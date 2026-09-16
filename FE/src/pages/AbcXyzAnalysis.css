@@ -1,0 +1,216 @@
+/* ABC/XYZ Analysis specific styles */
+.abc-top-split {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.abc-matrix-panel {
+  flex: 2;
+  background-color: white;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: 1.5rem;
+}
+
+.abc-policy-panel {
+  flex: 1;
+  background-color: white;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  font-family: 'Outfit', sans-serif;
+  color: #0f172a;
+  margin-bottom: 0.25rem;
+}
+
+.panel-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+}
+
+/* Matrix Grid */
+.matrix-grid-container {
+  display: grid;
+  grid-template-columns: 120px 1fr 1fr 1fr;
+  grid-template-rows: auto 1fr 1fr 1fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.matrix-col-header {
+  text-align: center;
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.matrix-row-header {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  text-align: right;
+  padding-right: 0.5rem;
+}
+
+.matrix-cell {
+  border-radius: 0.5rem;
+  padding: 1rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  text-align: center;
+  min-height: 90px;
+}
+
+.matrix-cell-count {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+  line-height: 1;
+}
+
+.matrix-cell-pct {
+  font-size: 0.625rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  opacity: 0.9;
+}
+
+.matrix-cell-label {
+  font-size: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+}
+
+/* Colors for cells */
+.cell-ax { background-color: #0f766e; } /* Dark Teal */
+.cell-ay { background-color: #14b8a6; } /* Med Teal */
+.cell-az { background-color: #5eead4; } /* Light Teal */
+
+.cell-bx { background-color: #d97706; } /* Dark Orange */
+.cell-by { background-color: #f59e0b; } /* Med Orange */
+.cell-bz { background-color: #fcd34d; } /* Light Orange (use darker text if needed, but white might be fine or maybe a bit dark) */
+.cell-bz { color: #78350f; } /* Dark brown text for contrast on light yellow/orange */
+
+.cell-cx { background-color: #64748b; } /* Dark Grey */
+.cell-cy { background-color: #94a3b8; } /* Med Grey */
+.cell-cz { background-color: #cbd5e1; color: #334155; } /* Light Grey */
+
+/* Policy Allocation Cards */
+.policy-card {
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.policy-card:last-child {
+  margin-bottom: 0;
+}
+
+.policy-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.policy-card-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.policy-badge {
+  font-size: 0.5rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-green { color: #059669; }
+.badge-orange { color: #d97706; }
+.badge-grey { color: #64748b; }
+
+.policy-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Bottom Log Table */
+.log-panel {
+  background-color: white;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: 1.5rem;
+}
+
+.log-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  font-family: 'Outfit', sans-serif;
+  color: #0f172a;
+  margin-bottom: 1.5rem;
+}
+
+.log-table {
+  width: 100%;
+}
+
+.log-header-row {
+  display: flex;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0.5rem;
+}
+
+.log-col-header {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.log-row {
+  display: flex;
+  align-items: center;
+  padding: 1rem 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.75rem;
+}
+
+.log-row:last-child {
+  border-bottom: none;
+}
+
+.log-col-1 { width: 12%; font-weight: 700; color: #0f172a; }
+.log-col-2 { width: 20%; font-weight: 500; color: #475569; }
+.log-col-3 { width: 8%; font-weight: 700; }
+.log-col-4 { width: 8%; font-weight: 700; }
+.log-col-5 { width: 15%; font-weight: 700; color: #0f172a; }
+.log-col-6 { width: 12%; font-weight: 700; color: #0f172a; }
+.log-col-7 { width: 10%; color: #64748b; }
+.log-col-8 { width: 15%; color: #64748b; }
+
+.text-class-a { color: #0d9488; }
+.text-class-b { color: #64748b; }
+.text-class-c { color: #94a3b8; }
+.text-class-x { color: #059669; }
+.text-class-y { color: #d97706; }
+.text-class-z { color: #94a3b8; }
