@@ -82,7 +82,7 @@
   font-weight: 600;
   color: var(--text-secondary);
   border: 1px solid transparent;
-  border-radius: 0.375rem;
+  border-radius: 9999px;
   background: none;
   cursor: pointer;
   transition: all 0.2s;
@@ -278,7 +278,6 @@
 }
 
 .po-btn {
-  margin-top: auto;
   background-color: #0d9488;
   color: white;
   border: none;
@@ -294,3 +293,79 @@
 .po-btn:hover {
   background-color: #0f766e;
 }
+
+.reject-btn {
+  background-color: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 0.375rem;
+  padding: 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.2s;
+}
+
+.reject-btn:hover {
+  background-color: #fee2e2;
+}
+
+/* Tabs and Header Actions */
+.rep-tabs {
+  display: flex;
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.rep-tab {
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rep-tab.active {
+  background-color: #0d9488;
+  color: white;
+}
+
+.rep-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.rep-export-btn {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.rep-export-btn:hover {
+  background-color: var(--bg-primary);
+}
+
+.rep-group-header {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  padding: 0.5rem 0;
+  letter-spacing: 0.05em;
+}
+

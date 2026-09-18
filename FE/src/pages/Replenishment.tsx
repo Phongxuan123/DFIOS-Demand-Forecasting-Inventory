@@ -24,24 +24,6 @@ export const Replenishment: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      {/* Header */}
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">Automated Replenishment Module</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, locations..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
-      </div>
 
       {isLoading || !data ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading replenishment data...</div>
@@ -96,8 +78,17 @@ export const Replenishment: React.FC = () => {
             {/* Left Table */}
             <div className="rep-table-area">
               <div className="rep-table-header">
-                <h3 className="rep-table-title">Active Replenishment Order Book</h3>
-                <span className="rep-table-sort">Sorted by: Urgent Priority</span>
+                <div className="rep-tabs">
+                  <button className="rep-tab active">Active Orders</button>
+                  <button className="rep-tab">History</button>
+                </div>
+                <div className="rep-table-actions">
+                  <span className="rep-table-sort">Sorted by: Urgent Priority</span>
+                  <button className="rep-export-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px'}}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Export CSV
+                  </button>
+                </div>
               </div>
               
               <div className="rep-list-header">
@@ -112,21 +103,29 @@ export const Replenishment: React.FC = () => {
               </div>
               
               <div>
+                <div className="rep-group-header">MOQ: 50 | Pack: 10</div>
                 {data.tableData.map((row: any, idx: number) => (
                   <div className="rep-row" key={idx}>
                     <div className="rep-col-1">{row.id}</div>
-                    <div className="rep-col-2">{row.name}</div>
+                    <div className="rep-col-2">
+                      <span className="truncate" style={{ display: 'inline-block', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {row.name}
+                      </span>
+                    </div>
                     <div className="rep-col-3">{row.stock}</div>
                     <div className="rep-col-4">{row.safety}</div>
                     <div className="rep-col-5">{row.rop}</div>
-                    <div className="rep-col-6">{row.eoq}</div>
+                    <div className="rep-col-6" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                      {row.eoq}
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{color: '#94a3b8'}}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                    </div>
                     <div className="rep-col-7">
                       <span className={`status-badge ${row.status === 'CRITICAL' ? 'critical' : row.status === 'LOW STOCK' ? 'low' : 'ok'}`}>
                         {row.status}
                       </span>
                     </div>
                     <div className="rep-col-8">
-                      <button className={`action-btn ${row.actionPrimary ? 'primary' : ''}`}>
+                      <button className={`action-btn ${row.actionPrimary ? 'primary' : ''}`} style={{ maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {row.action}
                       </button>
                     </div>
@@ -178,7 +177,10 @@ export const Replenishment: React.FC = () => {
                 </div>
               </div>
               
-              <button className="po-btn">Generate Purchase Order (150 Units)</button>
+              <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <button className="po-btn">Generate Purchase Order (150 Units)</button>
+                <button className="reject-btn">Reject Order</button>
+              </div>
             </div>
           </div>
         </>

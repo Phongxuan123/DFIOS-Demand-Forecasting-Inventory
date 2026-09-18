@@ -1,9 +1,7 @@
 import React from 'react';
-import { Search, Bell, Calendar } from 'lucide-react';
+import { Search, Bell, Calendar, Play } from 'lucide-react';
 import { ScatterChart, Scatter, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts';
 import './ModelPerformance.css';
-
-
 
 export const ModelPerformance: React.FC = () => {
   const [data, setData] = React.useState<any>(null);
@@ -26,23 +24,10 @@ export const ModelPerformance: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      {/* Header */}
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">Forecast Machine Learning Model Performance</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, locations..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
+      <div className="flex justify-end mb-4">
+        <button className="train-model-btn">
+          <Play size={14} style={{marginRight: '6px', fill: 'currentColor'}} /> Train New Model
+        </button>
       </div>
 
       {isLoading || !data ? (
@@ -156,6 +141,34 @@ export const ModelPerformance: React.FC = () => {
                   <div className="shap-value">{item.val} SHAP</div>
                 </div>
               ))}
+            </div>
+          </div>
+          
+          {/* Bottom Table: ML vs Static Comparison */}
+          <div className="mp-comparison-panel">
+            <h2 className="mp-panel-title">ML vs Static Formula Comparison</h2>
+            <p className="mp-panel-subtitle">Compare the active TFT model against a static moving average baseline for downstream inventory planning outputs.</p>
+            
+            <div className="mp-comp-table">
+              <div className="mp-comp-header">
+                <div className="mp-comp-col-1">Metric</div>
+                <div className="mp-comp-col-2">ML-based (TFT)</div>
+                <div className="mp-comp-col-3">Static (Moving Avg)</div>
+                <div className="mp-comp-col-4">Improvement</div>
+              </div>
+              
+              <div className="mp-comp-body">
+                {data.comparisonTable && data.comparisonTable.map((row: any, idx: number) => (
+                  <div className="mp-comp-row" key={idx}>
+                    <div className="mp-comp-col-1 font-bold text-slate-900">{row.metric}</div>
+                    <div className="mp-comp-col-2 text-slate-500">{row.ml}</div>
+                    <div className="mp-comp-col-3 text-slate-500">{row.static}</div>
+                    <div className="mp-comp-col-4">
+                      <span className="mp-comp-badge-green">{row.improvement}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </>

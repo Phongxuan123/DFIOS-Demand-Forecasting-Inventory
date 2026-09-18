@@ -144,15 +144,22 @@ export const mockModelPerformance = {
     { feature: 'Google Trends Footwear Volume', val: 0.04, pct: '10%' },
     { feature: 'Supplier Safety Lead Buffer', val: 0.02, pct: '5%' },
     { feature: 'Regional Logistics Delay Index', val: 0.01, pct: '2%' },
+  ],
+  comparisonTable: [
+    { metric: 'Safety Stock', ml: '12.4 days', static: '15.8 days', improvement: '+21%' },
+    { metric: 'ROP', ml: '1,240 units', static: '1,410 units', improvement: '+14%' },
+    { metric: 'EOQ', ml: '480 units', static: '540 units', improvement: '+12%' }
   ]
 };
 
 export const mockReports = {
   templates: [
-    { title: 'Demand Forecast Report', desc: 'Comprehensive summary of forecast models, tracking accuracy scores (MASE) against observed outcomes across filtered SKUs.', icon: 'TrendingUp' },
-    { title: 'Inventory Health Report', desc: 'Examine safety stock status, potential stockout hazards, reorder point triggers, and estimated holding cost metrics.', icon: 'Activity' },
-    { title: 'ABC/XYZ Classification Report', desc: 'A complete audit of current value-distribution tiers with suggested action policies for procurement optimization.', icon: 'Grid' },
-    { title: 'Model Benchmarking Report', desc: 'Compare neural networks, LightGBM, and baseline models. Features SHAP interpretability values for accuracy metrics.', icon: 'Settings' }
+    { title: 'Demand Forecast Report', desc: 'Comprehensive summary of forecast models, tracking accuracy scores (MASE) against observed outcomes across filtered SKUs.', icon: 'TrendingUp', btnText: 'Generate Report' },
+    { title: 'Inventory Health Report', desc: 'Examine safety stock status, potential stockout hazards, reorder point triggers, and estimated holding cost metrics.', icon: 'Activity', btnText: 'Generate Report' },
+    { title: 'ABC/XYZ Classification Report', desc: 'A complete audit of current value-distribution tiers with suggested action policies for procurement optimization.', icon: 'Grid', btnText: 'Generate Report' },
+    { title: 'Model Benchmarking Report', desc: 'Compare neural networks, LightGBM, and baseline models. Features SHAP interpretability values for accuracy metrics.', icon: 'Settings', btnText: 'Generate Report' },
+    { title: 'Historical Backtesting Report', desc: 'Run backtesting simulations on historical data to evaluate ML model effectiveness vs baseline inventory policies.', icon: 'Settings', btnText: 'Run Backtest' },
+    { title: 'Cost Comparison Report', desc: 'Compare estimated inventory holding costs between ML-driven optimization and traditional static formula approach, with improvement percentages.', icon: 'TrendingUp', btnText: 'Generate Report' }
   ],
   logs: [
     { name: 'Monthly Accuracy Audit - Sep 2...', type: 'Model Benchmarking', date: 'Oct 22, 2024', format: 'PDF', formatClass: 'pdf', size: '4.2 MB', status: 'READY', action: 'Download' },

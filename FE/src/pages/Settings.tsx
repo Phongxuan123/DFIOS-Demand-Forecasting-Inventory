@@ -37,29 +37,20 @@ export const Settings: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      {/* Header */}
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">System Settings</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, orders..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
-      </div>
 
       {isLoading || !data ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading settings data...</div>
       ) : (
-        <div className="settings-main-split">
+        <>
+          <div className="settings-tabs-container">
+            <button className="settings-tab-btn active">General Settings</button>
+            <button className="settings-tab-btn">User Management</button>
+            <button className="settings-tab-btn">Audit Logs</button>
+            <button className="settings-tab-btn">ML Pipeline</button>
+            <button className="settings-tab-btn">Automation</button>
+          </div>
+          
+          <div className="settings-main-split">
           {/* Left Panel */}
           <div className="settings-left-panel">
             <h2 className="settings-panel-title">Global Parameters</h2>
@@ -133,6 +124,37 @@ export const Settings: React.FC = () => {
             <div className="settings-divider"></div>
 
             {/* Section 3 */}
+            <div className="settings-subtitle">BATCH FORECAST SCHEDULE</div>
+            <div className="settings-row">
+              <div className="settings-group">
+                <label className="settings-label">Cron Schedule</label>
+                <input type="text" className="settings-input" defaultValue="Every Sunday at 02:00 AM" />
+              </div>
+              <div className="settings-group">
+                <label className="settings-label">Next Run</label>
+                <input type="text" className="settings-input" defaultValue="Oct 27, 2024" />
+              </div>
+              <div className="settings-group" style={{ flex: 0.5 }}>
+                <label className="settings-label">Enabled</label>
+                <div style={{marginTop: '0.25rem'}}><Toggle initialChecked={true} /></div>
+              </div>
+            </div>
+            
+            <div className="settings-checkbox-row">
+              <div className="settings-checkbox checked">
+                <svg width="10" height="8" viewBox="0 0 10 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M1 4.5L3.5 7L9 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+              <div className="settings-checkbox-info">
+                <span className="settings-checkbox-title">Auto-compute SS/ROP/EOQ & ABC-XYZ after each forecast run</span>
+                <span className="settings-checkbox-desc">Automatically recalculate Safety Stock, Reorder Points, EOQ and update ABC-XYZ classification when new forecasts complete.</span>
+              </div>
+            </div>
+
+            <div className="settings-divider"></div>
+
+            {/* Section 4 */}
             <div className="settings-subtitle">INVENTORY POLICIES</div>
             <div className="settings-row">
               <div className="settings-group">
@@ -211,9 +233,16 @@ export const Settings: React.FC = () => {
               </div>
 
               <button className="sync-btn">Sync & Refresh Data</button>
+              <button className="settings-btn-primary" style={{width: '100%', marginTop: '0.75rem'}}>Run Quality Check</button>
+              
+              <div className="settings-quality-status">
+                <div className="dataset-label">DATA QUALITY STATUS</div>
+                <div className="quality-text">Last check: Oct 22, 2024 | Missing: 0.3% | Anomalies: 2 detected | Leakage: None</div>
+              </div>
             </div>
           </div>
         </div>
+        </>
       )}
     </div>
   );

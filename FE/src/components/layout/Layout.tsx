@@ -11,8 +11,8 @@ export const Layout: React.FC = () => {
     <div className="app-container">
       <Sidebar />
       <main className="main-content">
-        {!isDashboard && <Topbar />}
-        <div className="page-container" style={{ paddingTop: isDashboard ? '2rem' : undefined }}>
+        <Topbar />
+        <div className="page-container">
           <Outlet />
         </div>
       </main>

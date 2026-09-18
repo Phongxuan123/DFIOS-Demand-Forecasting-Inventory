@@ -5,7 +5,7 @@ import { Eye, Box } from 'lucide-react';
 import './Login.css';
 
 export const Login: React.FC = () => {
-  const [email, setEmail] = useState('manager@fintrexlabel.com');
+  const [email, setEmail] = useState('php2422005@gmail.com');
   const [password, setPassword] = useState('admin123');
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -17,7 +17,7 @@ export const Login: React.FC = () => {
     setError('');
     try {
       // Hardcode bypassing for demo purposes
-      await login('admin@dfios.com', 'admin'); 
+      await login('admin@dfios.com', 'admin');
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -34,7 +34,7 @@ export const Login: React.FC = () => {
             <div className="login-logo-icon">D</div>
             <span className="login-logo-text">DFIOS</span>
           </div>
-          
+
           {/* Main Text */}
           <div className="login-hero">
             <h1 className="login-hero-title">
@@ -44,7 +44,7 @@ export const Login: React.FC = () => {
               Forecast demand spikes, reduce stockouts, and optimize safety stocks with enterprise-grade ML models scaled for growing retailers.
             </p>
           </div>
-          
+
           {/* Footer Logos */}
           <div className="login-footer">
             <p className="login-footer-title">
@@ -74,8 +74,8 @@ export const Login: React.FC = () => {
           <form onSubmit={handleSubmit} className="login-form">
             <div className="form-group">
               <label className="form-label">Email Address</label>
-              <input 
-                type="email" 
+              <input
+                type="email"
                 className="form-input"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -83,14 +83,14 @@ export const Login: React.FC = () => {
                 required
               />
             </div>
-            
+
             <div className="form-group">
               <div className="form-label-row">
                 <label className="form-label">Password</label>
                 <a href="#" className="forgot-password">Forgot Password?</a>
               </div>
               <div className="password-input-wrapper">
-                <input 
+                <input
                   type={showPassword ? 'text' : 'password'}
                   className="form-input password-input"
                   value={password}
@@ -98,8 +98,8 @@ export const Login: React.FC = () => {
                   placeholder="••••••••••••"
                   required
                 />
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   className="password-toggle"
                   onClick={() => setShowPassword(!showPassword)}
                 >
@@ -112,9 +112,9 @@ export const Login: React.FC = () => {
               <input type="checkbox" id="remember" className="remember-checkbox" defaultChecked />
               <label htmlFor="remember" className="remember-label">Remember me on this machine</label>
             </div>
-            
-            <button 
-              type="submit" 
+
+            <button
+              type="submit"
               disabled={isLoading}
               className="btn-primary login-btn"
             >

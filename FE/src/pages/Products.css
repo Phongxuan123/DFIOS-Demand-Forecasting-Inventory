@@ -1,13 +1,41 @@
 /* Products specific styles */
+.prod-tabs-container {
+  background-color: white;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.prod-tab-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background-color: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.prod-tab-btn.active {
+  background-color: #0d9488;
+  color: white;
+}
+
+.prod-tab-btn:hover:not(.active) {
+  background-color: #f1f5f9;
+}
+
 .prod-filter-bar {
   display: flex;
   align-items: flex-end;
   gap: 1.5rem;
-  padding: 1.5rem;
-  background-color: white;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color);
-  margin-bottom: 1.5rem;
+  padding: 0; /* Removing padding and background to let it sit below the tabs seamlessly if needed, wait, the filter bar should have no bg if it's separate? */
+  margin-bottom: 0.75rem;
 }
 
 .prod-filter-group {
@@ -131,11 +159,27 @@
 }
 
 .prod-col-1 { width: 15%; font-weight: 700; color: #0f172a; }
-.prod-col-2 { width: 20%; color: #64748b; }
+.prod-col-2 { width: 5%; color: #64748b; font-weight: 700; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.1; }
 .prod-col-3 { width: 15%; color: #475569; }
-.prod-col-4 { width: 25%; color: #64748b; }
-.prod-col-5 { width: 10%; text-align: center; font-weight: 700; }
-.prod-col-6 { width: 15%; text-align: right; color: #64748b; }
+.prod-col-4 { width: 25%; color: #475569; }
+.prod-col-5 { width: 15%; text-align: center; font-weight: 700; }
+.prod-col-6 { width: 15%; text-align: right; color: #475569; }
+.prod-col-7 { width: 10%; text-align: right; color: #475569; }
+
+.prod-helper-texts {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.prod-helper-text {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: #10b981;
+  background-color: #ecfdf5;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+}
 
 .prod-table-footer {
   display: flex;
@@ -304,4 +348,37 @@
 
 .prod-reorder-btn:hover {
   background-color: #0f766e;
+}
+
+.prod-input-box {
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #0f172a;
+  min-width: 60px;
+  text-align: center;
+}
+
+.prod-adj-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.625rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed var(--border-color);
+}
+
+.prod-adj-row:last-child {
+  border-bottom: none;
+}
+
+.prod-adj-text {
+  color: #475569;
+}
+
+.prod-adj-badge {
+  font-weight: 700;
+  color: #0d9488;
 }
