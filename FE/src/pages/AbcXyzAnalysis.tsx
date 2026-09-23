@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Bell, Calendar, Settings } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import './AbcXyzAnalysis.css';
 
 export const AbcXyzAnalysis: React.FC = () => {

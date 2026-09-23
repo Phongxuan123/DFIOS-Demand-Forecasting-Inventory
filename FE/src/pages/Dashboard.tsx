@@ -2,13 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/Card.tsx';
 import { api } from '../services/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Search, Bell, Calendar } from 'lucide-react';
+
 import './Dashboard.css';
 
 export const Dashboard: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [showNotifications, setShowNotifications] = useState(false);
+  
 
   useEffect(() => {
     const fetchData = async () => {

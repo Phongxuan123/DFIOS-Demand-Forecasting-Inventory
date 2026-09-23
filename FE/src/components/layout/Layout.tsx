@@ -1,11 +1,11 @@
 import React from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar.tsx';
 import { Topbar } from './Topbar.tsx';
 
 export const Layout: React.FC = () => {
-  const location = useLocation();
-  const isDashboard = location.pathname === '/';
+  
+  
 
   return (
     <div className="app-container">

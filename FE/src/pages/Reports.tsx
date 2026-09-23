@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Bell, Calendar, TrendingUp, Activity, Grid, Settings } from 'lucide-react';
+import { TrendingUp, Activity, Grid, Settings } from 'lucide-react';
 import './Reports.css';
 
 

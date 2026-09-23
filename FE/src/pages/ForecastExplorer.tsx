@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/Card.tsx';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Line } from 'recharts';
-import { Search, Bell, Calendar, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { api } from '../services/api.ts';
 import './ForecastExplorer.css';
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { Eye, Box } from 'lucide-react';
 import './Login.css';
@@ -87,7 +87,7 @@ export const Login: React.FC = () => {
             <div className="form-group">
               <div className="form-label-row">
                 <label className="form-label">Password</label>
-                <a href="#" className="forgot-password">Forgot Password?</a>
+                <Link to="/forgot-password" className="forgot-password">Forgot Password?</Link>
               </div>
               <div className="password-input-wrapper">
                 <input
