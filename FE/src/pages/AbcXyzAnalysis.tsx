@@ -1,12 +1,11 @@
 import React from 'react';
-import { Search, Bell, Calendar } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import './AbcXyzAnalysis.css';
-
-
 
 export const AbcXyzAnalysis: React.FC = () => {
   const [data, setData] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [isConfigOpen, setIsConfigOpen] = React.useState(false);
 
   React.useEffect(() => {
     const fetchData = async () => {
@@ -25,125 +24,82 @@ export const AbcXyzAnalysis: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      {/* Header */}
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">ABC/XYZ Inventory Analysis Matrix</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, locations..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
-      </div>
 
       {isLoading || !data ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading matrix data...</div>
       ) : (
         <>
-          {/* Top Split Section */}
-          <div className="abc-top-split">
-            {/* Left: Matrix Grid */}
-            <div className="abc-matrix-panel">
-              <h2 className="panel-title">ABC/XYZ Classification Matrix</h2>
-              <p className="panel-subtitle">ABC determines revenue contribution (Value). XYZ determines forecast predictability (Volatility).</p>
-              
-              <div className="matrix-grid-container">
-                {/* Top row headers */}
-                <div></div>
-                <div className="matrix-col-header">X (STABLE, COV &lt; 10%)</div>
-                <div className="matrix-col-header">Y (VARIABLE, COV 10-25%)</div>
-                <div className="matrix-col-header">Z (ERRATIC, COV &gt; 25%)</div>
-                
-                {/* Row A */}
-                <div className="matrix-row-header">A (HIGH VALUE, 70%)</div>
-                <div className="matrix-cell cell-ax">
-                  <span className="matrix-cell-count">245 SKUs</span>
-                  <span className="matrix-cell-pct">8.1%</span>
-                  <span className="matrix-cell-label">AX - Deep Strategic</span>
-                </div>
-                <div className="matrix-cell cell-ay">
-                  <span className="matrix-cell-count">124 SKUs</span>
-                  <span className="matrix-cell-pct">4.1%</span>
-                  <span className="matrix-cell-label">AY - Dynamic</span>
-                </div>
-                <div className="matrix-cell cell-az">
-                  <span className="matrix-cell-count">56 SKUs</span>
-                  <span className="matrix-cell-pct">1.8%</span>
-                  <span className="matrix-cell-label">AZ - High Volatility</span>
-                </div>
-                
-                {/* Row B */}
-                <div className="matrix-row-header">B (MED VALUE, 20%)</div>
-                <div className="matrix-cell cell-bx">
-                  <span className="matrix-cell-count">480 SKUs</span>
-                  <span className="matrix-cell-pct">15.7%</span>
-                  <span className="matrix-cell-label">BX - Mid Stable</span>
-                </div>
-                <div className="matrix-cell cell-by">
-                  <span className="matrix-cell-count">310 SKUs</span>
-                  <span className="matrix-cell-pct">10.2%</span>
-                  <span className="matrix-cell-label">BY - Mid Dynamic</span>
-                </div>
-                <div className="matrix-cell cell-bz">
-                  <span className="matrix-cell-count">112 SKUs</span>
-                  <span className="matrix-cell-pct">3.7%</span>
-                  <span className="matrix-cell-label">BZ - Seasonal</span>
-                </div>
-                
-                {/* Row C */}
-                <div className="matrix-row-header">C (LOW VALUE, 10%)</div>
-                <div className="matrix-cell cell-cx">
-                  <span className="matrix-cell-count">980 SKUs</span>
-                  <span className="matrix-cell-pct">32.1%</span>
-                  <span className="matrix-cell-label">CX - Basic Repeat</span>
-                </div>
-                <div className="matrix-cell cell-cy">
-                  <span className="matrix-cell-count">512 SKUs</span>
-                  <span className="matrix-cell-pct">16.8%</span>
-                  <span className="matrix-cell-label">CY - Basic Variable</span>
-                </div>
-                <div className="matrix-cell cell-cz">
-                  <span className="matrix-cell-count">230 SKUs</span>
-                  <span className="matrix-cell-pct">7.5%</span>
-                  <span className="matrix-cell-label">CZ - Extreme Long-Tail</span>
-                </div>
+          {/* Top Section */}
+          <div className="abc-matrix-panel">
+            <div className="abc-matrix-header">
+              <div>
+                <h2 className="panel-title">ABC/XYZ Classification Matrix</h2>
+                <p className="panel-subtitle">ABC determines revenue contribution (Value). XYZ determines forecast predictability (Volatility).</p>
               </div>
+              <button className="configure-btn" onClick={() => setIsConfigOpen(true)}>
+                <Settings size={14} style={{marginRight: '8px'}} /> Configure Thresholds
+              </button>
             </div>
             
-            {/* Right: Policy Allocation */}
-            <div className="abc-policy-panel">
-              <h2 className="panel-title" style={{marginBottom: '1.5rem'}}>Strategic Policy Allocation</h2>
+            <div className="matrix-grid-container">
+              {/* Top row headers */}
+              <div></div>
+              <div className="matrix-col-header">X (STABLE, COV &lt; 10%)</div>
+              <div className="matrix-col-header">Y (VARIABLE, COV 10-25%)</div>
+              <div className="matrix-col-header">Z (ERRATIC, COV &gt; 25%)</div>
               
-              <div className="policy-card">
-                <div className="policy-card-header">
-                  <span className="policy-card-title">AX / AY Policies</span>
-                  <span className="policy-badge badge-green">TOP STRATEGIC</span>
-                </div>
-                <p className="policy-desc">Keep tight safety stocks, run automated daily replenishment, perform high-frequency collaborative forecasting.</p>
+              {/* Row A */}
+              <div className="matrix-row-header">A (HIGH VALUE, 70%)</div>
+              <div className="matrix-cell cell-ax">
+                <span className="matrix-cell-count">245 SKUs</span>
+                <span className="matrix-cell-pct">8.1%</span>
+                <span className="matrix-cell-label">AX - Deep Strategic</span>
+              </div>
+              <div className="matrix-cell cell-ay">
+                <span className="matrix-cell-count">124 SKUs</span>
+                <span className="matrix-cell-pct">4.1%</span>
+                <span className="matrix-cell-label">AY - Dynamic</span>
+              </div>
+              <div className="matrix-cell cell-az">
+                <span className="matrix-cell-count">56 SKUs</span>
+                <span className="matrix-cell-pct">1.8%</span>
+                <span className="matrix-cell-label">AZ - High Volatility</span>
               </div>
               
-              <div className="policy-card">
-                <div className="policy-card-header">
-                  <span className="policy-card-title">AZ / BZ Policies</span>
-                  <span className="policy-badge badge-orange">VOLATILE VALUE</span>
-                </div>
-                <p className="policy-desc">Employ dynamic buffer calculations, set up seasonal alerts, and secure lead-time speed SLAs with suppliers.</p>
+              {/* Row B */}
+              <div className="matrix-row-header">B (MED VALUE, 20%)</div>
+              <div className="matrix-cell cell-bx">
+                <span className="matrix-cell-count">480 SKUs</span>
+                <span className="matrix-cell-pct">15.7%</span>
+                <span className="matrix-cell-label">BX - Mid Stable</span>
+              </div>
+              <div className="matrix-cell cell-by">
+                <span className="matrix-cell-count">310 SKUs</span>
+                <span className="matrix-cell-pct">10.2%</span>
+                <span className="matrix-cell-label">BY - Mid Dynamic</span>
+              </div>
+              <div className="matrix-cell cell-bz">
+                <span className="matrix-cell-count">112 SKUs</span>
+                <span className="matrix-cell-pct">3.7%</span>
+                <span className="matrix-cell-label">BZ - Seasonal</span>
               </div>
               
-              <div className="policy-card">
-                <div className="policy-card-header">
-                  <span className="policy-card-title">CX / CY / CZ Policies</span>
-                  <span className="policy-badge badge-grey">BULK AUTOMATION</span>
-                </div>
-                <p className="policy-desc">Establish simplified visual Kanban controls, run slow monthly batch reorders, maintain baseline safety stock.</p>
+              {/* Row C */}
+              <div className="matrix-row-header">C (LOW VALUE, 10%)</div>
+              <div className="matrix-cell cell-cx">
+                <span className="matrix-cell-count">980 SKUs</span>
+                <span className="matrix-cell-pct">32.1%</span>
+                <span className="matrix-cell-label">CX - Basic Repeat</span>
+              </div>
+              <div className="matrix-cell cell-cy">
+                <span className="matrix-cell-count">512 SKUs</span>
+                <span className="matrix-cell-pct">16.8%</span>
+                <span className="matrix-cell-label">CY - Basic Variable</span>
+              </div>
+              <div className="matrix-cell cell-cz">
+                <span className="matrix-cell-count">230 SKUs</span>
+                <span className="matrix-cell-pct">7.5%</span>
+                <span className="matrix-cell-label">CZ - Extreme Long-Tail</span>
               </div>
             </div>
           </div>
@@ -160,8 +116,6 @@ export const AbcXyzAnalysis: React.FC = () => {
                 <div className="log-col-header log-col-4">XYZ CLASS</div>
                 <div className="log-col-header log-col-5">COMBINED CLASS</div>
                 <div className="log-col-header log-col-6">ANNUAL REVENUE</div>
-                <div className="log-col-header log-col-7">COV VOLATILITY</div>
-                <div className="log-col-header log-col-8">RECOMMENDED POLICY</div>
               </div>
               
               <div>
@@ -173,17 +127,109 @@ export const AbcXyzAnalysis: React.FC = () => {
                       <span className={row.classA === 'A' ? 'text-class-a' : row.classA === 'B' ? 'text-class-b' : 'text-class-c'}>{row.classA}</span>
                     </div>
                     <div className="log-col-4">
-                      <span className={row.classX === 'X' ? 'text-class-x' : row.classX === 'Y' ? 'text-class-y' : 'text-class-z'}>{row.classX}</span>
+                      <span className={row.classX === 'X' ? 'text-class-a' : row.classX === 'Y' ? 'text-class-b' : 'text-class-c'}>{row.classX}</span>
                     </div>
                     <div className="log-col-5">{row.combined}</div>
                     <div className="log-col-6">{row.rev}</div>
-                    <div className="log-col-7">{row.cov}</div>
-                    <div className="log-col-8">{row.policy}</div>
                   </div>
                 ))}
               </div>
             </div>
           </div>
+          
+          {/* Modal Overlay */}
+          {isConfigOpen && (
+            <div className="config-modal-overlay" onClick={() => setIsConfigOpen(false)}>
+              
+              {/* Centered Modal */}
+              <div className="config-modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3 className="modal-title">ABC/XYZ Threshold Configuration</h3>
+                  <p className="modal-subtitle">Recalculation will update classification for all 3,049 SKUs</p>
+                </div>
+                
+                <div className="modal-body">
+                  <h4 className="threshold-section-title">ABC Thresholds</h4>
+                  
+                  <div className="slider-group">
+                    <div className="slider-label-row">
+                      <span className="slider-label">A (High Value)</span>
+                      <span className="slider-value">Top 70%</span>
+                    </div>
+                    <div className="slider-track bg-teal-100">
+                      <div className="slider-fill bg-teal-600" style={{width: '70%'}}></div>
+                      <div className="slider-thumb" style={{left: '70%'}}></div>
+                    </div>
+                  </div>
+                  
+                  <div className="slider-group">
+                    <div className="slider-label-row">
+                      <span className="slider-label">B (Medium Value)</span>
+                      <span className="slider-value">Next 20%</span>
+                    </div>
+                    <div className="slider-track bg-orange-100">
+                      <div className="slider-fill bg-orange-500" style={{width: '20%'}}></div>
+                      <div className="slider-thumb" style={{left: '20%'}}></div>
+                    </div>
+                  </div>
+                  
+                  <div className="slider-group">
+                    <div className="slider-label-row">
+                      <span className="slider-label">C (Low Value)</span>
+                      <span className="slider-value">Remaining 10%</span>
+                    </div>
+                    <div className="slider-track bg-slate-200">
+                      <div className="slider-fill bg-slate-500" style={{width: '10%'}}></div>
+                      <div className="slider-thumb" style={{left: '10%'}}></div>
+                    </div>
+                  </div>
+                  
+                  <h4 className="threshold-section-title mt-8">XYZ Thresholds</h4>
+                  
+                  <div className="slider-group">
+                    <div className="slider-label-row">
+                      <span className="slider-label">X (Stable)</span>
+                      <span className="slider-value">COV &lt; 10%</span>
+                    </div>
+                    <div className="slider-track bg-teal-100">
+                      <div className="slider-fill bg-teal-600" style={{width: '10%'}}></div>
+                      <div className="slider-thumb" style={{left: '10%'}}></div>
+                    </div>
+                  </div>
+                  
+                  <div className="slider-group">
+                    <div className="slider-label-row">
+                      <span className="slider-label">Y (Variable)</span>
+                      <span className="slider-value">COV 10% - 25%</span>
+                    </div>
+                    <div className="slider-track bg-orange-100">
+                      <div className="slider-fill bg-orange-500" style={{width: '15%'}}></div>
+                      <div className="slider-thumb" style={{left: '15%'}}></div>
+                    </div>
+                  </div>
+                  
+                  <div className="slider-group">
+                    <div className="slider-label-row">
+                      <span className="slider-label">Z (Erratic)</span>
+                      <span className="slider-value">COV &gt; 25%</span>
+                    </div>
+                    <div className="slider-track bg-slate-200">
+                      <div className="slider-fill bg-slate-500" style={{width: '75%'}}></div>
+                      <div className="slider-thumb" style={{left: '75%'}}></div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="modal-footer">
+                  <div className="modal-actions">
+                    <button className="reset-btn" onClick={() => setIsConfigOpen(false)}>Reset to Default</button>
+                    <button className="apply-btn" onClick={() => setIsConfigOpen(false)}>Apply & Recalculate</button>
+                  </div>
+                  <p className="modal-footer-text">Recalculation will update classification for all 3,049 SKUs</p>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

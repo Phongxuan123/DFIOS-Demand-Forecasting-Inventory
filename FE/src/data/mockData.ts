@@ -144,15 +144,22 @@ export const mockModelPerformance = {
     { feature: 'Google Trends Footwear Volume', val: 0.04, pct: '10%' },
     { feature: 'Supplier Safety Lead Buffer', val: 0.02, pct: '5%' },
     { feature: 'Regional Logistics Delay Index', val: 0.01, pct: '2%' },
+  ],
+  comparisonTable: [
+    { metric: 'Safety Stock', ml: '12.4 days', static: '15.8 days', improvement: '+21%' },
+    { metric: 'ROP', ml: '1,240 units', static: '1,410 units', improvement: '+14%' },
+    { metric: 'EOQ', ml: '480 units', static: '540 units', improvement: '+12%' }
   ]
 };
 
 export const mockReports = {
   templates: [
-    { title: 'Demand Forecast Report', desc: 'Comprehensive summary of forecast models, tracking accuracy scores (MASE) against observed outcomes across filtered SKUs.', icon: 'TrendingUp' },
-    { title: 'Inventory Health Report', desc: 'Examine safety stock status, potential stockout hazards, reorder point triggers, and estimated holding cost metrics.', icon: 'Activity' },
-    { title: 'ABC/XYZ Classification Report', desc: 'A complete audit of current value-distribution tiers with suggested action policies for procurement optimization.', icon: 'Grid' },
-    { title: 'Model Benchmarking Report', desc: 'Compare neural networks, LightGBM, and baseline models. Features SHAP interpretability values for accuracy metrics.', icon: 'Settings' }
+    { title: 'Demand Forecast Report', desc: 'Comprehensive summary of forecast models, tracking accuracy scores (MASE) against observed outcomes across filtered SKUs.', icon: 'TrendingUp', btnText: 'Generate Report' },
+    { title: 'Inventory Health Report', desc: 'Examine safety stock status, potential stockout hazards, reorder point triggers, and estimated holding cost metrics.', icon: 'Activity', btnText: 'Generate Report' },
+    { title: 'ABC/XYZ Classification Report', desc: 'A complete audit of current value-distribution tiers with suggested action policies for procurement optimization.', icon: 'Grid', btnText: 'Generate Report' },
+    { title: 'Model Benchmarking Report', desc: 'Compare neural networks, LightGBM, and baseline models. Features SHAP interpretability values for accuracy metrics.', icon: 'Settings', btnText: 'Generate Report' },
+    { title: 'Historical Backtesting Report', desc: 'Run backtesting simulations on historical data to evaluate ML model effectiveness vs baseline inventory policies.', icon: 'Settings', btnText: 'Run Backtest' },
+    { title: 'Cost Comparison Report', desc: 'Compare estimated inventory holding costs between ML-driven optimization and traditional static formula approach, with improvement percentages.', icon: 'TrendingUp', btnText: 'Generate Report' }
   ],
   logs: [
     { name: 'Monthly Accuracy Audit - Sep 2...', type: 'Model Benchmarking', date: 'Oct 22, 2024', format: 'PDF', formatClass: 'pdf', size: '4.2 MB', status: 'READY', action: 'Download' },
@@ -197,4 +204,133 @@ export const mockSettings = {
     emailDispatch: true,
     email: 'jenkins@dfios.cockpit.com'
   }
+};
+
+export const mockUsers = [
+  { name: 'Sarah Jenkins', email: 's.jenkins@dfios.com', role: 'WAREHOUSE MANAGER', status: 'ACTIVE', lastLogin: '10 mins ago' },
+  { name: 'Marcus Brody', email: 'm.brody@dfios.com', role: 'ADMIN', status: 'ACTIVE', lastLogin: '2 hours ago' },
+  { name: 'Leah Vance', email: 'l.vance@dfios.com', role: 'VIEWER', status: 'ACTIVE', lastLogin: 'Yesterday, 18:04' },
+  { name: 'Donald Sterling', email: 'd.sterling@dfios.com', role: 'WAREHOUSE MANAGER', status: 'DISABLED', lastLogin: 'Oct 12, 10:45' },
+  { name: 'Chloe Bennett', email: 'c.bennett@dfios.com', role: 'VIEWER', status: 'ACTIVE', lastLogin: 'Oct 19, 08:33' },
+  { name: 'Arthur Dent', email: 'a.dent@dfios.com', role: 'VIEWER', status: 'ACTIVE', lastLogin: 'Oct 21, 11:20' }
+];
+
+export const mockSuppliers = [
+  { name: 'Pacifica Footwear Co', email: 'contract-active@pacifica.com', skus: 84, leadTime: 5, reliability: 94 },
+  { name: 'Apex Sports Logistics', email: 'contract-active@pacifica.com', skus: 112, leadTime: 7, reliability: 88 },
+  { name: 'Nordic Athletic Supplies', email: 'contract-active@pacifica.com', skus: 43, leadTime: 14, reliability: 98 },
+  { name: 'Vanguard Global Imports', email: 'contract-active@pacifica.com', skus: 201, leadTime: 21, reliability: 72 },
+  { name: 'Horizon Retail Dist', email: 'contract-active@pacifica.com', skus: 19, leadTime: 4, reliability: 91 }
+];
+
+export const mockDataImports = [
+  { name: 'm5-historical-store-data-2024.xlsx', date: 'Oct 22, 11:20', records: '142,000', status: 'VALIDATED', operator: 'Sarah Jenkins' },
+  { name: 'e-commerce-warehouse-sales-q3.csv', date: 'Oct 18, 09:44', records: '89,102', status: 'VALIDATED', operator: 'Sarah Jenkins' },
+  { name: 'eastside-mall-adjustments-sep.xlsx', date: 'Oct 15, 14:12', records: '12,901', status: 'ERROR', operator: 'Leah Vance' },
+  { name: 'downtown-flagship-actuals-q2.csv', date: 'Oct 09, 10:30', records: '214,055', status: 'VALIDATED', operator: 'Marcus Brody' }
+];
+
+export const mockEvents = [
+  { id: '1', name: 'Autumn Flash Clearance', type: 'Marketing Promotion', lift: '+35%', dates: ['10/24', '10/25'] }
+];
+// Append to mockData.ts
+export const mockAdjustments = [
+  { date: 'Oct 24, 09:32', sku: 'SKU-8921', name: 'Nike Ultra Boost', desc: 'Physical count variance', type: 'Cycle Count', prev: 24, new: 22, change: -2, user: 'Sarah Jenkins' },
+  { date: 'Oct 24, 08:15', sku: 'SKU-4402', name: 'Nike Vapor Fly', desc: 'PO-2024-098 received', type: 'PO Receipt', prev: 50, new: 150, change: 100, user: 'Warehouse Te...' },
+  { date: 'Oct 23, 16:40', sku: 'SKU-1024', name: 'Puma Classic', desc: 'Damaged stock write-off', type: 'Manual Edit', prev: 12, new: 10, change: -2, user: 'Sarah Jenkins' },
+  { date: 'Oct 23, 11:10', sku: 'SKU-7721', name: 'Adidas Samba', desc: 'Urgent transfer receipt', type: 'PO Receipt', prev: 0, new: 80, change: 80, user: 'Warehouse Te...' },
+  { date: 'Oct 22, 14:05', sku: 'SKU-5012', name: 'Reebok Club C', desc: 'Scheduled audit perfect match', type: 'Cycle Count', prev: 45, new: 45, change: 0, user: 'John Doe' },
+  { date: 'Oct 21, 09:20', sku: 'SKU-2931', name: 'Asics Gel Kayano', desc: 'Found misplaced inventory', type: 'Manual Edit', prev: 8, new: 12, change: 4, user: 'Sarah Jenkins' },
+  { date: 'Oct 20, 15:30', sku: 'SKU-8921', name: 'Nike Ultra Boost', desc: 'PO-2024-091 completed', type: 'PO Receipt', prev: 22, new: 122, change: 100, user: 'Warehouse Te...' },
+  { date: 'Oct 19, 10:00', sku: 'SKU-3129', name: 'New Balance 990', desc: 'Shrinkage entry', type: 'Cycle Count', prev: 18, new: 15, change: -3, user: 'John Doe' }
+];
+
+export const mockReplenishmentDashboard = {
+  kpis: {
+    avgSafetyStockDays: '12.4 Days',
+    systemRopCoverage: '94.1%',
+    systemRopAlerts: 27,
+    totalEoqValue: '$45,820',
+    serviceLevel: '96.4%',
+    serviceLevelMom: '+0.8%'
+  },
+  skus: [
+    { id: 'SKU-8921', name: 'Nike Ultra Boost', category: 'Footwear', daily: 25.4, sd: 4.2, lt: 7, ss: 20, rop: 198, eoq: 450, status: 'Below ROP' },
+    { id: 'SKU-4402', name: 'Nike Vapor Fly', category: 'Footwear', daily: 12.8, sd: 2.1, lt: 10, ss: 11, rop: 140, eoq: 250, status: 'Critical' },
+    { id: 'SKU-1024', name: 'Puma Classic', category: 'Footwear', daily: 8.5, sd: 1.5, lt: 5, ss: 7, rop: 50, eoq: 180, status: 'Critical' },
+    { id: 'SKU-7721', name: 'Adidas Samba', category: 'Footwear', daily: 42.1, sd: 6.8, lt: 4, ss: 25, rop: 194, eoq: 600, status: 'Above ROP' },
+    { id: 'SKU-5012', name: 'Reebok Club C', category: 'Footwear', daily: 15, sd: 2.5, lt: 6, ss: 12, rop: 102, eoq: 300, status: 'Above ROP' },
+    { id: 'SKU-2931', name: 'Asics Gel Kayano', category: 'Footwear', daily: 11.2, sd: 1.9, lt: 8, ss: 10, rop: 100, eoq: 220, status: 'Above ROP' },
+    { id: 'SKU-3129', name: 'New Balance 990', category: 'Footwear', daily: 6.4, sd: 1.1, lt: 14, ss: 7, rop: 97, eoq: 150, status: 'Below ROP' },
+    { id: 'SKU-8812', name: 'Under Armour Hovr', category: 'Apparel', daily: 19.5, sd: 3.2, lt: 6, ss: 15, rop: 132, eoq: 380, status: 'Above ROP' }
+  ]
+};
+
+export const mockCostSimulation = {
+  currentPolicy: { sl: '95%', holding: '$6,420', stockout: '$7,210', total: '$14,210' },
+  simulatedPolicy: { sl: '98%', holding: '$8,250', stockout: '$2,100', total: '$10,850' },
+  delta: { holding: '+28.5%', stockout: '-70.8%', total: '-23.6%' },
+  chartData: [
+    { sl: '85%', cost: 18000 },
+    { sl: '90%', cost: 16000 },
+    { sl: '95%', cost: 14210 },
+    { sl: '96%', cost: 13500 },
+    { sl: '98%', cost: 10850 },
+    { sl: '99.9%', cost: 22000 }
+  ]
+};
+
+export const mockAuditLogs = [
+  { timestamp: '2024-10-24 10:32:15', user: 'sarah.j@dfios.com', action: 'Inventory Policy Update', details: 'Service Level Target globally updated to 95%', ip: '192.168.1.42', severity: 'Warning' },
+  { timestamp: '2024-10-24 09:40:02', user: 'system-agent-ml', action: 'Model Training Execution', details: 'TFT v3.2 weekly retraining pipeline finished', ip: '10.0.4.12', severity: 'Info' },
+  { timestamp: '2024-10-24 08:15:30', user: 'wh-receiver-02', action: 'Inventory Adjustment', details: 'SKU-4402 Nike Vapor received PO-2024-098', ip: '192.168.10.15', severity: 'Info' },
+  { timestamp: '2024-10-23 16:40:11', user: 'sarah.j@dfios.com', action: 'Manual Inventory Edit', details: 'SKU-1024 Puma Classic quantity write-off (-2)', ip: '192.168.1.42', severity: 'Warning' },
+  { timestamp: '2024-10-23 14:15:00', user: 'john.d@dfios.com', action: 'Data Export', details: 'ABC/XYZ analysis exported to Excel format', ip: '192.168.1.109', severity: 'Info' },
+  { timestamp: '2024-10-23 09:00:24', user: 'system-agent-ml', action: 'Data Ingestion Sync', details: 'Walmart Sales database sync finalized cleanly', ip: '10.0.4.12', severity: 'Info' },
+  { timestamp: '2024-10-22 17:30:15', user: 'admin@dfios.com', action: 'User Deletion', details: "Role 'Store Manager' user deleted (ID: 442)", ip: '192.168.1.2', severity: 'Critical' },
+  { timestamp: '2024-10-22 08:30:00', user: 'sarah.j@dfios.com', action: 'User Authentication', details: 'Successfully logged in via SSO', ip: '192.168.1.42', severity: 'Info' },
+  { timestamp: '2024-10-21 11:22:18', user: 'john.d@dfios.com', action: 'Automatic Recalculation', details: 'SS/ROP/EOQ values successfully auto-updated', ip: '192.168.1.109', severity: 'Info' },
+  { timestamp: '2024-10-20 15:45:02', user: 'wh-receiver-02', action: 'Inventory Adjustment', details: 'SKU-8921 Nike Ultra Boost PO-2024-091 (+100)', ip: '192.168.10.15', severity: 'Info' }
+];
+
+export const mockDataQuality = {
+  score: '94.2%',
+  missingRate: '0.3%',
+  outliers: 2,
+  inspections: [
+    { name: 'Future date target leakage check', category: 'Leakage Prevention', status: 'Pass', details: 'Validated all validation dataset windows possess no future va...', affected: '0 anomalies' },
+    { name: 'Sales volume completeness audit', category: 'Completeness', status: 'Warning', details: 'Discovered 32 null/missing values in historical series', affected: '32 SKUs' },
+    { name: 'SKU database redundancy validation', category: 'Consistency', status: 'Pass', details: 'Verified absolutely no duplicate matching index entries exist', affected: '0 anomalies' },
+    { name: 'Price-demand correlation consistency', category: 'Validity', status: 'Pass', details: 'Temporal correlation metrics validate correctly within bound t...', affected: '0 anomalies' },
+    { name: 'Promotion flag data integrity aligner', category: 'Consistency', status: 'Fail', details: 'Identified binary promotion flags active on past closed dates', affected: '2 records' },
+    { name: 'Outlier Sales Spikes Analysis', category: 'Validity', status: 'Warning', details: 'Sales spikes identified outside normal distribution limits (3 S...', affected: '4 events' }
+  ]
+};
+
+export const mockMlPipeline = {
+  kpis: {
+    lastRun: {
+      time: 'Oct 24, 00:00',
+      status: 'Duration: 42 mins finished clean'
+    },
+    nextRun: {
+      time: 'In 6 Days',
+      status: 'Scheduled: Oct 31, 00:00 AM'
+    },
+    activeModel: {
+      name: 'TFT v3.2',
+      desc: 'Temporal Fusion Transformer'
+    },
+    pipelineHealth: {
+      status: 'Healthy',
+      desc: '0 Ingestion Alerts pending'
+    }
+  },
+  executions: [
+    { id: 'RUN-1092', trigger: 'Scheduled', start: 'Oct 24, 00:00', duration: '42 min', model: 'TFT v3.2', scope: '3,049 SKUs', status: 'Completed', params: ['SS', 'ABC'] },
+    { id: 'RUN-1091', trigger: 'Manual Trigger', start: 'Oct 22, 14:15', duration: '45 min', model: 'TFT v3.2', scope: '3,049 SKUs', status: 'Completed', params: ['SS', 'ABC'] },
+    { id: 'RUN-1090', trigger: 'Scheduled', start: 'Oct 17, 00:00', duration: '41 min', model: 'TFT v3.1', scope: '3,037 SKUs', status: 'Completed', params: ['SS', 'ABC'] },
+    { id: 'RUN-1089', trigger: 'Scheduled', start: 'Oct 10, 00:00', duration: '44 min', model: 'TFT v3.1', scope: '3,037 SKUs', status: 'Completed', params: ['SS'] },
+    { id: 'RUN-1088', trigger: 'Scheduled', start: 'Oct 03, 00:00', duration: '58 min', model: 'LightGBM v2.9', scope: '3,025 SKUs', status: 'Failed', params: [] }
+  ]
 };

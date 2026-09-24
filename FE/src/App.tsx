@@ -10,6 +10,7 @@ import { Products } from './pages/Products.tsx';
 import { ModelPerformance } from './pages/ModelPerformance.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Login } from './pages/auth/Login.tsx';
+import { ForgotPassword } from './pages/auth/ForgotPassword.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -24,6 +25,7 @@ const App: React.FC = () => {
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
           
           <Route path="/" element={
             <ProtectedRoute>

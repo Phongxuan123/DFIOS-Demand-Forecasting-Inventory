@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Bell, Calendar, TrendingUp, Activity, Grid, Settings } from 'lucide-react';
+import { TrendingUp, Activity, Grid, Settings } from 'lucide-react';
 import './Reports.css';
 
 
@@ -35,25 +35,6 @@ export const Reports: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      {/* Header */}
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">Reports & Exports</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, orders..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
-      </div>
-
       <h2 className="section-title">Generate System Reports</h2>
 
       {isLoading || !data ? (
@@ -73,7 +54,7 @@ export const Reports: React.FC = () => {
                     <div className="rc-select"><div className="rc-select-icon"></div>Last 30 Days</div>
                     <div className="rc-select" style={{flex: '0 0 auto', width: 'auto'}}>PDF Format</div>
                   </div>
-                  <button className="rc-generate-btn">Generate Report</button>
+                  <button className="rc-generate-btn">{tpl.btnText || 'Generate Report'}</button>
                 </div>
               </div>
             ))}

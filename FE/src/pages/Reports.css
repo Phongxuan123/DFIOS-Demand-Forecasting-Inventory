@@ -168,9 +168,11 @@
   font-size: 0.625rem;
   font-weight: 700;
   text-transform: uppercase;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
 }
-.status-badge.ready { color: #059669; }
-.status-badge.processing { color: #ca8a04; background-color: #fef9c3; padding: 0.125rem 0.25rem; border-radius: 0.25rem; }
+.status-badge.ready { color: #0d9488; background-color: #ccfbf1; }
+.status-badge.processing { color: #ca8a04; background-color: #fef9c3; }
 
 .download-btn {
   font-size: 0.625rem;

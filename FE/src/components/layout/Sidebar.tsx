@@ -18,7 +18,7 @@ export const Sidebar: React.FC = () => {
           <span>DEMAND FORECASTING</span>
         </div>
       </div>
-      
+
       <nav className="sidebar-nav">
         <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
           <LayoutDashboard size={18} />
@@ -36,7 +36,7 @@ export const Sidebar: React.FC = () => {
           <PieChart size={18} />
           <span>ABC/XYZ Analysis</span>
         </NavLink>
-        
+
         <NavLink to="/model-performance" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Activity size={18} />
           <span>Model Performance</span>
@@ -45,10 +45,10 @@ export const Sidebar: React.FC = () => {
           <FileText size={18} />
           <span>Reports</span>
         </NavLink>
-        
+
         <div className="nav-divider" />
         <div className="nav-group-title">SYSTEM</div>
-        
+
         <NavLink to="/products" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <Package size={18} />
           <span>Products</span>
@@ -62,9 +62,9 @@ export const Sidebar: React.FC = () => {
       <div className="sidebar-footer">
         <div className="user-profile-bottom">
           <div className="user-profile-info">
-            <img src="https://ui-avatars.com/api/?name=Sarah+Jenkins&background=0d9488&color=fff" alt="User" className="user-avatar" />
+            <img src="https://ui-avatars.com/api/?name=Phuc+Pham+Huu&background=0d9488&color=fff" alt="User" className="user-avatar" />
             <div className="user-details">
-              <span className="user-name">Sarah Jenkins</span>
+              <span className="user-name">Phuc Pham Huu</span>
               <span className="user-role">Inventory Manager</span>
             </div>
           </div>

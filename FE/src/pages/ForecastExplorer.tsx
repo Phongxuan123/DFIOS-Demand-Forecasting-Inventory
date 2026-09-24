@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/Card.tsx';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Line } from 'recharts';
-import { Search, Bell, Calendar, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { api } from '../services/api.ts';
 import './ForecastExplorer.css';
 
@@ -9,6 +9,7 @@ export const ForecastExplorer: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [skuSearch, setSkuSearch] = useState('SKU-8921-ULTRA-BOOST-WHITE');
+  const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -36,25 +37,6 @@ export const ForecastExplorer: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      {/* Header */}
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">Interactive Forecast Explorer</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, locations..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
-      </div>
-
       {/* Filters Bar */}
       <Card className="mb-6 p-6">
         <div className="forecast-filters">
@@ -154,6 +136,21 @@ export const ForecastExplorer: React.FC = () => {
             </div>
           )}
         </div>
+        
+        <div className="override-section">
+          <div className="override-info">
+            <h4 className="override-title">Manual Forecast Override</h4>
+            <p className="override-desc">Apply a temporary business override adjustment to the projected baseline demand for this SKU.</p>
+            <div className="override-current">
+              <span className="override-label">Current predicted demand</span>
+              <span className="override-value">1,420 units</span>
+            </div>
+          </div>
+          <div className="override-action">
+            <span className="override-status">Manual Override Applied</span>
+            <button className="override-btn" onClick={() => setIsOverrideModalOpen(true)}>Override Forecast</button>
+          </div>
+        </div>
       </Card>
 
       {!isLoading && data && (
@@ -219,6 +216,56 @@ export const ForecastExplorer: React.FC = () => {
               ))}
             </div>
           </Card>
+        </div>
+      )}
+
+      {/* Override Modal */}
+      {isOverrideModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)}><X size={16} /></button>
+            <h2 className="modal-title">Manual Forecast Override</h2>
+            <p className="modal-subtitle">SKU-8921-ULTRA-BOOST-WHITE • E-Commerce Warehouse • 28d Horizon</p>
+            
+            <div className="modal-form-group mt-4">
+              <label>Current predicted demand</label>
+              <div className="modal-readonly-input">
+                <span className="text-xl font-bold">1,420 units</span>
+              </div>
+            </div>
+            
+            <div className="modal-form-group">
+              <label>Adjusted Forecast</label>
+              <div className="modal-input-wrapper">
+                <input type="text" defaultValue="1,480" className="modal-input" />
+                <span className="modal-input-suffix">units</span>
+              </div>
+            </div>
+            
+            <div className="modal-form-group">
+              <label>Override reason category</label>
+              <select className="modal-select">
+                <option>Seasonal Adjustment</option>
+                <option>Promotional Event</option>
+                <option>Supply Chain Disruption</option>
+              </select>
+            </div>
+            
+            <div className="modal-form-group">
+              <label>Reason for Override</label>
+              <textarea className="modal-textarea" placeholder="Enter justification for manual adjustment..."></textarea>
+            </div>
+            
+            <div className="modal-info-banner">
+              <div className="banner-dot"></div>
+              <span>Override will be logged and tracked for model accuracy comparison.</span>
+            </div>
+            
+            <div className="modal-actions">
+              <button className="modal-btn-cancel" onClick={() => setIsOverrideModalOpen(false)}>Cancel</button>
+              <button className="modal-btn-apply" onClick={() => setIsOverrideModalOpen(false)}>Apply Override</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

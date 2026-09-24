@@ -71,7 +71,7 @@
   line-height: 1;
 }
 
-.active-model .mp-metric-value {
+.active-model .mp-metric-item:nth-child(1) .mp-metric-value {
   color: #0d9488;
 }
 
@@ -83,7 +83,7 @@
 }
 
 .mp-acc-panel {
-  flex: 2;
+  flex: 1;
   background-color: white;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
@@ -206,3 +206,248 @@
   font-weight: 700;
   color: #0f172a;
 }
+
+/* Train New Model Button */
+.train-model-btn {
+  display: flex;
+  align-items: center;
+  padding: 0.625rem 1rem;
+  background-color: #0d9488;
+  color: white;
+  border: none;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(13, 148, 136, 0.2);
+}
+
+.train-model-btn:hover {
+  background-color: #0f766e;
+}
+
+/* Comparison Table */
+.mp-comparison-panel {
+  background-color: white;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.mp-comp-table {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.mp-comp-header {
+  display: flex;
+  background-color: #f8fafc;
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem;
+}
+
+.mp-comp-header > div {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.mp-comp-row {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.mp-comp-row:last-child {
+  border-bottom: none;
+}
+
+.mp-comp-row > div {
+  font-size: 0.75rem;
+}
+
+.mp-comp-col-1 { width: 30%; }
+.mp-comp-col-2 { width: 30%; }
+.mp-comp-col-3 { width: 30%; }
+.mp-comp-col-4 { width: 10%; display: flex; justify-content: flex-end; }
+
+.mp-comp-badge-green {
+  background-color: #dcfce7;
+  color: #166534;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 0.625rem;
+}
+
+.font-bold { font-weight: 700; }
+.text-slate-900 { color: #0f172a; }
+.text-slate-500 { color: #64748b; }
+/* Existing CSS ... */
+
+.mp-header-area {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.mp-page-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.mp-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.5rem;
+}
+
+.mp-tab-btn {
+  background: none;
+  border: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.mp-tab-btn:hover {
+  background-color: #f1f5f9;
+}
+
+.mp-tab-btn.active {
+  background-color: white;
+  color: #0f172a;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+
+/* Cost Simulator Layout */
+.cost-sim-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 1.5rem;
+}
+
+.cost-sim-inputs {
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  align-self: start;
+}
+
+.sim-input-group {
+  margin-bottom: 1.5rem;
+}
+
+.sim-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 0.5rem;
+}
+
+.sim-value-text {
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.text-teal { color: #0d9488; }
+.text-red { color: #dc2626; }
+.text-green { color: #16a34a; }
+
+.sim-select, .sim-input {
+  width: 100%;
+  height: 2.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  color: #0f172a;
+  outline: none;
+  background-color: white;
+}
+
+.sim-slider-track {
+  height: 6px;
+  background-color: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sim-slider-fill {
+  height: 100%;
+  background-color: #0d9488;
+}
+
+.sim-run-btn {
+  width: 100%;
+  background-color: #0d9488;
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sim-run-btn:hover {
+  background-color: #0f766e;
+}
+
+.cost-sim-outputs {
+  display: flex;
+  flex-direction: column;
+}
+
+.cost-sim-chart-panel, .cost-sim-table-panel {
+  background-color: white;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+}
+
+.sim-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sim-table th {
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sim-table td {
+  padding: 1rem 0;
+  font-size: 0.875rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.fw-500 { font-weight: 500; }
+.fw-600 { font-weight: 600; }
+.fw-700 { font-weight: 700; color: #0f172a; }
+
+.mt-4 { margin-top: 1rem; }
+.mt-6 { margin-top: 1.5rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-4 { margin-bottom: 1rem; }
+.mb-6 { margin-bottom: 1.5rem; }

@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/Card.tsx';
 import { api } from '../services/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Search, Bell, Calendar } from 'lucide-react';
+
 import './Dashboard.css';
 
 export const Dashboard: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  
 
   useEffect(() => {
     const fetchData = async () => {
@@ -35,25 +36,8 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="animate-fade-in mb-6">
-      <div className="dashboard-header">
-        <h1 className="dashboard-title">Inventory Optimization Cockpit</h1>
-        <div className="dashboard-header-actions">
-          <div className="search-wrapper">
-            <Search size={14} className="search-icon" />
-            <input type="text" placeholder="Search products, locations..." className="search-input" />
-          </div>
-          <button className="bell-btn">
-            <Bell size={16} />
-            <span className="bell-badge"></span>
-          </button>
-          <div className="date-display">
-            <Calendar size={14} />
-            October 24, 2024
-          </div>
-        </div>
-      </div>
 
-      <div className="grid-cols-4 mb-6">
+      <div className="grid-cols-3 mb-6">
         <Card className="kpi-card">
           <p className="kpi-label">Total Monitored SKUs</p>
           <div className="kpi-value-row">
@@ -78,13 +62,6 @@ export const Dashboard: React.FC = () => {
           </div>
         </Card>
 
-        <Card className="kpi-card">
-          <p className="kpi-label">Service Level Achieved</p>
-          <div className="kpi-value-row">
-            <h2 className="kpi-value">{data.kpis.serviceLevel}%</h2>
-            <span className="kpi-badge success">+0.8% increase</span>
-          </div>
-        </Card>
       </div>
 
       <Card className="mb-6 p-6">
