@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
-import { Search, Bell, Calendar, X, Loader2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Search, Bell, Calendar, X, Loader2, ArrowRight } from 'lucide-react';
 import { mockProducts, mockReports, mockForecastExplorer } from '../../data/mockData.ts';
 import './Topbar.css';
 
@@ -20,24 +21,21 @@ const getPageConfig = (pathname: string) => {
 
 export const Topbar: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const config = getPageConfig(location.pathname);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [history, setHistory] = useState<string[]>(['Nike Ultra Boost', 'SKU-4402']);
   const [showNotifications, setShowNotifications] = useState(false);
   
-  const searchRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
   // Handle click outside to close dropdowns
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
-        setShowDropdown(false);
-      }
       if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
         setShowNotifications(false);
       }
@@ -45,6 +43,21 @@ export const Topbar: React.FC = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Keyboard shortcut for command palette
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setIsCommandPaletteOpen((open) => !open);
+      }
+      if (e.key === 'Escape' && isCommandPaletteOpen) {
+        setIsCommandPaletteOpen(false);
+      }
+    };
+    document.addEventListener('keydown', down);
+    return () => document.removeEventListener('keydown', down);
+  }, [isCommandPaletteOpen]);
 
   // Simulate search logic based on context
   useEffect(() => {
@@ -55,7 +68,6 @@ export const Topbar: React.FC = () => {
     }
 
     setIsSearching(true);
-    setShowDropdown(true);
 
     const delay = setTimeout(() => {
       let found: any[] = [];
@@ -80,15 +92,9 @@ export const Topbar: React.FC = () => {
     return () => clearTimeout(delay);
   }, [searchTerm, config.context]);
 
-  const handleClear = () => {
-    setSearchTerm('');
-    setResults([]);
-    setShowDropdown(false);
-  };
-  
+
   const handleSelectHistory = (term: string) => {
     setSearchTerm(term);
-    setShowDropdown(true);
   };
 
   return (
@@ -96,71 +102,116 @@ export const Topbar: React.FC = () => {
       <h1 className="topbar-page-title">{config.title}</h1>
       
       <div className="topbar-actions-right">
-        <div className="topbar-search-container" ref={searchRef}>
-          <div className="search-input-wrapper">
-            <Search size={14} className="search-icon" />
-            <input 
-              type="text" 
-              placeholder={config.placeholder}
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setShowDropdown(true);
-              }}
-              onFocus={() => setShowDropdown(true)}
-              className="topbar-search-input"
-            />
-            {isSearching && <Loader2 size={14} className="search-loader animate-spin" />}
-            {!isSearching && searchTerm && (
-              <button className="search-clear-btn" onClick={handleClear}>
-                <X size={14} />
-              </button>
-            )}
-          </div>
-          
-          {/* Autocomplete Dropdown */}
-          {showDropdown && (
-            <div className="search-dropdown-menu">
-              {!searchTerm && history.length > 0 && (
-                <div className="search-section">
-                  <div className="search-section-title">Recent Searches</div>
-                  {history.map((h, i) => (
-                    <div key={i} className="search-history-item" onClick={() => handleSelectHistory(h)}>
-                      <Search size={12} className="history-icon" />
-                      <span>{h}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {searchTerm && !isSearching && results.length === 0 && (
-                <div className="search-no-results">
-                  <p>No results found for "{searchTerm}"</p>
-                  <span className="search-hint">Try searching for a different SKU, category, or check your spelling.</span>
-                </div>
-              )}
-              
-              {searchTerm && !isSearching && results.length > 0 && (
-                <div className="search-section">
-                  <div className="search-section-title">Suggested Results</div>
-                  {results.slice(0, 5).map((res, idx) => (
-                    <div key={idx} className="search-result-item" onClick={() => {
-                      setSearchTerm(res.name || res.title);
-                      if (!history.includes(res.name || res.title)) {
-                        setHistory([res.name || res.title, ...history].slice(0, 5));
-                      }
-                      setShowDropdown(false);
-                    }}>
-                      {res.id && <span className="result-id">{res.id}</span>}
-                      <span className="result-name">{res.name || res.title}</span>
-                      {res.category && <span className="result-meta">{res.category}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+        <div className="topbar-search-trigger" onClick={() => setIsCommandPaletteOpen(true)}>
+          <Search size={14} className="search-icon" />
+          <span className="search-placeholder">Search...</span>
         </div>
+
+        {/* Command Palette Modal */}
+        {isCommandPaletteOpen && createPortal(
+          <div className="command-palette-overlay" onClick={() => setIsCommandPaletteOpen(false)}>
+            <div className="command-palette-modal" onClick={e => e.stopPropagation()}>
+              <div className="cp-header">
+                <Search size={18} className="cp-icon" />
+                <input 
+                  type="text" 
+                  placeholder={config.placeholder || "Type a command or search..."}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="cp-input"
+                  autoFocus
+                />
+                {searchTerm && (
+                  <button className="cp-clear-input-btn" onClick={() => setSearchTerm('')}>
+                    <X size={14} />
+                  </button>
+                )}
+                <button className="cp-close-btn" onClick={() => setIsCommandPaletteOpen(false)}>
+                  <span style={{ fontSize: '10px', fontWeight: 600 }}>ESC</span>
+                </button>
+              </div>
+              
+              <div className="cp-body">
+                {isSearching && (
+                  <div className="cp-loading">
+                    <Loader2 size={16} className="animate-spin" style={{marginRight: '8px'}} /> Searching...
+                  </div>
+                )}
+                
+                {!searchTerm && history.length > 0 && (
+                  <div className="cp-section">
+                    <div className="cp-section-title">Recent Searches</div>
+                    {history.map((h, i) => (
+                      <div key={i} className="cp-item" onClick={() => handleSelectHistory(h)}>
+                        <ArrowRight size={14} className="cp-item-icon" />
+                        <span>{h}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                {!searchTerm && (
+                  <>
+                    <div className="cp-section">
+                      <div className="cp-section-title">Navigation</div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Dashboard</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/forecast-explorer'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Forecast Explorer</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/replenishment'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Replenishment</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/abc-xyz'); }}><ArrowRight size={14} className="cp-item-icon" /><span>ABC/XYZ Analysis</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/model-performance'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Model Performance</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/reports'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Reports</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/products'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Products</span></div>
+                    </div>
+                    
+                    <div className="cp-section">
+                      <div className="cp-section-title">Settings</div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Profile & Account</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>System Configuration</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Notifications</span></div>
+                    </div>
+
+                    <div className="cp-section">
+                      <div className="cp-section-title">Theme</div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); }}><ArrowRight size={14} className="cp-item-icon" /><span>Light Mode</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); }}><ArrowRight size={14} className="cp-item-icon" /><span>Dark Mode</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); }}><ArrowRight size={14} className="cp-item-icon" /><span>System Default</span></div>
+                    </div>
+                  </>
+                )}
+                
+                {searchTerm && !isSearching && results.length === 0 && (
+                  <div className="cp-no-results">
+                    <p style={{ margin: 0, fontWeight: 500, color: '#334155' }}>No results found for "{searchTerm}"</p>
+                    <span className="cp-search-hint">Try searching for a different keyword, SKU, or check your spelling.</span>
+                  </div>
+                )}
+                
+                {searchTerm && !isSearching && results.length > 0 && (
+                  <div className="cp-section">
+                    <div className="cp-section-title">Suggested Results</div>
+                    {results.slice(0, 5).map((res, idx) => (
+                      <div key={idx} className="cp-item" onClick={() => {
+                        setSearchTerm(res.name || res.title);
+                        if (!history.includes(res.name || res.title)) {
+                          setHistory([res.name || res.title, ...history].slice(0, 5));
+                        }
+                        setIsCommandPaletteOpen(false);
+                      }}>
+                        <ArrowRight size={14} className="cp-item-icon" />
+                        <div className="cp-item-content">
+                          {res.id && <span className="cp-result-id">{res.id}</span>}
+                          <span className="cp-result-name">{res.name || res.title}</span>
+                        </div>
+                        {res.category && <span className="cp-result-meta">{res.category}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
         <div className="notif-wrapper" ref={notifRef}>
           <button className="topbar-bell-btn" onClick={() => setShowNotifications(!showNotifications)}>

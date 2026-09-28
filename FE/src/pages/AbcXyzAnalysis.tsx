@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { Settings } from 'lucide-react';
 import './AbcXyzAnalysis.css';
 
@@ -138,7 +139,7 @@ export const AbcXyzAnalysis: React.FC = () => {
           </div>
           
           {/* Modal Overlay */}
-          {isConfigOpen && (
+          {isConfigOpen && createPortal(
             <div className="config-modal-overlay" onClick={() => setIsConfigOpen(false)}>
               
               {/* Centered Modal */}
@@ -228,7 +229,8 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <p className="modal-footer-text">Recalculation will update classification for all 3,049 SKUs</p>
                 </div>
               </div>
-            </div>
+            </div>,
+            document.body
           )}
         </>
       )}
