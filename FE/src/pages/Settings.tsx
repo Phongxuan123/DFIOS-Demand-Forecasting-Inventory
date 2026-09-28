@@ -383,6 +383,7 @@ export const Settings: React.FC = () => {
 
   const renderDataQuality = () => (
     <div className="settings-dq-panel">
+      <h2 className="mp-panel-title mb-6">Data Quality Inspector</h2>
       <div className="dq-top-row">
         <div className="dq-score-card">
           <div className="dq-score-circle">
@@ -457,33 +458,23 @@ export const Settings: React.FC = () => {
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading settings data...</div>
       ) : (
         <>
-          {activeTab !== 'Data Quality' && (
-            <div className="settings-tabs-container">
-              {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Automation'].map(tab => (
-                <button 
-                  key={tab}
-                  className={`settings-tab-btn ${activeTab === tab ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab)}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-          )}
-          
-          {activeTab === 'Data Quality' && (
-            <div className="mb-4">
-              <button className="settings-btn-outline" onClick={() => setActiveTab('ML Pipeline')} style={{padding: '0.375rem 0.75rem'}}>
-                &larr; Back to ML Pipeline
+          <div className="settings-tabs-container">
+            {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Data Quality Inspector', 'Automation'].map(tab => (
+              <button 
+                key={tab}
+                className={`settings-tab-btn ${activeTab === tab ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab)}
+              >
+                {tab}
               </button>
-            </div>
-          )}
+            ))}
+          </div>
 
           {activeTab === 'General Settings' && renderGeneralSettings()}
           {activeTab === 'User Management' && renderUserManagement()}
           {activeTab === 'ML Pipeline' && renderMLPipeline()}
           {activeTab === 'Audit Logs' && renderAuditLogs()}
-          {activeTab === 'Data Quality' && renderDataQuality()}
+          {activeTab === 'Data Quality Inspector' && renderDataQuality()}
           
           {(activeTab === 'Automation') && (
             <div className="settings-main-split">

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Card } from '../components/ui/Card.tsx';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Line } from 'recharts';
 import { X } from 'lucide-react';
@@ -220,7 +221,7 @@ export const ForecastExplorer: React.FC = () => {
       )}
 
       {/* Override Modal */}
-      {isOverrideModalOpen && (
+      {isOverrideModalOpen && createPortal(
         <div className="modal-overlay">
           <div className="modal-content">
             <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)}><X size={16} /></button>
@@ -266,7 +267,8 @@ export const ForecastExplorer: React.FC = () => {
               <button className="modal-btn-apply" onClick={() => setIsOverrideModalOpen(false)}>Apply Override</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

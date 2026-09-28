@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Search } from 'lucide-react';
+import { Play, Search, Calendar } from 'lucide-react';
 import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts';
 import './ModelPerformance.css';
 
@@ -175,6 +175,110 @@ export const ModelPerformance: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Model Training & Benchmarking */}
+      <div className="mp-training-panel">
+        <h2 className="mp-panel-title">Model Training & Benchmarking</h2>
+        <p className="mp-panel-subtitle">Configure the next training run and track the latest execution history for the active model stack.</p>
+        
+        <div className="training-form-row">
+          <div className="training-input-group" style={{maxWidth: '200px'}}>
+            <label>Model type</label>
+            <select className="training-select">
+              <option>TFT</option>
+              <option>LightGBM</option>
+              <option>XGBoost</option>
+            </select>
+          </div>
+          
+          <div className="training-input-group">
+            <label>Training period</label>
+            <div className="training-input-wrapper">
+              <input type="text" className="training-input" defaultValue="Oct 01, 2024 - Oct 22, 2024" />
+              <Calendar size={14} className="input-icon" />
+            </div>
+          </div>
+        </div>
+        
+        <div className="training-form-row">
+          <div className="training-input-group">
+            <label>SKU scope</label>
+            <select className="training-select">
+              <option>All SKUs</option>
+              <option>Top 20% SKUs</option>
+              <option>Bottom 80% SKUs</option>
+            </select>
+          </div>
+          <button className="btn-start-training">
+            <Play size={14} style={{fill: 'currentColor'}} /> Start Training
+          </button>
+        </div>
+        
+        <div className="training-status-banner">
+          <div className="status-dot"></div>
+          Last trained: Oct 22, 2024 | Duration: 45 min
+        </div>
+      </div>
+
+      {/* Model Registry */}
+      <div className="mp-registry-panel">
+        <h2 className="mp-panel-title">Model Registry</h2>
+        <p className="mp-panel-subtitle">Track deployed and archived model versions, benchmark performance, and manage lifecycle actions.</p>
+        
+        <div className="registry-table-container">
+          <table className="registry-table">
+            <thead>
+              <tr>
+                <th>Version</th>
+                <th>Model</th>
+                <th>Trained Date</th>
+                <th>MASE</th>
+                <th>RMSE</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="fw-600">v3.2</td>
+                <td>TFT</td>
+                <td>Oct 22, 2024</td>
+                <td>0.64</td>
+                <td>22.4</td>
+                <td><span className="registry-status active">Active</span></td>
+                <td><button className="registry-action-btn">Archive</button></td>
+              </tr>
+              <tr>
+                <td className="fw-600">v3.1</td>
+                <td>LightGBM</td>
+                <td>Oct 15, 2024</td>
+                <td>0.84</td>
+                <td>32.1</td>
+                <td><span className="registry-status archived">Archived</span></td>
+                <td><button className="registry-action-btn deploy">Deploy</button></td>
+              </tr>
+              <tr>
+                <td className="fw-600">v3.0</td>
+                <td>ARIMA</td>
+                <td>Sep 28, 2024</td>
+                <td>1.12</td>
+                <td>45.2</td>
+                <td><span className="registry-status archived">Archived</span></td>
+                <td><button className="registry-action-btn deploy">Deploy</button></td>
+              </tr>
+              <tr>
+                <td className="fw-600">v2.9</td>
+                <td>XGBoost</td>
+                <td>Sep 10, 2024</td>
+                <td>0.91</td>
+                <td>36.8</td>
+                <td><span className="registry-status archived">Archived</span></td>
+                <td><button className="registry-action-btn deploy">Deploy</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </>
   );
 
@@ -279,12 +383,6 @@ export const ModelPerformance: React.FC = () => {
     <div className="animate-fade-in mb-6">
       <div className="mp-header-area">
         <h1 className="mp-page-title">{activeTab === 'Cost Simulator' ? 'Cost Sensitivity Simulator' : 'Model Performance & Diagnostics'}</h1>
-        {activeTab === 'Cost Simulator' && (
-          <div className="rep-search-box">
-            <Search size={14} color="#94a3b8" />
-            <input type="text" placeholder="Search products, audits, SKU..." />
-          </div>
-        )}
       </div>
 
       <div className="mp-tabs">

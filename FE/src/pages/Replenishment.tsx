@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Search } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Download, Pencil } from 'lucide-react';
 import './Replenishment.css';
 
 export const Replenishment: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [adjQty, setAdjQty] = useState('45');
+  const [reason, setReason] = useState('');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -22,13 +26,9 @@ export const Replenishment: React.FC = () => {
   }, []);
 
   return (
-    <div className="animate-fade-in mb-6 rep-container">
+    <div className="animate-fade-in mb-6 rep-container relative">
       <div className="rep-header-section">
-        <h1 className="rep-page-title">Inventory Parameter Dashboard — Safety Stock, ROP & EOQ</h1>
-        <div className="rep-search-box">
-          <Search size={14} color="#94a3b8" />
-          <input type="text" placeholder="Search products, audits, SKU..." />
-        </div>
+        <h1 className="rep-page-title">Automated Replenishment Module</h1>
       </div>
 
       {isLoading || !data ? (
@@ -37,78 +37,129 @@ export const Replenishment: React.FC = () => {
         <>
           <div className="rep-kpi-row">
             <div className="rep-kpi-card">
-              <span className="rep-kpi-title">AVERAGE SAFETY STOCK COVERAGE</span>
+              <span className="rep-kpi-title">ITEMS BELOW ROP</span>
               <div className="rep-kpi-content">
-                <h2>{data.kpis.avgSafetyStockDays}</h2>
-                <span className="rep-badge green">Optimized</span>
+                <h2>14</h2>
+                <span className="rep-badge red-light">Needs Immediate Action</span>
               </div>
             </div>
             
             <div className="rep-kpi-card">
-              <span className="rep-kpi-title">SYSTEM ROP COVERAGE</span>
+              <span className="rep-kpi-title">PENDING PURCHASE ORDERS</span>
               <div className="rep-kpi-content">
-                <h2>{data.kpis.systemRopCoverage}</h2>
-                <span className="rep-badge red">{data.kpis.systemRopAlerts} SKUs Alerting</span>
+                <h2>8</h2>
+                <span className="rep-badge yellow-light">3 ETA Today</span>
               </div>
             </div>
 
             <div className="rep-kpi-card">
-              <span className="rep-kpi-title">TOTAL CURRENT EOQ VALUE</span>
+              <span className="rep-kpi-title">AVG. SAFETY STOCK DAYS</span>
               <div className="rep-kpi-content">
-                <h2>{data.kpis.totalEoqValue}</h2>
-                <span className="rep-badge green">Optimal Run</span>
+                <h2>12.3 Days</h2>
+                <span className="rep-badge green-text">Target Achieved (98%)</span>
               </div>
             </div>
 
             <div className="rep-kpi-card">
-              <span className="rep-kpi-title">TARGET SERVICE LEVEL ACHIEVED</span>
+              <span className="rep-kpi-title">TOTAL EOQ VALUE</span>
               <div className="rep-kpi-content">
-                <h2>{data.kpis.serviceLevel}</h2>
-                <span className="rep-badge green-text">{data.kpis.serviceLevelMom} MoM</span>
+                <h2>$24,580</h2>
+                <span className="rep-badge green-text">+15% Capital Efficiency</span>
               </div>
+            </div>
+          </div>
+
+          <div className="rep-filter-bar">
+            <span className="filter-label">FILTER REPLENISHMENT BY STATUS</span>
+            <div className="filter-pills">
+              <button className="pill-btn">All (140)</button>
+              <button className="pill-btn active-green">Below Safety Stock (14)</button>
+              <button className="pill-btn">Triggered ROP (22)</button>
+              <button className="pill-btn">Optimized (104)</button>
             </div>
           </div>
 
           <div className="rep-main-grid">
             <div className="rep-table-panel">
-              <h3 className="rep-panel-title">SKU Inventory Parameters & Status</h3>
+              <div className="table-top-bar">
+                <div className="tab-group">
+                  <button className="tab-btn active">Active Orders</button>
+                  <button className="tab-btn">History</button>
+                </div>
+                <div className="action-group">
+                  <span className="sort-text">Sorted by: Urgent Priority</span>
+                  <button className="export-btn"><Download size={14} /> Export CSV</button>
+                </div>
+              </div>
               
               <div className="rep-table-wrap">
-                <table className="rep-table">
+                <table className="rep-table new-rep-table">
                   <thead>
                     <tr>
                       <th>SKU ID</th>
-                      <th>PRODUCT</th>
-                      <th>DAILY (μ)</th>
-                      <th>S.D. (σ)</th>
-                      <th>LT</th>
-                      <th>SS</th>
+                      <th className="vertical-th">
+                        <div className="vert-text">PRODUCT<br/>NAME</div>
+                        <div className="moq-pack">MOQ: 50 | Pack: 10</div>
+                      </th>
+                      <th>STOCK</th>
+                      <th>SAFETY</th>
                       <th>ROP</th>
                       <th>EOQ</th>
                       <th>STATUS</th>
+                      <th>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.skus.map((sku: any, i: number) => (
-                      <tr key={i} className={i === 0 ? 'active' : ''}>
-                        <td className="fw-700">{sku.id}</td>
-                        <td>
-                          <div className="rep-prod-name">{sku.name}</div>
-                          <div className="rep-prod-cat">{sku.category}</div>
-                        </td>
-                        <td>{sku.daily}</td>
-                        <td>{sku.sd}</td>
-                        <td>{sku.lt}d</td>
-                        <td className="fw-600">{sku.ss}</td>
-                        <td className="fw-600">{sku.rop}</td>
-                        <td className="fw-600">{sku.eoq}</td>
-                        <td>
-                          <span className={`rep-status ${sku.status === 'Critical' ? 'red' : sku.status === 'Below ROP' ? 'yellow' : 'green'}`}>
-                            {sku.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    <tr>
+                      <td className="fw-700">SKU-8921</td>
+                      <td className="dots-td">..</td>
+                      <td>8</td>
+                      <td>15</td>
+                      <td>20</td>
+                      <td className="eoq-cell">150 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td><span className="status-badge red-bg">CRITICAL</span></td>
+                      <td><button className="action-btn green-solid">Reorder 150 Nov</button></td>
+                    </tr>
+                    <tr>
+                      <td className="fw-700">SKU-4402</td>
+                      <td className="dots-td">..</td>
+                      <td>12</td>
+                      <td>10</td>
+                      <td>18</td>
+                      <td className="eoq-cell">120 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td><span className="status-badge yellow-text">LOW STOCK</span></td>
+                      <td><button className="action-btn outline">Trigger Reorder</button></td>
+                    </tr>
+                    <tr>
+                      <td className="fw-700">SKU-1024</td>
+                      <td className="dots-td">..</td>
+                      <td>45</td>
+                      <td>12</td>
+                      <td>22</td>
+                      <td className="eoq-cell">80 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td><span className="status-badge green-text-badge">IN STOCK</span></td>
+                      <td><button className="action-btn outline">Monitor Demand</button></td>
+                    </tr>
+                    <tr>
+                      <td className="fw-700">SKU-7721</td>
+                      <td className="dots-td">..</td>
+                      <td>68</td>
+                      <td>25</td>
+                      <td>40</td>
+                      <td className="eoq-cell">200 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td><span className="status-badge green-text-badge">IN STOCK</span></td>
+                      <td><button className="action-btn outline">Optimized</button></td>
+                    </tr>
+                    <tr>
+                      <td className="fw-700">SKU-5012</td>
+                      <td className="dots-td">..</td>
+                      <td>9</td>
+                      <td>8</td>
+                      <td>15</td>
+                      <td className="eoq-cell">100 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td><span className="status-badge yellow-text">LOW STOCK</span></td>
+                      <td><button className="action-btn outline">Reorder Triggered</button></td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -116,55 +167,115 @@ export const Replenishment: React.FC = () => {
 
             <div className="rep-detail-panel">
               <div className="rep-detail-header">
-                <span className="rep-detail-tag">SELECTED SKU PARAMETERS</span>
+                <span className="rep-detail-tag red-tag">SKU-8921 CRITICAL</span>
                 <h2 className="rep-detail-title">Nike Ultra Boost</h2>
-                <p className="rep-detail-subtitle">SKU-8921 • Footwear Tier A</p>
+                <p className="rep-detail-subtitle">E-Commerce Warehouse • Footwear</p>
               </div>
 
-              <div className="rep-formula-group">
-                <div className="rep-formula-top">
-                  <span className="rep-formula-name">Safety Stock (SS)</span>
-                  <span className="rep-formula-result">20 units</span>
+              <div className="calc-box">
+                <h4 className="calc-title">SAFETY STOCK CALCULATION</h4>
+                <div className="calc-row">
+                  <span>Daily Demand (μ)</span>
+                  <span className="fw-700">4.2 units/day</span>
                 </div>
-                <div className="rep-formula-box">
-                  SS = Z * σ * √L
+                <div className="calc-row">
+                  <span>Supplier Lead Time (L)</span>
+                  <span className="fw-700">5 Days</span>
                 </div>
-                <div className="rep-formula-desc">
-                  Z (95% SL) = 1.65 | σ = 4.2 | L = 7 days<br/>
-                  1.65 * 4.2 * 2.64 = 18.3 ≈ 20 units
+                <div className="calc-row">
+                  <span>Z-Score (98% SL)</span>
+                  <span className="fw-700">2.05</span>
                 </div>
-              </div>
-
-              <div className="rep-formula-group">
-                <div className="rep-formula-top">
-                  <span className="rep-formula-name">Reorder Point (ROP)</span>
-                  <span className="rep-formula-result">198 units</span>
-                </div>
-                <div className="rep-formula-box">
-                  ROP = (μ * L) + SS
-                </div>
-                <div className="rep-formula-desc">
-                  μ = 25.4 units/day | L = 7 days | SS = 20<br/>
-                  (25.4 * 7) + 20 = 177.8 + 20 = 198 units
+                <div className="calc-divider"></div>
+                <div className="calc-row">
+                  <span className="fw-700">Calculated Safety Stock</span>
+                  <span className="fw-700 teal-text">15 Units</span>
                 </div>
               </div>
 
-              <div className="rep-formula-group">
-                <div className="rep-formula-top">
-                  <span className="rep-formula-name">Economic Order Qty (EOQ)</span>
-                  <span className="rep-formula-result">450 units</span>
-                </div>
-                <div className="rep-formula-box">
-                  EOQ = √(2 * D * S / H)
-                </div>
-                <div className="rep-formula-desc">
-                  D = 9,271/yr | S = $50.00 | H = $2.20/unit/yr<br/>
-                  √(2 * 9271 * 50 / 2.2) = √421,409 ≈ 450 units
+              <div className="forecast-box">
+                <h4 className="calc-title">28-DAY DEMAND FORECAST PROJECTION</h4>
+                <div className="chart-placeholder">
+                  <svg width="100%" height="60" viewBox="0 0 200 60" preserveAspectRatio="none">
+                    <path d="M0,50 L30,20 L60,45 L110,10 L150,25 L200,35" fill="none" stroke="#0d9488" strokeWidth="2" strokeDasharray="4 4" />
+                    <path d="M0,50 L30,20 L60,45" fill="none" stroke="#64748b" strokeWidth="2" />
+                    <circle cx="60" cy="45" r="4" fill="#0d9488" />
+                  </svg>
+                  <div className="chart-labels">
+                    <span>Oct 24</span>
+                    <span className="teal-text fw-600" style={{ fontSize: '10px' }}>ROP Trigger</span>
+                    <span>Nov 21</span>
+                  </div>
                 </div>
               </div>
-
+              
+              <div className="detail-actions">
+                <button className="btn-generate">Generate Purchase Order (150 Units)</button>
+                <button className="btn-reject">Reject Order</button>
+              </div>
             </div>
           </div>
+          
+          {showModal && createPortal(
+            <div className="modal-overlay" onClick={() => setShowModal(false)}>
+              <div className="modal-content" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h2>Adjust Recommended Order Quantity</h2>
+                  <p>SKU-8921 - Nike Ultra Boost (White / Size 10)</p>
+                </div>
+                
+                <div className="modal-body">
+                  <div className="supplier-box">
+                    <div className="supplier-title">SUPPLIER CONSTRAINTS</div>
+                    <div className="supplier-rules">
+                      MOQ <strong>50 units</strong> • Pack-size / Order Multiple <strong>10 units</strong>
+                    </div>
+                    <div className="supplier-hint">Hint: Enter a multiple of 10 (e.g., 50, 60, 70).</div>
+                  </div>
+                  
+                  <div className="input-group">
+                    <label>RECOMMENDED ORDER QUANTITY</label>
+                    <div className="input-with-label">
+                      <input type="text" value="150" readOnly className="disabled-input" />
+                      <span className="inner-label">Current</span>
+                    </div>
+                  </div>
+                  
+                  <div className="input-group">
+                    <label>ADJUSTED ORDER QUANTITY</label>
+                    <div className="input-with-label error-state">
+                      <input 
+                        type="text" 
+                        value={adjQty} 
+                        onChange={e => setAdjQty(e.target.value)} 
+                        className="error-input" 
+                      />
+                      <span className="inner-label red">Invalid</span>
+                    </div>
+                    <div className="error-text">
+                      - Must be &ge; 50 (MOQ).<br/>- Must be a multiple of 10 (Pack-size).
+                    </div>
+                  </div>
+                  
+                  <div className="input-group mb-0">
+                    <label>REASON FOR ADJUSTMENT</label>
+                    <textarea 
+                      placeholder="Enter reason..."
+                      value={reason}
+                      onChange={e => setReason(e.target.value)}
+                    ></textarea>
+                    <div className="error-text mt-1">Reason is required for auditability.</div>
+                  </div>
+                </div>
+                
+                <div className="modal-footer">
+                  <button className="btn-cancel" onClick={() => setShowModal(false)}>Cancel</button>
+                  <button className="btn-save">Save / Apply Adjustment</button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
         </>
       )}
     </div>
