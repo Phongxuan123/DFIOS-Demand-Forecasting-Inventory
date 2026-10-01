@@ -25,3 +25,19 @@ class ForecastSigma(Base):
     sigma_d_h7 = Column(Float)
     sigma_d_h14 = Column(Float)
     sigma_d_h28 = Column(Float)
+    
+class Product(Base):
+    __tablename__ = "products"
+    item_id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    dept_id = Column(String)
+    cat_id = Column(String)
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True)
+    email = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, nullable=False)  # "Admin" | "Warehouse Manager" | "Viewer"
+    display_name = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)

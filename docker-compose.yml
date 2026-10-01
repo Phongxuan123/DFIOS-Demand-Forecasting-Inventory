@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dfios-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dfios
+      POSTGRES_PASSWORD: dfios123
+      POSTGRES_DB: dfios
+    ports:
+      - "5432:5432"
+    volumes:
+      - dfios_pgdata:/var/lib/postgresql/data
+
+volumes:
+  dfios_pgdata:
