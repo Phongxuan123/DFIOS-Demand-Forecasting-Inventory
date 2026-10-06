@@ -2,6 +2,10 @@ from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
 from app.models.forecast import Forecast, ForecastSigma
+from app.models.sales_history import SalesHistory
+from app.models.supplier import Supplier
+from app.models.inventory import Inventory
+from app.models.event import Event
 from app.models.email_token import EmailToken
 from app.models.audit_log import AuditLog
 
@@ -11,7 +15,10 @@ __all__ = [
     "Product",
     "Forecast",
     "ForecastSigma",
+    "SalesHistory",
+    "Supplier",
+    "Inventory",
+    "Event",
     "EmailToken",
     "AuditLog",
 ]
-
