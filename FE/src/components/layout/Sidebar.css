@@ -70,7 +70,7 @@
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--accent-gradient);
+  background: var(--accent-primary);
   transform: scaleY(0);
   transition: transform var(--transition-normal);
 }
@@ -86,7 +86,7 @@
 }
 
 .nav-item.active {
-  background: var(--accent-gradient);
+  background: var(--accent-primary);
   color: white;
   box-shadow: var(--shadow-sm);
 }

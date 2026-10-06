@@ -103,7 +103,7 @@ export const Topbar: React.FC = () => {
       
       <div className="topbar-actions-right">
         <div className="topbar-search-trigger" onClick={() => setIsCommandPaletteOpen(true)}>
-          <Search size={14} className="search-icon" />
+          <Search size={14} />
           <span className="search-placeholder">Search...</span>
         </div>
 

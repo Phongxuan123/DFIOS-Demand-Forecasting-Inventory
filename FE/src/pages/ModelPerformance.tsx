@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Search, Calendar } from 'lucide-react';
+import { Play, Calendar } from 'lucide-react';
 import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { useAuth } from '../context/AuthContext.tsx';
 import './ModelPerformance.css';
 
 export const ModelPerformance: React.FC = () => {
+  const { user } = useAuth();
+  if (user?.role !== 'ADMIN') return <div className="p-8 text-center" style={{marginTop: '20px'}}><h2>Access Denied</h2><p>You do not have permission to view Model Performance.</p></div>;
   const [activeTab, setActiveTab] = useState('Performance Metrics');
   const [data, setData] = useState<any>(null);
   const [costData, setCostData] = useState<any>(null);
