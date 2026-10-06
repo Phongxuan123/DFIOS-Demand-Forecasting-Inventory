@@ -19,4 +19,9 @@ from app.api.v1.endpoints.auth import request_change_email, confirm_change_email
 api_router.add_api_route("/me/email", request_change_email, methods=["POST"], tags=["User Profile & Settings"], summary="UC05 - Đổi email (Alias)")
 api_router.add_api_route("/me/email/confirm", confirm_change_email, methods=["POST"], tags=["User Profile & Settings"], summary="UC05 - Xác nhận đổi email (Alias)")
 
+# UC45: System Administration & Audit Logs (Admin)
+from app.api.v1.endpoints.audit_logs import router as audit_logs_router
+api_router.include_router(audit_logs_router, prefix="/audit-logs", tags=["System Administration & Audit Logs (UC45)"])
+
+
 
