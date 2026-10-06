@@ -8,6 +8,7 @@ from app.models.inventory import Inventory
 from app.models.event import Event
 from app.models.email_token import EmailToken
 from app.models.audit_log import AuditLog
+from app.models.inventory_adjustment import InventoryAdjustment
 
 __all__ = [
     "Base",
@@ -21,4 +22,5 @@ __all__ = [
     "Event",
     "EmailToken",
     "AuditLog",
+    "InventoryAdjustment",
 ]

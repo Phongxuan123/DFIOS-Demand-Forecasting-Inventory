@@ -23,6 +23,27 @@ from app.schemas.event import (
     create_inventory_updated_event,
 )
 from app.schemas.audit_log import AuditLogResponse, AuditLogListResponse
+from app.schemas.product import (
+    ProductCreate,
+    ProductUpdate,
+    ProductResponse,
+    ProductListResponse,
+    ProductBulkCreateRequest,
+    ProductBulkCreateResponse,
+)
+from app.schemas.supplier import (
+    SupplierCreate,
+    SupplierUpdate,
+    SupplierResponse,
+    SupplierListResponse,
+)
+from app.schemas.inventory import (
+    InventoryUpdate,
+    InventoryResponse,
+    InventoryListResponse,
+    InventoryAdjustmentResponse,
+    InventoryAdjustmentListResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -45,6 +66,21 @@ __all__ = [
     "create_inventory_updated_event",
     "AuditLogResponse",
     "AuditLogListResponse",
+    "ProductCreate",
+    "ProductUpdate",
+    "ProductResponse",
+    "ProductListResponse",
+    "ProductBulkCreateRequest",
+    "ProductBulkCreateResponse",
+    "SupplierCreate",
+    "SupplierUpdate",
+    "SupplierResponse",
+    "SupplierListResponse",
+    "InventoryUpdate",
+    "InventoryResponse",
+    "InventoryListResponse",
+    "InventoryAdjustmentResponse",
+    "InventoryAdjustmentListResponse",
 ]
 
 
