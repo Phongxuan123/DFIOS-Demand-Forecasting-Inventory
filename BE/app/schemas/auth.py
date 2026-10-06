@@ -26,6 +26,18 @@ class UpdateProfileRequest(BaseModel):
     display_name: Optional[str] = Field(None, description="Tên hiển thị mới")
     email: Optional[str] = Field(None, description="Email liên hệ mới")
 
+class ActivateAccountRequest(BaseModel):
+    token: str = Field(..., description="Token kích hoạt tài khoản")
+    password: str = Field(..., min_length=6, description="Mật khẩu thiết lập lần đầu (tối thiểu 6 ký tự)")
+
+class ChangeEmailRequest(BaseModel):
+    new_email: str = Field(..., description="Địa chỉ email mới muốn thay đổi")
+    current_password: str = Field(..., description="Mật khẩu hiện tại để xác thực")
+
+class ConfirmChangeEmailRequest(BaseModel):
+    token: str = Field(..., description="Token xác nhận đổi email gửi trong hòm thư mới")
+
 class MessageResponse(BaseModel):
     message: str
     detail: Optional[str] = None
+

@@ -47,3 +47,27 @@ def verify_password_reset_token(token: str) -> str | None:
         return None
     return payload.get("sub")
 
+import secrets
+import hashlib
+import hmac
+
+def generate_secure_token() -> str:
+    """
+    Sinh chuỗi token ngẫu nhiên bảo mật cao độ dài 32 bytes (URL-safe string).
+    """
+    return secrets.token_urlsafe(32)
+
+def hash_token(token: str) -> str:
+    """
+    Băm token bằng SHA-256 trước khi lưu DB. Tuyệt đối không lưu token thô.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def verify_token_hash(token: str, token_hash: str) -> bool:
+    """
+    So sánh an toàn chống tấn công timing attack bằng hmac.compare_digest.
+    """
+    computed = hash_token(token)
+    return hmac.compare_digest(computed, token_hash)
+
+

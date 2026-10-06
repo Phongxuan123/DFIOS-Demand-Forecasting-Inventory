@@ -60,6 +60,15 @@ def get_current_user(
             detail="Tài khoản đã bị vô hiệu hóa",
         )
     
+    # Kiểm tra thu hồi phiên đăng nhập cũ (Session revocation)
+    token_version = payload.get("token_version")
+    if token_version is not None and token_version != getattr(user, "token_version", 1):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Phiên đăng nhập đã bị thu hồi do tài khoản đã đổi mật khẩu",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     return user
 
 def require_roles(allowed_roles: List[str]):

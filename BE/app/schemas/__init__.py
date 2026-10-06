@@ -5,6 +5,9 @@ from app.schemas.auth import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
     UpdateProfileRequest,
+    ActivateAccountRequest,
+    ChangeEmailRequest,
+    ConfirmChangeEmailRequest,
     MessageResponse,
 )
 from app.schemas.user import (
@@ -12,6 +15,12 @@ from app.schemas.user import (
     UserCreateRequest,
     UserUpdateRequest,
     UserStatusUpdateRequest,
+)
+from app.schemas.event import (
+    EventType,
+    InventoryUpdatedData,
+    SystemEvent,
+    create_inventory_updated_event,
 )
 
 __all__ = [
@@ -21,9 +30,18 @@ __all__ = [
     "ForgotPasswordRequest",
     "ResetPasswordRequest",
     "UpdateProfileRequest",
+    "ActivateAccountRequest",
+    "ChangeEmailRequest",
+    "ConfirmChangeEmailRequest",
     "MessageResponse",
     "UserResponse",
     "UserCreateRequest",
     "UserUpdateRequest",
     "UserStatusUpdateRequest",
+    "EventType",
+    "InventoryUpdatedData",
+    "SystemEvent",
+    "create_inventory_updated_event",
 ]
+
+

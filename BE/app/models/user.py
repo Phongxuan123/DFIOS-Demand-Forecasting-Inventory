@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Boolean
+from sqlalchemy import Column, String, DateTime, Boolean, Integer
 from app.models.base import Base
 
 class User(Base):
@@ -11,5 +11,8 @@ class User(Base):
     role = Column(String, nullable=False)  # "Admin" | "Warehouse Manager" | "Viewer"
     display_name = Column(String)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_verified = Column(Boolean, default=False, nullable=False)
+    token_version = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
