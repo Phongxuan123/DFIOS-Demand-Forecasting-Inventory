@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, Pencil } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.tsx';
 import './Replenishment.css';
 
 export const Replenishment: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -116,9 +118,9 @@ export const Replenishment: React.FC = () => {
                       <td>8</td>
                       <td>15</td>
                       <td>20</td>
-                      <td className="eoq-cell">150 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td className="eoq-cell">150 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
                       <td><span className="status-badge red-bg">CRITICAL</span></td>
-                      <td><button className="action-btn green-solid">Reorder 150 Nov</button></td>
+                      <td>{user?.role !== 'VIEWER' && <button className="action-btn green-solid">Reorder 150 Nov</button>}</td>
                     </tr>
                     <tr>
                       <td className="fw-700">SKU-4402</td>
@@ -126,9 +128,9 @@ export const Replenishment: React.FC = () => {
                       <td>12</td>
                       <td>10</td>
                       <td>18</td>
-                      <td className="eoq-cell">120 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td className="eoq-cell">120 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
                       <td><span className="status-badge yellow-text">LOW STOCK</span></td>
-                      <td><button className="action-btn outline">Trigger Reorder</button></td>
+                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Trigger Reorder</button>}</td>
                     </tr>
                     <tr>
                       <td className="fw-700">SKU-1024</td>
@@ -136,9 +138,9 @@ export const Replenishment: React.FC = () => {
                       <td>45</td>
                       <td>12</td>
                       <td>22</td>
-                      <td className="eoq-cell">80 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td className="eoq-cell">80 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
                       <td><span className="status-badge green-text-badge">IN STOCK</span></td>
-                      <td><button className="action-btn outline">Monitor Demand</button></td>
+                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Monitor Demand</button>}</td>
                     </tr>
                     <tr>
                       <td className="fw-700">SKU-7721</td>
@@ -146,9 +148,9 @@ export const Replenishment: React.FC = () => {
                       <td>68</td>
                       <td>25</td>
                       <td>40</td>
-                      <td className="eoq-cell">200 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td className="eoq-cell">200 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
                       <td><span className="status-badge green-text-badge">IN STOCK</span></td>
-                      <td><button className="action-btn outline">Optimized</button></td>
+                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Optimized</button>}</td>
                     </tr>
                     <tr>
                       <td className="fw-700">SKU-5012</td>
@@ -156,9 +158,9 @@ export const Replenishment: React.FC = () => {
                       <td>9</td>
                       <td>8</td>
                       <td>15</td>
-                      <td className="eoq-cell">100 <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} /></td>
+                      <td className="eoq-cell">100 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
                       <td><span className="status-badge yellow-text">LOW STOCK</span></td>
-                      <td><button className="action-btn outline">Reorder Triggered</button></td>
+                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Reorder Triggered</button>}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -209,10 +211,12 @@ export const Replenishment: React.FC = () => {
                 </div>
               </div>
               
-              <div className="detail-actions">
-                <button className="btn-generate">Generate Purchase Order (150 Units)</button>
-                <button className="btn-reject">Reject Order</button>
-              </div>
+              {user?.role !== 'VIEWER' && (
+                <div className="detail-actions">
+                  <button className="btn-generate">Generate Purchase Order (150 Units)</button>
+                  <button className="btn-reject">Reject Order</button>
+                </div>
+              )}
             </div>
           </div>
           

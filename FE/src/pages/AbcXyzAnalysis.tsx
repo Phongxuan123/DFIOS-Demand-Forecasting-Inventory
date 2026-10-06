@@ -1,9 +1,11 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Settings } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.tsx';
 import './AbcXyzAnalysis.css';
 
 export const AbcXyzAnalysis: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isConfigOpen, setIsConfigOpen] = React.useState(false);
@@ -37,9 +39,11 @@ export const AbcXyzAnalysis: React.FC = () => {
                 <h2 className="panel-title">ABC/XYZ Classification Matrix</h2>
                 <p className="panel-subtitle">ABC determines revenue contribution (Value). XYZ determines forecast predictability (Volatility).</p>
               </div>
-              <button className="configure-btn" onClick={() => setIsConfigOpen(true)}>
-                <Settings size={14} style={{marginRight: '8px'}} /> Configure Thresholds
-              </button>
+              {user?.role === 'ADMIN' && (
+                <button className="configure-btn" onClick={() => setIsConfigOpen(true)}>
+                  <Settings size={14} style={{marginRight: '8px'}} /> Configure Thresholds
+                </button>
+              )}
             </div>
             
             <div className="matrix-grid-container">

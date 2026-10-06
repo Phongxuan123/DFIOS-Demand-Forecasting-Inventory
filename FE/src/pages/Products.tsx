@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Upload, Download, Plus, Calendar as CalendarIcon, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, Tooltip, ResponsiveContainer } from 'recharts';
+import { useAuth } from '../context/AuthContext.tsx';
 import './Products.css';
 
 export const Products: React.FC = () => {
+  const { user } = useAuth();
+  if (user?.role !== 'ADMIN') return <div className="p-8 text-center" style={{marginTop: '20px'}}><h2>Access Denied</h2><p>You do not have permission to view Products.</p></div>;
   const [activeTab, setActiveTab] = useState('Products');
   const [data, setData] = useState<any>(null);
   const [suppliers, setSuppliers] = useState<any[]>([]);

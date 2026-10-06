@@ -3,10 +3,12 @@ import { createPortal } from 'react-dom';
 import { Card } from '../components/ui/Card.tsx';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Line } from 'recharts';
 import { X } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import './ForecastExplorer.css';
 
 export const ForecastExplorer: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [skuSearch, setSkuSearch] = useState('SKU-8921-ULTRA-BOOST-WHITE');
@@ -149,7 +151,7 @@ export const ForecastExplorer: React.FC = () => {
           </div>
           <div className="override-action">
             <span className="override-status">Manual Override Applied</span>
-            <button className="override-btn" onClick={() => setIsOverrideModalOpen(true)}>Override Forecast</button>
+            {user?.role !== 'VIEWER' && <button className="override-btn" onClick={() => setIsOverrideModalOpen(true)}>Override Forecast</button>}
           </div>
         </div>
       </Card>

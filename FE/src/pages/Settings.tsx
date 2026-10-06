@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Plus } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.tsx';
 import './Settings.css';
 
 
 export const Settings: React.FC = () => {
+  const { user } = useAuth();
+  if (user?.role !== 'ADMIN') return <div className="p-8 text-center" style={{marginTop: '20px'}}><h2>Access Denied</h2><p>You do not have permission to view Settings.</p></div>;
   const [data, setData] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -459,7 +462,12 @@ export const Settings: React.FC = () => {
       ) : (
         <>
           <div className="settings-tabs-container">
-            {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Data Quality Inspector', 'Automation'].map(tab => (
+            {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Data Quality Inspector', 'Automation']
+              .filter(tab => {
+                if (user?.role !== 'ADMIN' && ['User Management', 'ML Pipeline', 'Automation'].includes(tab)) return false;
+                return true;
+              })
+              .map(tab => (
               <button 
                 key={tab}
                 className={`settings-tab-btn ${activeTab === tab ? 'active' : ''}`}

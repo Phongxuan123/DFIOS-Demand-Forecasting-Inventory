@@ -1,31 +1,39 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, TrendingUp, Package, PieChart, FileText, Activity, Settings, LogOut } from 'lucide-react';
+import { 
+  LayoutDashboard, 
+  LineChart, 
+  Package, 
+  PieChart, 
+  Activity, 
+  Settings, 
+  FileText,
+  LogOut
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import './Sidebar.css';
 
 export const Sidebar: React.FC = () => {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
 
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <div className="logo-icon-new">
-          D
-        </div>
-        <div className="logo-text-new">
-          <h2>DFIOS</h2>
-          <span>DEMAND FORECASTING</span>
+        <div className="logo-container">
+          <div className="logo-icon">DF</div>
+          <span className="logo-text">DFIOS</span>
         </div>
       </div>
 
       <nav className="sidebar-nav">
-        <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
+        <div className="nav-group-title">MAIN MENU</div>
+        
+        <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <LayoutDashboard size={18} />
           <span>Dashboard</span>
         </NavLink>
         <NavLink to="/forecast-explorer" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <TrendingUp size={18} />
+          <LineChart size={18} />
           <span>Forecast Explorer</span>
         </NavLink>
         <NavLink to="/replenishment" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
@@ -37,35 +45,42 @@ export const Sidebar: React.FC = () => {
           <span>ABC/XYZ Analysis</span>
         </NavLink>
 
-        <NavLink to="/model-performance" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Activity size={18} />
-          <span>Model Performance</span>
-        </NavLink>
+        {user?.role === 'ADMIN' && (
+          <NavLink to="/model-performance" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <Activity size={18} />
+            <span>Model Performance</span>
+          </NavLink>
+        )}
         <NavLink to="/reports" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <FileText size={18} />
           <span>Reports</span>
         </NavLink>
 
-        <div className="nav-divider" />
-        <div className="nav-group-title">SYSTEM</div>
+        {user?.role === 'ADMIN' && (
+          <>
+            <div className="nav-divider" />
+            <div className="nav-group-title">SYSTEM</div>
 
-        <NavLink to="/products" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Package size={18} />
-          <span>Products</span>
-        </NavLink>
-        <NavLink to="/settings" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Settings size={18} />
-          <span>Settings</span>
-        </NavLink>
+            <NavLink to="/products" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+              <Package size={18} />
+              <span>Products</span>
+            </NavLink>
+            
+            <NavLink to="/settings" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+              <Settings size={18} />
+              <span>Settings</span>
+            </NavLink>
+          </>
+        )}
       </nav>
 
-      <div className="sidebar-footer">
-        <div className="user-profile-bottom">
+      <div className="sidebar-footer" style={{flexDirection: 'column', padding: '16px'}}>
+        <div className="user-profile-bottom" style={{padding: 0, border: 'none'}}>
           <div className="user-profile-info">
-            <img src="https://ui-avatars.com/api/?name=Phuc+Pham+Huu&background=0d9488&color=fff" alt="User" className="user-avatar" />
+            <img src={`https://ui-avatars.com/api/?name=${(user?.name || 'User').replace(' ', '+')}&background=0d9488&color=fff`} alt="User" className="user-avatar" />
             <div className="user-details">
-              <span className="user-name">Phuc Pham Huu</span>
-              <span className="user-role">Inventory Manager</span>
+              <span className="user-name">{user?.name || 'Unknown'}</span>
+              <span className="user-role">{user?.role || 'User'}</span>
             </div>
           </div>
           <button onClick={logout} className="logout-btn-bottom" title="Logout">
