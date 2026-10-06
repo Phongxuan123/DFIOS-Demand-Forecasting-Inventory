@@ -4,7 +4,7 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
 import bcrypt
 from dotenv import load_dotenv
-from app.database import engine
+from app.core.database import engine
 from app.models import User
 from sqlalchemy.orm import sessionmaker
 

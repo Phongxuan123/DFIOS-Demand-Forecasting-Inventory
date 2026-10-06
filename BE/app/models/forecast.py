@@ -1,11 +1,10 @@
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, SmallInteger, Float, Boolean, Date, DateTime
-from sqlalchemy.orm import declarative_base
-from datetime import datetime
-
-Base = declarative_base()
+from app.models.base import Base
 
 class Forecast(Base):
     __tablename__ = "forecast"
+    
     id = Column(String, primary_key=True)
     item_id = Column(String, nullable=False)
     store_id = Column(String, nullable=False)
@@ -17,27 +16,12 @@ class Forecast(Base):
     p90 = Column(Float)
     available = Column(Boolean, nullable=False)
     model_version = Column(String, nullable=False)
-    generated_at = Column(DateTime, default=datetime.utcnow)
+    generated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class ForecastSigma(Base):
     __tablename__ = "forecast_sigma"
+    
     id = Column(String, primary_key=True)
     sigma_d_h7 = Column(Float)
     sigma_d_h14 = Column(Float)
     sigma_d_h28 = Column(Float)
-    
-class Product(Base):
-    __tablename__ = "products"
-    item_id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    dept_id = Column(String)
-    cat_id = Column(String)
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(String, primary_key=True)
-    email = Column(String, unique=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    role = Column(String, nullable=False)  # "Admin" | "Warehouse Manager" | "Viewer"
-    display_name = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)

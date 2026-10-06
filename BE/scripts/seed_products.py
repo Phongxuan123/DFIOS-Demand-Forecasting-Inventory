@@ -4,7 +4,7 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
 import pandas as pd
 from dotenv import load_dotenv
-from app.database import engine
+from app.core.database import engine
 
 load_dotenv(os.path.join(SCRIPT_DIR, "..", ".env"))
 
