@@ -38,6 +38,9 @@ with Session() as session:
             password_hash=hash_password(u["password"]),
             role=u["role"],
             display_name=u["display_name"],
+            is_active=True,
+            is_verified=True,
+            token_version=1,
         )
         session.add(user)
     session.commit()

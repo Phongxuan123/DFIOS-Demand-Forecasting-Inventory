@@ -10,6 +10,7 @@ class UserResponse(BaseModel):
     role: str
     display_name: Optional[str] = None
     is_active: bool = True
+    is_verified: bool = False
     created_at: Optional[datetime] = None
 
     class Config:
@@ -17,9 +18,10 @@ class UserResponse(BaseModel):
 
 class UserCreateRequest(BaseModel):
     email: str = Field(..., description="Email người dùng")
-    password: str = Field(..., min_length=6, description="Mật khẩu tối thiểu 6 ký tự")
+    password: Optional[str] = Field(None, min_length=6, description="Mật khẩu (để trống để gửi link kích hoạt)")
     role: UserRole = Field(..., description="Vai trò: Admin | Warehouse Manager | Viewer")
     display_name: Optional[str] = Field(None, description="Tên hiển thị")
+
 
 class UserUpdateRequest(BaseModel):
     display_name: Optional[str] = None
