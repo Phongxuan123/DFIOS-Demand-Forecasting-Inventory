@@ -22,6 +22,7 @@ from app.schemas.event import (
     SystemEvent,
     create_inventory_updated_event,
 )
+from app.schemas.audit_log import AuditLogResponse, AuditLogListResponse
 
 __all__ = [
     "LoginRequest",
@@ -42,6 +43,8 @@ __all__ = [
     "InventoryUpdatedData",
     "SystemEvent",
     "create_inventory_updated_event",
+    "AuditLogResponse",
+    "AuditLogListResponse",
 ]
 
 
