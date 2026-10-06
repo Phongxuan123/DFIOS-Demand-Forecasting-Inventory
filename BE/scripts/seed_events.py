@@ -5,7 +5,11 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 import pandas as pd
 from app.core.database import engine
 
-CALENDAR_PATH = r"C:\m5-forecasting-accuracy\calendar.csv"
+from dotenv import load_dotenv
+load_dotenv(os.path.join(SCRIPT_DIR, "..", ".env"))
+CALENDAR_PATH = os.getenv("M5_CALENDAR_CSV_PATH")
+if not CALENDAR_PATH:
+    raise SystemExit("Missing M5_CALENDAR_CSV_PATH in .env")
 
 df = pd.read_csv(CALENDAR_PATH, usecols=["date", "event_name_1", "event_type_1", "event_name_2", "event_type_2"])
 
