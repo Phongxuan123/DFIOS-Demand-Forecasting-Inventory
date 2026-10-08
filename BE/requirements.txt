@@ -6,4 +6,5 @@ pandas
 pyarrow
 bcrypt
 pyjwt
-python-dotenv
+python-dotenv
+python-multipart

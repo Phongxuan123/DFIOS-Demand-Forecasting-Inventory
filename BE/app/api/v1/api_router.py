@@ -6,6 +6,8 @@ from app.api.v1.endpoints.audit_logs import router as audit_logs_router
 from app.api.v1.endpoints.products import router as products_router
 from app.api.v1.endpoints.suppliers import router as suppliers_router
 from app.api.v1.endpoints.inventory import router as inventory_router
+from app.api.v1.endpoints.sales import router as sales_router
+from app.api.v1.endpoints.events_calendar import router as events_calendar_router
 
 api_router = APIRouter()
 
@@ -23,6 +25,12 @@ api_router.include_router(suppliers_router, prefix="/suppliers", tags=["Master D
 
 # UC13, UC14: Inventory & Adjustment History
 api_router.include_router(inventory_router, prefix="/inventory", tags=["Inventory Management (UC13, UC14)"])
+
+# UC15: Master Data - Historical Sales Data
+api_router.include_router(sales_router, prefix="/sales", tags=["Master Data - Historical Sales (UC15)"])
+
+# UC16: Master Data - Event & Promotion Calendar
+api_router.include_router(events_calendar_router, prefix="/events-calendar", tags=["Master Data - Event Calendar (UC16)"])
 
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
