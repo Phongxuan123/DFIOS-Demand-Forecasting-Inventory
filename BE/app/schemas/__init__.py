@@ -44,6 +44,23 @@ from app.schemas.inventory import (
     InventoryAdjustmentResponse,
     InventoryAdjustmentListResponse,
 )
+from app.schemas.sales import (
+    SaleRecordBase,
+    SaleRecordCreate,
+    SaleRecordResponse,
+    SalesQueryResponse,
+    SalesSummaryResponse,
+    SalesImportResponse,
+)
+from app.schemas.event_calendar import (
+    EventBase,
+    EventCreate,
+    EventUpdate,
+    EventResponse,
+    EventListResponse,
+    EventBulkCreateRequest,
+    EventBulkCreateResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -81,6 +98,19 @@ __all__ = [
     "InventoryListResponse",
     "InventoryAdjustmentResponse",
     "InventoryAdjustmentListResponse",
+    "SaleRecordBase",
+    "SaleRecordCreate",
+    "SaleRecordResponse",
+    "SalesQueryResponse",
+    "SalesSummaryResponse",
+    "SalesImportResponse",
+    "EventBase",
+    "EventCreate",
+    "EventUpdate",
+    "EventResponse",
+    "EventListResponse",
+    "EventBulkCreateRequest",
+    "EventBulkCreateResponse",
 ]
 
 
