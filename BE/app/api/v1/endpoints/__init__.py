@@ -7,6 +7,7 @@ from app.api.v1.endpoints.suppliers import router as suppliers_router
 from app.api.v1.endpoints.inventory import router as inventory_router
 from app.api.v1.endpoints.sales import router as sales_router
 from app.api.v1.endpoints.events_calendar import router as events_calendar_router
+from app.api.v1.endpoints.settings import router as settings_router
 
 __all__ = [
     "auth_router",
@@ -18,4 +19,5 @@ __all__ = [
     "inventory_router",
     "sales_router",
     "events_calendar_router",
+    "settings_router",
 ]

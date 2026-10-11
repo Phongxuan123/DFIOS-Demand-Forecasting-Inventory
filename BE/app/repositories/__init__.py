@@ -5,6 +5,7 @@ from app.repositories.supplier_repository import SupplierRepository, supplier_re
 from app.repositories.inventory_repository import InventoryRepository, inventory_repository
 from app.repositories.sales_repository import SalesRepository, sales_repository
 from app.repositories.event_repository import EventRepository, event_repository
+from app.repositories.system_setting_repository import SystemSettingRepository, system_setting_repository
 
 __all__ = [
     "BaseRepository",
@@ -20,4 +21,6 @@ __all__ = [
     "sales_repository",
     "EventRepository",
     "event_repository",
+    "SystemSettingRepository",
+    "system_setting_repository",
 ]
