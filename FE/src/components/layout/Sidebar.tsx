@@ -45,7 +45,7 @@ export const Sidebar: React.FC = () => {
           <span>ABC/XYZ Analysis</span>
         </NavLink>
 
-        {user?.role === 'ADMIN' && (
+        {(user?.role?.toUpperCase() === 'ADMIN') && (
           <NavLink to="/model-performance" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
             <Activity size={18} />
             <span>Model Performance</span>
@@ -56,7 +56,7 @@ export const Sidebar: React.FC = () => {
           <span>Reports</span>
         </NavLink>
 
-        {user?.role === 'ADMIN' && (
+        {(user?.role?.toUpperCase() === 'ADMIN') && (
           <>
             <div className="nav-divider" />
             <div className="nav-group-title">SYSTEM</div>

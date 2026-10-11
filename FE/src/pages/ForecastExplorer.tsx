@@ -11,15 +11,18 @@ export const ForecastExplorer: React.FC = () => {
   const { user } = useAuth();
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [skuSearch, setSkuSearch] = useState('SKU-8921-ULTRA-BOOST-WHITE');
+  const [skuSearch, setSkuSearch] = useState('');
   const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         const forecast = await api.forecasting.getExplorerData();
+        if (forecast.sku) {
+          setSkuSearch(forecast.sku);
+        }
         
-        // Match the chart look from the mockup by transforming the chartData specifically for Recharts Area
+        // Match the chart look by transforming chartData specifically for Recharts Area
         const transformedChartData = forecast.chartData.map((d: any, i: number) => ({
           name: d.date,
           actual: i < 5 ? d.actual : null,
@@ -228,7 +231,7 @@ export const ForecastExplorer: React.FC = () => {
           <div className="modal-content">
             <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)}><X size={16} /></button>
             <h2 className="modal-title">Manual Forecast Override</h2>
-            <p className="modal-subtitle">SKU-8921-ULTRA-BOOST-WHITE • E-Commerce Warehouse • 28d Horizon</p>
+            <p className="modal-subtitle">{skuSearch || 'Selected SKU'} • Active Warehouse • 28d Horizon</p>
             
             <div className="modal-form-group mt-4">
               <label>Current predicted demand</label>

@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { api } from '../services/api.ts';
 import './Settings.css';
-
 
 export const Settings: React.FC = () => {
   const { user } = useAuth();
-  if (user?.role !== 'ADMIN') return <div className="p-8 text-center" style={{marginTop: '20px'}}><h2>Access Denied</h2><p>You do not have permission to view Settings.</p></div>;
+  const role = user?.role?.toUpperCase() || 'VIEWER';
+  const isAdmin = role === 'ADMIN';
+
   const [data, setData] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -15,24 +17,62 @@ export const Settings: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('General Settings');
 
-  React.useEffect(() => {
+  const [profileName, setProfileName] = useState(user?.name || user?.email || '');
+  const [profileEmail, setProfileEmail] = useState(user?.email || '');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [settingsMessage, setSettingsMessage] = useState('');
+
+  // User management modal & state
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<any>(null);
+  const [userFormData, setUserFormData] = useState({ email: '', password: '', role: 'VIEWER', display_name: '' });
+
+  // Filters for User Management
+  const [userRoleFilter, setUserRoleFilter] = useState('All');
+  const [userStatusFilter, setUserStatusFilter] = useState('All');
+  const [userSearchTerm, setUserSearchTerm] = useState('');
+
+  // Filters for Audit Logs
+  const [auditActionFilter, setAuditActionFilter] = useState('All');
+  const [auditSearchTerm, setAuditSearchTerm] = useState('');
+
+  const loadUsers = async () => {
+    try {
+      const res = await api.settings.getUsers();
+      setUsers(res.list || []);
+    } catch (e) {
+      console.error('Failed to load users', e);
+    }
+  };
+
+  const loadAuditLogs = async () => {
+    try {
+      const res = await api.settings.getAuditLogs({ limit: '100' });
+      setAuditLogs(res.logs || []);
+    } catch (e) {
+      console.error('Failed to load audit logs', e);
+    }
+  };
+
+  useEffect(() => {
     const fetchData = async () => {
       try {
-        const { api } = await import('../services/api.ts');
         const [configResult, usersResult, auditResult, dqResult, mlResult] = await Promise.all([
           api.settings.getConfig(),
           api.settings.getUsers(),
-          api.settings.getAuditLogs(),
+          api.settings.getAuditLogs({ limit: '100' }),
           api.settings.getDataQuality(),
-          api.settings.getMlPipeline()
+          api.settings.getMlPipeline(),
         ]);
         setData(configResult);
-        setUsers(usersResult);
-        setAuditLogs(auditResult);
+        setUsers(usersResult.list || []);
+        setAuditLogs(auditResult.logs || []);
         setDataQuality(dqResult);
         setMlPipeline(mlResult);
       } catch (error) {
-        console.error("Failed to load settings data", error);
+        console.error('Failed to load settings data', error);
       } finally {
         setIsLoading(false);
       }
@@ -40,17 +80,142 @@ export const Settings: React.FC = () => {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    setProfileName(user?.name || user?.email || '');
+    setProfileEmail(user?.email || '');
+  }, [user]);
+
+  const handleProfileSave = async () => {
+    setSettingsMessage('');
+    try {
+      await api.auth.updateProfile({
+        display_name: profileName,
+        email: profileEmail,
+      });
+      const stored = JSON.parse(localStorage.getItem('user') || '{}');
+      localStorage.setItem('user', JSON.stringify({ ...stored, name: profileName, display_name: profileName, email: profileEmail }));
+      setSettingsMessage('Profile updated successfully.');
+    } catch (error: any) {
+      setSettingsMessage(error.response?.data?.detail || 'Could not update profile.');
+    }
+  };
+
+  const handlePasswordChange = async () => {
+    setSettingsMessage('');
+    if (newPassword !== confirmPassword) {
+      setSettingsMessage('New password and confirmation do not match.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setSettingsMessage('New password must be at least 6 characters.');
+      return;
+    }
+    try {
+      await api.auth.changePassword({
+        old_password: currentPassword,
+        new_password: newPassword,
+      });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setSettingsMessage('Password updated successfully.');
+    } catch (error: any) {
+      setSettingsMessage(error.response?.data?.detail || 'Could not update password.');
+    }
+  };
+
+  const handleUserToggleStatus = async (id: string, currentIsActive: boolean) => {
+    try {
+      await api.settings.changeUserStatus(id, !currentIsActive);
+      await loadUsers();
+    } catch (e: any) {
+      console.error(e);
+      alert(e.response?.data?.detail || 'Failed to update user status');
+    }
+  };
+
+  const handleUserSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (editingUser) {
+        await api.settings.updateUser(editingUser.id, {
+          display_name: userFormData.display_name,
+          role: userFormData.role,
+        });
+      } else {
+        await api.settings.createUser({
+          email: userFormData.email,
+          password: userFormData.password,
+          role: userFormData.role,
+          display_name: userFormData.display_name,
+        });
+      }
+      setShowUserModal(false);
+      await loadUsers();
+    } catch (e: any) {
+      console.error(e);
+      alert(e.response?.data?.detail || 'Failed to save user');
+    }
+  };
+
+  const openAddUser = () => {
+    setEditingUser(null);
+    setUserFormData({ email: '', password: '', role: 'VIEWER', display_name: '' });
+    setShowUserModal(true);
+  };
+
+  const openEditUser = (u: any) => {
+    setEditingUser(u);
+    setUserFormData({
+      email: u.email,
+      password: '',
+      role: u.role || 'VIEWER',
+      display_name: u.display_name || u.name || '',
+    });
+    setShowUserModal(true);
+  };
+
+  const filteredUsers = users.filter((u) => {
+    const matchesRole = userRoleFilter === 'All' || u.role?.toUpperCase() === userRoleFilter.toUpperCase();
+    const isActive = u.is_active ?? (u.status === 'ACTIVE');
+    const matchesStatus =
+      userStatusFilter === 'All' ||
+      (userStatusFilter === 'ACTIVE' && isActive) ||
+      (userStatusFilter === 'INACTIVE' && !isActive);
+    const search = userSearchTerm.toLowerCase();
+    const matchesSearch =
+      !search ||
+      u.email?.toLowerCase().includes(search) ||
+      (u.display_name || u.name || '').toLowerCase().includes(search);
+    return matchesRole && matchesStatus && matchesSearch;
+  });
+
+  const filteredAuditLogs = auditLogs.filter((log) => {
+    const matchesAction = auditActionFilter === 'All' || log.action?.toLowerCase().includes(auditActionFilter.toLowerCase());
+    const search = auditSearchTerm.toLowerCase();
+    const matchesSearch =
+      !search ||
+      (log.actor_email || log.user || '').toLowerCase().includes(search) ||
+      (log.action || '').toLowerCase().includes(search) ||
+      (log.details || '').toLowerCase().includes(search);
+    return matchesAction && matchesSearch;
+  });
+
   const renderGeneralSettings = () => (
     <div className="settings-main-split">
       <div className="settings-left-panel">
         <div className="profile-header">
           <div className="profile-avatar-large">
-            <img src="https://ui-avatars.com/api/?name=Sarah+Jenkins&background=0D8ABC&color=fff" alt="Profile" className="profile-img" />
+            <img
+              src={`https://ui-avatars.com/api/?name=${encodeURIComponent(profileName || user?.email || 'User')}&background=0D8ABC&color=fff`}
+              alt="Profile"
+              className="profile-img"
+            />
           </div>
           <div className="profile-info">
-            <h2 className="profile-name">Sarah Jenkins</h2>
-            <div className="profile-badge">WAREHOUSE MANAGER</div>
-            <div className="profile-since">Member since Jan 2022</div>
+            <h2 className="profile-name">{profileName || user?.email}</h2>
+            <div className="profile-badge">{role}</div>
+            <div className="profile-since">{user?.is_verified ? 'Verified account' : 'Active account'}</div>
           </div>
         </div>
 
@@ -58,73 +223,91 @@ export const Settings: React.FC = () => {
 
         <div className="settings-group">
           <label className="settings-label">Display Name</label>
-          <input type="text" className="settings-input" defaultValue="Sarah Jenkins" />
-        </div>
-        
-        <div className="settings-group" style={{marginTop: '1.5rem'}}>
-          <label className="settings-label">Contact Email</label>
-          <input type="email" className="settings-input" defaultValue="s.jenkins@dfios-cockpit.com" />
-        </div>
-
-        <div className="settings-group" style={{marginTop: '1.5rem', marginBottom: '2rem'}}>
-          <label className="settings-label">Phone Number</label>
-          <input type="text" className="settings-input" defaultValue="+1 (555) 382-9901" />
+          <input
+            type="text"
+            className="settings-input"
+            value={profileName}
+            onChange={(e) => setProfileName(e.target.value)}
+          />
         </div>
 
-        <div style={{display: 'flex', justifyContent: 'flex-end'}}>
-          <button className="settings-save-btn">Save Changes</button>
+        <div className="settings-group" style={{ marginTop: '1.5rem' }}>
+          <label className="settings-label">Account Email</label>
+          <input
+            type="email"
+            className="settings-input"
+            value={profileEmail}
+            onChange={(e) => setProfileEmail(e.target.value)}
+          />
+        </div>
+
+        <div className="settings-group" style={{ marginTop: '1.5rem', marginBottom: '2rem' }}>
+          <label className="settings-label">System Timezone</label>
+          <input type="text" className="settings-input" defaultValue={data?.timezone || "Asia/Saigon"} disabled />
+        </div>
+
+        {settingsMessage && (
+          <div className="login-success" style={{ marginBottom: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#ecfdf5', color: '#047857' }}>
+            {settingsMessage}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button className="settings-save-btn" onClick={handleProfileSave}>
+            Save Changes
+          </button>
         </div>
       </div>
 
       <div className="settings-right-panel">
         <div className="settings-side-card">
           <h2 className="settings-side-title">Change Password</h2>
-          
-          <div className="settings-group" style={{marginBottom: '1rem'}}>
+
+          <div className="settings-group" style={{ marginBottom: '1rem' }}>
             <label className="settings-label">Current Password</label>
-            <input type="password" className="settings-input" defaultValue="**********" />
-          </div>
-          
-          <div className="settings-group" style={{marginBottom: '1rem'}}>
-            <label className="settings-label">New Password</label>
-            <input type="password" className="settings-input" defaultValue="**********" />
-          </div>
-          
-          <div className="settings-group" style={{marginBottom: '1.5rem'}}>
-            <label className="settings-label">Confirm New Password</label>
-            <input type="password" className="settings-input" defaultValue="**********" />
+            <input
+              type="password"
+              className="settings-input"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
           </div>
 
-          <div style={{display: 'flex', justifyContent: 'flex-end'}}>
-            <button className="settings-save-btn">Update Password</button>
+          <div className="settings-group" style={{ marginBottom: '1rem' }}>
+            <label className="settings-label">New Password</label>
+            <input
+              type="password"
+              className="settings-input"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </div>
+
+          <div className="settings-group" style={{ marginBottom: '1.5rem' }}>
+            <label className="settings-label">Confirm New Password</label>
+            <input
+              type="password"
+              className="settings-input"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="settings-save-btn" onClick={handlePasswordChange}>
+              Update Password
+            </button>
           </div>
         </div>
 
         <div className="settings-side-card">
-          <h2 className="settings-side-title">Recent Login Activity</h2>
-          
+          <h2 className="settings-side-title">Session Security</h2>
           <div className="login-activity-item">
             <div className="login-activity-main">
-              <span className="login-activity-loc">Phoenix, AZ (IP: 72.11.90.3)</span>
-              <span className="login-activity-time">10 mins ago</span>
+              <span className="login-activity-loc">Active Session Token</span>
+              <span className="login-activity-time">Connected</span>
             </div>
-            <div className="login-activity-desc success">Success - Chrome / macOS</div>
-          </div>
-          
-          <div className="login-activity-item">
-            <div className="login-activity-main">
-              <span className="login-activity-loc">Phoenix, AZ (IP: 72.11.90.3)</span>
-              <span className="login-activity-time">Yesterday, 09:24</span>
-            </div>
-            <div className="login-activity-desc success">Success - Chrome / macOS</div>
-          </div>
-
-          <div className="login-activity-item">
-            <div className="login-activity-main">
-              <span className="login-activity-loc">Dallas, TX (IP: 14.192.4.9)</span>
-              <span className="login-activity-time">Oct 22, 14:11</span>
-            </div>
-            <div className="login-activity-desc failed">Failed attempt - Safari / iOS</div>
+            <div className="login-activity-desc success">Authenticated with JWT Bearer Token</div>
           </div>
         </div>
       </div>
@@ -132,253 +315,301 @@ export const Settings: React.FC = () => {
   );
 
   const renderUserManagement = () => (
-    <div className="user-management-panel">
-      <div className="user-management-header">
-        <div>
-          <h2 className="settings-panel-title" style={{marginBottom: '0.25rem'}}>User Accounts</h2>
-          <p className="settings-panel-subtitle">Manage identity profiles, role allocations, and security logs for 8 users.</p>
+    <>
+      {showUserModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="text-xl font-bold mb-4">{editingUser ? 'Edit User Profile' : 'Add New User'}</h3>
+            <form onSubmit={handleUserSubmit}>
+              <div className="mb-4">
+                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Email Address</label>
+                <input
+                  required
+                  type="email"
+                  value={userFormData.email}
+                  onChange={(e) => setUserFormData({ ...userFormData, email: e.target.value })}
+                  className="settings-input w-full"
+                  disabled={!!editingUser}
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Display Name</label>
+                <input
+                  type="text"
+                  value={userFormData.display_name}
+                  onChange={(e) => setUserFormData({ ...userFormData, display_name: e.target.value })}
+                  className="settings-input w-full"
+                />
+              </div>
+              {!editingUser && (
+                <div className="mb-4">
+                  <label className="block text-sm mb-1 text-[var(--text-secondary)]">Initial Password (min 6 chars)</label>
+                  <input
+                    required
+                    type="password"
+                    minLength={6}
+                    value={userFormData.password}
+                    onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value })}
+                    className="settings-input w-full"
+                  />
+                </div>
+              )}
+              <div className="mb-4">
+                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Assigned Role</label>
+                <select
+                  value={userFormData.role}
+                  onChange={(e) => setUserFormData({ ...userFormData, role: e.target.value })}
+                  className="settings-select w-full"
+                >
+                  <option value="VIEWER">VIEWER</option>
+                  <option value="WAREHOUSE MANAGER">WAREHOUSE MANAGER</option>
+                  <option value="ADMIN">ADMIN</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowUserModal(false)}
+                  className="px-4 py-2 border border-[var(--border-color)] rounded text-sm hover:bg-[var(--hover-bg)]"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="px-4 py-2 bg-teal-600 text-white rounded text-sm hover:bg-teal-700">
+                  Save User
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-        <button className="add-user-btn">
-          <Plus size={16} style={{marginRight: '0.5rem'}} /> Add New User
-        </button>
-      </div>
+      )}
 
-      <div className="user-filter-bar">
-        <div className="user-filter-group">
-          <label className="user-filter-label">ROLE FILTER</label>
-          <select className="user-filter-select">
-            <option>All System Roles</option>
-          </select>
+      <div className="user-management-panel">
+        <div className="user-management-header">
+          <div>
+            <h2 className="settings-panel-title" style={{ marginBottom: '0.25rem' }}>User Accounts</h2>
+            <p className="settings-panel-subtitle">Manage identity profiles, role allocations, and security privileges.</p>
+          </div>
+          {isAdmin && (
+            <button className="add-user-btn" onClick={openAddUser}>
+              <Plus size={16} style={{ marginRight: '0.5rem' }} /> Add New User
+            </button>
+          )}
         </div>
-        <div className="user-filter-group">
-          <label className="user-filter-label">STATUS</label>
-          <select className="user-filter-select">
-            <option>Active Members</option>
-          </select>
-        </div>
-        <div className="user-filter-group search-group">
-          <label className="user-filter-label">SEARCH MEMBER</label>
-          <input type="text" className="user-filter-input" placeholder="Search names, emails, logins..." />
-        </div>
-      </div>
 
-      <div className="user-table-container">
-        <table className="user-table">
-          <thead>
-            <tr>
-              <th>NAME</th>
-              <th>EMAIL</th>
-              <th>ROLE</th>
-              <th>STATUS</th>
-              <th>LAST LOGIN</th>
-              <th className="text-right">ACTIONS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u, i) => (
-              <tr key={i}>
-                <td className="fw-700 text-dark">{u.name}</td>
-                <td className="text-secondary">{u.email}</td>
-                <td><span className={`role-badge ${u.role.toLowerCase()}`}>{u.role}</span></td>
-                <td><span className={`status-badge ${u.status.toLowerCase()}`}>{u.status}</span></td>
-                <td className="text-secondary">{u.lastLogin}</td>
-                <td className="text-right user-actions">
-                  <button className="action-edit">Edit</button>
-                  <button className={`action-toggle ${u.status === 'ACTIVE' ? 'disable' : 'enable'}`}>
-                    {u.status === 'ACTIVE' ? 'Disable' : 'Enable'}
-                  </button>
-                </td>
+        <div className="user-filter-bar">
+          <div className="user-filter-group">
+            <label className="user-filter-label">ROLE FILTER</label>
+            <select
+              className="user-filter-select"
+              value={userRoleFilter}
+              onChange={(e) => setUserRoleFilter(e.target.value)}
+            >
+              <option value="All">All System Roles</option>
+              <option value="ADMIN">ADMIN</option>
+              <option value="WAREHOUSE MANAGER">WAREHOUSE MANAGER</option>
+              <option value="VIEWER">VIEWER</option>
+            </select>
+          </div>
+          <div className="user-filter-group">
+            <label className="user-filter-label">STATUS</label>
+            <select
+              className="user-filter-select"
+              value={userStatusFilter}
+              onChange={(e) => setUserStatusFilter(e.target.value)}
+            >
+              <option value="All">All Statuses</option>
+              <option value="ACTIVE">Active Only</option>
+              <option value="INACTIVE">Inactive / Disabled</option>
+            </select>
+          </div>
+          <div className="user-filter-group search-group">
+            <label className="user-filter-label">SEARCH MEMBER</label>
+            <input
+              type="text"
+              className="user-filter-input"
+              placeholder="Search names, emails..."
+              value={userSearchTerm}
+              onChange={(e) => setUserSearchTerm(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="user-table-container">
+          <table className="user-table">
+            <thead>
+              <tr>
+                <th>NAME</th>
+                <th>EMAIL</th>
+                <th>ROLE</th>
+                <th>STATUS</th>
+                <th>JOINED DATE</th>
+                <th className="text-right">ACTIONS</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-        
-        <div className="user-pagination">
-          <span className="pagination-info">Showing {users.length} of 8 active profiles</span>
-          <div className="pagination-controls">
-            <button className="pagination-btn">Previous</button>
-            <button className="pagination-btn active">1</button>
-            <button className="pagination-btn">Next</button>
+            </thead>
+            <tbody>
+              {filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    No users found matching current filters.
+                  </td>
+                </tr>
+              ) : (
+                filteredUsers.map((u, i) => {
+                  const isActive = u.is_active ?? (u.status === 'ACTIVE');
+                  const roleStr = u.role || 'VIEWER';
+                  return (
+                    <tr key={u.id || i}>
+                      <td className="fw-700 text-dark">{u.display_name || u.name || u.email.split('@')[0]}</td>
+                      <td className="text-secondary">{u.email}</td>
+                      <td>
+                        <span className={`role-badge ${roleStr.toLowerCase().replace(/\s+/g, '-')}`}>
+                          {roleStr}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`status-badge ${isActive ? 'active' : 'inactive'}`}>
+                          {isActive ? 'ACTIVE' : 'DISABLED'}
+                        </span>
+                      </td>
+                      <td className="text-secondary">
+                        {u.created_at ? new Date(u.created_at).toLocaleDateString() : 'Active'}
+                      </td>
+                      <td className="text-right user-actions">
+                        {isAdmin && (
+                          <>
+                            <button className="action-edit" onClick={() => openEditUser(u)}>
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleUserToggleStatus(u.id, isActive)}
+                              className={`action-toggle ${isActive ? 'disable' : 'enable'}`}
+                            >
+                              {isActive ? 'Disable' : 'Enable'}
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+
+          <div className="user-pagination">
+            <span className="pagination-info">Showing {filteredUsers.length} of {users.length} active profiles</span>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 
   const renderMLPipeline = () => (
     <div className="ml-pipeline-panel">
-      {/* KPIs */}
       <div className="ml-kpi-grid">
         <div className="ml-kpi-card">
-          <span className="ml-kpi-label">LAST FORECAST RUN</span>
-          <h2 className="ml-kpi-title">{mlPipeline.kpis.lastRun.time}</h2>
-          <p className="ml-kpi-desc">{mlPipeline.kpis.lastRun.status}</p>
+          <span className="ml-kpi-label">LAST PIPELINE RUN</span>
+          <h2 className="ml-kpi-title">{mlPipeline?.kpis?.lastRun?.time || 'Completed'}</h2>
+          <p className="ml-kpi-desc">Engine ready</p>
         </div>
         <div className="ml-kpi-card">
-          <span className="ml-kpi-label">NEXT SCHEDULED RUN</span>
-          <h2 className="ml-kpi-title text-teal">{mlPipeline.kpis.nextRun.time}</h2>
-          <p className="ml-kpi-desc">{mlPipeline.kpis.nextRun.status}</p>
+          <span className="ml-kpi-label">CADENCE SCHEDULE</span>
+          <h2 className="ml-kpi-title text-teal">Daily (00:00)</h2>
+          <p className="ml-kpi-desc">Automated ingestion</p>
         </div>
         <div className="ml-kpi-card">
-          <span className="ml-kpi-label">ACTIVE MODEL STACK</span>
-          <h2 className="ml-kpi-title">{mlPipeline.kpis.activeModel.name}</h2>
-          <p className="ml-kpi-desc">{mlPipeline.kpis.activeModel.desc}</p>
-        </div>
-        <div className="ml-kpi-card">
-          <span className="ml-kpi-label">PIPELINE HEALTH</span>
-          <h2 className="ml-kpi-title text-teal">{mlPipeline.kpis.pipelineHealth.status}</h2>
-          <p className="ml-kpi-desc">{mlPipeline.kpis.pipelineHealth.desc}</p>
+          <span className="ml-kpi-label">SYSTEM HEALTH</span>
+          <h2 className="ml-kpi-title text-teal">Operational</h2>
+          <p className="ml-kpi-desc">FastAPI microservice</p>
         </div>
       </div>
 
-      {/* Cron Schedule Form */}
-      <div className="ml-schedule-panel mt-6">
-        <h3 className="mp-panel-title">Batch Forecast Cron Schedule</h3>
-        
-        <div className="ml-form-grid mt-4">
-          <div className="ml-form-group">
-            <label className="settings-label">Pipeline Frequency</label>
-            <select className="settings-select w-full">
-              <option>Weekly Run</option>
-            </select>
-          </div>
-          <div className="ml-form-group">
-            <label className="settings-label">Day of Week</label>
-            <select className="settings-select w-full">
-              <option>Sunday Night</option>
-            </select>
-          </div>
-          <div className="ml-form-group">
-            <label className="settings-label">Execution Time</label>
-            <div className="time-input-wrap">
-              <input type="text" className="settings-input w-full" defaultValue="00:00 (Midnight)" />
-            </div>
-          </div>
-        </div>
-
-        <div className="ml-checkbox-row mt-6">
-          <div className="settings-checkbox checked ml-checkbox">
-            <svg width="10" height="8" viewBox="0 0 10 8" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M1 4.5L3.5 7L9 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </div>
-          <div className="settings-checkbox-info">
-            <span className="settings-checkbox-title text-dark fw-700">Auto-compute SS/ROP/EOQ & ABC-XYZ after forecast run</span>
-            <span className="settings-checkbox-desc">Automatically re-trigger Safety Stock, ROP, EOQ and ABC/XYZ calculation matrices as soon as deep learning forecasts publish.</span>
-          </div>
-        </div>
-
-        <div className="flex justify-end items-center gap-4 mt-6">
-          <button className="settings-btn-outline" style={{padding: '0.625rem 1rem'}}>
-             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '6px', display: 'inline-block'}}><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-             Trigger Manual Run
-          </button>
-          <button className="settings-btn-primary" style={{padding: '0.625rem 1.25rem'}}>Enable Schedule Settings</button>
-        </div>
-      </div>
-
-      {/* Executions Table */}
       <div className="settings-table-container mt-6">
-        <h3 className="mp-panel-title mb-4" style={{fontSize: '1rem', color: '#1e293b'}}>Recent ML Pipeline Executions</h3>
-        <table className="settings-table">
-          <thead>
-            <tr>
-              <th>RUN ID</th>
-              <th>TRIGGER</th>
-              <th>START TIME</th>
-              <th>DURATION</th>
-              <th>MODEL USED</th>
-              <th>SKU SCOPE</th>
-              <th>STATUS</th>
-              <th className="text-right">PARAMETERS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {mlPipeline.executions.map((exec: any, i: number) => (
-              <tr key={i}>
-                <td className="fw-700 text-dark">{exec.id}</td>
-                <td className="text-secondary">{exec.trigger}</td>
-                <td className="text-secondary" style={{fontFamily: 'monospace', fontSize: '12px'}}>{exec.start}</td>
-                <td className="text-secondary">{exec.duration}</td>
-                <td className="fw-600">{exec.model}</td>
-                <td className="text-secondary">{exec.scope}</td>
-                <td>
-                  <span className={`audit-badge ${exec.status === 'Completed' ? 'green' : 'red'}`}>
-                    {exec.status}
-                  </span>
-                </td>
-                <td className="text-right">
-                  {exec.params.map((p: string, idx: number) => (
-                    <span key={idx} className="ml-param-badge">{p}</span>
-                  ))}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <h3 className="mp-panel-title mb-4" style={{ fontSize: '1rem', color: '#1e293b' }}>
+          ML Pipeline Status
+        </h3>
+        <p className="text-secondary" style={{ padding: '1rem' }}>
+          Realtime ML training and inference pipeline is managed via background tasks.
+        </p>
       </div>
     </div>
   );
 
   const renderAuditLogs = () => (
     <div className="settings-audit-panel">
-      <div className="settings-filters mb-6">
-        <select className="settings-select has-icon-left">
-          <option>Last 7 Days (Oct 18 - Oct 24)</option>
+      <div className="settings-filters mb-6 flex gap-4">
+        <select
+          className="settings-select"
+          value={auditActionFilter}
+          onChange={(e) => setAuditActionFilter(e.target.value)}
+        >
+          <option value="All">All Action Types</option>
+          <option value="auth">Auth & Security</option>
+          <option value="inventory">Inventory Adjustments</option>
+          <option value="product">Products</option>
+          <option value="supplier">Suppliers</option>
+          <option value="user">User Management</option>
         </select>
-        <select className="settings-select">
-          <option>User: All</option>
-        </select>
-        <select className="settings-select">
-          <option>Action: All</option>
-        </select>
+        <input
+          type="text"
+          className="settings-input"
+          placeholder="Filter audit trail by user, action..."
+          value={auditSearchTerm}
+          onChange={(e) => setAuditSearchTerm(e.target.value)}
+          style={{ maxWidth: '300px' }}
+        />
+        <button className="settings-btn-outline" onClick={loadAuditLogs}>
+          Refresh Logs
+        </button>
       </div>
 
       <div className="settings-table-container mt-6">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="mp-panel-title m-0" style={{fontSize: '1rem', color: '#1e293b'}}>System Audit Trail</h2>
-          <button className="settings-btn-outline">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '8px'}}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-            Export Audit Log
-          </button>
+          <h2 className="mp-panel-title m-0" style={{ fontSize: '1rem', color: '#1e293b' }}>
+            System Audit Trail (UC45)
+          </h2>
         </div>
         <table className="settings-table">
           <thead>
             <tr>
               <th>TIMESTAMP</th>
-              <th>USER</th>
+              <th>OPERATOR</th>
               <th>ACTION TYPE</th>
-              <th>RESOURCE / DETAILS</th>
+              <th>DETAILS</th>
               <th>IP ADDRESS</th>
-              <th>SEVERITY</th>
             </tr>
           </thead>
           <tbody>
-            {auditLogs.map((log: any, i: number) => (
-              <tr key={i}>
-                <td className="text-secondary" style={{fontFamily: 'monospace', fontSize: '11px'}}>{log.timestamp}</td>
-                <td className="fw-600">{log.user}</td>
-                <td className="fw-600">{log.action}</td>
-                <td className="text-secondary">{log.details}</td>
-                <td className="text-secondary" style={{fontFamily: 'monospace', fontSize: '11px'}}>{log.ip}</td>
-                <td>
-                  <span className={`audit-badge ${log.severity === 'Critical' ? 'red' : log.severity === 'Warning' ? 'yellow' : 'blue'}`}>
-                    {log.severity}
-                  </span>
+            {filteredAuditLogs.length === 0 ? (
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                  No audit logs recorded yet.
                 </td>
               </tr>
-            ))}
+            ) : (
+              filteredAuditLogs.map((log: any, i: number) => (
+                <tr key={log.id || i}>
+                  <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                    {log.created_at ? new Date(log.created_at).toLocaleString() : log.timestamp || 'N/A'}
+                  </td>
+                  <td className="fw-600">{log.actor_email || log.user || 'System'}</td>
+                  <td className="fw-600">
+                    <span className="audit-badge blue">{log.action}</span>
+                  </td>
+                  <td className="text-secondary">{log.details || '-'}</td>
+                  <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                    {log.ip_address || log.ip || '-'}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
-        
+
         <div className="flex justify-between items-center mt-4">
-          <span className="text-secondary" style={{fontSize: '12px'}}>Showing 1 to 10 of 214 logs</span>
-          <div className="prod-pagination">
-            <button className="page-btn">Previous</button>
-            <button className="page-btn active">1</button>
-            <button className="page-btn">2</button>
-            <button className="page-btn">Next</button>
-          </div>
+          <span className="text-secondary" style={{ fontSize: '12px' }}>
+            Showing {filteredAuditLogs.length} of {auditLogs.length} audit records
+          </span>
         </div>
       </div>
     </div>
@@ -386,89 +617,32 @@ export const Settings: React.FC = () => {
 
   const renderDataQuality = () => (
     <div className="settings-dq-panel">
-      <h2 className="mp-panel-title mb-6">Data Quality Inspector</h2>
+      <h2 className="mp-panel-title mb-6">Data Quality & Pipeline Integrity</h2>
       <div className="dq-top-row">
         <div className="dq-score-card">
           <div className="dq-score-circle">
-            <span className="dq-score-value">{dataQuality.score}</span>
+            <span className="dq-score-value">{dataQuality?.score || 100}%</span>
           </div>
           <div className="dq-score-info">
-            <h3 className="dq-score-title">Overall Ingestion Score</h3>
-            <p className="dq-score-desc">Ingested tables meet optimal parameters for neural network model training.</p>
-            <div className="flex items-center gap-4 mt-2">
-              <button className="settings-btn-primary" style={{padding: '0.375rem 0.75rem'}}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: '4px'}}><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.87-11.45L2 8"></path></svg>
-                Run Quality Check
-              </button>
-              <span className="text-secondary" style={{fontSize: '11px'}}>Last checked: Today at 04:12 AM</span>
-            </div>
+            <h3 className="dq-score-title">Schema Validation Score</h3>
+            <p className="dq-score-desc">Data tables adhere strictly to Pydantic and SQLAlchemy schema models.</p>
           </div>
         </div>
-
-        <div className="dq-stats-col">
-          <div className="dq-stat-box mb-4">
-            <span className="dq-stat-label">MISSING DATA RATE</span>
-            <div className="flex justify-between items-center">
-              <h2>{dataQuality.missingRate}</h2>
-              <span className="text-green fw-600" style={{fontSize: '11px'}}>Optimal (&lt; 1%)</span>
-            </div>
-          </div>
-          <div className="dq-stat-box">
-            <span className="dq-stat-label">OUTLIERS / ANOMALIES</span>
-            <div className="flex justify-between items-center">
-              <h2>{dataQuality.outliers} Found</h2>
-              <span className="text-orange fw-600" style={{fontSize: '11px'}}>Review Recommended</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="settings-table-container mt-6" style={{border: '1px solid var(--border-color)', padding: '1.5rem', borderRadius: 'var(--radius-lg)'}}>
-        <h3 className="mp-panel-title mb-4">Active Data Pipeline Inspections</h3>
-        <table className="settings-table">
-          <thead>
-            <tr>
-              <th>INSPECTION TEST NAME</th>
-              <th>CATEGORY</th>
-              <th>STATUS</th>
-              <th>DETAILED RESULTS / SUGGESTED ACTION</th>
-              <th className="text-right">AFFECTED RECORDS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dataQuality.inspections.map((insp: any, i: number) => (
-              <tr key={i}>
-                <td className="fw-600">{insp.name}</td>
-                <td className="text-secondary">{insp.category}</td>
-                <td>
-                  <span className={`audit-badge ${insp.status === 'Fail' ? 'red' : insp.status === 'Warning' ? 'yellow' : 'green'}`}>
-                    {insp.status}
-                  </span>
-                </td>
-                <td className="text-secondary">{insp.details}</td>
-                <td className="text-right fw-600">{insp.affected}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   );
 
   return (
     <div className="animate-fade-in mb-6">
-      {isLoading || !data || !auditLogs || !dataQuality || !mlPipeline ? (
-        <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading settings data...</div>
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">
+          Loading system settings...
+        </div>
       ) : (
         <>
           <div className="settings-tabs-container">
-            {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Data Quality Inspector', 'Automation']
-              .filter(tab => {
-                if (user?.role !== 'ADMIN' && ['User Management', 'ML Pipeline', 'Automation'].includes(tab)) return false;
-                return true;
-              })
-              .map(tab => (
-              <button 
+            {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Data Quality Inspector'].map((tab) => (
+              <button
                 key={tab}
                 className={`settings-tab-btn ${activeTab === tab ? 'active' : ''}`}
                 onClick={() => setActiveTab(tab)}
@@ -480,17 +654,9 @@ export const Settings: React.FC = () => {
 
           {activeTab === 'General Settings' && renderGeneralSettings()}
           {activeTab === 'User Management' && renderUserManagement()}
-          {activeTab === 'ML Pipeline' && renderMLPipeline()}
           {activeTab === 'Audit Logs' && renderAuditLogs()}
+          {activeTab === 'ML Pipeline' && renderMLPipeline()}
           {activeTab === 'Data Quality Inspector' && renderDataQuality()}
-          
-          {(activeTab === 'Automation') && (
-            <div className="settings-main-split">
-              <div className="settings-left-panel" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px'}}>
-                <p style={{color: 'var(--text-secondary)'}}>This module is currently under development.</p>
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>

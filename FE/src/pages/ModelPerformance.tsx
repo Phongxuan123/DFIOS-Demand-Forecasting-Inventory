@@ -6,7 +6,6 @@ import './ModelPerformance.css';
 
 export const ModelPerformance: React.FC = () => {
   const { user } = useAuth();
-  if (user?.role !== 'ADMIN') return <div className="p-8 text-center" style={{marginTop: '20px'}}><h2>Access Denied</h2><p>You do not have permission to view Model Performance.</p></div>;
   const [activeTab, setActiveTab] = useState('Performance Metrics');
   const [data, setData] = useState<any>(null);
   const [costData, setCostData] = useState<any>(null);
@@ -31,6 +30,10 @@ export const ModelPerformance: React.FC = () => {
     fetchData();
   }, []);
 
+  if (user && user?.role?.toUpperCase() !== 'ADMIN') {
+    return <div className="p-8 text-center" style={{marginTop: '20px'}}><h2>Access Denied</h2><p>You do not have permission to view Model Performance.</p></div>;
+  }
+
   const renderPerformanceTab = () => (
     <>
       <div className="flex justify-end mb-4">
@@ -40,7 +43,7 @@ export const ModelPerformance: React.FC = () => {
       </div>
       {/* KPI Cards */}
       <div className="mp-kpi-grid">
-        {data.kpis.map((kpi: any, idx: number) => (
+        {(data?.kpis || []).map((kpi: any, idx: number) => (
           <div className={`mp-kpi-card ${kpi.type === 'best' ? 'active-model' : ''}`} key={idx}>
             <div className="mp-kpi-header">
               <h3 className="mp-kpi-title">{kpi.title}</h3>
@@ -121,7 +124,7 @@ export const ModelPerformance: React.FC = () => {
                 <XAxis type="number" dataKey="x" hide domain={[0, 6]} />
                 <YAxis type="number" dataKey="y" hide domain={[0, 6]} />
                 <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 5, y: 5 }]} stroke="#94a3b8" strokeDasharray="3 3" />
-                {data.scatterData.map((point: any, index: number) => (
+                {(data?.scatterData || []).map((point: any, index: number) => (
                   <Scatter key={index} data={[point]} fill={point.fill} />
                 ))}
               </ScatterChart>
@@ -136,7 +139,7 @@ export const ModelPerformance: React.FC = () => {
         <p className="mp-panel-subtitle" style={{marginBottom: 0}}>Measures the positive or negative attribution impact of core features on 28-day predictive demand outputs.</p>
         
         <div className="shap-list">
-          {data.shapValues.map((item: any, idx: number) => (
+          {(data?.shapValues || []).map((item: any, idx: number) => (
             <div className="shap-item" key={idx}>
               <div className="shap-label">{item.feature}</div>
               <div className="shap-bar-container">
@@ -164,7 +167,7 @@ export const ModelPerformance: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {data.comparisonTable.map((row: any, i: number) => (
+              {(data?.comparisonTable || []).map((row: any, i: number) => (
                 <tr key={i}>
                   <td className="fw-500">{row.metric}</td>
                   <td>{row.static}</td>
@@ -337,7 +340,7 @@ export const ModelPerformance: React.FC = () => {
           <h2 className="mp-panel-title mb-4">Total Expected Annual Cost vs. Target Service Level</h2>
           <div style={{height: '250px'}}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={costData.chartData} margin={{top: 20, right: 20, bottom: 20, left: 20}}>
+              <LineChart data={costData?.chartData || []} margin={{top: 20, right: 20, bottom: 20, left: 20}}>
                 <XAxis dataKey="sl" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 12}} dy={10} />
                 <Line type="monotone" dataKey="cost" stroke="#0d9488" strokeWidth={2} dot={{r: 4, fill: '#0d9488'}} />
               </LineChart>
@@ -359,21 +362,21 @@ export const ModelPerformance: React.FC = () => {
             <tbody>
               <tr>
                 <td className="text-secondary">Annual Holding Cost</td>
-                <td className="text-right fw-500">{costData.currentPolicy.holding}</td>
-                <td className="text-right fw-500">{costData.simulatedPolicy.holding}</td>
-                <td className="text-right"><span className="text-red fw-600">{costData.delta.holding}</span></td>
+                <td className="text-right fw-500">{costData?.currentPolicy?.holding || '-'}</td>
+                <td className="text-right fw-500">{costData?.simulatedPolicy?.holding || '-'}</td>
+                <td className="text-right"><span className="text-red fw-600">{costData?.delta?.holding || '-'}</span></td>
               </tr>
               <tr>
                 <td className="text-secondary">Stockout Cost (Expected)</td>
-                <td className="text-right fw-500">{costData.currentPolicy.stockout}</td>
-                <td className="text-right fw-500">{costData.simulatedPolicy.stockout}</td>
-                <td className="text-right"><span className="text-green fw-600">{costData.delta.stockout}</span></td>
+                <td className="text-right fw-500">{costData?.currentPolicy?.stockout || '-'}</td>
+                <td className="text-right fw-500">{costData?.simulatedPolicy?.stockout || '-'}</td>
+                <td className="text-right"><span className="text-green fw-600">{costData?.delta?.stockout || '-'}</span></td>
               </tr>
               <tr>
                 <td className="fw-600">Total Annual Costs</td>
-                <td className="text-right fw-700">{costData.currentPolicy.total}</td>
-                <td className="text-right fw-700">{costData.simulatedPolicy.total}</td>
-                <td className="text-right"><span className="text-green fw-600">{costData.delta.total}</span></td>
+                <td className="text-right fw-700">{costData?.currentPolicy?.total || '-'}</td>
+                <td className="text-right fw-700">{costData?.simulatedPolicy?.total || '-'}</td>
+                <td className="text-right"><span className="text-green fw-600">{costData?.delta?.total || '-'}</span></td>
               </tr>
             </tbody>
           </table>

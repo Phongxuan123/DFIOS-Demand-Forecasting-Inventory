@@ -1,72 +1,157 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Download, Pencil } from 'lucide-react';
+import { Pencil, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { api } from '../services/api.ts';
 import './Replenishment.css';
 
 export const Replenishment: React.FC = () => {
   const { user } = useAuth();
-  const [data, setData] = useState<any>(null);
+  const [inventory, setInventory] = useState<any[]>([]);
+  const [selectedItem, setSelectedItem] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Filters & Tabs
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'CRITICAL' | 'LOW' | 'OPTIMIZED'>('ALL');
+  const [viewTab, setViewTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE');
+  const [adjustmentsHistory, setAdjustmentsHistory] = useState<any[]>([]);
+
+  // Modal State for adjusting stock / order qty
   const [showModal, setShowModal] = useState(false);
-  const [adjQty, setAdjQty] = useState('45');
-  const [reason, setReason] = useState('');
+  const [adjOnHand, setAdjOnHand] = useState('0');
+  const [adjOnOrder, setAdjOnOrder] = useState('0');
+  const [adjReason, setAdjReason] = useState('Reorder replenishment');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [invRes, histRes] = await Promise.all([
+        api.inventory.getInventory({ limit: 100 }),
+        api.inventory.getAdjustments({ limit: 50 }),
+      ]);
+      const items = invRes.list || [];
+      setInventory(items);
+      setAdjustmentsHistory(histRes.list || []);
+
+      if (items.length > 0) {
+        setSelectedItem(items[0]);
+      }
+    } catch (error) {
+      console.error('Failed to load replenishment inventory', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const { api } = await import('../services/api.ts');
-        const response = await api.inventory.getReplenishmentDashboard();
-        setData(response);
-      } catch (error) {
-        console.error("Failed to load replenishment data", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchData();
+    loadData();
   }, []);
+
+  const openAdjustModal = (item: any) => {
+    setSelectedItem(item);
+    setAdjOnHand(String(item.on_hand ?? 0));
+    setAdjOnOrder(String(item.on_order ?? 0));
+    setAdjReason('Reorder replenishment');
+    setShowModal(true);
+  };
+
+  const handleUpdateInventory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedItem) return;
+    setIsSubmitting(true);
+    try {
+      await api.inventory.updateInventory(selectedItem.item_id, selectedItem.store_id || 'CA_1', {
+        on_hand: Number(adjOnHand),
+        on_order: Number(adjOnOrder),
+        reason: adjReason,
+      });
+      setShowModal(false);
+      await loadData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to adjust inventory');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleQuickReorder = async (item: any, addQty: number) => {
+    try {
+      const newOrder = Number(item.on_order || 0) + addQty;
+      await api.inventory.updateInventory(item.item_id, item.store_id || 'CA_1', {
+        on_hand: Number(item.on_hand || 0),
+        on_order: newOrder,
+        reason: `PO reorder triggered (+${addQty} units)`,
+      });
+      await loadData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to trigger reorder');
+    }
+  };
+
+  // KPIs derived directly from live BE inventory
+  const criticalItems = inventory.filter((item) => (item.on_hand ?? 0) <= 0);
+  const lowStockItems = inventory.filter((item) => (item.on_hand ?? 0) > 0 && (item.on_hand ?? 0) < 15);
+  const pendingOrders = inventory.filter((item) => (item.on_order ?? 0) > 0);
+  const totalStockUnits = inventory.reduce((sum, item) => sum + Number(item.on_hand || 0), 0);
+
+  const filteredItems = inventory.filter((item) => {
+    const stock = Number(item.on_hand ?? 0);
+    if (statusFilter === 'CRITICAL') return stock <= 0;
+    if (statusFilter === 'LOW') return stock > 0 && stock < 15;
+    if (statusFilter === 'OPTIMIZED') return stock >= 15;
+    return true;
+  });
 
   return (
     <div className="animate-fade-in mb-6 rep-container relative">
       <div className="rep-header-section">
-        <h1 className="rep-page-title">Automated Replenishment Module</h1>
+        <h1 className="rep-page-title">Automated Replenishment Module (UC13)</h1>
+        <button
+          className="prod-btn-outline flex items-center gap-2"
+          onClick={loadData}
+          style={{ height: '36px', padding: '0 12px' }}
+        >
+          <RefreshCw size={14} /> Refresh
+        </button>
       </div>
 
-      {isLoading || !data ? (
-        <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading dashboard data...</div>
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">
+          Loading replenishment inventory...
+        </div>
       ) : (
         <>
           <div className="rep-kpi-row">
             <div className="rep-kpi-card">
-              <span className="rep-kpi-title">ITEMS BELOW ROP</span>
+              <span className="rep-kpi-title">OUT OF STOCK (CRITICAL)</span>
               <div className="rep-kpi-content">
-                <h2>14</h2>
-                <span className="rep-badge red-light">Needs Immediate Action</span>
+                <h2>{criticalItems.length}</h2>
+                <span className="rep-badge red-light">Immediate Attention</span>
               </div>
             </div>
-            
+
+            <div className="rep-kpi-card">
+              <span className="rep-kpi-title">BELOW SAFETY STOCK / LOW</span>
+              <div className="rep-kpi-content">
+                <h2>{lowStockItems.length}</h2>
+                <span className="rep-badge yellow-light">Reorder Triggered</span>
+              </div>
+            </div>
+
             <div className="rep-kpi-card">
               <span className="rep-kpi-title">PENDING PURCHASE ORDERS</span>
               <div className="rep-kpi-content">
-                <h2>8</h2>
-                <span className="rep-badge yellow-light">3 ETA Today</span>
+                <h2>{pendingOrders.length}</h2>
+                <span className="rep-badge green-text">In Transit</span>
               </div>
             </div>
 
             <div className="rep-kpi-card">
-              <span className="rep-kpi-title">AVG. SAFETY STOCK DAYS</span>
+              <span className="rep-kpi-title">TOTAL MONITORED UNITS</span>
               <div className="rep-kpi-content">
-                <h2>12.3 Days</h2>
-                <span className="rep-badge green-text">Target Achieved (98%)</span>
-              </div>
-            </div>
-
-            <div className="rep-kpi-card">
-              <span className="rep-kpi-title">TOTAL EOQ VALUE</span>
-              <div className="rep-kpi-content">
-                <h2>$24,580</h2>
-                <span className="rep-badge green-text">+15% Capital Efficiency</span>
+                <h2>{totalStockUnits.toLocaleString()}</h2>
+                <span className="rep-badge green-text">Active Inventory</span>
               </div>
             </div>
           </div>
@@ -74,10 +159,30 @@ export const Replenishment: React.FC = () => {
           <div className="rep-filter-bar">
             <span className="filter-label">FILTER REPLENISHMENT BY STATUS</span>
             <div className="filter-pills">
-              <button className="pill-btn">All (140)</button>
-              <button className="pill-btn active-green">Below Safety Stock (14)</button>
-              <button className="pill-btn">Triggered ROP (22)</button>
-              <button className="pill-btn">Optimized (104)</button>
+              <button
+                className={`pill-btn ${statusFilter === 'ALL' ? 'active-green' : ''}`}
+                onClick={() => setStatusFilter('ALL')}
+              >
+                All ({inventory.length})
+              </button>
+              <button
+                className={`pill-btn ${statusFilter === 'CRITICAL' ? 'active-green' : ''}`}
+                onClick={() => setStatusFilter('CRITICAL')}
+              >
+                Out of Stock ({criticalItems.length})
+              </button>
+              <button
+                className={`pill-btn ${statusFilter === 'LOW' ? 'active-green' : ''}`}
+                onClick={() => setStatusFilter('LOW')}
+              >
+                Low Stock ({lowStockItems.length})
+              </button>
+              <button
+                className={`pill-btn ${statusFilter === 'OPTIMIZED' ? 'active-green' : ''}`}
+                onClick={() => setStatusFilter('OPTIMIZED')}
+              >
+                In Stock ({inventory.length - criticalItems.length - lowStockItems.length})
+              </button>
             </div>
           </div>
 
@@ -85,197 +190,262 @@ export const Replenishment: React.FC = () => {
             <div className="rep-table-panel">
               <div className="table-top-bar">
                 <div className="tab-group">
-                  <button className="tab-btn active">Active Orders</button>
-                  <button className="tab-btn">History</button>
-                </div>
-                <div className="action-group">
-                  <span className="sort-text">Sorted by: Urgent Priority</span>
-                  <button className="export-btn"><Download size={14} /> Export CSV</button>
+                  <button
+                    className={`tab-btn ${viewTab === 'ACTIVE' ? 'active' : ''}`}
+                    onClick={() => setViewTab('ACTIVE')}
+                  >
+                    Inventory & Orders
+                  </button>
+                  <button
+                    className={`tab-btn ${viewTab === 'HISTORY' ? 'active' : ''}`}
+                    onClick={() => setViewTab('HISTORY')}
+                  >
+                    Adjustment History ({adjustmentsHistory.length})
+                  </button>
                 </div>
               </div>
-              
+
               <div className="rep-table-wrap">
-                <table className="rep-table new-rep-table">
-                  <thead>
-                    <tr>
-                      <th>SKU ID</th>
-                      <th className="vertical-th">
-                        <div className="vert-text">PRODUCT<br/>NAME</div>
-                        <div className="moq-pack">MOQ: 50 | Pack: 10</div>
-                      </th>
-                      <th>STOCK</th>
-                      <th>SAFETY</th>
-                      <th>ROP</th>
-                      <th>EOQ</th>
-                      <th>STATUS</th>
-                      <th>ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td className="fw-700">SKU-8921</td>
-                      <td className="dots-td">..</td>
-                      <td>8</td>
-                      <td>15</td>
-                      <td>20</td>
-                      <td className="eoq-cell">150 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
-                      <td><span className="status-badge red-bg">CRITICAL</span></td>
-                      <td>{user?.role !== 'VIEWER' && <button className="action-btn green-solid">Reorder 150 Nov</button>}</td>
-                    </tr>
-                    <tr>
-                      <td className="fw-700">SKU-4402</td>
-                      <td className="dots-td">..</td>
-                      <td>12</td>
-                      <td>10</td>
-                      <td>18</td>
-                      <td className="eoq-cell">120 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
-                      <td><span className="status-badge yellow-text">LOW STOCK</span></td>
-                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Trigger Reorder</button>}</td>
-                    </tr>
-                    <tr>
-                      <td className="fw-700">SKU-1024</td>
-                      <td className="dots-td">..</td>
-                      <td>45</td>
-                      <td>12</td>
-                      <td>22</td>
-                      <td className="eoq-cell">80 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
-                      <td><span className="status-badge green-text-badge">IN STOCK</span></td>
-                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Monitor Demand</button>}</td>
-                    </tr>
-                    <tr>
-                      <td className="fw-700">SKU-7721</td>
-                      <td className="dots-td">..</td>
-                      <td>68</td>
-                      <td>25</td>
-                      <td>40</td>
-                      <td className="eoq-cell">200 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
-                      <td><span className="status-badge green-text-badge">IN STOCK</span></td>
-                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Optimized</button>}</td>
-                    </tr>
-                    <tr>
-                      <td className="fw-700">SKU-5012</td>
-                      <td className="dots-td">..</td>
-                      <td>9</td>
-                      <td>8</td>
-                      <td>15</td>
-                      <td className="eoq-cell">100 {user?.role !== 'VIEWER' && <Pencil size={12} className="edit-icon" onClick={() => setShowModal(true)} />}</td>
-                      <td><span className="status-badge yellow-text">LOW STOCK</span></td>
-                      <td>{user?.role !== 'VIEWER' && <button className="action-btn outline">Reorder Triggered</button>}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                {viewTab === 'ACTIVE' ? (
+                  <table className="rep-table new-rep-table">
+                    <thead>
+                      <tr>
+                        <th>SKU ID</th>
+                        <th>PRODUCT NAME</th>
+                        <th>STORE</th>
+                        <th>ON-HAND</th>
+                        <th>ON-ORDER</th>
+                        <th>STATUS</th>
+                        <th>ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                            No inventory records found for selected filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredItems.map((item, idx) => {
+                          const stock = Number(item.on_hand ?? 0);
+                          const isCritical = stock <= 0;
+                          const isLow = stock > 0 && stock < 15;
+                          const isSelected = selectedItem?.item_id === item.item_id && selectedItem?.store_id === item.store_id;
+
+                          return (
+                            <tr
+                              key={`${item.item_id}-${item.store_id}-${idx}`}
+                              className={isSelected ? 'bg-teal-50/50' : ''}
+                              onClick={() => setSelectedItem(item)}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <td className="fw-700">{item.item_id}</td>
+                              <td>{item.product_name || item.item_id}</td>
+                              <td>{item.store_id || 'Warehouse'}</td>
+                              <td className="fw-700">{item.on_hand}</td>
+                              <td className="eoq-cell">
+                                {item.on_order ?? 0}{' '}
+                                {user?.role !== 'VIEWER' && (
+                                  <Pencil
+                                    size={12}
+                                    className="edit-icon inline ml-1 text-slate-400 hover:text-teal-600"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openAdjustModal(item);
+                                    }}
+                                  />
+                                )}
+                              </td>
+                              <td>
+                                {isCritical ? (
+                                  <span className="status-badge red-bg">CRITICAL</span>
+                                ) : isLow ? (
+                                  <span className="status-badge yellow-text">LOW STOCK</span>
+                                ) : (
+                                  <span className="status-badge green-text-badge">IN STOCK</span>
+                                )}
+                              </td>
+                              <td>
+                                {user?.role !== 'VIEWER' && (
+                                  <button
+                                    className={`action-btn ${isCritical ? 'green-solid' : 'outline'}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleQuickReorder(item, 50);
+                                    }}
+                                  >
+                                    +50 Order
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="rep-table new-rep-table">
+                    <thead>
+                      <tr>
+                        <th>DATE</th>
+                        <th>SKU ID</th>
+                        <th>STORE</th>
+                        <th>PREV</th>
+                        <th>NEW</th>
+                        <th>REASON</th>
+                        <th>OPERATOR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adjustmentsHistory.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                            No adjustment history found.
+                          </td>
+                        </tr>
+                      ) : (
+                        adjustmentsHistory.map((adj, i) => (
+                          <tr key={adj.id || i}>
+                            <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                              {adj.created_at ? new Date(adj.created_at).toLocaleDateString() : 'N/A'}
+                            </td>
+                            <td className="fw-700">{adj.item_id}</td>
+                            <td>{adj.store_id}</td>
+                            <td>{adj.old_on_hand}</td>
+                            <td className="fw-700">{adj.new_on_hand}</td>
+                            <td>{adj.reason || 'Cycle count'}</td>
+                            <td className="text-secondary">{adj.adjusted_by || 'Staff'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
 
             <div className="rep-detail-panel">
-              <div className="rep-detail-header">
-                <span className="rep-detail-tag red-tag">SKU-8921 CRITICAL</span>
-                <h2 className="rep-detail-title">Nike Ultra Boost</h2>
-                <p className="rep-detail-subtitle">E-Commerce Warehouse • Footwear</p>
-              </div>
-
-              <div className="calc-box">
-                <h4 className="calc-title">SAFETY STOCK CALCULATION</h4>
-                <div className="calc-row">
-                  <span>Daily Demand (μ)</span>
-                  <span className="fw-700">4.2 units/day</span>
+              {!selectedItem ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                  Select an item to inspect replenishment calculation.
                 </div>
-                <div className="calc-row">
-                  <span>Supplier Lead Time (L)</span>
-                  <span className="fw-700">5 Days</span>
-                </div>
-                <div className="calc-row">
-                  <span>Z-Score (98% SL)</span>
-                  <span className="fw-700">2.05</span>
-                </div>
-                <div className="calc-divider"></div>
-                <div className="calc-row">
-                  <span className="fw-700">Calculated Safety Stock</span>
-                  <span className="fw-700 teal-text">15 Units</span>
-                </div>
-              </div>
-
-              <div className="forecast-box">
-                <h4 className="calc-title">28-DAY DEMAND FORECAST PROJECTION</h4>
-                <div className="chart-placeholder">
-                  <svg width="100%" height="60" viewBox="0 0 200 60" preserveAspectRatio="none">
-                    <path d="M0,50 L30,20 L60,45 L110,10 L150,25 L200,35" fill="none" stroke="#0d9488" strokeWidth="2" strokeDasharray="4 4" />
-                    <path d="M0,50 L30,20 L60,45" fill="none" stroke="#64748b" strokeWidth="2" />
-                    <circle cx="60" cy="45" r="4" fill="#0d9488" />
-                  </svg>
-                  <div className="chart-labels">
-                    <span>Oct 24</span>
-                    <span className="teal-text fw-600" style={{ fontSize: '10px' }}>ROP Trigger</span>
-                    <span>Nov 21</span>
+              ) : (
+                <>
+                  <div className="rep-detail-header">
+                    <span className={`rep-detail-tag ${selectedItem.on_hand <= 0 ? 'red-tag' : 'green-tag'}`}>
+                      {selectedItem.item_id} • {selectedItem.on_hand <= 0 ? 'CRITICAL' : 'OPTIMIZED'}
+                    </span>
+                    <h2 className="rep-detail-title">{selectedItem.product_name || selectedItem.item_id}</h2>
+                    <p className="rep-detail-subtitle">Store: {selectedItem.store_id || 'CA_1'}</p>
                   </div>
-                </div>
-              </div>
-              
-              {user?.role !== 'VIEWER' && (
-                <div className="detail-actions">
-                  <button className="btn-generate">Generate Purchase Order (150 Units)</button>
-                  <button className="btn-reject">Reject Order</button>
-                </div>
+
+                  <div className="calc-box">
+                    <h4 className="calc-title">INVENTORY POSITION</h4>
+                    <div className="calc-row">
+                      <span>On-hand Stock</span>
+                      <span className="fw-700">{selectedItem.on_hand} units</span>
+                    </div>
+                    <div className="calc-row">
+                      <span>On-order (In transit)</span>
+                      <span className="fw-700">{selectedItem.on_order ?? 0} units</span>
+                    </div>
+                    <div className="calc-row">
+                      <span>Effective Stock Position</span>
+                      <span className="fw-700 teal-text">
+                        {Number(selectedItem.on_hand || 0) + Number(selectedItem.on_order || 0)} units
+                      </span>
+                    </div>
+                    <div className="calc-divider"></div>
+                    <div className="calc-row">
+                      <span>Recommended Safety Stock</span>
+                      <span className="fw-700">15 Units</span>
+                    </div>
+                  </div>
+
+                  {user?.role !== 'VIEWER' && (
+                    <div className="detail-actions" style={{ marginTop: '1.5rem' }}>
+                      <button
+                        className="btn-generate"
+                        onClick={() => openAdjustModal(selectedItem)}
+                      >
+                        Adjust / Reorder Quantity
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
-          
-          {showModal && createPortal(
+
+          {showModal && selectedItem && createPortal(
             <div className="modal-overlay" onClick={() => setShowModal(false)}>
-              <div className="modal-content" onClick={e => e.stopPropagation()}>
-                <div className="modal-header">
-                  <h2>Adjust Recommended Order Quantity</h2>
-                  <p>SKU-8921 - Nike Ultra Boost (White / Size 10)</p>
-                </div>
-                
-                <div className="modal-body">
-                  <div className="supplier-box">
-                    <div className="supplier-title">SUPPLIER CONSTRAINTS</div>
-                    <div className="supplier-rules">
-                      MOQ <strong>50 units</strong> • Pack-size / Order Multiple <strong>10 units</strong>
-                    </div>
-                    <div className="supplier-hint">Hint: Enter a multiple of 10 (e.g., 50, 60, 70).</div>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header flex justify-between items-start">
+                  <div>
+                    <h2>Adjust Stock & Order Quantity (UC13)</h2>
+                    <p>{selectedItem.item_id} • Store: {selectedItem.store_id}</p>
                   </div>
-                  
+                  <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleUpdateInventory} className="modal-body">
                   <div className="input-group">
-                    <label>RECOMMENDED ORDER QUANTITY</label>
-                    <div className="input-with-label">
-                      <input type="text" value="150" readOnly className="disabled-input" />
-                      <span className="inner-label">Current</span>
-                    </div>
+                    <label>On-hand Actual Stock</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="settings-input w-full"
+                      value={adjOnHand}
+                      onChange={(e) => setAdjOnHand(e.target.value)}
+                      required
+                    />
                   </div>
-                  
-                  <div className="input-group">
-                    <label>ADJUSTED ORDER QUANTITY</label>
-                    <div className="input-with-label error-state">
-                      <input 
-                        type="text" 
-                        value={adjQty} 
-                        onChange={e => setAdjQty(e.target.value)} 
-                        className="error-input" 
-                      />
-                      <span className="inner-label red">Invalid</span>
-                    </div>
-                    <div className="error-text">
-                      - Must be &ge; 50 (MOQ).<br/>- Must be a multiple of 10 (Pack-size).
-                    </div>
+
+                  <div className="input-group" style={{ marginTop: '1rem' }}>
+                    <label>On-order Quantity (Purchase Order)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="settings-input w-full"
+                      value={adjOnOrder}
+                      onChange={(e) => setAdjOnOrder(e.target.value)}
+                      required
+                    />
                   </div>
-                  
-                  <div className="input-group mb-0">
-                    <label>REASON FOR ADJUSTMENT</label>
-                    <textarea 
-                      placeholder="Enter reason..."
-                      value={reason}
-                      onChange={e => setReason(e.target.value)}
-                    ></textarea>
-                    <div className="error-text mt-1">Reason is required for auditability.</div>
+
+                  <div className="input-group" style={{ marginTop: '1rem' }}>
+                    <label>Adjustment Reason</label>
+                    <input
+                      type="text"
+                      className="settings-input w-full"
+                      value={adjReason}
+                      onChange={(e) => setAdjReason(e.target.value)}
+                      placeholder="e.g. Cycle count, Restock, Return"
+                    />
                   </div>
-                </div>
-                
-                <div className="modal-footer">
-                  <button className="btn-cancel" onClick={() => setShowModal(false)}>Cancel</button>
-                  <button className="btn-save">Save / Apply Adjustment</button>
-                </div>
+
+                  <div className="modal-footer flex justify-end gap-3 mt-6">
+                    <button
+                      type="button"
+                      className="btn-reject"
+                      onClick={() => setShowModal(false)}
+                      disabled={isSubmitting}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn-confirm"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? 'Saving...' : 'Save Adjustment'}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>,
             document.body

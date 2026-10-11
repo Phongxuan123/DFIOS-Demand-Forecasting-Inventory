@@ -76,7 +76,7 @@ export const Reports: React.FC = () => {
       ) : (
         <>
           <div className="report-grid-3col">
-            {data.templates
+            {(data.templates || [])
               .map((tpl: any, idx: number) => ({ ...tpl, originalIdx: idx, isGenerated: idx % 2 === 1 }))
               .filter((tpl: any) => tpl.title.toLowerCase().includes(searchTerm.toLowerCase()) || tpl.desc.toLowerCase().includes(searchTerm.toLowerCase()))
               .filter((tpl: any) => {
@@ -116,27 +116,33 @@ export const Reports: React.FC = () => {
               </div>
               
               <div>
-                {data.logs.map((log: any, idx: number) => (
-                  <div className="log-row" key={idx}>
-                    <div className="log-col-1">{log.name}</div>
-                    <div className="log-col-2">{log.type}</div>
-                    <div className="log-col-3">{log.date}</div>
-                    <div className="log-col-4">
-                      <span className={`format-badge ${log.formatClass}`}>{log.format}</span>
-                    </div>
-                    <div className="log-col-5">{log.size}</div>
-                    <div className="log-col-6">
-                      <span className={`status-badge ${log.status === 'READY' ? 'ready' : 'processing'}`}>{log.status}</span>
-                    </div>
-                    <div className="log-col-7">
-                      {log.action === 'Download' ? (
-                        <button className="download-btn">Download</button>
-                      ) : (
-                        <span className="wait-text">Wait...</span>
-                      )}
-                    </div>
+                {(data.logs || []).length === 0 ? (
+                  <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                    No generated reports available yet.
                   </div>
-                ))}
+                ) : (
+                  (data.logs || []).map((log: any, idx: number) => (
+                    <div className="log-row" key={idx}>
+                      <div className="log-col-1">{log.name}</div>
+                      <div className="log-col-2">{log.type}</div>
+                      <div className="log-col-3">{log.date}</div>
+                      <div className="log-col-4">
+                        <span className={`format-badge ${log.formatClass || 'csv'}`}>{log.format || 'CSV'}</span>
+                      </div>
+                      <div className="log-col-5">{log.size || '20 KB'}</div>
+                      <div className="log-col-6">
+                        <span className={`status-badge ${log.status === 'READY' ? 'ready' : 'processing'}`}>{log.status || 'READY'}</span>
+                      </div>
+                      <div className="log-col-7">
+                        {log.action === 'Download' ? (
+                          <button className="download-btn">Download</button>
+                        ) : (
+                          <span className="wait-text">Wait...</span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>

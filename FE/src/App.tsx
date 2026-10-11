@@ -11,10 +11,12 @@ import { ModelPerformance } from './pages/ModelPerformance.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Login } from './pages/auth/Login.tsx';
 import { ForgotPassword } from './pages/auth/ForgotPassword.tsx';
+import { ActivateAccount } from './pages/auth/ActivateAccount.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0b1120', color: '#94a3b8' }}>Loading...</div>;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   return <>{children}</>;
 };
@@ -26,6 +28,7 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/activate" element={<ActivateAccount />} />
           
           <Route path="/" element={
             <ProtectedRoute>
