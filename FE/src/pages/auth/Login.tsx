@@ -5,7 +5,7 @@ import { Eye, Box } from 'lucide-react';
 import './Login.css';
 
 export const Login: React.FC = () => {
-  const [email, setEmail] = useState('php2422005@gmail.com');
+  const [email, setEmail] = useState('admin@dfios.com');
   const [password, setPassword] = useState('admin123');
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -16,8 +16,7 @@ export const Login: React.FC = () => {
     e.preventDefault();
     setError('');
     try {
-      // Hardcode bypassing for demo purposes
-      await login('admin@dfios.com', 'admin');
+      await login(email, password);
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -106,6 +105,18 @@ export const Login: React.FC = () => {
                   <Eye size={18} />
                 </button>
               </div>
+            </div>
+
+            <div className="login-demo-accounts" style={{display: 'flex', gap: '8px', marginBottom: '16px', fontSize: '12px'}}>
+              <button type="button" onClick={() => { setEmail('admin@dfios.com'); setPassword('admin123'); }} style={{padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', color: '#334155', cursor: 'pointer', flex: 1}}>
+                Admin
+              </button>
+              <button type="button" onClick={() => { setEmail('manager@dfios.com'); setPassword('manager123'); }} style={{padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', color: '#334155', cursor: 'pointer', flex: 1}}>
+                Manager
+              </button>
+              <button type="button" onClick={() => { setEmail('viewer@dfios.com'); setPassword('viewer123'); }} style={{padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', color: '#334155', cursor: 'pointer', flex: 1}}>
+                Viewer
+              </button>
             </div>
 
             <div className="remember-me-group">

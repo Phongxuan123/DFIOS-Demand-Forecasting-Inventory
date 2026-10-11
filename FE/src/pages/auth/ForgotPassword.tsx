@@ -1,16 +1,42 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import { apiClient } from '../../services/apiClient.ts';
 import './Login.css'; // Reusing the identical layout styles
 
 export const ForgotPassword: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const resetToken = searchParams.get('token') || '';
   const [email, setEmail] = useState('');
   const [isSent, setIsSent] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate API call to send reset link
-    setIsSent(true);
+    setError('');
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      if (resetToken) {
+        if (newPassword !== confirmPassword) {
+          setError('New password and confirmation do not match.');
+          return;
+        }
+        await apiClient.post('/auth/reset-password', { token: resetToken, new_password: newPassword });
+        setMessage('Your password has been reset. You can sign in with the new password.');
+      } else {
+        await apiClient.post('/auth/forgot-password', { email });
+        setIsSent(true);
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Password recovery request failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -51,10 +77,13 @@ export const ForgotPassword: React.FC = () => {
       {/* Right Side - Form */}
       <div className="login-right">
         <div className="login-form-container">
-          <h2 className="login-title">Reset Your Password</h2>
+          <h2 className="login-title">{resetToken ? 'Create New Password' : 'Reset Your Password'}</h2>
           <p className="login-subtitle">
-            Enter the email address associated with your DFIOS account and we will send you a secure recovery link.
+            {resetToken ? 'Enter a new password for your DFIOS account.' : 'Enter the email address associated with your DFIOS account and we will send you a secure recovery link.'}
           </p>
+
+          {error && <div className="login-error">{error}</div>}
+          {message && <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>{message}</div>}
 
           {isSent ? (
             <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
@@ -62,24 +91,52 @@ export const ForgotPassword: React.FC = () => {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="login-form">
-              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                <label className="form-label">Email Address</label>
-                <input
-                  type="email"
-                  className="form-input"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="manager@fintrexlabel.com"
-                  required
-                />
-              </div>
+              {resetToken ? (
+                <>
+                  <div className="form-group" style={{ marginBottom: '1rem' }}>
+                    <label className="form-label">New Password</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                    <label className="form-label">Confirm New Password</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                  <label className="form-label">Email Address</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="manager@dfios.com"
+                    required
+                  />
+                </div>
+              )}
 
               <button
                 type="submit"
                 className="btn-primary login-btn"
                 style={{ marginBottom: '1rem' }}
+                disabled={isSubmitting}
               >
-                Send Reset Link
+                {isSubmitting ? 'Submitting...' : resetToken ? 'Reset Password' : 'Send Reset Link'}
               </button>
             </form>
           )}

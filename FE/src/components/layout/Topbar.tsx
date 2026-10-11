@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Search, Bell, Calendar, X, Loader2, ArrowRight } from 'lucide-react';
-import { mockProducts, mockReports, mockForecastExplorer } from '../../data/mockData.ts';
+import { api } from '../../services/api.ts';
+import { useSSE } from '../../hooks/useSSE.ts';
 import './Topbar.css';
 
 const getPageConfig = (pathname: string) => {
@@ -30,6 +31,7 @@ export const Topbar: React.FC = () => {
   const [results, setResults] = useState<any[]>([]);
   const [history, setHistory] = useState<string[]>(['Nike Ultra Boost', 'SKU-4402']);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [stockAlerts, setStockAlerts] = useState<any[]>([]);
   
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -43,6 +45,25 @@ export const Topbar: React.FC = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    api.inventory.getReplenishmentAlerts()
+      .then((result) => setStockAlerts(result.alerts || []))
+      .catch(() => setStockAlerts([]));
+  }, []);
+
+  const sse = useSSE('/events');
+  useEffect(() => {
+    if (sse.data && sse.data.type !== 'connected' && sse.data.type !== 'close') {
+      const newNotif = {
+        name: `[Event: ${sse.data.type}]`,
+        details: JSON.stringify(sse.data.payload),
+        actionText: 'Dismiss',
+        statusClass: 'warning',
+      };
+      setStockAlerts((prev) => [newNotif, ...prev]);
+    }
+  }, [sse.data]);
 
   // Keyboard shortcut for command palette
   useEffect(() => {
@@ -59,7 +80,7 @@ export const Topbar: React.FC = () => {
     return () => document.removeEventListener('keydown', down);
   }, [isCommandPaletteOpen]);
 
-  // Simulate search logic based on context
+  // Real search logic querying backend
   useEffect(() => {
     if (!searchTerm.trim()) {
       setResults([]);
@@ -69,25 +90,23 @@ export const Topbar: React.FC = () => {
 
     setIsSearching(true);
 
-    const delay = setTimeout(() => {
-      let found: any[] = [];
-      const term = searchTerm.toLowerCase();
-      
-      // Contextual search logic
-      if (config.context === 'products' || config.context === 'dashboard' || config.context === 'abcxyz') {
-        found = mockProducts.list.filter(p => p.name.toLowerCase().includes(term) || p.id.toLowerCase().includes(term));
-      } else if (config.context === 'reports') {
-        found = mockReports.templates.filter(r => r.title.toLowerCase().includes(term) || r.desc.toLowerCase().includes(term));
-      } else if (config.context === 'forecast') {
-        found = mockForecastExplorer.skus.filter(s => s.name.toLowerCase().includes(term) || s.id.toLowerCase().includes(term));
-      } else {
-        // Generic fallback
-        found = mockProducts.list.filter(p => p.name.toLowerCase().includes(term));
+    const delay = setTimeout(async () => {
+      try {
+        const term = searchTerm.toLowerCase();
+        const res = await api.products.getProducts({ search: term, limit: 10 });
+        const found = (res.list || []).map((p: any) => ({
+          id: p.item_id,
+          name: p.name,
+          category: p.cat_id || p.dept_id || 'Product',
+        }));
+        setResults(found);
+      } catch (err) {
+        console.error('Search failed', err);
+        setResults([]);
+      } finally {
+        setIsSearching(false);
       }
-
-      setResults(found);
-      setIsSearching(false);
-    }, 400); // 400ms loading simulation
+    }, 300);
 
     return () => clearTimeout(delay);
   }, [searchTerm, config.context]);
@@ -216,7 +235,7 @@ export const Topbar: React.FC = () => {
         <div className="notif-wrapper" ref={notifRef}>
           <button className="topbar-bell-btn" onClick={() => setShowNotifications(!showNotifications)}>
             <Bell size={16} />
-            <span className="topbar-bell-badge">3</span>
+            {stockAlerts.length > 0 && <span className="topbar-bell-badge">{stockAlerts.length}</span>}
           </button>
           
           {showNotifications && (
@@ -226,34 +245,24 @@ export const Topbar: React.FC = () => {
                 <a href="#">Mark all read</a>
               </div>
               <div className="notifications-list">
-                <div className="notification-item">
-                  <div className="notif-dot red"></div>
-                  <div className="notif-content">
-                    <p><strong>SKU-8921 Nike Ultra Boost</strong> dropped below ROP (20 units). Current: 8 units</p>
-                    <span>2 min ago</span>
+                {stockAlerts.length === 0 && (
+                  <div className="notification-item">
+                    <div className="notif-dot teal"></div>
+                    <div className="notif-content">
+                      <p>No SKU is currently below reorder point.</p>
+                      <span>Updated now</span>
+                    </div>
                   </div>
-                </div>
-                <div className="notification-item">
-                  <div className="notif-dot red"></div>
-                  <div className="notif-content">
-                    <p><strong>SKU-4402 Nike Vapor</strong> inventory fell below safety stock (12 units). Current: 6 units</p>
-                    <span>15 min ago</span>
+                )}
+                {stockAlerts.slice(0, 5).map((alert) => (
+                  <div className="notification-item" key={`${alert.id}-${alert.store}`}>
+                    <div className={`notif-dot ${alert.status === 'CRITICAL' ? 'red' : 'orange'}`}></div>
+                    <div className="notif-content">
+                      <p><strong>{alert.id} {alert.name}</strong> is below ROP ({alert.rop}). Current: {alert.stock} units</p>
+                      <span>{alert.store} - updated now</span>
+                    </div>
                   </div>
-                </div>
-                <div className="notification-item">
-                  <div className="notif-dot red"></div>
-                  <div className="notif-content">
-                    <p><strong>SKU-1024 Puma Classic</strong> stockout detected at Eastside Mall. Current: 0 units</p>
-                    <span>1 hour ago</span>
-                  </div>
-                </div>
-                <div className="notification-item">
-                  <div className="notif-dot orange"></div>
-                  <div className="notif-content">
-                    <p><strong>SKU-7721 Adidas Samba</strong> demand spike detected. Recommended allocation +15%</p>
-                    <span>2 hours ago</span>
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           )}
@@ -261,7 +270,7 @@ export const Topbar: React.FC = () => {
         
         <div className="topbar-date-display">
           <Calendar size={14} />
-          October 24, 2024
+          {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
         </div>
       </div>
     </header>
