@@ -11,6 +11,7 @@ from app.models.audit_log import AuditLog
 from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.system_setting import SystemSetting
 from app.models.data_quality import DataQualityRun
+from app.models.ml_training import MLTrainingJob
 
 __all__ = [
     "Base",
@@ -27,4 +28,5 @@ __all__ = [
     "InventoryAdjustment",
     "SystemSetting",
     "DataQualityRun",
+    "MLTrainingJob",
 ]

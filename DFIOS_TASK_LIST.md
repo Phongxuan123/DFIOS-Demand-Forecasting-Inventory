@@ -1,6 +1,6 @@
 # DFIOS Backend — Task List hợp nhất (37 UC còn lại)
 
-Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **15/50 UC xong, 65 test pass**. File này gộp danh sách của Gemini (endpoint, công thức, giá trị mặc định cụ thể) với thứ tự theo phụ thuộc dữ liệu. Tick `[x]` khi task xong và test pass.
+Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **16/50 UC xong, 72 test pass**. File này gộp danh sách của Gemini (endpoint, công thức, giá trị mặc định cụ thể) với thứ tự theo phụ thuộc dữ liệu. Tick `[x]` khi task xong và test pass.
 
 > Dán nguyên file hoặc từng Phase cho agent. Làm **tuần tự theo Phase**, Phase nào xong phải pass test rồi mới sang Phase sau.
 
@@ -27,7 +27,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 | A | Authentication & Access | 6 | 6/6 ✅ | — |
 | C | Master Data & Inventory | 6 | 6/6 ✅ | — |
 | I | System Administration | 2 | 2/2 ✅ | 0 |
-| J | ML Pipeline & Model Ops | 5 | 1/5 | 1, 8 |
+| J | ML Pipeline & Model Ops | 5 | 2/5 | 1, 8 |
 | D | Demand Forecasting | 8 | 0/8 | 2 |
 | E | ABC/XYZ Classification | 4 | 0/4 | 3 |
 | F | Inventory Optimization | 4 | 0/4 | 4 |
@@ -55,7 +55,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
   - Kiểm tra: tỷ lệ missing, outlier, nhất quán (ngày trùng, giá trị âm, SKU không tồn tại). **Leakage**: không đặc trưng nào dùng dữ liệu sau thời điểm dự báo; split theo thời gian.
   - Kết quả theo SKU: số liệu, mức nghiêm trọng, cờ pass/fail.
 
-- [ ] **T03 · UC47 — Train & Benchmark Forecasting Models** · `Admin`
+- [x] **T03 · UC47 — Train & Benchmark Forecasting Models** · `Admin`
   - `POST /api/v1/ml/train`, `GET /api/v1/ml/train/{job_id}`
   - Input: khoảng thời gian, danh sách SKU, danh sách mô hình. Metric: MAE, RMSE, MASE, WRMSSE.
   - **Bất đồng bộ** (background task / job queue), trạng thái `pending/running/done/failed`, poll được.
