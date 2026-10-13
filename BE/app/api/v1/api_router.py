@@ -12,6 +12,7 @@ from app.api.v1.endpoints.settings import router as settings_router
 from app.api.v1.endpoints.data_quality import router as data_quality_router
 from app.api.v1.endpoints.ml_training import router as ml_training_router
 from app.api.v1.endpoints.model_registry import router as model_registry_router
+from app.api.v1.endpoints.forecasts import router as forecasts_router
 
 api_router = APIRouter()
 
@@ -35,6 +36,9 @@ api_router.include_router(sales_router, prefix="/sales", tags=["Master Data - Hi
 
 # UC16: Master Data - Event & Promotion Calendar
 api_router.include_router(events_calendar_router, prefix="/events-calendar", tags=["Master Data - Event Calendar (UC16)"])
+
+# UC17 - UC24: Demand Forecasting (Forecast Explorer)
+api_router.include_router(forecasts_router, prefix="/forecasts", tags=["Demand Forecasting - Forecast Explorer (UC17-UC24)"])
 
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
