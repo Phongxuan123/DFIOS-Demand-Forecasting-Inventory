@@ -13,6 +13,7 @@ from app.models.system_setting import SystemSetting
 from app.models.data_quality import DataQualityRun
 from app.models.ml_training import MLTrainingJob
 from app.models.model_registry import ModelRegistry
+from app.models.classification import SKUClassification
 
 __all__ = [
     "Base",
@@ -33,4 +34,5 @@ __all__ = [
     "DataQualityRun",
     "MLTrainingJob",
     "ModelRegistry",
+    "SKUClassification",
 ]

@@ -83,6 +83,16 @@ from app.schemas.forecast import (
     ForecastOverrideResponse,
     ForecastOverrideRevertResponse,
 )
+from app.schemas.classification import (
+    ClassificationThresholds,
+    ClassificationThresholdsUpdate,
+    SegmentSummary,
+    ClassificationMatrixResponse,
+    SKUClassificationItem,
+    SKUClassificationListResponse,
+    RecommendationResponse,
+    ClassificationRecomputeResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -151,6 +161,14 @@ __all__ = [
     "ForecastOverrideCreate",
     "ForecastOverrideResponse",
     "ForecastOverrideRevertResponse",
+    "ClassificationThresholds",
+    "ClassificationThresholdsUpdate",
+    "SegmentSummary",
+    "ClassificationMatrixResponse",
+    "SKUClassificationItem",
+    "SKUClassificationListResponse",
+    "RecommendationResponse",
+    "ClassificationRecomputeResponse",
 ]
 
 

@@ -29,7 +29,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 | I | System Administration | 2 | 2/2 ✅ | 0 |
 | J | ML Pipeline & Model Ops | 5 | 3/5 | 1, 8 |
 | D | Demand Forecasting | 8 | 8/8 ✅ | 2 |
-| E | ABC/XYZ Classification | 4 | 0/4 | 3 |
+| E | ABC/XYZ Classification | 4 | 4/4 ✅ | 3 |
 | F | Inventory Optimization | 4 | 0/4 | 4 |
 | G | Replenishment | 6 | 0/6 | 5 |
 | B | Dashboard & Alerts | 4 | 0/4 | 6 |
@@ -94,15 +94,15 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 
 ## Phase 3 — Phân loại ABC/XYZ (Module E)
 
-- [ ] **T13 · UC25 — Configure ABC/XYZ Thresholds** · `Admin`
+- [x] **T13 · UC25 — Configure ABC/XYZ Thresholds** · `Admin`
   - `GET/PUT /api/v1/classification/thresholds`
   - Mặc định: Pareto doanh thu **A 80% / B 15% / C 5%**; hệ số biến động CV = σ/μ: **X ≤ 0.5, Y 0.5–1.0, Z > 1.0**.
   - Đổi ngưỡng thì **tính lại phân loại toàn bộ SKU** (chạy nền nếu nhiều SKU).
-- [ ] **T14 · UC26 — View ABC-XYZ Matrix** · cả 3 role
+- [x] **T14 · UC26 — View ABC-XYZ Matrix** · cả 3 role
   - `GET /api/v1/classification/matrix` · ma trận 3×3 (AX…CZ), mỗi ô có số lượng và tỷ trọng SKU.
-- [ ] **T15 · UC27 — Filter SKU by Segment** · cả 3 role
+- [x] **T15 · UC27 — Filter SKU by Segment** · cả 3 role
   - `GET /api/v1/classification/skus?abc=&xyz=` · phân trang, tìm kiếm.
-- [ ] **T16 · UC28 — Classification-based Recommendation** · `Warehouse Manager`, `Admin` (**Viewer 403**)
+- [x] **T16 · UC28 — Classification-based Recommendation** · `Warehouse Manager`, `Admin` (**Viewer 403**)
   - `GET /api/v1/classification/recommendations/{segment}`
   - Chính sách cho từng nhóm (ví dụ AX kiểm soát gắt gao theo ngày; CZ gom đơn định kỳ). Bảng luật 9 ô để ở config/seed, không hardcode rải rác.
 

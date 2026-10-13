@@ -7,6 +7,7 @@ from app.services.sales_service import SalesService, sales_service
 from app.services.event_calendar_service import EventCalendarService, event_calendar_service
 from app.services.system_setting_service import SystemSettingService, system_setting_service
 from app.services.forecast_service import ForecastService, forecast_service
+from app.services.classification_service import ClassificationService, classification_service
 
 __all__ = [
     "AuthService",
@@ -27,4 +28,6 @@ __all__ = [
     "system_setting_service",
     "ForecastService",
     "forecast_service",
+    "ClassificationService",
+    "classification_service",
 ]
