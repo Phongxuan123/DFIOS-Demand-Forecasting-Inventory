@@ -40,6 +40,10 @@ api_router.include_router(events_calendar_router, prefix="/events-calendar", tag
 # UC17 - UC24: Demand Forecasting (Forecast Explorer)
 api_router.include_router(forecasts_router, prefix="/forecasts", tags=["Demand Forecasting - Forecast Explorer (UC17-UC24)"])
 
+# UC25 - UC28: Inventory Classification (ABC/XYZ)
+from app.api.v1.endpoints.classification import router as classification_router
+api_router.include_router(classification_router, prefix="/classification", tags=["Inventory Classification - ABC/XYZ (UC25-UC28)"])
+
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 
