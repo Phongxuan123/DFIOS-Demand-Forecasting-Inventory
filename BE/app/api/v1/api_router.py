@@ -11,6 +11,7 @@ from app.api.v1.endpoints.events_calendar import router as events_calendar_route
 from app.api.v1.endpoints.settings import router as settings_router
 from app.api.v1.endpoints.data_quality import router as data_quality_router
 from app.api.v1.endpoints.ml_training import router as ml_training_router
+from app.api.v1.endpoints.model_registry import router as model_registry_router
 
 api_router = APIRouter()
 
@@ -44,9 +45,10 @@ api_router.include_router(audit_logs_router, prefix="/audit-logs", tags=["System
 # UC44: System Administration - General Settings
 api_router.include_router(settings_router, prefix="/settings", tags=["System Administration - General Settings (UC44)"])
 
-# UC46, UC47: ML Pipeline & Model Ops
+# UC46, UC47, UC48: ML Pipeline & Model Ops
 api_router.include_router(data_quality_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC46)"])
 api_router.include_router(ml_training_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC47)"])
+api_router.include_router(model_registry_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC48)"])
 
 # Alias cho /me/email và /me/email/confirm (đáp ứng cả 2 cấu trúc URL)
 from app.api.v1.endpoints.auth import request_change_email, confirm_change_email

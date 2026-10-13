@@ -171,6 +171,21 @@ class MLTrainingService:
                 best_model=best_model_name,
             )
 
+            # Tự động ghi nhận phiên bản mô hình vào ModelRegistry (UC48)
+            from app.models.model_registry import ModelRegistry
+            model_ver_entry = ModelRegistry(
+                name=f"{best_model_name.upper()}-Production-Candidate",
+                version=f"v{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
+                algorithm=best_model_name,
+                scope=store_id or "global",
+                is_production=False,
+                parameters=params,
+                metrics=metrics_result.get(best_model_name),
+                trained_by=job.triggered_by,
+                job_id=job.id,
+            )
+            db.add(model_ver_entry)
+
             audit_service.log(
                 db,
                 action="ml.train.complete",

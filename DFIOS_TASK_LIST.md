@@ -1,6 +1,6 @@
 # DFIOS Backend — Task List hợp nhất (37 UC còn lại)
 
-Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **16/50 UC xong, 72 test pass**. File này gộp danh sách của Gemini (endpoint, công thức, giá trị mặc định cụ thể) với thứ tự theo phụ thuộc dữ liệu. Tick `[x]` khi task xong và test pass.
+Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **17/50 UC xong, 78 test pass**. File này gộp danh sách của Gemini (endpoint, công thức, giá trị mặc định cụ thể) với thứ tự theo phụ thuộc dữ liệu. Tick `[x]` khi task xong và test pass.
 
 > Dán nguyên file hoặc từng Phase cho agent. Làm **tuần tự theo Phase**, Phase nào xong phải pass test rồi mới sang Phase sau.
 
@@ -27,7 +27,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 | A | Authentication & Access | 6 | 6/6 ✅ | — |
 | C | Master Data & Inventory | 6 | 6/6 ✅ | — |
 | I | System Administration | 2 | 2/2 ✅ | 0 |
-| J | ML Pipeline & Model Ops | 5 | 2/5 | 1, 8 |
+| J | ML Pipeline & Model Ops | 5 | 3/5 | 1, 8 |
 | D | Demand Forecasting | 8 | 0/8 | 2 |
 | E | ABC/XYZ Classification | 4 | 0/4 | 3 |
 | F | Inventory Optimization | 4 | 0/4 | 4 |
@@ -62,7 +62,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
   - Dùng covariate từ lịch sự kiện (UC16). Split theo thời gian, không shuffle.
   - **Làm trước LightGBM + XGBoost + một baseline thống kê.** ARIMA/LSTM/TFT làm sau, chưa làm thì trả lỗi rõ ràng chứ không bỏ qua âm thầm.
 
-- [ ] **T04 · UC48 — Log Experiment & Manage Model Registry** · `Admin`
+- [x] **T04 · UC48 — Log Experiment & Manage Model Registry** · `Admin`
   - `GET /api/v1/ml/models`, `POST /api/v1/ml/models/{id}/promote`
   - Mỗi lần train ghi experiment vào MLflow. Liệt kê phiên bản kèm thời gian train, siêu tham số, chỉ số. Đánh dấu bản **production** (mỗi SKU/nhóm một bản).
 
