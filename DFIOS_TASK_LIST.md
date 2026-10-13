@@ -1,6 +1,6 @@
 # DFIOS Backend — Task List hợp nhất (37 UC còn lại)
 
-Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **14/50 UC xong, 57 test pass**. File này gộp danh sách của Gemini (endpoint, công thức, giá trị mặc định cụ thể) với thứ tự theo phụ thuộc dữ liệu. Tick `[x]` khi task xong và test pass.
+Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **15/50 UC xong, 65 test pass**. File này gộp danh sách của Gemini (endpoint, công thức, giá trị mặc định cụ thể) với thứ tự theo phụ thuộc dữ liệu. Tick `[x]` khi task xong và test pass.
 
 > Dán nguyên file hoặc từng Phase cho agent. Làm **tuần tự theo Phase**, Phase nào xong phải pass test rồi mới sang Phase sau.
 
@@ -16,6 +16,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 6. **Tái dùng, không viết lại**: SSE event bus (`GET /api/v1/events`), service cập nhật tồn kho (`inventory`), audit service.
 7. **Mỗi task xong** báo lại: file tạo/sửa, endpoint mới, kết quả test.
 8. SRS mơ hồ thì chọn phương án đơn giản nhất, ghi giả định vào docstring, **không dừng lại hỏi**.
+9. **Tiêu chuẩn code**: Không code lan man, không viết code quá dài thừa thãi; tối ưu code sạch sẽ, súc tích và hiệu quả nhất (KISS, DRY). Tuyệt đối không bịa code, không bịa framework/library ngoài stack chuẩn của dự án.
 
 ---
 
@@ -26,7 +27,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 | A | Authentication & Access | 6 | 6/6 ✅ | — |
 | C | Master Data & Inventory | 6 | 6/6 ✅ | — |
 | I | System Administration | 2 | 2/2 ✅ | 0 |
-| J | ML Pipeline & Model Ops | 5 | 0/5 | 1, 8 |
+| J | ML Pipeline & Model Ops | 5 | 1/5 | 1, 8 |
 | D | Demand Forecasting | 8 | 0/8 | 2 |
 | E | ABC/XYZ Classification | 4 | 0/4 | 3 |
 | F | Inventory Optimization | 4 | 0/4 | 4 |
@@ -49,7 +50,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 
 ## Phase 1 — ML Pipeline lõi
 
-- [ ] **T02 · UC46 — Check Data Quality / Leakage Prevention** · `Admin`
+- [x] **T02 · UC46 — Check Data Quality / Leakage Prevention** · `Admin`
   - `POST /api/v1/ml/data-quality/run`, `GET /api/v1/ml/data-quality/{run_id}`
   - Kiểm tra: tỷ lệ missing, outlier, nhất quán (ngày trùng, giá trị âm, SKU không tồn tại). **Leakage**: không đặc trưng nào dùng dữ liệu sau thời điểm dự báo; split theo thời gian.
   - Kết quả theo SKU: số liệu, mức nghiêm trọng, cờ pass/fail.

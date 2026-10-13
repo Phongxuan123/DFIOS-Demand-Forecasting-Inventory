@@ -10,6 +10,7 @@ from app.models.email_token import EmailToken
 from app.models.audit_log import AuditLog
 from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.system_setting import SystemSetting
+from app.models.data_quality import DataQualityRun
 
 __all__ = [
     "Base",
@@ -25,4 +26,5 @@ __all__ = [
     "AuditLog",
     "InventoryAdjustment",
     "SystemSetting",
+    "DataQualityRun",
 ]
