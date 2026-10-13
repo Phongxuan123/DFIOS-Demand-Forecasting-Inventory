@@ -12,6 +12,7 @@ from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.system_setting import SystemSetting
 from app.models.data_quality import DataQualityRun
 from app.models.ml_training import MLTrainingJob
+from app.models.model_registry import ModelRegistry
 
 __all__ = [
     "Base",
@@ -29,4 +30,5 @@ __all__ = [
     "SystemSetting",
     "DataQualityRun",
     "MLTrainingJob",
+    "ModelRegistry",
 ]
