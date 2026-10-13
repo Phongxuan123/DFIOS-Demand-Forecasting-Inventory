@@ -28,7 +28,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 | C | Master Data & Inventory | 6 | 6/6 ✅ | — |
 | I | System Administration | 2 | 2/2 ✅ | 0 |
 | J | ML Pipeline & Model Ops | 5 | 3/5 | 1, 8 |
-| D | Demand Forecasting | 8 | 0/8 | 2 |
+| D | Demand Forecasting | 8 | 8/8 ✅ | 2 |
 | E | ABC/XYZ Classification | 4 | 0/4 | 3 |
 | F | Inventory Optimization | 4 | 0/4 | 4 |
 | G | Replenishment | 6 | 0/6 | 5 |
@@ -72,21 +72,21 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 
 > Tạo bảng `forecasts` ở T05: sku, store, ngày, horizon, p10/p50/p90, model_version. Các task sau dùng lại.
 
-- [ ] **T05 · UC17 — View Demand Forecast** · cả 3 role
+- [x] **T05 · UC17 — View Demand Forecast** · cả 3 role
   - `GET /api/v1/forecasts` · dự báo theo SKU từ model production.
-- [ ] **T06 · UC18 — Select Forecast Horizon** · cả 3 role
+- [x] **T06 · UC18 — Select Forecast Horizon** · cả 3 role
   - Tham số `horizon` ∈ {7, 14, 28}, mặc định theo cấu hình; giá trị khác trả 422.
-- [ ] **T07 · UC19 — Filter Forecast by SKU** · cả 3 role
+- [x] **T07 · UC19 — Filter Forecast by SKU** · cả 3 role
   - Lọc theo SKU, ngành hàng (`category`), cửa hàng (`store_id`); phân trang, sắp xếp.
-- [ ] **T08 · UC20 — View Historical Demand** · cả 3 role
+- [x] **T08 · UC20 — View Historical Demand** · cả 3 role
   - `GET /api/v1/forecasts/{sku}/history` · lấy từ dữ liệu bán hàng (UC15), tách khỏi dự báo, gộp ngày/tuần/tháng.
-- [ ] **T09 · UC21 — Compare Actual vs Predicted** · cả 3 role
+- [x] **T09 · UC21 — Compare Actual vs Predicted** · cả 3 role
   - `GET /api/v1/forecasts/{sku}/compare` · chuỗi thực tế và dự báo trên cùng khung thời gian (chỉ phần đã có thực tế).
-- [ ] **T10 · UC22 — View Prediction Uncertainty Band** · cả 3 role
+- [x] **T10 · UC22 — View Prediction Uncertainty Band** · cả 3 role
   - Trả khoảng tin cậy **p10 / p50 / p90** và phân bố sai số cho một SKU.
-- [ ] **T11 · UC23 — View Forecast Explanation (SHAP)** · `Warehouse Manager`, `Admin` (**Viewer 403**)
+- [x] **T11 · UC23 — View Forecast Explanation (SHAP)** · `Warehouse Manager`, `Admin` (**Viewer 403**)
   - Mức đóng góp của feature (giá, sự kiện, thời điểm). Tính SHAP lúc chạy dự báo và lưu, không tính lại mỗi request. Mô hình không có SHAP (ARIMA) trả 404 kèm thông báo rõ.
-- [ ] **T12 · UC24 — Manual Forecast Override** · `Warehouse Manager`, `Admin`
+- [x] **T12 · UC24 — Manual Forecast Override** · `Warehouse Manager`, `Admin`
   - `POST /api/v1/forecasts/{sku}/override`, `DELETE /api/v1/forecasts/{sku}/override/{id}`
   - **Bắt buộc lý do**. Lưu giá trị gốc + giá trị override, người sửa, thời gian. Response nói rõ đang dùng giá trị nào. Hoàn tác được. Ghi audit.
 

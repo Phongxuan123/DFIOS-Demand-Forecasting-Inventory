@@ -66,6 +66,23 @@ from app.schemas.system_setting import (
     SettingsListResponse,
     SettingUpdateRequest,
 )
+from app.schemas.forecast import (
+    ForecastItemResponse,
+    ForecastListResponse,
+    HistoryPoint,
+    HistoricalDemandResponse,
+    ComparePoint,
+    CompareMetrics,
+    ForecastCompareResponse,
+    UncertaintyPoint,
+    ErrorDistribution,
+    ForecastUncertaintyResponse,
+    SHAPFeatureContribution,
+    ForecastExplanationResponse,
+    ForecastOverrideCreate,
+    ForecastOverrideResponse,
+    ForecastOverrideRevertResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -119,6 +136,21 @@ __all__ = [
     "SettingItem",
     "SettingsListResponse",
     "SettingUpdateRequest",
+    "ForecastItemResponse",
+    "ForecastListResponse",
+    "HistoryPoint",
+    "HistoricalDemandResponse",
+    "ComparePoint",
+    "CompareMetrics",
+    "ForecastCompareResponse",
+    "UncertaintyPoint",
+    "ErrorDistribution",
+    "ForecastUncertaintyResponse",
+    "SHAPFeatureContribution",
+    "ForecastExplanationResponse",
+    "ForecastOverrideCreate",
+    "ForecastOverrideResponse",
+    "ForecastOverrideRevertResponse",
 ]
 
 
