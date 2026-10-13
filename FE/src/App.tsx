@@ -12,6 +12,7 @@ import { Settings } from './pages/Settings.tsx';
 import { Login } from './pages/auth/Login.tsx';
 import { ForgotPassword } from './pages/auth/ForgotPassword.tsx';
 import { ActivateAccount } from './pages/auth/ActivateAccount.tsx';
+import { ConfirmEmail } from './pages/auth/ConfirmEmail.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -28,7 +29,9 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ForgotPassword />} />
           <Route path="/activate" element={<ActivateAccount />} />
+          <Route path="/confirm-email" element={<ConfirmEmail />} />
           
           <Route path="/" element={
             <ProtectedRoute>

@@ -80,7 +80,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   ABC determines product value importance. XYZ determines demand predictability (Volatility).
                 </p>
               </div>
-              {user?.role === 'ADMIN' && (
+              {user?.role?.toUpperCase() === 'ADMIN' && (
                 <button className="configure-btn" onClick={() => setIsConfigOpen(true)}>
                   <Settings size={14} style={{ marginRight: '8px' }} /> Configure Thresholds
                 </button>

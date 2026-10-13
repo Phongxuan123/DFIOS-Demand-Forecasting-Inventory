@@ -310,6 +310,18 @@ export const api = {
       const res = await apiClient.patch(`/users/${id}/status`, { is_active });
       return res.data;
     },
+    deleteUser: async (id: string) => {
+      const res = await apiClient.delete(`/users/${id}`);
+      return res.data;
+    },
+    resendActivation: async (id: string) => {
+      const res = await apiClient.post(`/users/${id}/resend-activation`);
+      return res.data;
+    },
+    getAuditActions: async () => {
+      const res = await apiClient.get('/audit-logs/actions');
+      return res.data || [];
+    },
     getAuditLogs: async (params?: Record<string, string>) => {
       const res = await apiClient.get('/audit-logs', { params });
       return { logs: unwrapItems(res.data), total: res.data?.total || 0 };

@@ -1,5 +1,6 @@
 import React from 'react';
 import { TrendingUp, Activity, Grid, Settings } from 'lucide-react';
+import { api } from '../services/api.ts';
 import './Reports.css';
 
 
@@ -14,7 +15,7 @@ export const Reports: React.FC = () => {
   React.useEffect(() => {
     const fetchData = async () => {
       try {
-        const { api } = await import('../services/api.ts');
+        // static api import used
         const result = await api.reports.getRecentLogs();
         setData(result);
       } catch (error) {

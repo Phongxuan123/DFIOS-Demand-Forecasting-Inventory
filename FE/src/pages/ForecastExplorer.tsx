@@ -23,7 +23,7 @@ export const ForecastExplorer: React.FC = () => {
         }
         
         // Match the chart look by transforming chartData specifically for Recharts Area
-        const transformedChartData = forecast.chartData.map((d: any, i: number) => ({
+        const transformedChartData = (forecast?.chartData || []).map((d: any, i: number) => ({
           name: d.date,
           actual: i < 5 ? d.actual : null,
           predicted: i >= 4 ? (d.forecast || d.actual) : null,
@@ -154,7 +154,7 @@ export const ForecastExplorer: React.FC = () => {
           </div>
           <div className="override-action">
             <span className="override-status">Manual Override Applied</span>
-            {user?.role !== 'VIEWER' && <button className="override-btn" onClick={() => setIsOverrideModalOpen(true)}>Override Forecast</button>}
+            {user?.role?.toUpperCase() !== 'VIEWER' && <button className="override-btn" onClick={() => setIsOverrideModalOpen(true)}>Override Forecast</button>}
           </div>
         </div>
       </Card>
@@ -171,26 +171,26 @@ export const ForecastExplorer: React.FC = () => {
             <div className="stats-list">
               <div className="stat-item">
                 <span className="stat-label">Predicted 28d Demand</span>
-                <span className="stat-value">{data.stats.predictedDemand}</span>
+                <span className="stat-value">{data?.stats?.predictedDemand || '-'}</span>
               </div>
               <div className="stat-item">
                 <span className="stat-label">Recommended Safety Stock</span>
-                <span className="stat-value">{data.stats.safetyStock}</span>
+                <span className="stat-value">{data?.stats?.safetyStock || '-'}</span>
               </div>
               <div className="stat-item">
                 <span className="stat-label">Optimal Reorder Point</span>
-                <span className="stat-value">{data.stats.reorderPoint}</span>
+                <span className="stat-value">{data?.stats?.reorderPoint || '-'}</span>
               </div>
               <div className="stat-item">
                 <span className="stat-label">Active Model MASE</span>
                 <span className="stat-value" style={{display: 'flex', gap: '0.25rem'}}>
-                  <strong>{data.stats.mase}</strong>
+                  <strong>{data?.stats?.mase || '-'}</strong>
                   <span className="text-teal">(Excellent)</span>
                 </span>
               </div>
               <div className="stat-item">
                 <span className="stat-label">Confidence Interval (90%)</span>
-                <span className="stat-value">{data.stats.ci}</span>
+                <span className="stat-value">{data?.stats?.ci || '-'}</span>
               </div>
             </div>
           </Card>
@@ -211,7 +211,7 @@ export const ForecastExplorer: React.FC = () => {
                 <div className="matrix-col-header matrix-col-5 text-right">Spike Danger</div>
               </div>
               
-              {data.scheduleMatrix.map((row: any, idx: number) => (
+              {(data?.scheduleMatrix || []).map((row: any, idx: number) => (
                 <div className="matrix-row" key={idx}>
                   <div className="matrix-cell matrix-col-1 font-bold">{row.date}</div>
                   <div className="matrix-cell matrix-col-2 text-teal">{row.demand} units</div>

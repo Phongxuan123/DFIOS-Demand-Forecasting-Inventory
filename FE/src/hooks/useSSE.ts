@@ -8,10 +8,12 @@ export function useSSE(url: string) {
   useEffect(() => {
     let active = true;
     const token = localStorage.getItem('access_token');
-    
     const connect = async () => {
       try {
-        const response = await fetch(apiClient.defaults.baseURL + url, {
+        const base = (apiClient.defaults.baseURL || '/api/v1').replace(/\/$/, '');
+        const path = url.replace(/^\//, '');
+        const fullUrl = `${base}/${path}`;
+        const response = await fetch(fullUrl, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Accept': 'text/event-stream'
