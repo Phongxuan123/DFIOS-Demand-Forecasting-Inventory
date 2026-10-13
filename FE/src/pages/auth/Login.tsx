@@ -5,8 +5,8 @@ import { Eye, Box } from 'lucide-react';
 import './Login.css';
 
 export const Login: React.FC = () => {
-  const [email, setEmail] = useState('admin@dfios.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const { login, isLoading } = useAuth();
@@ -75,6 +75,8 @@ export const Login: React.FC = () => {
               <label className="form-label">Email Address</label>
               <input
                 type="email"
+                name="email"
+                autoComplete="username"
                 className="form-input"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -91,6 +93,8 @@ export const Login: React.FC = () => {
               <div className="password-input-wrapper">
                 <input
                   type={showPassword ? 'text' : 'password'}
+                  name="password"
+                  autoComplete="current-password"
                   className="form-input password-input"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -105,18 +109,6 @@ export const Login: React.FC = () => {
                   <Eye size={18} />
                 </button>
               </div>
-            </div>
-
-            <div className="login-demo-accounts" style={{display: 'flex', gap: '8px', marginBottom: '16px', fontSize: '12px'}}>
-              <button type="button" onClick={() => { setEmail('admin@dfios.com'); setPassword('admin123'); }} style={{padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', color: '#334155', cursor: 'pointer', flex: 1}}>
-                Admin
-              </button>
-              <button type="button" onClick={() => { setEmail('manager@dfios.com'); setPassword('manager123'); }} style={{padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', color: '#334155', cursor: 'pointer', flex: 1}}>
-                Manager
-              </button>
-              <button type="button" onClick={() => { setEmail('viewer@dfios.com'); setPassword('viewer123'); }} style={{padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', color: '#334155', cursor: 'pointer', flex: 1}}>
-                Viewer
-              </button>
             </div>
 
             <div className="remember-me-group">

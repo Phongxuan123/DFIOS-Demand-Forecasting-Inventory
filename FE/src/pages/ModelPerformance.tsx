@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Play, Calendar } from 'lucide-react';
 import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { api } from '../services/api.ts';
 import './ModelPerformance.css';
 
 export const ModelPerformance: React.FC = () => {
@@ -14,7 +15,7 @@ export const ModelPerformance: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const { api } = await import('../services/api.ts');
+        // static api import used
         const [perfResult, costResult] = await Promise.all([
           api.models.getPerformanceMetrics(),
           api.models.getCostSimulation()

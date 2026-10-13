@@ -83,9 +83,16 @@ export const ForgotPassword: React.FC = () => {
           </p>
 
           {error && <div className="login-error">{error}</div>}
-          {message && <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>{message}</div>}
-
-          {isSent ? (
+          {message ? (
+            <div>
+              <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1.25rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
+                {message}
+              </div>
+              <Link to="/login" className="btn-primary login-btn" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                Sign In With New Password
+              </Link>
+            </div>
+          ) : isSent ? (
             <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
               We have sent a password recovery link to your email address. Please check your inbox.
             </div>

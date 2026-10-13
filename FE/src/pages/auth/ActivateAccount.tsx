@@ -53,21 +53,30 @@ export const ActivateAccount: React.FC = () => {
 
           {!token && <div className="login-error">Activation token is missing from the link.</div>}
           {error && <div className="login-error">{error}</div>}
-          {message && <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>{message}</div>}
-
-          <form onSubmit={handleSubmit} className="login-form">
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <input className="form-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required />
+          {message ? (
+            <div>
+              <div className="login-success" style={{ backgroundColor: '#ccfbf1', color: '#0f766e', padding: '1.25rem', borderRadius: '0.375rem', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
+                {message}
+              </div>
+              <Link to="/login" className="btn-primary login-btn" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
+                Sign In to Your Account
+              </Link>
             </div>
-            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-              <label className="form-label">Confirm Password</label>
-              <input className="form-input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={6} required />
-            </div>
-            <button className="btn-primary login-btn" type="submit" disabled={!token || isSubmitting}>
-              {isSubmitting ? 'Activating...' : 'Activate Account'}
-            </button>
-          </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="login-form">
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input className="form-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required />
+              </div>
+              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                <label className="form-label">Confirm Password</label>
+                <input className="form-input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={6} required />
+              </div>
+              <button className="btn-primary login-btn" type="submit" disabled={!token || isSubmitting}>
+                {isSubmitting ? 'Activating...' : 'Activate Account'}
+              </button>
+            </form>
+          )}
 
           <div style={{ textAlign: 'center', marginTop: '1rem' }}>
             <Link to="/login" style={{ color: '#0d9488', fontSize: '0.875rem', fontWeight: 600, textDecoration: 'none' }}>

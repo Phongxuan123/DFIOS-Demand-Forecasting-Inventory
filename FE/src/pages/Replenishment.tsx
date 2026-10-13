@@ -7,6 +7,7 @@ import './Replenishment.css';
 
 export const Replenishment: React.FC = () => {
   const { user } = useAuth();
+  const canEdit = user?.role?.toUpperCase() !== 'VIEWER';
   const [inventory, setInventory] = useState<any[]>([]);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -246,7 +247,7 @@ export const Replenishment: React.FC = () => {
                               <td className="fw-700">{item.on_hand}</td>
                               <td className="eoq-cell">
                                 {item.on_order ?? 0}{' '}
-                                {user?.role !== 'VIEWER' && (
+                                {canEdit && (
                                   <Pencil
                                     size={12}
                                     className="edit-icon inline ml-1 text-slate-400 hover:text-teal-600"
@@ -267,7 +268,7 @@ export const Replenishment: React.FC = () => {
                                 )}
                               </td>
                               <td>
-                                {user?.role !== 'VIEWER' && (
+                                {canEdit && (
                                   <button
                                     className={`action-btn ${isCritical ? 'green-solid' : 'outline'}`}
                                     onClick={(e) => {
@@ -364,7 +365,7 @@ export const Replenishment: React.FC = () => {
                     </div>
                   </div>
 
-                  {user?.role !== 'VIEWER' && (
+                  {canEdit && (
                     <div className="detail-actions" style={{ marginTop: '1.5rem' }}>
                       <button
                         className="btn-generate"

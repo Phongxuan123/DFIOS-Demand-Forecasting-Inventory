@@ -27,7 +27,7 @@ export const Settings: React.FC = () => {
   // User management modal & state
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
-  const [userFormData, setUserFormData] = useState({ email: '', password: '', role: 'VIEWER', display_name: '' });
+  const [userFormData, setUserFormData] = useState({ email: '', password: '', role: 'Viewer', display_name: '' });
 
   // Filters for User Management
   const [userRoleFilter, setUserRoleFilter] = useState('All');
@@ -37,6 +37,14 @@ export const Settings: React.FC = () => {
   // Filters for Audit Logs
   const [auditActionFilter, setAuditActionFilter] = useState('All');
   const [auditSearchTerm, setAuditSearchTerm] = useState('');
+  const [auditActions, setAuditActions] = useState<string[]>([]);
+
+  // Email Change State (UC05)
+  const [showEmailChangeModal, setShowEmailChangeModal] = useState(false);
+  const [newEmailValue, setNewEmailValue] = useState('');
+  const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
+  const [emailModalError, setEmailModalError] = useState('');
+  const [emailModalSuccess, setEmailModalSuccess] = useState('');
 
   const loadUsers = async () => {
     try {
@@ -59,18 +67,20 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [configResult, usersResult, auditResult, dqResult, mlResult] = await Promise.all([
+        const [configResult, usersResult, auditResult, dqResult, mlResult, actionsResult] = await Promise.all([
           api.settings.getConfig(),
           api.settings.getUsers(),
           api.settings.getAuditLogs({ limit: '100' }),
           api.settings.getDataQuality(),
           api.settings.getMlPipeline(),
+          api.settings.getAuditActions().catch(() => []),
         ]);
         setData(configResult);
         setUsers(usersResult.list || []);
         setAuditLogs(auditResult.logs || []);
         setDataQuality(dqResult);
         setMlPipeline(mlResult);
+        setAuditActions(actionsResult || []);
       } catch (error) {
         console.error('Failed to load settings data', error);
       } finally {
@@ -134,20 +144,64 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handleDeleteUser = async (id: string, userEmail: string) => {
+    if (!window.confirm(`Are you sure you want to permanently delete user "${userEmail}"?`)) return;
+    try {
+      await api.settings.deleteUser(id);
+      await loadUsers();
+    } catch (e: any) {
+      console.error(e);
+      alert(e.response?.data?.detail || 'Failed to delete user');
+    }
+  };
+
+  const handleResendActivation = async (id: string) => {
+    try {
+      const res = await api.settings.resendActivation(id);
+      alert(res.message || 'Activation email has been sent successfully.');
+    } catch (e: any) {
+      console.error(e);
+      alert(e.response?.data?.detail || 'Failed to resend activation link');
+    }
+  };
+
+  const handleEmailChangeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEmailModalError('');
+    setEmailModalSuccess('');
+    try {
+      const res = await api.auth.requestChangeEmail({
+        new_email: newEmailValue,
+        current_password: emailCurrentPassword,
+      });
+      setEmailModalSuccess(res.message || 'Confirmation link sent to your new email. Please check your inbox.');
+      setEmailCurrentPassword('');
+    } catch (err: any) {
+      setEmailModalError(err.response?.data?.detail || 'Failed to request email change.');
+    }
+  };
+
+  const normalizeRole = (r?: string) => {
+    const upper = (r || '').toUpperCase();
+    if (upper === 'ADMIN') return 'Admin';
+    if (upper.includes('MANAGER')) return 'Warehouse Manager';
+    return 'Viewer';
+  };
+
   const handleUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       if (editingUser) {
         await api.settings.updateUser(editingUser.id, {
-          display_name: userFormData.display_name,
+          display_name: userFormData.display_name?.trim() || undefined,
           role: userFormData.role,
         });
       } else {
         await api.settings.createUser({
-          email: userFormData.email,
-          password: userFormData.password,
+          email: userFormData.email.trim(),
+          password: userFormData.password?.trim() ? userFormData.password.trim() : undefined,
           role: userFormData.role,
-          display_name: userFormData.display_name,
+          display_name: userFormData.display_name?.trim() || undefined,
         });
       }
       setShowUserModal(false);
@@ -160,7 +214,7 @@ export const Settings: React.FC = () => {
 
   const openAddUser = () => {
     setEditingUser(null);
-    setUserFormData({ email: '', password: '', role: 'VIEWER', display_name: '' });
+    setUserFormData({ email: '', password: '', role: 'Viewer', display_name: '' });
     setShowUserModal(true);
   };
 
@@ -169,7 +223,7 @@ export const Settings: React.FC = () => {
     setUserFormData({
       email: u.email,
       password: '',
-      role: u.role || 'VIEWER',
+      role: normalizeRole(u.role),
       display_name: u.display_name || u.name || '',
     });
     setShowUserModal(true);
@@ -232,12 +286,28 @@ export const Settings: React.FC = () => {
         </div>
 
         <div className="settings-group" style={{ marginTop: '1.5rem' }}>
-          <label className="settings-label">Account Email</label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+            <label className="settings-label" style={{ margin: 0 }}>Account Email</label>
+            <button
+              type="button"
+              style={{ background: 'none', border: 'none', color: '#0d9488', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}
+              onClick={() => {
+                setNewEmailValue('');
+                setEmailCurrentPassword('');
+                setEmailModalError('');
+                setEmailModalSuccess('');
+                setShowEmailChangeModal(true);
+              }}
+            >
+              Change Email Address
+            </button>
+          </div>
           <input
             type="email"
             className="settings-input"
-            value={profileEmail}
-            onChange={(e) => setProfileEmail(e.target.value)}
+            value={user?.email || profileEmail}
+            disabled
+            style={{ backgroundColor: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }}
           />
         </div>
 
@@ -486,6 +556,24 @@ export const Settings: React.FC = () => {
                             >
                               {isActive ? 'Disable' : 'Enable'}
                             </button>
+                            {!u.is_verified && (
+                              <button
+                                onClick={() => handleResendActivation(u.id)}
+                                className="action-edit"
+                                style={{ backgroundColor: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' }}
+                                title="Resend account activation email"
+                              >
+                                Resend Link
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteUser(u.id, u.email)}
+                              className="action-edit"
+                              style={{ backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca' }}
+                              title="Delete user"
+                            >
+                              Delete
+                            </button>
                           </>
                         )}
                       </td>
@@ -544,11 +632,19 @@ export const Settings: React.FC = () => {
           onChange={(e) => setAuditActionFilter(e.target.value)}
         >
           <option value="All">All Action Types</option>
-          <option value="auth">Auth & Security</option>
-          <option value="inventory">Inventory Adjustments</option>
-          <option value="product">Products</option>
-          <option value="supplier">Suppliers</option>
-          <option value="user">User Management</option>
+          {auditActions.length > 0 ? (
+            auditActions.map((act) => (
+              <option key={act} value={act}>{act}</option>
+            ))
+          ) : (
+            <>
+              <option value="auth">Auth & Security</option>
+              <option value="inventory">Inventory Adjustments</option>
+              <option value="product">Products</option>
+              <option value="supplier">Suppliers</option>
+              <option value="user">User Management</option>
+            </>
+          )}
         </select>
         <input
           type="text"
@@ -657,6 +753,166 @@ export const Settings: React.FC = () => {
           {activeTab === 'Audit Logs' && renderAuditLogs()}
           {activeTab === 'ML Pipeline' && renderMLPipeline()}
           {activeTab === 'Data Quality Inspector' && renderDataQuality()}
+
+          {/* Email Change Modal (UC05) */}
+          {showEmailChangeModal && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+                <h3 className="text-xl font-bold mb-2">Change Account Email</h3>
+                <p className="text-sm text-[var(--text-secondary)] mb-4">
+                  Per security requirements (UC05), enter your new email address and current password. A confirmation link will be sent to the new email.
+                </p>
+
+                {emailModalError && (
+                  <div className="login-error mb-4" style={{ padding: '0.75rem', fontSize: '13px' }}>
+                    {emailModalError}
+                  </div>
+                )}
+                {emailModalSuccess && (
+                  <div className="login-success mb-4" style={{ padding: '0.75rem', fontSize: '13px', backgroundColor: '#ccfbf1', color: '#0f766e', borderRadius: '6px' }}>
+                    {emailModalSuccess}
+                  </div>
+                )}
+
+                <form onSubmit={handleEmailChangeSubmit}>
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Current Email</label>
+                    <input
+                      type="email"
+                      value={user?.email || ''}
+                      disabled
+                      className="settings-input w-full"
+                      style={{ backgroundColor: '#f8fafc', color: '#64748b' }}
+                    />
+                  </div>
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">New Email Address</label>
+                    <input
+                      required
+                      type="email"
+                      placeholder="new_email@example.com"
+                      value={newEmailValue}
+                      onChange={(e) => setNewEmailValue(e.target.value)}
+                      className="settings-input w-full"
+                    />
+                  </div>
+                  <div className="mb-6">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Current Password</label>
+                    <input
+                      required
+                      type="password"
+                      placeholder="Enter current password to verify"
+                      value={emailCurrentPassword}
+                      onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                      className="settings-input w-full"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowEmailChangeModal(false)}
+                      className="settings-btn-outline"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="submit"
+                      className="settings-save-btn"
+                    >
+                      Send Confirmation Link
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* User Management Modal (UC06) */}
+          {showUserModal && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+                <h3 className="text-xl font-bold mb-2">{editingUser ? 'Edit User Account' : 'Add New User (UC06)'}</h3>
+                <p className="text-sm text-[var(--text-secondary)] mb-4">
+                  {editingUser
+                    ? 'Update user display name or assign new system permission role.'
+                    : 'Create a new user account. If password is left blank, an activation link will be automatically emailed to the user.'}
+                </p>
+
+                <form onSubmit={handleUserSubmit}>
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Email Address</label>
+                    <input
+                      required
+                      type="email"
+                      placeholder="user@example.com"
+                      value={userFormData.email}
+                      disabled={!!editingUser}
+                      onChange={(e) => setUserFormData({ ...userFormData, email: e.target.value })}
+                      className="settings-input w-full"
+                      style={editingUser ? { backgroundColor: '#f8fafc', color: '#64748b' } : {}}
+                    />
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Display Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Alex Nguyen"
+                      value={userFormData.display_name}
+                      onChange={(e) => setUserFormData({ ...userFormData, display_name: e.target.value })}
+                      className="settings-input w-full"
+                    />
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">System Role</label>
+                    <select
+                      value={userFormData.role}
+                      onChange={(e) => setUserFormData({ ...userFormData, role: e.target.value })}
+                      className="settings-input w-full"
+                    >
+                      <option value="Admin">Admin</option>
+                      <option value="Warehouse Manager">Warehouse Manager</option>
+                      <option value="Viewer">Viewer</option>
+                    </select>
+                  </div>
+
+                  {!editingUser && (
+                    <div className="mb-6">
+                      <label className="block text-sm mb-1 text-[var(--text-secondary)]">Initial Password (Optional)</label>
+                      <input
+                        type="password"
+                        placeholder="Leave blank to send activation email"
+                        minLength={6}
+                        value={userFormData.password}
+                        onChange={(e) => setUserFormData({ ...userFormData, password: e.target.value })}
+                        className="settings-input w-full"
+                      />
+                      <span className="text-xs text-[var(--text-secondary)] mt-1 block">
+                        If left blank, user receives a secure link via email to set their password upon first login (UC06).
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => setShowUserModal(false)}
+                      className="settings-btn-outline"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="settings-save-btn"
+                    >
+                      {editingUser ? 'Save Changes' : 'Create Account'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
