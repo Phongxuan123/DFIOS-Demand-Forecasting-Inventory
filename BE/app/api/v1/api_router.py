@@ -44,6 +44,10 @@ api_router.include_router(forecasts_router, prefix="/forecasts", tags=["Demand F
 from app.api.v1.endpoints.classification import router as classification_router
 api_router.include_router(classification_router, prefix="/classification", tags=["Inventory Classification - ABC/XYZ (UC25-UC28)"])
 
+# UC29 - UC32: Inventory Optimization (Module F)
+from app.api.v1.endpoints.optimization import router as optimization_router
+api_router.include_router(optimization_router, prefix="/optimization", tags=["Inventory Optimization (UC29-UC32)"])
+
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 

@@ -93,6 +93,19 @@ from app.schemas.classification import (
     RecommendationResponse,
     ClassificationRecomputeResponse,
 )
+from app.schemas.optimization import (
+    ServiceLevelConfig,
+    ServiceLevelConfigUpdate,
+    InventoryParamItem,
+    InventoryParamsListResponse,
+    RecomputeRequest,
+    RecomputeResponse,
+    CompareParamItem,
+    CompareStaticResponse,
+    SensitivityScenario,
+    SensitivityAnalysisRequest,
+    SensitivityAnalysisResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -169,6 +182,17 @@ __all__ = [
     "SKUClassificationListResponse",
     "RecommendationResponse",
     "ClassificationRecomputeResponse",
+    "ServiceLevelConfig",
+    "ServiceLevelConfigUpdate",
+    "InventoryParamItem",
+    "InventoryParamsListResponse",
+    "RecomputeRequest",
+    "RecomputeResponse",
+    "CompareParamItem",
+    "CompareStaticResponse",
+    "SensitivityScenario",
+    "SensitivityAnalysisRequest",
+    "SensitivityAnalysisResponse",
 ]
 
 

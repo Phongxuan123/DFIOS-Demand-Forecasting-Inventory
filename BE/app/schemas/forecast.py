@@ -1,5 +1,6 @@
+import datetime as dt
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -167,3 +168,25 @@ class ForecastOverrideRevertResponse(BaseModel):
     id: str
     item_id: str
     original_value: float
+
+
+# --- Bulk Override ---
+
+class BulkOverrideItem(BaseModel):
+    store_id: str = Field("CA_1", description="Mã cửa hàng / kho")
+    item_id: str = Field(..., description="Mã SKU")
+    date: dt.date = Field(..., description="Ngày dự báo cần điều chỉnh")
+    value: float = Field(..., ge=0, description="Giá trị điều chỉnh (>= 0)")
+    reason: str = Field(..., description="Lý do điều chỉnh")
+
+
+class BulkOverrideRequest(BaseModel):
+    items: List[BulkOverrideItem] = Field(..., min_length=1, description="Danh sách bản ghi điều chỉnh hàng loạt")
+
+
+class BulkOverrideResponse(BaseModel):
+    success: bool
+    created_count: int
+    skipped_count: int
+    errors: List[Dict[str, Any]] = []
+    message: Optional[str] = None
