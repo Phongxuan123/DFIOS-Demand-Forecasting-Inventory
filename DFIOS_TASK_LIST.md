@@ -30,7 +30,7 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 | J | ML Pipeline & Model Ops | 5 | 3/5 | 1, 8 |
 | D | Demand Forecasting | 8 | 8/8 ✅ | 2 |
 | E | ABC/XYZ Classification | 4 | 4/4 ✅ | 3 |
-| F | Inventory Optimization | 4 | 0/4 | 4 |
+| F | Inventory Optimization | 4 | 4/4 ✅ | 4 |
 | G | Replenishment | 6 | 0/6 | 5 |
 | B | Dashboard & Alerts | 4 | 0/4 | 6 |
 | H | Reports & Analytics | 5 | 0/5 | 7 |
@@ -110,19 +110,19 @@ Stack: **FastAPI · SQLAlchemy · PostgreSQL**, prefix `/api/v1`. Hiện có **1
 
 ## Phase 4 — Tối ưu tồn kho (Module F)
 
-- [ ] **T17 · UC29 — Configure Target Service Level** · `Admin`
+- [x] **T17 · UC29 — Configure Target Service Level** · `Admin`
   - `GET/PUT /api/v1/optimization/service-level`
   - τ ∈ **[0.85, 0.99]**, đặt theo nhóm hàng hoặc SKU. Đổi τ thì tính lại SS/ROP.
-- [ ] **T18 · UC30 — View Safety Stock / ROP / EOQ** · `Warehouse Manager`, `Admin`
+- [x] **T18 · UC30 — View Safety Stock / ROP / EOQ** · `Warehouse Manager`, `Admin`
   - `GET /api/v1/optimization/parameters`, `POST /api/v1/optimization/recompute`
   - `SS = Z_τ · σ_L` với `σ_L = σ_sai-số-ngày · √L`
   - `ROP = d_L + SS` (`d_L` = nhu cầu dự báo trong lead time)
   - `EOQ = √(2·D·S / H)`
   - Lưu vào bảng `inventory_params` để Dashboard và Replenishment dùng lại.
   - **Fallback:** chưa có model production thì tính bằng trung bình di động và gắn cờ `source: "static"` (có model thì `"ml"`). Nhờ vậy Phase 4–6 không bị kẹt chờ ML.
-- [ ] **T19 · UC31 — Compare ML vs Static Formula** · `Admin`
+- [x] **T19 · UC31 — Compare ML vs Static Formula** · `Admin`
   - `GET /api/v1/optimization/compare-static` · song song ML và Moving Average, trả chênh lệch từng SKU.
-- [ ] **T20 · UC32 — Run Cost Sensitivity Analysis** · `Admin`
+- [x] **T20 · UC32 — Run Cost Sensitivity Analysis** · `Admin`
   - `POST /api/v1/optimization/sensitivity-analysis`
   - Mô phỏng Lead Time **±20%** hoặc Service Level **±5%**, ước tính tác động lên chi phí lưu kho và chi phí thiếu hàng. **Chỉ mô phỏng, không ghi đè dữ liệu thật.**
 
