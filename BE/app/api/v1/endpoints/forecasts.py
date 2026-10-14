@@ -14,6 +14,8 @@ from app.schemas.forecast import (
     ForecastOverrideCreate,
     ForecastOverrideResponse,
     ForecastOverrideRevertResponse,
+    BulkOverrideRequest,
+    BulkOverrideResponse,
 )
 from app.services.forecast_service import forecast_service
 
@@ -61,6 +63,27 @@ def get_forecasts(
         limit=limit,
         sort_by=sort_by,
         order=order,
+    )
+
+
+@router.post("/bulk-override", response_model=BulkOverrideResponse, status_code=status.HTTP_201_CREATED, summary="Can thiệp dự báo hàng loạt (Manager & Admin only)")
+def bulk_forecast_override(
+    body: BulkOverrideRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager_or_admin),
+):
+    """
+    **Bulk Forecast Override**:
+    Người dùng điều chỉnh dự báo hàng loạt cho nhiều SKU/ngày.
+    Quyền: Warehouse Manager, Admin (Viewer bị 403).
+    """
+    ip = get_client_ip(request)
+    return forecast_service.bulk_override(
+        db,
+        request=body,
+        current_user=user,
+        ip_address=ip,
     )
 
 

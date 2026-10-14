@@ -24,6 +24,8 @@ from app.schemas.forecast import (
     ForecastOverrideCreate,
     ForecastOverrideResponse,
     ForecastOverrideRevertResponse,
+    BulkOverrideRequest,
+    BulkOverrideResponse,
 )
 from app.repositories.forecast_repository import forecast_repository
 from app.repositories.product_repository import product_repository
@@ -676,6 +678,103 @@ class ForecastService:
         """
         overrides = forecast_repository.get_overrides_for_sku(db, item_id=sku, store_id=store_id)
         return [ForecastOverrideResponse.model_validate(o) for o in overrides]
+
+    def bulk_override(
+        self,
+        db: Session,
+        request: BulkOverrideRequest,
+        current_user: User,
+        ip_address: Optional[str] = None,
+    ) -> BulkOverrideResponse:
+        """
+        Thực hiện can thiệp thủ công hàng loạt (Bulk Forecast Override).
+        Kiểm tra reason: không được để trống hoặc chỉ chứa khoảng trắng (trả về 422).
+        Đối với SKU/date không tồn tại, ghi nhận lỗi vào errors và tăng skipped_count.
+        """
+        validation_errors = []
+        for idx, item in enumerate(request.items):
+            if not item.reason or not item.reason.strip():
+                validation_errors.append({
+                    "type": "type_error.str.strip",
+                    "loc": ["body", "items", idx, "reason"],
+                    "msg": "Lý do điều chỉnh không được để trống hoặc chỉ chứa khoảng trắng",
+                    "input": item.reason,
+                })
+                validation_errors.append({
+                    "type": "value_error",
+                    "loc": ["body", "items", idx, "reason"],
+                    "msg": "Lý do điều chỉnh không hợp lệ",
+                    "input": item.reason,
+                })
+
+        if validation_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=validation_errors,
+            )
+
+        created_count = 0
+        skipped_count = 0
+        errors = []
+
+        for item in request.items:
+            product = product_repository.get_by_item_id(db, item.item_id)
+            if not product:
+                errors.append({
+                    "item_id": item.item_id,
+                    "date": str(item.date),
+                    "error": f"Không tìm thấy sản phẩm với SKU '{item.item_id}'",
+                })
+                skipped_count += 1
+                continue
+
+            fc = forecast_repository.get_single_forecast(
+                db,
+                item_id=item.item_id,
+                forecast_date=item.date,
+                store_id=item.store_id,
+            )
+            if not fc:
+                errors.append({
+                    "item_id": item.item_id,
+                    "date": str(item.date),
+                    "error": f"Không tìm thấy bản ghi dự báo cho SKU '{item.item_id}' vào ngày {item.date}",
+                })
+                skipped_count += 1
+                continue
+
+            override = ForecastOverride(
+                id=str(uuid.uuid4()),
+                item_id=item.item_id,
+                store_id=item.store_id,
+                forecast_date=item.date,
+                h=fc.h,
+                original_value=fc.y_pred,
+                override_value=item.value,
+                reason=item.reason.strip(),
+                created_by=current_user.email,
+                is_active=True,
+            )
+            forecast_repository.create_override(db, override)
+            created_count += 1
+
+        if created_count > 0:
+            audit_service.log(
+                db,
+                action="forecast.bulk_override",
+                actor_email=current_user.email,
+                ip_address=ip_address,
+                details=f"Can thiệp dự báo hàng loạt: thành công={created_count}, bỏ qua={skipped_count}",
+            )
+            db.commit()
+
+        return BulkOverrideResponse(
+            success=True,
+            created_count=created_count,
+            skipped_count=skipped_count,
+            errors=errors,
+            message=f"Đã xử lý can thiệp hàng loạt: tạo mới {created_count}, bỏ qua {skipped_count}.",
+        )
 
 
 forecast_service = ForecastService()

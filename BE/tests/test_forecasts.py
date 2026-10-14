@@ -73,7 +73,8 @@ class TestForecastEndpoints(unittest.TestCase):
             # Seed Products
             p1 = Product(item_id="FOODS_1_001", name="Super Apple", dept_id="FOODS_1", cat_id="FOODS")
             p2 = Product(item_id="HOBBIES_1_001", name="Board Game", dept_id="HOBBIES_1", cat_id="HOBBIES")
-            session.add_all([p1, p2])
+            p3 = Product(item_id="FOODS_1_002", name="Super Banana", dept_id="FOODS_1", cat_id="FOODS")
+            session.add_all([p1, p2, p3])
 
             # Seed Forecasts (28 days for FOODS_1_001)
             base_date = date(2026, 10, 1)
@@ -93,6 +94,7 @@ class TestForecastEndpoints(unittest.TestCase):
                     model_version="v1.0.0",
                 )
                 session.add(fc)
+
 
             # Seed SalesHistory for FOODS_1_001 (overlapping 14 days)
             for i in range(1, 15):
@@ -387,3 +389,220 @@ class TestForecastEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         self.assertEqual(res_no_date.status_code, 404)
+
+
+    # UC25: Bulk Override với validation
+    def test_bulk_override_role_validation(self):
+        payload = {
+            "items": [
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_001",
+                    "date": "2026-10-01",
+                    "value": 20.0,
+                    "reason": "Test bulk override"
+                }
+            ]
+        }
+        
+        # Viewer: 403 Forbidden
+        res = self.client.post(
+            "/api/v1/forecasts/bulk-override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.viewer_token}"}
+        )
+        self.assertEqual(res.status_code, 403)
+    
+    def test_bulk_override_validation_rules(self):
+        # Admin user để pass role check
+        payload = {
+            "items": [
+                # 1. Invalid date (không tồn tại)
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_001",
+                    "date": "2030-01-01",
+                    "value": 20.0,
+                    "reason": "Invalid date"
+                },
+                # 2. Empty reason
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_001",
+                    "date": "2026-10-01",
+                    "value": 20.0,
+                    "reason": " "
+                },
+                # 3. Invalid item_id
+                {
+                    "store_id": "CA_1",
+                    "item_id": "INVALID_ITEM",
+                    "date": "2026-10-01",
+                    "value": 20.0,
+                    "reason": "Invalid item"
+                }
+            ]
+        }
+        
+        res = self.client.post(
+            "/api/v1/forecasts/bulk-override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        
+        self.assertEqual(res.status_code, 422)
+        data = res.json()
+        
+        # Validate error format
+        self.assertIn("detail", data)
+        self.assertIsInstance(data["detail"], list)
+        self.assertTrue(len(data["detail"]) > 0)
+        
+        for error in data["detail"]:
+            self.assertIn("type", error)
+            self.assertIn("loc", error)
+            self.assertIn("msg", error)
+            
+        # Validate specific error types
+        error_types = [err["type"] for err in data["detail"]]
+        self.assertIn("value_error", error_types)
+        self.assertIn("type_error.str.strip", error_types)
+    
+    # UC26: Bulk Override thành công với tất cả valid records
+    def test_bulk_override_success(self):
+        with self.TestingSessionLocal() as session:
+            session.add(
+                Forecast(
+                    id="fc_foods_2_day2",
+                    item_id="FOODS_1_002",
+                    store_id="CA_1",
+                    forecast_date=date(2026, 10, 2),
+                    h=2,
+                    y_pred=12.0,
+                    p10=10.0,
+                    p50=12.0,
+                    p90=14.0,
+                    available=True,
+                    model_version="v1.0.0",
+                )
+            )
+            session.commit()
+
+        # Tạo override hợp lệ cho ngày 2026-10-01
+        payload = {
+            "items": [
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_001",
+                    "date": "2026-10-01",
+                    "value": 30.0,
+                    "reason": "Test bulk success 1"
+                },
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_002",  # Item khác
+                    "date": "2026-10-02",  # Date khác
+                    "value": 15.0,
+                    "reason": "Test bulk success 2"
+                }
+            ]
+        }
+        
+        res = self.client.post(
+            "/api/v1/forecasts/bulk-override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        
+        self.assertIn("success", data)
+        self.assertIn("created_count", data)
+        self.assertIn("skipped_count", data)
+        self.assertIn("errors", data)
+        
+        self.assertEqual(data["success"], True)
+        self.assertEqual(data["created_count"], 2)
+        self.assertEqual(data["skipped_count"], 0)
+        self.assertEqual(data["errors"], [])
+        
+        # Verify records created
+        with self.TestingSessionLocal() as session:
+            # Check first record
+            created_1 = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_001",
+                ForecastOverride.store_id == "CA_1",
+                ForecastOverride.forecast_date == date(2026, 10, 1)
+            ).first()
+            self.assertIsNotNone(created_1)
+            self.assertEqual(created_1.override_value, 30.0)
+            self.assertTrue(created_1.is_active)
+            
+            # Check second record
+            created_2 = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_002",
+                ForecastOverride.store_id == "CA_1",
+                ForecastOverride.forecast_date == date(2026, 10, 2)
+            ).first()
+            self.assertIsNotNone(created_2)
+            self.assertEqual(created_2.override_value, 15.0)
+            self.assertTrue(created_2.is_active)
+
+
+    # UC27: Bulk Override - Một phần valid, một phần invalid
+    def test_bulk_override_mixed_results(self):
+        payload = {
+            "items": [
+                # Valid override
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_001",
+                    "date": "2026-10-02",
+                    "value": 40.0,
+                    "reason": "Valid test"
+                },
+                # Invalid date
+                {
+                    "store_id": "CA_1",
+                    "item_id": "FOODS_1_001",
+                    "date": "2030-01-01",
+                    "value": 20.0,
+                    "reason": "Invalid date"
+                },
+                # Invalid item_id
+                {
+                    "store_id": "CA_1",
+                    "item_id": "INVALID_ITEM",
+                    "date": "2026-10-03",
+                    "value": 25.0,
+                    "reason": "Invalid item"
+                }
+            ]
+        }
+        
+        res = self.client.post(
+            "/api/v1/forecasts/bulk-override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        
+        # Validate counts
+        self.assertEqual(data["success"], True)
+        self.assertEqual(data["created_count"], 1)
+        self.assertEqual(data["skipped_count"], 2)
+        self.assertEqual(len(data["errors"]), 2)
+        
+        # Verify created record
+        with self.TestingSessionLocal() as session:
+            created = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_001",
+                ForecastOverride.store_id == "CA_1",
+                ForecastOverride.forecast_date == date(2026, 10, 2),
+            ).first()
+            self.assertIsNotNone(created)
+            self.assertEqual(created.override_value, 40.0)
+            self.assertTrue(created.is_active)
