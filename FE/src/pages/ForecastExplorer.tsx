@@ -5,6 +5,7 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, Compos
 import { X, Download, FileSpreadsheet, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
+import { Pagination } from '../components/ui/Pagination.tsx';
 import './ForecastExplorer.css';
 
 export const ForecastExplorer: React.FC = () => {
@@ -23,6 +24,10 @@ export const ForecastExplorer: React.FC = () => {
   const [explanation, setExplanation] = useState<any>(null);
   const [overrides, setOverrides] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+
+  // Schedule Matrix Pagination
+  const [matrixPage, setMatrixPage] = useState(1);
+  const [matrixPageSize, setMatrixPageSize] = useState(7);
 
   // Toast feedback
   const [toast, setToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
@@ -47,6 +52,16 @@ export const ForecastExplorer: React.FC = () => {
     if (selectedCategory === 'All') return products;
     return products.filter((p: any) => p.cat_id === selectedCategory || p.category === selectedCategory);
   }, [products, selectedCategory]);
+
+  useEffect(() => {
+    setMatrixPage(1);
+  }, [skuSearch, horizon, selectedStore]);
+
+  const paginatedScheduleMatrix = useMemo(() => {
+    const matrix = data?.scheduleMatrix || [];
+    const start = (matrixPage - 1) * matrixPageSize;
+    return matrix.slice(start, start + matrixPageSize);
+  }, [data?.scheduleMatrix, matrixPage, matrixPageSize]);
 
   const fetchForecast = async (sku?: string, h: number = horizon, store?: string) => {
     setIsLoading(true);
@@ -89,7 +104,7 @@ export const ForecastExplorer: React.FC = () => {
         const [catList, storeList, prodRes] = await Promise.all([
           api.products.getCategories().catch(() => []),
           api.inventory.getStores().catch(() => []),
-          api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
+          api.products.getAllProducts().catch(() => ({ list: [] })),
         ]);
         setCategories(catList || []);
         setStores(storeList || []);
@@ -612,7 +627,7 @@ export const ForecastExplorer: React.FC = () => {
                 <div className="matrix-col-header matrix-col-5 text-right">SPIKE RISK</div>
               </div>
 
-              {(data?.scheduleMatrix || []).map((row: any, idx: number) => (
+              {paginatedScheduleMatrix.map((row: any, idx: number) => (
                 <div className="matrix-row" key={idx}>
                   <div className="matrix-cell matrix-col-1 font-bold">{row.date}</div>
                   <div className="matrix-cell matrix-col-2 text-teal">{row.demand} units</div>
@@ -622,6 +637,20 @@ export const ForecastExplorer: React.FC = () => {
                 </div>
               ))}
             </div>
+
+            {(data?.scheduleMatrix?.length || 0) > matrixPageSize && (
+              <Pagination
+                currentPage={matrixPage}
+                totalItems={data.scheduleMatrix.length}
+                pageSize={matrixPageSize}
+                onPageChange={setMatrixPage}
+                onPageSizeChange={(newSize) => {
+                  setMatrixPageSize(newSize);
+                  setMatrixPage(1);
+                }}
+                pageSizeOptions={[7, 14, 28]}
+              />
+            )}
           </Card>
         </div>
       )}

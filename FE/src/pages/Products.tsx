@@ -3,6 +3,7 @@ import { Search, Upload, Plus, Calendar as CalendarIcon, ChevronRight, Trash2, E
 import { BarChart, Bar, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
+import { Pagination } from '../components/ui/Pagination.tsx';
 import './Products.css';
 
 export const Products: React.FC = () => {
@@ -37,6 +38,22 @@ export const Products: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedDept, setSelectedDept] = useState('All');
+
+  // Pagination states for all tabs
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(15);
+
+  const [supplierPage, setSupplierPage] = useState(1);
+  const [supplierPageSize, setSupplierPageSize] = useState(10);
+
+  const [adjPage, setAdjPage] = useState(1);
+  const [adjPageSize, setAdjPageSize] = useState(10);
+
+  const [salesPage, setSalesPage] = useState(1);
+  const [salesPageSize, setSalesPageSize] = useState(15);
+
+  const [eventsPage, setEventsPage] = useState(1);
+  const [eventsPageSize, setEventsPageSize] = useState(10);
 
   // Inventory Stock Adjustment in Product Detail Panel
   const [onHandValue, setOnHandValue] = useState('0');
@@ -113,16 +130,17 @@ export const Products: React.FC = () => {
     setIsLoading(true);
     try {
       const [prodRes, suppRes, storesRes, adjRes, catRes, deptRes] = await Promise.all([
-        api.products.getProducts({ limit: 200 }),
-        api.products.getSuppliers(),
+        api.products.getAllProducts(),
+        api.products.getAllSuppliers(),
         api.inventory.getStores().catch(() => ['CA_1']),
-        api.inventory.getAdjustments({ limit: 100 }),
+        api.inventory.getAllAdjustments(),
         api.products.getCategories().catch(() => []),
         api.products.getDepartments().catch(() => []),
       ]);
 
       const prodList = prodRes.list || [];
       setProducts(prodList);
+      setTotalProducts(prodRes.total || prodList.length);
       const rawSuppliers = suppRes.list || [];
       const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
       const mergedSuppliers = rawSuppliers.map((s: any) => ({
@@ -143,6 +161,13 @@ export const Products: React.FC = () => {
       if (mergedSuppliers.length > 0) {
         setSelectedSupplier(mergedSuppliers[0]);
       }
+
+      // Background preload for inactive tabs (Sales Data & Events)
+      // Allows 0ms instant tab switching while keeping initial catalog render snappy
+      setTimeout(() => {
+        api.sales.queryAllSales().catch(() => {});
+        api.eventsCalendar.listAllEvents().catch(() => {});
+      }, 350);
     } catch (error) {
       console.error('Failed to load products page data', error);
     } finally {
@@ -153,21 +178,21 @@ export const Products: React.FC = () => {
   const loadSalesData = async () => {
     setIsLoadingSales(true);
     try {
-      const params: any = { limit: 50 };
+      const params: any = {};
       if (salesFilterSku.trim()) params.item_id = salesFilterSku.trim();
       if (salesFilterStore !== 'All') params.store_id = salesFilterStore;
       if (salesStartDate) params.start_date = salesStartDate;
       if (salesEndDate) params.end_date = salesEndDate;
 
       const [salesRes, summaryRes] = await Promise.all([
-        api.sales.querySales(params),
+        api.sales.queryAllSales(params),
         api.sales.getSummary({
           item_id: salesFilterSku.trim() || undefined,
           store_id: salesFilterStore !== 'All' ? salesFilterStore : undefined,
         }).catch(() => null),
       ]);
       setSalesList(salesRes.list || []);
-      setSalesTotal(salesRes.total || 0);
+      setSalesTotal(salesRes.total || (salesRes.list || []).length);
       setSalesSummary(summaryRes);
     } catch (e) {
       console.error('Failed to load sales data', e);
@@ -180,8 +205,7 @@ export const Products: React.FC = () => {
     setIsLoadingEvents(true);
     try {
       const [eventsRes, typesRes] = await Promise.all([
-        api.eventsCalendar.listEvents({
-          limit: 200,
+        api.eventsCalendar.listAllEvents({
           event_type: selectedEventType !== 'All' ? selectedEventType : undefined,
         }),
         api.eventsCalendar.getTypes().catch(() => ['Promotion', 'Holiday', 'Cultural', 'National', 'Religious']),
@@ -583,6 +607,27 @@ export const Products: React.FC = () => {
     );
   });
 
+  // Paginated Slices
+  const paginatedProducts = filteredProducts.slice(
+    (productPage - 1) * productPageSize,
+    productPage * productPageSize
+  );
+
+  const paginatedSuppliers = suppliers.slice(
+    (supplierPage - 1) * supplierPageSize,
+    supplierPage * supplierPageSize
+  );
+
+  const paginatedAdjustments = filteredAdjustments.slice(
+    (adjPage - 1) * adjPageSize,
+    adjPage * adjPageSize
+  );
+
+  const paginatedSales = salesList.slice(
+    (salesPage - 1) * salesPageSize,
+    salesPage * salesPageSize
+  );
+
   const renderProductsTab = () => {
     const prod = selectedProduct || filteredProducts[0] || {};
     return (
@@ -697,7 +742,10 @@ export const Products: React.FC = () => {
               <select
                 className="prod-filter-select"
                 value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
+                onChange={(e) => {
+                  setSelectedCategory(e.target.value);
+                  setProductPage(1);
+                }}
               >
                 <option value="All">All Categories</option>
                 {categories.map((c) => (
@@ -710,7 +758,10 @@ export const Products: React.FC = () => {
               <select
                 className="prod-filter-select"
                 value={selectedDept}
-                onChange={(e) => setSelectedDept(e.target.value)}
+                onChange={(e) => {
+                  setSelectedDept(e.target.value);
+                  setProductPage(1);
+                }}
               >
                 <option value="All">All Departments</option>
                 {departments.map((d) => (
@@ -724,7 +775,10 @@ export const Products: React.FC = () => {
                 className="prod-filter-input"
                 placeholder="Search SKU or name..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setProductPage(1);
+                }}
               />
             </div>
           </div>
@@ -739,62 +793,87 @@ export const Products: React.FC = () => {
 
         <div className="prod-main-split">
           <div className="prod-table-area">
-            <div className="prod-table-header">
-              <span className="prod-table-title">Product Catalog ({filteredProducts.length} of {totalProducts} SKUs)</span>
+            <div className="prod-table-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <span className="prod-table-title" style={{ margin: 0 }}>
+                Product Catalog ({filteredProducts.length} of {totalProducts || products.length} SKUs)
+              </span>
             </div>
-            <div className="prod-table">
-              <div className="prod-thead">
-                <div className="col-sku">SKU ID</div>
-                <div className="col-name">NAME</div>
-                <div className="col-dept">DEPT</div>
-                <div className="col-cat">CATEGORY</div>
-                <div className="col-actions">ACTIONS</div>
-              </div>
-              <div className="prod-tbody">
-                {filteredProducts.length === 0 ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
-                    No products found matching filters.
-                  </div>
-                ) : (
-                  filteredProducts.map((p) => (
-                    <div
-                      className={`prod-row ${selectedProduct?.item_id === p.item_id ? 'active' : ''}`}
-                      key={p.item_id}
-                      onClick={() => selectProductItem(p)}
-                    >
-                      <div className="col-sku fw-600">{p.item_id}</div>
-                      <div className="col-name">{p.name}</div>
-                      <div className="col-dept">{p.dept_id || '-'}</div>
-                      <div className="col-cat">
-                        <span className="status-pill active">{p.cat_id || 'GENERAL'}</span>
-                      </div>
-                      <div className="col-actions" onClick={(e) => e.stopPropagation()}>
-                        {canEdit && (
-                          <div style={{ display: 'flex', gap: '0.25rem' }}>
-                            <button
-                              onClick={() => openEditProduct(p)}
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#0d9488' }}
-                              title="Edit product"
-                            >
-                              <Edit size={14} />
-                            </button>
-                            {isAdmin && (
+            <div className="prod-table-container">
+              <table className="prod-catalog-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '22%' }}>SKU ID</th>
+                    <th style={{ width: '32%' }}>PRODUCT NAME</th>
+                    <th style={{ width: '18%' }}>DEPARTMENT</th>
+                    <th style={{ width: '16%' }}>CATEGORY</th>
+                    <th style={{ width: '12%', textAlign: 'right' }}>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedProducts.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '2.5rem', textAlign: 'center', color: '#94a3b8' }}>
+                        No products found matching filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedProducts.map((p) => (
+                      <tr
+                        key={p.item_id}
+                        className={`prod-table-row ${selectedProduct?.item_id === p.item_id ? 'selected' : ''}`}
+                        onClick={() => selectProductItem(p)}
+                      >
+                        <td>
+                          <span className="sku-code-badge">{p.item_id}</span>
+                        </td>
+                        <td>
+                          <span className="product-name-cell">{p.name}</span>
+                        </td>
+                        <td>
+                          <span className="text-secondary">{p.dept_id || '-'}</span>
+                        </td>
+                        <td>
+                          <span className={`cat-pill cat-${(p.cat_id || 'OTHER').toLowerCase()}`}>
+                            {p.cat_id || 'GENERAL'}
+                          </span>
+                        </td>
+                        <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                          {canEdit && (
+                            <div className="action-buttons-cell">
                               <button
-                                onClick={() => handleDeleteProduct(p.item_id)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }}
-                                title="Delete SKU"
+                                onClick={() => openEditProduct(p)}
+                                className="action-btn-edit"
+                                title="Edit product"
                               >
-                                <Trash2 size={14} />
+                                <Edit size={14} />
                               </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+                              {isAdmin && (
+                                <button
+                                  onClick={() => handleDeleteProduct(p.item_id)}
+                                  className="action-btn-delete"
+                                  title="Delete SKU"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
+
+            <Pagination
+              currentPage={productPage}
+              totalItems={filteredProducts.length}
+              pageSize={productPageSize}
+              onPageChange={setProductPage}
+              onPageSizeChange={setProductPageSize}
+              pageSizeOptions={[10, 20, 50]}
+            />
           </div>
 
           <div className="prod-detail-panel">
@@ -1046,12 +1125,12 @@ export const Products: React.FC = () => {
               <div className="col-rel">STATUS</div>
             </div>
             <div className="suppliers-tbody">
-              {suppliers.length === 0 ? (
+              {paginatedSuppliers.length === 0 ? (
                 <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
                   No suppliers found in directory.
                 </div>
               ) : (
-                suppliers.map((s, i) => (
+                paginatedSuppliers.map((s, i) => (
                   <div
                     className={`suppliers-row ${selectedSupplier?.id === s.id ? 'active' : ''}`}
                     key={s.id || i}
@@ -1075,6 +1154,14 @@ export const Products: React.FC = () => {
               )}
             </div>
           </div>
+          <Pagination
+            currentPage={supplierPage}
+            totalItems={suppliers.length}
+            pageSize={supplierPageSize}
+            onPageChange={setSupplierPage}
+            onPageSizeChange={setSupplierPageSize}
+            pageSizeOptions={[5, 10, 20]}
+          />
         </div>
 
         <div className="prod-detail-panel supplier-detail">
@@ -1392,7 +1479,7 @@ export const Products: React.FC = () => {
                 </td>
               </tr>
             ) : (
-              salesList.map((s, i) => (
+              paginatedSales.map((s, i) => (
                 <tr key={s.id || i}>
                   <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{s.sale_date}</td>
                   <td className="fw-700 text-dark">{s.item_id}</td>
@@ -1407,11 +1494,14 @@ export const Products: React.FC = () => {
           </tbody>
         </table>
 
-        <div className="adj-footer">
-          <span className="text-secondary">
-            Showing {salesList.length} of {salesTotal} sales records
-          </span>
-        </div>
+        <Pagination
+          currentPage={salesPage}
+          totalItems={salesList.length}
+          pageSize={salesPageSize}
+          onPageChange={setSalesPage}
+          onPageSizeChange={setSalesPageSize}
+          pageSizeOptions={[15, 30, 50]}
+        />
       </div>
     </div>
   );
@@ -1429,6 +1519,11 @@ export const Products: React.FC = () => {
         (ev.end_date && String(ev.end_date).toLowerCase().includes(q))
       );
     });
+
+    const paginatedEvents = filteredEvents.slice(
+      (eventsPage - 1) * eventsPageSize,
+      eventsPage * eventsPageSize
+    );
 
     return (
       <div className="events-view animate-fade-in">
@@ -1608,7 +1703,10 @@ export const Products: React.FC = () => {
                 className="prod-filter-input"
                 style={{ paddingLeft: '32px', width: '100%', height: '36px' }}
                 value={eventSearch}
-                onChange={(e) => setEventSearch(e.target.value)}
+                onChange={(e) => {
+                  setEventSearch(e.target.value);
+                  setEventsPage(1);
+                }}
               />
               {eventSearch && (
                 <button
@@ -1650,7 +1748,7 @@ export const Products: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                filteredEvents.map((ev, i) => (
+                paginatedEvents.map((ev, i) => (
                   <tr key={ev.id || i}>
                     <td className="fw-700 text-dark">{ev.event_name}</td>
                     <td>
@@ -1677,6 +1775,15 @@ export const Products: React.FC = () => {
               )}
             </tbody>
           </table>
+
+          <Pagination
+            currentPage={eventsPage}
+            totalItems={filteredEvents.length}
+            pageSize={eventsPageSize}
+            onPageChange={setEventsPage}
+            onPageSizeChange={setEventsPageSize}
+            pageSizeOptions={[5, 10, 20]}
+          />
         </div>
 
       {/* Realtime Event Bus SSE broadcast panel */}
@@ -1756,7 +1863,10 @@ export const Products: React.FC = () => {
               type="text"
               placeholder="Filter by SKU or adjusted by..."
               value={adjSearchTerm}
-              onChange={(e) => setAdjSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setAdjSearchTerm(e.target.value);
+                setAdjPage(1);
+              }}
             />
           </div>
         </div>
@@ -1776,14 +1886,14 @@ export const Products: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredAdjustments.length === 0 ? (
+              {paginatedAdjustments.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
                     No inventory adjustments found.
                   </td>
                 </tr>
               ) : (
-                filteredAdjustments.map((adj, i) => {
+                paginatedAdjustments.map((adj, i) => {
                   const change = (adj.new_on_hand ?? 0) - (adj.old_on_hand ?? 0);
                   return (
                     <tr key={adj.id || i}>
@@ -1810,11 +1920,14 @@ export const Products: React.FC = () => {
             </tbody>
           </table>
 
-          <div className="adj-footer">
-            <span className="text-secondary">
-              Showing {filteredAdjustments.length} of {adjustments.length} adjustment records
-            </span>
-          </div>
+          <Pagination
+            currentPage={adjPage}
+            totalItems={filteredAdjustments.length}
+            pageSize={adjPageSize}
+            onPageChange={setAdjPage}
+            onPageSizeChange={setAdjPageSize}
+            pageSizeOptions={[10, 20, 50]}
+          />
         </div>
       </div>
     );

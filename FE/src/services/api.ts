@@ -35,6 +35,65 @@ export const cachedGet = async <T = any>(url: string, params?: any, ttlMs: numbe
   return res.data;
 };
 
+export const fetchAllPages = async <T = any>(
+  url: string,
+  batchSize: number = 500,
+  baseParams: Record<string, any> = {},
+  ttlMs: number = 30000
+): Promise<{ list: T[]; total: number; [key: string]: any }> => {
+  const fullCacheKey = `fetchAll:${url}:${JSON.stringify(baseParams || {})}`;
+  const now = Date.now();
+  const cached = memoryCache.get(fullCacheKey);
+  if (cached && (now - cached.timestamp < ttlMs)) {
+    return cached.data;
+  }
+
+  // 1. Fetch initial chunk to discover total count and retrieve first batch
+  const firstRes = await cachedGet(url, { ...baseParams, skip: 0, limit: batchSize }, ttlMs);
+  const firstItems: T[] = Array.isArray(firstRes) ? firstRes : (firstRes?.items || firstRes?.list || firstRes?.logs || []);
+  const total = typeof firstRes?.total === 'number' ? firstRes.total : firstItems.length;
+
+  if (total <= batchSize || firstItems.length >= total) {
+    const result = {
+      ...firstRes,
+      list: firstItems,
+      total,
+    };
+    memoryCache.set(fullCacheKey, { data: result, timestamp: now });
+    return result;
+  }
+
+  // 2. Fetch all subsequent chunks simultaneously in parallel
+  const totalBatches = Math.ceil(total / batchSize);
+  const remainingPromises: Promise<any>[] = [];
+
+  for (let b = 1; b < totalBatches; b++) {
+    const skip = b * batchSize;
+    remainingPromises.push(
+      cachedGet(url, { ...baseParams, skip, limit: batchSize }, ttlMs).catch((err) => {
+        console.warn(`[fetchAllPages] Error fetching batch skip=${skip} for ${url}:`, err);
+        return { items: [], list: [], logs: [] };
+      })
+    );
+  }
+
+  const remainingResponses = await Promise.all(remainingPromises);
+  const allItems: T[] = [...firstItems];
+
+  for (const r of remainingResponses) {
+    const items: T[] = Array.isArray(r) ? r : (r?.items || r?.list || r?.logs || []);
+    allItems.push(...items);
+  }
+
+  const result = {
+    ...firstRes,
+    list: allItems,
+    total: Math.max(total, allItems.length),
+  };
+  memoryCache.set(fullCacheKey, { data: result, timestamp: now });
+  return result;
+};
+
 export const api = {
   auth: {
     login: async (credentials: any) => {
@@ -318,6 +377,14 @@ export const api = {
         summary: res?.summary,
       };
     },
+    getAllSkus: async (params?: any) => {
+      const res = await fetchAllPages('/classification/skus', 500, params, 30000);
+      return {
+        list: res.list || [],
+        total: res.total || 0,
+        summary: res.summary,
+      };
+    },
     getRecommendations: async () => {
       return cachedGet('/classification/recommendations', null, 120000);
     },
@@ -330,6 +397,10 @@ export const api = {
     getInventory: async (params?: any) => {
       const res = await cachedGet('/inventory', params, 15000);
       return { list: unwrapItems(res), total: res?.total || 0 };
+    },
+    getAllInventory: async (params?: any) => {
+      const res = await fetchAllPages('/inventory', 500, params, 20000);
+      return { list: res.list || [], total: res.total || 0 };
     },
     getStores: async () => {
       return cachedGet('/inventory/stores', null, 300000);
@@ -347,18 +418,26 @@ export const api = {
       const res = await cachedGet('/inventory/history', params, 15000);
       return { list: unwrapItems(res), total: res?.total || 0 };
     },
+    getAllAdjustments: async (params?: any) => {
+      const res = await fetchAllPages('/inventory/history', 500, params, 20000);
+      return { list: res.list || [], total: res.total || 0 };
+    },
     getProducts: async (params?: any) => {
       const res = await cachedGet('/products', { limit: 100, ...params }, 30000);
       return { list: unwrapItems(res), total: res?.total || 0 };
     },
+    getAllProducts: async (params?: any) => {
+      const res = await fetchAllPages('/products', 500, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
+    },
     getReplenishmentDashboard: async () => {
-      const res = await cachedGet('/inventory', { limit: 50 }, 15000);
-      const items = unwrapItems(res);
-      return { items, total: res?.total || items.length };
+      const res = await fetchAllPages('/inventory', 500, {}, 15000);
+      const items = res.list || [];
+      return { items, total: res.total || items.length };
     },
     getReplenishmentAlerts: async () => {
-      const res = await cachedGet('/inventory', { limit: 50 }, 15000);
-      const items = unwrapItems(res);
+      const res = await fetchAllPages('/inventory', 500, {}, 15000);
+      const items = res.list || [];
       return { alerts: items.filter((x: any) => (x.on_hand ?? 0) <= 10) };
     },
   },
@@ -367,6 +446,10 @@ export const api = {
     getProducts: async (params?: any) => {
       const res = await cachedGet('/products', params, 30000);
       return { list: unwrapItems(res), total: res?.total || 0 };
+    },
+    getAllProducts: async (params?: any) => {
+      const res = await fetchAllPages('/products', 500, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
     },
     getProduct: async (id: string) => {
       return cachedGet(`/products/${id}`, null, 60000);
@@ -404,6 +487,10 @@ export const api = {
     getSuppliers: async (params?: any) => {
       const res = await cachedGet('/suppliers', params, 30000);
       return { list: unwrapItems(res), total: res?.total || 0 };
+    },
+    getAllSuppliers: async (params?: any) => {
+      const res = await fetchAllPages('/suppliers', 500, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
     },
     getSupplier: async (id: string) => {
       return cachedGet(`/suppliers/${id}`, null, 60000);
@@ -480,6 +567,15 @@ export const api = {
         average_quantity: res?.average_quantity || 0,
       };
     },
+    queryAllSales: async (params?: { item_id?: string; store_id?: string; start_date?: string; end_date?: string }) => {
+      const res = await fetchAllPages('/sales', 500, params, 20000);
+      return {
+        list: res.list || [],
+        total: res.total || 0,
+        total_quantity: res.total_quantity || 0,
+        average_quantity: res.average_quantity || 0,
+      };
+    },
     getSummary: async (params?: { item_id?: string; store_id?: string }) => {
       return cachedGet('/sales/summary', params, 30000);
     },
@@ -505,6 +601,10 @@ export const api = {
     listEvents: async (params?: { skip?: number; limit?: number; event_type?: string; start_date?: string; end_date?: string; search?: string }) => {
       const res = await cachedGet('/events-calendar', params, 30000);
       return { list: unwrapItems(res), total: res?.total || 0 };
+    },
+    listAllEvents: async (params?: { event_type?: string; start_date?: string; end_date?: string; search?: string }) => {
+      const res = await fetchAllPages('/events-calendar', 500, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
     },
     getTypes: async () => {
       return cachedGet('/events-calendar/types', null, 300000);
@@ -562,6 +662,10 @@ export const api = {
       const res = await apiClient.get('/ml/data-quality', { params });
       return { list: unwrapItems(res.data), total: res.data?.total || 0 };
     },
+    listAllDataQualityRuns: async (params?: any) => {
+      const res = await fetchAllPages('/ml/data-quality', 100, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
+    },
     train: async (data: { algorithm: string; sku_list?: string[]; start_date?: string; end_date?: string; test_days?: number; hyperparameters?: any }) => {
       const res = await apiClient.post('/ml/train', data);
       return res.data;
@@ -574,9 +678,17 @@ export const api = {
       const res = await apiClient.get('/ml/train', { params });
       return { list: unwrapItems(res.data), total: res.data?.total || 0 };
     },
+    listAllTrainJobs: async (params?: any) => {
+      const res = await fetchAllPages('/ml/train', 100, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
+    },
     getModels: async (params?: { skip?: number; limit?: number; is_production?: boolean; algorithm?: string; scope?: string }) => {
       const res = await apiClient.get('/ml/models', { params });
       return { list: unwrapItems(res.data), total: res.data?.total || 0 };
+    },
+    getAllModels: async (params?: any) => {
+      const res = await fetchAllPages('/ml/models', 100, params, 30000);
+      return { list: res.list || [], total: res.total || 0 };
     },
     getModel: async (modelId: string) => {
       const res = await apiClient.get(`/ml/models/${modelId}`);
@@ -597,23 +709,31 @@ export const api = {
       const res = await apiClient.get('/users', { params });
       return { list: unwrapItems(res.data), total: res.data?.total || 0 };
     },
+    getAllUsers: async (params?: any) => {
+      const res = await fetchAllPages('/users', 500, params, 20000);
+      return { list: res.list || [], total: res.total || 0 };
+    },
     getUser: async (id: string) => {
       const res = await apiClient.get(`/users/${id}`);
       return res.data;
     },
     createUser: async (userData: any) => {
+      clearApiCache('/users');
       const res = await apiClient.post('/users', userData);
       return res.data;
     },
     updateUser: async (id: string, userData: any) => {
+      clearApiCache('/users');
       const res = await apiClient.put(`/users/${id}`, userData);
       return res.data;
     },
     changeUserStatus: async (id: string, is_active: boolean) => {
+      clearApiCache('/users');
       const res = await apiClient.patch(`/users/${id}/status`, { is_active });
       return res.data;
     },
     deleteUser: async (id: string) => {
+      clearApiCache('/users');
       const res = await apiClient.delete(`/users/${id}`);
       return res.data;
     },
@@ -629,6 +749,10 @@ export const api = {
       const res = await apiClient.get('/audit-logs', { params });
       return { logs: unwrapItems(res.data), total: res.data?.total || 0 };
     },
+    getAllAuditLogs: async (params?: any) => {
+      const res = await fetchAllPages('/audit-logs', 500, params, 20000);
+      return { logs: res.list || [], total: res.total || 0 };
+    },
     getSystemSettings: async () => {
       const res = await apiClient.get('/settings');
       return res.data;
@@ -638,6 +762,7 @@ export const api = {
       return res.data;
     },
     updateSystemSetting: async (key: string, value: any, description?: string) => {
+      clearApiCache('/settings');
       const res = await apiClient.put(`/settings/${key}`, { value, description });
       return res.data;
     },
@@ -752,8 +877,8 @@ export const api = {
 
   reports: {
     getRecentLogs: async () => {
-      const auditRes = await apiClient.get('/audit-logs', { params: { limit: 10 } }).catch(() => ({ data: { items: [] } }));
-      const logs = (unwrapItems(auditRes.data) || []).map((l: any, idx: number) => ({
+      const auditRes = await fetchAllPages('/audit-logs', 500, {}, 20000).catch(() => ({ list: [], total: 0 }));
+      const logs = (auditRes.list || []).map((l: any, idx: number) => ({
         name: `Audit_${l.action || 'Report'}_${idx + 1}.csv`,
         type: l.action?.split('.')[0]?.toUpperCase() || 'SYSTEM',
         date: l.created_at ? new Date(l.created_at).toLocaleDateString() : 'Today',

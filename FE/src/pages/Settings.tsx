@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
+import { Pagination } from '../components/ui/Pagination.tsx';
 import './Settings.css';
 
 export const Settings: React.FC = () => {
@@ -13,6 +14,22 @@ export const Settings: React.FC = () => {
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('General Settings');
+
+  // Pagination States
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersPerPage, setUsersPerPage] = useState(10);
+
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditPerPage, setAuditPerPage] = useState(10);
+
+  const [trainJobsPage, setTrainJobsPage] = useState(1);
+  const [trainJobsPerPage, setTrainJobsPerPage] = useState(5);
+
+  const [modelsPage, setModelsPage] = useState(1);
+  const [modelsPerPage, setModelsPerPage] = useState(5);
+
+  const [dqIssuesPage, setDqIssuesPage] = useState(1);
+  const [dqIssuesPerPage, setDqIssuesPerPage] = useState(10);
 
   const [profileName, setProfileName] = useState(user?.name || user?.email || '');
   const [profileEmail, setProfileEmail] = useState(user?.email || '');
@@ -72,7 +89,7 @@ export const Settings: React.FC = () => {
 
   const loadUsers = async () => {
     try {
-      const res = await api.settings.getUsers();
+      const res = await api.settings.getAllUsers();
       setUsers(res.list || []);
     } catch (e) {
       console.error('Failed to load users', e);
@@ -81,7 +98,7 @@ export const Settings: React.FC = () => {
 
   const loadAuditLogs = async () => {
     try {
-      const res = await api.settings.getAuditLogs({ limit: '100' });
+      const res = await api.settings.getAllAuditLogs();
       setAuditLogs(res.logs || []);
     } catch (e) {
       console.error('Failed to load audit logs', e);
@@ -93,11 +110,11 @@ export const Settings: React.FC = () => {
       try {
         const [sysRes, usersResult, auditResult, dqRunsRes, trainJobsRes, modelsRes, actionsResult] = await Promise.all([
           api.settings.getSystemSettings().catch(() => ({ settings: {}, items: [] })),
-          api.settings.getUsers().catch(() => ({ list: [], total: 0 })),
-          api.settings.getAuditLogs({ limit: '100' }).catch(() => ({ logs: [], total: 0 })),
-          api.ml.listDataQualityRuns().catch(() => ({ list: [], total: 0 })),
-          api.ml.listTrainJobs().catch(() => ({ list: [], total: 0 })),
-          api.ml.getModels().catch(() => ({ list: [], total: 0 })),
+          api.settings.getAllUsers().catch(() => ({ list: [], total: 0 })),
+          api.settings.getAllAuditLogs().catch(() => ({ logs: [], list: [], total: 0 })),
+          api.ml.listAllDataQualityRuns().catch(() => ({ list: [], total: 0 })),
+          api.ml.listAllTrainJobs().catch(() => ({ list: [], total: 0 })),
+          api.ml.getAllModels().catch(() => ({ list: [], total: 0 })),
           api.settings.getAuditActions().catch(() => []),
         ]);
 
@@ -373,6 +390,49 @@ export const Settings: React.FC = () => {
       (log.details || '').toLowerCase().includes(search);
     return matchesAction && matchesSearch;
   });
+
+  // Reset pagination on filter changes
+  useEffect(() => {
+    setUsersPage(1);
+  }, [userRoleFilter, userStatusFilter, userSearchTerm]);
+
+  useEffect(() => {
+    setAuditPage(1);
+  }, [auditActionFilter, auditSearchTerm]);
+
+  useEffect(() => {
+    setDqIssuesPage(1);
+  }, [selectedDqRun]);
+
+  const paginatedUsers = useMemo(() => {
+    const start = (usersPage - 1) * usersPerPage;
+    return filteredUsers.slice(start, start + usersPerPage);
+  }, [filteredUsers, usersPage, usersPerPage]);
+
+  const paginatedAuditLogs = useMemo(() => {
+    const start = (auditPage - 1) * auditPerPage;
+    return filteredAuditLogs.slice(start, start + auditPerPage);
+  }, [filteredAuditLogs, auditPage, auditPerPage]);
+
+  const paginatedTrainJobs = useMemo(() => {
+    const start = (trainJobsPage - 1) * trainJobsPerPage;
+    return trainJobs.slice(start, start + trainJobsPerPage);
+  }, [trainJobs, trainJobsPage, trainJobsPerPage]);
+
+  const paginatedModels = useMemo(() => {
+    const start = (modelsPage - 1) * modelsPerPage;
+    return modelsList.slice(start, start + modelsPerPage);
+  }, [modelsList, modelsPage, modelsPerPage]);
+
+  const currentDqIssues = useMemo(() => {
+    const run = selectedDqRun || dqRuns[0];
+    return run?.issues || [];
+  }, [selectedDqRun, dqRuns]);
+
+  const paginatedDqIssues = useMemo(() => {
+    const start = (dqIssuesPage - 1) * dqIssuesPerPage;
+    return currentDqIssues.slice(start, start + dqIssuesPerPage);
+  }, [currentDqIssues, dqIssuesPage, dqIssuesPerPage]);
 
   const renderGeneralSettings = () => (
     <div className="settings-main-split">
@@ -832,7 +892,7 @@ export const Settings: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((u, i) => {
+                paginatedUsers.map((u, i) => {
                   const isActive = u.is_active ?? (u.status === 'ACTIVE');
                   const roleStr = u.role || 'VIEWER';
                   return (
@@ -892,9 +952,19 @@ export const Settings: React.FC = () => {
             </tbody>
           </table>
 
-          <div className="user-pagination">
-            <span className="pagination-info">Showing {filteredUsers.length} of {users.length} active profiles</span>
-          </div>
+          {filteredUsers.length > 0 && (
+            <Pagination
+              currentPage={usersPage}
+              totalItems={filteredUsers.length}
+              pageSize={usersPerPage}
+              onPageChange={setUsersPage}
+              onPageSizeChange={(newSize) => {
+                setUsersPerPage(newSize);
+                setUsersPage(1);
+              }}
+              pageSizeOptions={[5, 10, 20, 50]}
+            />
+          )}
         </div>
       </div>
     </>
@@ -953,7 +1023,7 @@ export const Settings: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                trainJobs.map((j) => (
+                paginatedTrainJobs.map((j) => (
                   <tr key={j.id}>
                     <td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{j.id.slice(0, 8)}...</td>
                     <td className="fw-700">{j.algorithm.toUpperCase()}</td>
@@ -975,6 +1045,19 @@ export const Settings: React.FC = () => {
               )}
             </tbody>
           </table>
+          {trainJobs.length > 0 && (
+            <Pagination
+              currentPage={trainJobsPage}
+              totalItems={trainJobs.length}
+              pageSize={trainJobsPerPage}
+              onPageChange={setTrainJobsPage}
+              onPageSizeChange={(newSize) => {
+                setTrainJobsPerPage(newSize);
+                setTrainJobsPage(1);
+              }}
+              pageSizeOptions={[5, 10, 20]}
+            />
+          )}
         </div>
 
         <div className="settings-table-container mt-6">
@@ -1003,7 +1086,7 @@ export const Settings: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                modelsList.map((m) => (
+                paginatedModels.map((m) => (
                   <tr key={m.id}>
                     <td className="fw-700 text-dark">{m.name} ({m.version || 'v1'})</td>
                     <td>{m.algorithm.toUpperCase()}</td>
@@ -1023,6 +1106,19 @@ export const Settings: React.FC = () => {
               )}
             </tbody>
           </table>
+          {modelsList.length > 0 && (
+            <Pagination
+              currentPage={modelsPage}
+              totalItems={modelsList.length}
+              pageSize={modelsPerPage}
+              onPageChange={setModelsPage}
+              onPageSizeChange={(newSize) => {
+                setModelsPerPage(newSize);
+                setModelsPage(1);
+              }}
+              pageSizeOptions={[5, 10, 20]}
+            />
+          )}
         </div>
       </div>
     );
@@ -1088,7 +1184,7 @@ export const Settings: React.FC = () => {
                 </td>
               </tr>
             ) : (
-              filteredAuditLogs.map((log: any, i: number) => (
+              paginatedAuditLogs.map((log: any, i: number) => (
                 <tr key={log.id || i}>
                   <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
                     {log.created_at ? new Date(log.created_at).toLocaleString() : log.timestamp || 'N/A'}
@@ -1107,11 +1203,19 @@ export const Settings: React.FC = () => {
           </tbody>
         </table>
 
-        <div className="flex justify-between items-center mt-4">
-          <span className="text-secondary" style={{ fontSize: '12px' }}>
-            Showing {filteredAuditLogs.length} of {auditLogs.length} audit records
-          </span>
-        </div>
+        {filteredAuditLogs.length > 0 && (
+          <Pagination
+            currentPage={auditPage}
+            totalItems={filteredAuditLogs.length}
+            pageSize={auditPerPage}
+            onPageChange={setAuditPage}
+            onPageSizeChange={(newSize) => {
+              setAuditPerPage(newSize);
+              setAuditPage(1);
+            }}
+            pageSizeOptions={[10, 15, 25, 50]}
+          />
+        )}
       </div>
     </div>
   );
@@ -1244,7 +1348,7 @@ export const Settings: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    run.issues.map((iss: any, idx: number) => {
+                    paginatedDqIssues.map((iss: any, idx: number) => {
                       const sevColor =
                         iss.severity === 'CRITICAL' ? '#fee2e2' :
                         iss.severity === 'HIGH' ? '#ffedd5' :
@@ -1280,6 +1384,19 @@ export const Settings: React.FC = () => {
                   )}
                 </tbody>
               </table>
+              {currentDqIssues.length > 0 && (
+                <Pagination
+                  currentPage={dqIssuesPage}
+                  totalItems={currentDqIssues.length}
+                  pageSize={dqIssuesPerPage}
+                  onPageChange={setDqIssuesPage}
+                  onPageSizeChange={(newSize) => {
+                    setDqIssuesPerPage(newSize);
+                    setDqIssuesPage(1);
+                  }}
+                  pageSizeOptions={[5, 10, 20]}
+                />
+              )}
             </div>
 
             {/* Run History Selector */}

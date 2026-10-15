@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Pencil, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
+import { Pagination } from '../components/ui/Pagination.tsx';
 import './Replenishment.css';
 
 export const Replenishment: React.FC = () => {
@@ -17,6 +18,14 @@ export const Replenishment: React.FC = () => {
   const [viewTab, setViewTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE');
   const [adjustmentsHistory, setAdjustmentsHistory] = useState<any[]>([]);
 
+  // Active Inventory Pagination
+  const [activePage, setActivePage] = useState(1);
+  const [activePageSize, setActivePageSize] = useState(10);
+
+  // History Pagination
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
+
   // Modal State for adjusting stock / order qty
   const [showModal, setShowModal] = useState(false);
   const [adjOnHand, setAdjOnHand] = useState('0');
@@ -28,8 +37,8 @@ export const Replenishment: React.FC = () => {
     setIsLoading(true);
     try {
       const [invRes, histRes] = await Promise.all([
-        api.inventory.getInventory({ limit: 100 }),
-        api.inventory.getAdjustments({ limit: 50 }),
+        api.inventory.getAllInventory(),
+        api.inventory.getAllAdjustments(),
       ]);
       const items = invRes.list || [];
       setInventory(items);
@@ -103,6 +112,20 @@ export const Replenishment: React.FC = () => {
     if (statusFilter === 'OPTIMIZED') return stock >= 15;
     return true;
   });
+
+  useEffect(() => {
+    setActivePage(1);
+  }, [statusFilter]);
+
+  const paginatedActiveItems = useMemo(() => {
+    const start = (activePage - 1) * activePageSize;
+    return filteredItems.slice(start, start + activePageSize);
+  }, [filteredItems, activePage, activePageSize]);
+
+  const paginatedHistoryItems = useMemo(() => {
+    const start = (historyPage - 1) * historyPageSize;
+    return adjustmentsHistory.slice(start, start + historyPageSize);
+  }, [adjustmentsHistory, historyPage, historyPageSize]);
 
   return (
     <div className="animate-fade-in mb-6 rep-container relative">
@@ -208,121 +231,151 @@ export const Replenishment: React.FC = () => {
 
               <div className="rep-table-wrap">
                 {viewTab === 'ACTIVE' ? (
-                  <table className="rep-table new-rep-table">
-                    <thead>
-                      <tr>
-                        <th>SKU ID</th>
-                        <th>PRODUCT NAME</th>
-                        <th>STORE</th>
-                        <th>ON-HAND</th>
-                        <th>ON-ORDER</th>
-                        <th>STATUS</th>
-                        <th>ACTION</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredItems.length === 0 ? (
+                  <>
+                    <table className="rep-table new-rep-table">
+                      <thead>
                         <tr>
-                          <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
-                            No inventory records found for selected filter.
-                          </td>
+                          <th>SKU ID</th>
+                          <th>PRODUCT NAME</th>
+                          <th>STORE</th>
+                          <th>ON-HAND</th>
+                          <th>ON-ORDER</th>
+                          <th>STATUS</th>
+                          <th>ACTION</th>
                         </tr>
-                      ) : (
-                        filteredItems.map((item, idx) => {
-                          const stock = Number(item.on_hand ?? 0);
-                          const isCritical = stock <= 0;
-                          const isLow = stock > 0 && stock < 15;
-                          const isSelected = selectedItem?.item_id === item.item_id && selectedItem?.store_id === item.store_id;
-
-                          return (
-                            <tr
-                              key={`${item.item_id}-${item.store_id}-${idx}`}
-                              className={isSelected ? 'bg-teal-50/50' : ''}
-                              onClick={() => setSelectedItem(item)}
-                              style={{ cursor: 'pointer' }}
-                            >
-                              <td className="fw-700">{item.item_id}</td>
-                              <td>{item.product_name || item.item_id}</td>
-                              <td>{item.store_id || 'Warehouse'}</td>
-                              <td className="fw-700">{item.on_hand}</td>
-                              <td className="eoq-cell">
-                                {item.on_order ?? 0}{' '}
-                                {canEdit && (
-                                  <Pencil
-                                    size={12}
-                                    className="edit-icon inline ml-1 text-slate-400 hover:text-teal-600"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openAdjustModal(item);
-                                    }}
-                                  />
-                                )}
-                              </td>
-                              <td>
-                                {isCritical ? (
-                                  <span className="status-badge red-bg">CRITICAL</span>
-                                ) : isLow ? (
-                                  <span className="status-badge yellow-text">LOW STOCK</span>
-                                ) : (
-                                  <span className="status-badge green-text-badge">IN STOCK</span>
-                                )}
-                              </td>
-                              <td>
-                                {canEdit && (
-                                  <button
-                                    className={`action-btn ${isCritical ? 'green-solid' : 'outline'}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleQuickReorder(item, 50);
-                                    }}
-                                  >
-                                    +50 Order
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                ) : (
-                  <table className="rep-table new-rep-table">
-                    <thead>
-                      <tr>
-                        <th>DATE</th>
-                        <th>SKU ID</th>
-                        <th>STORE</th>
-                        <th>PREV</th>
-                        <th>NEW</th>
-                        <th>REASON</th>
-                        <th>OPERATOR</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {adjustmentsHistory.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
-                            No adjustment history found.
-                          </td>
-                        </tr>
-                      ) : (
-                        adjustmentsHistory.map((adj, i) => (
-                          <tr key={adj.id || i}>
-                            <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
-                              {adj.created_at ? new Date(adj.created_at).toLocaleDateString() : 'N/A'}
+                      </thead>
+                      <tbody>
+                        {filteredItems.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                              No inventory records found for selected filter.
                             </td>
-                            <td className="fw-700">{adj.item_id}</td>
-                            <td>{adj.store_id}</td>
-                            <td>{adj.old_on_hand}</td>
-                            <td className="fw-700">{adj.new_on_hand}</td>
-                            <td>{adj.reason || 'Cycle count'}</td>
-                            <td className="text-secondary">{adj.adjusted_by || 'Staff'}</td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          paginatedActiveItems.map((item, idx) => {
+                            const stock = Number(item.on_hand ?? 0);
+                            const isCritical = stock <= 0;
+                            const isLow = stock > 0 && stock < 15;
+                            const isSelected = selectedItem?.item_id === item.item_id && selectedItem?.store_id === item.store_id;
+
+                            return (
+                              <tr
+                                key={`${item.item_id}-${item.store_id}-${idx}`}
+                                className={isSelected ? 'bg-teal-50/50' : ''}
+                                onClick={() => setSelectedItem(item)}
+                                style={{ cursor: 'pointer' }}
+                              >
+                                <td className="fw-700">{item.item_id}</td>
+                                <td>{item.product_name || item.item_id}</td>
+                                <td>{item.store_id || 'Warehouse'}</td>
+                                <td className="fw-700">{item.on_hand}</td>
+                                <td className="eoq-cell">
+                                  {item.on_order ?? 0}{' '}
+                                  {canEdit && (
+                                    <Pencil
+                                      size={12}
+                                      className="edit-icon inline ml-1 text-slate-400 hover:text-teal-600"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openAdjustModal(item);
+                                      }}
+                                    />
+                                  )}
+                                </td>
+                                <td>
+                                  {isCritical ? (
+                                    <span className="status-badge red-bg">CRITICAL</span>
+                                  ) : isLow ? (
+                                    <span className="status-badge yellow-text">LOW STOCK</span>
+                                  ) : (
+                                    <span className="status-badge green-text-badge">IN STOCK</span>
+                                  )}
+                                </td>
+                                <td>
+                                  {canEdit && (
+                                    <button
+                                      className={`action-btn ${isCritical ? 'green-solid' : 'outline'}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleQuickReorder(item, 50);
+                                      }}
+                                    >
+                                      +50 Order
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                    {filteredItems.length > 0 && (
+                      <Pagination
+                        currentPage={activePage}
+                        totalItems={filteredItems.length}
+                        pageSize={activePageSize}
+                        onPageChange={setActivePage}
+                        onPageSizeChange={(newSize) => {
+                          setActivePageSize(newSize);
+                          setActivePage(1);
+                        }}
+                        pageSizeOptions={[10, 15, 25, 50]}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <table className="rep-table new-rep-table">
+                      <thead>
+                        <tr>
+                          <th>DATE</th>
+                          <th>SKU ID</th>
+                          <th>STORE</th>
+                          <th>PREV</th>
+                          <th>NEW</th>
+                          <th>REASON</th>
+                          <th>OPERATOR</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adjustmentsHistory.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                              No adjustment history found.
+                            </td>
+                          </tr>
+                        ) : (
+                          paginatedHistoryItems.map((adj, i) => (
+                            <tr key={adj.id || i}>
+                              <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                                {adj.created_at ? new Date(adj.created_at).toLocaleDateString() : 'N/A'}
+                              </td>
+                              <td className="fw-700">{adj.item_id}</td>
+                              <td>{adj.store_id}</td>
+                              <td>{adj.old_on_hand}</td>
+                              <td className="fw-700">{adj.new_on_hand}</td>
+                              <td>{adj.reason || 'Cycle count'}</td>
+                              <td className="text-secondary">{adj.adjusted_by || 'Staff'}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                    {adjustmentsHistory.length > 0 && (
+                      <Pagination
+                        currentPage={historyPage}
+                        totalItems={adjustmentsHistory.length}
+                        pageSize={historyPageSize}
+                        onPageChange={setHistoryPage}
+                        onPageSizeChange={(newSize) => {
+                          setHistoryPageSize(newSize);
+                          setHistoryPage(1);
+                        }}
+                        pageSizeOptions={[10, 15, 25, 50]}
+                      />
+                    )}
+                  </>
                 )}
               </div>
             </div>
