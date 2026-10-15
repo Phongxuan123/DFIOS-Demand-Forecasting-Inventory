@@ -8,6 +8,8 @@ from app.services.event_calendar_service import EventCalendarService, event_cale
 from app.services.system_setting_service import SystemSettingService, system_setting_service
 from app.services.forecast_service import ForecastService, forecast_service
 from app.services.classification_service import ClassificationService, classification_service
+from app.services.optimization_service import OptimizationService, optimization_service
+from app.services.replenishment_service import ReplenishmentService, replenishment_service
 
 __all__ = [
     "AuthService",
@@ -30,4 +32,8 @@ __all__ = [
     "forecast_service",
     "ClassificationService",
     "classification_service",
+    "OptimizationService",
+    "optimization_service",
+    "ReplenishmentService",
+    "replenishment_service",
 ]

@@ -48,6 +48,10 @@ api_router.include_router(classification_router, prefix="/classification", tags=
 from app.api.v1.endpoints.optimization import router as optimization_router
 api_router.include_router(optimization_router, prefix="/optimization", tags=["Inventory Optimization (UC29-UC32)"])
 
+# UC33 - UC38: Replenishment Recommendations (Module G)
+from app.api.v1.endpoints.replenishments import router as replenishments_router
+api_router.include_router(replenishments_router, prefix="/replenishments", tags=["Replenishment Recommendations (UC33-UC38)"])
+
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 

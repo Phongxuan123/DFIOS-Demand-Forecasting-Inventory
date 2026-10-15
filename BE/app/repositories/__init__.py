@@ -8,6 +8,8 @@ from app.repositories.event_repository import EventRepository, event_repository
 from app.repositories.system_setting_repository import SystemSettingRepository, system_setting_repository
 from app.repositories.forecast_repository import ForecastRepository, forecast_repository
 from app.repositories.classification_repository import ClassificationRepository, classification_repository
+from app.repositories.inventory_param_repository import InventoryParamRepository, inventory_param_repository
+from app.repositories.replenishment_repository import ReplenishmentRepository, replenishment_repository
 
 __all__ = [
     "BaseRepository",
@@ -29,4 +31,8 @@ __all__ = [
     "forecast_repository",
     "ClassificationRepository",
     "classification_repository",
+    "InventoryParamRepository",
+    "inventory_param_repository",
+    "ReplenishmentRepository",
+    "replenishment_repository",
 ]
