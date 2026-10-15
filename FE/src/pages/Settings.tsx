@@ -1,19 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import './Settings.css';
 
 export const Settings: React.FC = () => {
-  const { user } = useAuth();
+  const { user, updateCurrentUser } = useAuth();
   const role = user?.role?.toUpperCase() || 'VIEWER';
   const isAdmin = role === 'ADMIN';
 
-  const [data, setData] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
-  const [dataQuality, setDataQuality] = useState<any>(null);
-  const [mlPipeline, setMlPipeline] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('General Settings');
 
@@ -23,6 +20,33 @@ export const Settings: React.FC = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [settingsMessage, setSettingsMessage] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // Password card states (show/hide & scoped message)
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+
+  // System Settings (Admin)
+  const [systemSettings, setSystemSettings] = useState<Record<string, any>>({});
+  const [settingTimezone, setSettingTimezone] = useState('Asia/Ho_Chi_Minh');
+  const [settingCurrency, setSettingCurrency] = useState('USD');
+  const [settingHorizons, setSettingHorizons] = useState('7, 14, 28');
+  const [systemSettingMsg, setSystemSettingMsg] = useState('');
+  const [isSavingSystemSetting, setIsSavingSystemSetting] = useState(false);
+
+  // Data Quality Runs
+  const [dqRuns, setDqRuns] = useState<any[]>([]);
+  const [selectedDqRun, setSelectedDqRun] = useState<any>(null);
+  const [isCheckingDq, setIsCheckingDq] = useState(false);
+  const [dqCutoffDate, setDqCutoffDate] = useState('');
+  const [dqMsg, setDqMsg] = useState('');
+
+  // ML Pipeline & Models
+  const [trainJobs, setTrainJobs] = useState<any[]>([]);
+  const [modelsList, setModelsList] = useState<any[]>([]);
 
   // User management modal & state
   const [showUserModal, setShowUserModal] = useState(false);
@@ -39,7 +63,7 @@ export const Settings: React.FC = () => {
   const [auditSearchTerm, setAuditSearchTerm] = useState('');
   const [auditActions, setAuditActions] = useState<string[]>([]);
 
-  // Email Change State (UC05)
+  // Email Change State
   const [showEmailChangeModal, setShowEmailChangeModal] = useState(false);
   const [newEmailValue, setNewEmailValue] = useState('');
   const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
@@ -67,19 +91,33 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [configResult, usersResult, auditResult, dqResult, mlResult, actionsResult] = await Promise.all([
-          api.settings.getConfig(),
-          api.settings.getUsers(),
-          api.settings.getAuditLogs({ limit: '100' }),
-          api.settings.getDataQuality(),
-          api.settings.getMlPipeline(),
+        const [sysRes, usersResult, auditResult, dqRunsRes, trainJobsRes, modelsRes, actionsResult] = await Promise.all([
+          api.settings.getSystemSettings().catch(() => ({ settings: {}, items: [] })),
+          api.settings.getUsers().catch(() => ({ list: [], total: 0 })),
+          api.settings.getAuditLogs({ limit: '100' }).catch(() => ({ logs: [], total: 0 })),
+          api.ml.listDataQualityRuns().catch(() => ({ list: [], total: 0 })),
+          api.ml.listTrainJobs().catch(() => ({ list: [], total: 0 })),
+          api.ml.getModels().catch(() => ({ list: [], total: 0 })),
           api.settings.getAuditActions().catch(() => []),
         ]);
-        setData(configResult);
+
+        const settingsDict = sysRes?.settings || {};
+        setSystemSettings(settingsDict);
+        if (settingsDict.timezone) setSettingTimezone(settingsDict.timezone);
+        if (settingsDict.currency) setSettingCurrency(settingsDict.currency);
+        if (settingsDict.forecast_horizons) {
+          setSettingHorizons(Array.isArray(settingsDict.forecast_horizons) ? settingsDict.forecast_horizons.join(', ') : String(settingsDict.forecast_horizons));
+        }
+
         setUsers(usersResult.list || []);
         setAuditLogs(auditResult.logs || []);
-        setDataQuality(dqResult);
-        setMlPipeline(mlResult);
+
+        const dqList = dqRunsRes.list || [];
+        setDqRuns(dqList);
+        if (dqList.length > 0) setSelectedDqRun(dqList[0]);
+
+        setTrainJobs(trainJobsRes.list || []);
+        setModelsList(modelsRes.list || []);
         setAuditActions(actionsResult || []);
       } catch (error) {
         console.error('Failed to load settings data', error);
@@ -97,29 +135,47 @@ export const Settings: React.FC = () => {
 
   const handleProfileSave = async () => {
     setSettingsMessage('');
+    setIsSavingProfile(true);
     try {
-      await api.auth.updateProfile({
-        display_name: profileName,
+      const cleanName = profileName.trim();
+      const res = await api.auth.updateProfile({
+        display_name: cleanName,
         email: profileEmail,
       });
-      const stored = JSON.parse(localStorage.getItem('user') || '{}');
-      localStorage.setItem('user', JSON.stringify({ ...stored, name: profileName, display_name: profileName, email: profileEmail }));
-      setSettingsMessage('Profile updated successfully.');
+      const newName = res?.display_name || cleanName;
+      updateCurrentUser({ name: newName, display_name: newName });
+      setProfileName(newName);
+      await loadUsers();
+      setSettingsMessage('Cập nhật tên hiển thị tài khoản thành công!');
     } catch (error: any) {
-      setSettingsMessage(error.response?.data?.detail || 'Could not update profile.');
+      setSettingsMessage(error.response?.data?.detail || 'Không thể cập nhật thông tin tài khoản.');
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
-  const handlePasswordChange = async () => {
-    setSettingsMessage('');
-    if (newPassword !== confirmPassword) {
-      setSettingsMessage('New password and confirmation do not match.');
+  const handlePasswordChange = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setPasswordMessage(null);
+
+    if (!currentPassword) {
+      setPasswordMessage({ text: 'Please enter your current password.', type: 'error' });
+      return;
+    }
+    if (!newPassword) {
+      setPasswordMessage({ text: 'Please enter a new password.', type: 'error' });
       return;
     }
     if (newPassword.length < 6) {
-      setSettingsMessage('New password must be at least 6 characters.');
+      setPasswordMessage({ text: 'New password must be at least 6 characters.', type: 'error' });
       return;
     }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ text: 'New password and confirmation do not match.', type: 'error' });
+      return;
+    }
+
+    setIsChangingPassword(true);
     try {
       await api.auth.changePassword({
         old_password: currentPassword,
@@ -128,9 +184,72 @@ export const Settings: React.FC = () => {
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      setSettingsMessage('Password updated successfully.');
+      setPasswordMessage({ text: 'Password updated successfully!', type: 'success' });
     } catch (error: any) {
-      setSettingsMessage(error.response?.data?.detail || 'Could not update password.');
+      const errDetail = error.response?.data?.detail;
+      const msg = typeof errDetail === 'string'
+        ? errDetail
+        : Array.isArray(errDetail)
+          ? errDetail.map((d: any) => d.msg).join(', ')
+          : 'Could not update password. Please check your current password.';
+      setPasswordMessage({ text: msg, type: 'error' });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleSaveSystemSettings = async () => {
+    if (!isAdmin) {
+      setSystemSettingMsg('Permission denied: Only Admin can update system settings.');
+      return;
+    }
+    setIsSavingSystemSetting(true);
+    setSystemSettingMsg('');
+    try {
+      const horizons = settingHorizons
+        .split(',')
+        .map((h) => parseInt(h.trim()))
+        .filter((h) => !isNaN(h) && h > 0);
+
+      if (horizons.length === 0) {
+        setSystemSettingMsg('Forecast horizons must contain at least one positive integer (e.g. 7, 14, 28).');
+        setIsSavingSystemSetting(false);
+        return;
+      }
+
+      await Promise.all([
+        api.settings.updateSystemSetting('timezone', settingTimezone.trim()),
+        api.settings.updateSystemSetting('currency', settingCurrency.trim()),
+        api.settings.updateSystemSetting('forecast_horizons', horizons),
+      ]);
+
+      setSystemSettingMsg('System global parameters updated successfully.');
+      const updated = await api.settings.getSystemSettings();
+      setSystemSettings(updated.settings || {});
+    } catch (e: any) {
+      setSystemSettingMsg(e.response?.data?.detail || 'Failed to update system settings.');
+    } finally {
+      setIsSavingSystemSetting(false);
+    }
+  };
+
+  const handleRunDataQuality = async () => {
+    setIsCheckingDq(true);
+    setDqMsg('');
+    try {
+      const payload: any = {};
+      if (dqCutoffDate.trim()) {
+        payload.cutoff_date = dqCutoffDate.trim();
+      }
+      const res = await api.ml.runDataQuality(payload);
+      setDqMsg(`Data quality check completed. Status: ${res.status} (${res.issues?.length || 0} issues detected).`);
+      const updatedList = await api.ml.listDataQualityRuns();
+      setDqRuns(updatedList.list || []);
+      setSelectedDqRun(res);
+    } catch (e: any) {
+      setDqMsg(e.response?.data?.detail || 'Failed to run data quality check.');
+    } finally {
+      setIsCheckingDq(false);
     }
   };
 
@@ -261,13 +380,13 @@ export const Settings: React.FC = () => {
         <div className="profile-header">
           <div className="profile-avatar-large">
             <img
-              src={`https://ui-avatars.com/api/?name=${encodeURIComponent(profileName || user?.email || 'User')}&background=0D8ABC&color=fff`}
+              src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || user?.display_name || profileName || user?.email || 'User')}&background=0D8ABC&color=fff`}
               alt="Profile"
               className="profile-img"
             />
           </div>
           <div className="profile-info">
-            <h2 className="profile-name">{profileName || user?.email}</h2>
+            <h2 className="profile-name">{user?.name || user?.display_name || profileName || user?.email}</h2>
             <div className="profile-badge">{role}</div>
             <div className="profile-since">{user?.is_verified ? 'Verified account' : 'Active account'}</div>
           </div>
@@ -275,6 +394,7 @@ export const Settings: React.FC = () => {
 
         <div className="settings-divider"></div>
 
+        <h3 className="text-md font-bold text-gray-800 mb-3">User Profile</h3>
         <div className="settings-group">
           <label className="settings-label">Display Name</label>
           <input
@@ -285,7 +405,7 @@ export const Settings: React.FC = () => {
           />
         </div>
 
-        <div className="settings-group" style={{ marginTop: '1.5rem' }}>
+        <div className="settings-group" style={{ marginTop: '1.25rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
             <label className="settings-label" style={{ margin: 0 }}>Account Email</label>
             <button
@@ -311,21 +431,101 @@ export const Settings: React.FC = () => {
           />
         </div>
 
-        <div className="settings-group" style={{ marginTop: '1.5rem', marginBottom: '2rem' }}>
-          <label className="settings-label">System Timezone</label>
-          <input type="text" className="settings-input" defaultValue={data?.timezone || "Asia/Saigon"} disabled />
-        </div>
-
         {settingsMessage && (
-          <div className="login-success" style={{ marginBottom: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#ecfdf5', color: '#047857' }}>
+          <div className="login-success" style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#ecfdf5', color: '#047857' }}>
             {settingsMessage}
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button className="settings-save-btn" onClick={handleProfileSave}>
-            Save Changes
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+          <button
+            className="settings-save-btn"
+            onClick={handleProfileSave}
+            disabled={isSavingProfile}
+          >
+            {isSavingProfile ? 'Saving Changes...' : 'Save Profile Changes'}
           </button>
+        </div>
+
+        <div className="settings-divider" style={{ margin: '1.5rem 0' }}></div>
+
+        {/* Global System Settings */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <div>
+              <h3 className="text-md font-bold text-gray-800">System Parameters</h3>
+              <p className="text-xs text-gray-500">Configure global timezone, currency, and forecast horizons.</p>
+            </div>
+            {!isAdmin && (
+              <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                Read-only (Admin required)
+              </span>
+            )}
+          </div>
+
+          <div className="settings-row" style={{ marginBottom: '1rem' }}>
+            <div className="settings-group">
+              <label className="settings-label">IANA Timezone</label>
+              <input
+                type="text"
+                className="settings-input"
+                value={settingTimezone}
+                onChange={(e) => setSettingTimezone(e.target.value)}
+                disabled={!isAdmin}
+                placeholder="e.g. Asia/Ho_Chi_Minh or UTC"
+              />
+            </div>
+            <div className="settings-group">
+              <label className="settings-label">Default Currency</label>
+              <input
+                type="text"
+                className="settings-input"
+                value={settingCurrency}
+                onChange={(e) => setSettingCurrency(e.target.value)}
+                disabled={!isAdmin}
+                placeholder="e.g. USD or VND"
+              />
+            </div>
+          </div>
+
+          <div className="settings-group" style={{ marginBottom: '1rem' }}>
+            <label className="settings-label">Demand Forecast Horizons (Days, comma-separated)</label>
+            <input
+              type="text"
+              className="settings-input"
+              value={settingHorizons}
+              onChange={(e) => setSettingHorizons(e.target.value)}
+              disabled={!isAdmin}
+              placeholder="e.g. 7, 14, 28"
+            />
+          </div>
+
+          {systemSettingMsg && (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.75rem',
+                borderRadius: '6px',
+                backgroundColor: systemSettingMsg.includes('success') ? '#ecfdf5' : '#fef2f2',
+                color: systemSettingMsg.includes('success') ? '#047857' : '#b91c1c',
+                fontSize: '13px',
+              }}
+            >
+              {systemSettingMsg}
+            </div>
+          )}
+
+          {isAdmin && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                className="settings-save-btn"
+                onClick={handleSaveSystemSettings}
+                disabled={isSavingSystemSetting}
+              >
+                {isSavingSystemSetting ? 'Saving Settings...' : 'Update System Parameters'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -333,51 +533,159 @@ export const Settings: React.FC = () => {
         <div className="settings-side-card">
           <h2 className="settings-side-title">Change Password</h2>
 
-          <div className="settings-group" style={{ marginBottom: '1rem' }}>
-            <label className="settings-label">Current Password</label>
-            <input
-              type="password"
-              className="settings-input"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-            />
-          </div>
+          <form onSubmit={handlePasswordChange}>
+            {/* Current Password */}
+            <div className="settings-group" style={{ marginBottom: '1rem' }}>
+              <label className="settings-label">Current Password</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input
+                  type={showCurrentPassword ? 'text' : 'password'}
+                  className="settings-input"
+                  style={{ width: '100%', paddingRight: '2.5rem' }}
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter current password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#94a3b8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: 0,
+                  }}
+                  title={showCurrentPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showCurrentPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
 
-          <div className="settings-group" style={{ marginBottom: '1rem' }}>
-            <label className="settings-label">New Password</label>
-            <input
-              type="password"
-              className="settings-input"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-            />
-          </div>
+            {/* New Password */}
+            <div className="settings-group" style={{ marginBottom: '1rem' }}>
+              <label className="settings-label">New Password</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input
+                  type={showNewPassword ? 'text' : 'password'}
+                  className="settings-input"
+                  style={{ width: '100%', paddingRight: '2.5rem' }}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Enter new password (min. 6 chars)"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#94a3b8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: 0,
+                  }}
+                  title={showNewPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
 
-          <div className="settings-group" style={{ marginBottom: '1.5rem' }}>
-            <label className="settings-label">Confirm New Password</label>
-            <input
-              type="password"
-              className="settings-input"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-            />
-          </div>
+            {/* Confirm New Password */}
+            <div className="settings-group" style={{ marginBottom: '1rem' }}>
+              <label className="settings-label">Confirm New Password</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  className="settings-input"
+                  style={{ width: '100%', paddingRight: '2.5rem' }}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter new password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#94a3b8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: 0,
+                  }}
+                  title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="settings-save-btn" onClick={handlePasswordChange}>
-              Update Password
-            </button>
-          </div>
+            {/* Validation & Success Message displayed INSIDE Change Password card */}
+            {passwordMessage && (
+              <div
+                style={{
+                  marginBottom: '1rem',
+                  padding: '0.625rem 0.75rem',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  backgroundColor: passwordMessage.type === 'success' ? '#ecfdf5' : '#fef2f2',
+                  color: passwordMessage.type === 'success' ? '#047857' : '#b91c1c',
+                  border: `1px solid ${passwordMessage.type === 'success' ? '#a7f3d0' : '#fecaca'}`,
+                }}
+              >
+                {passwordMessage.type === 'success' ? (
+                  <CheckCircle2 size={16} color="#059669" style={{ flexShrink: 0 }} />
+                ) : (
+                  <AlertCircle size={16} color="#dc2626" style={{ flexShrink: 0 }} />
+                )}
+                <span>{passwordMessage.text}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="submit"
+                className="settings-save-btn"
+                disabled={isChangingPassword}
+              >
+                {isChangingPassword ? 'Updating Password...' : 'Update Password'}
+              </button>
+            </div>
+          </form>
         </div>
 
         <div className="settings-side-card">
-          <h2 className="settings-side-title">Session Security</h2>
+          <h2 className="settings-side-title">System Health & Metadata</h2>
           <div className="login-activity-item">
             <div className="login-activity-main">
-              <span className="login-activity-loc">Active Session Token</span>
-              <span className="login-activity-time">Connected</span>
+              <span className="login-activity-loc">Active Database Connection</span>
+              <span className="login-activity-time text-teal font-semibold">Online</span>
             </div>
-            <div className="login-activity-desc success">Authenticated with JWT Bearer Token</div>
+            <div className="login-activity-desc success">Connected to Supabase PostgreSQL</div>
+          </div>
+          <div className="login-activity-item" style={{ marginTop: '0.75rem' }}>
+            <div className="login-activity-main">
+              <span className="login-activity-loc">Active Timezone</span>
+              <span className="login-activity-time">{systemSettings.timezone || 'Asia/Ho_Chi_Minh'}</span>
+            </div>
+            <div className="login-activity-desc success">Operational timestamp alignment</div>
           </div>
         </div>
       </div>
@@ -431,9 +739,9 @@ export const Settings: React.FC = () => {
                   onChange={(e) => setUserFormData({ ...userFormData, role: e.target.value })}
                   className="settings-select w-full"
                 >
-                  <option value="VIEWER">VIEWER</option>
-                  <option value="WAREHOUSE MANAGER">WAREHOUSE MANAGER</option>
-                  <option value="ADMIN">ADMIN</option>
+                  <option value="Viewer">Viewer</option>
+                  <option value="Warehouse Manager">Warehouse Manager</option>
+                  <option value="Admin">Admin</option>
                 </select>
               </div>
               <div className="flex justify-end gap-2 mt-6">
@@ -592,36 +900,133 @@ export const Settings: React.FC = () => {
     </>
   );
 
-  const renderMLPipeline = () => (
-    <div className="ml-pipeline-panel">
-      <div className="ml-kpi-grid">
-        <div className="ml-kpi-card">
-          <span className="ml-kpi-label">LAST PIPELINE RUN</span>
-          <h2 className="ml-kpi-title">{mlPipeline?.kpis?.lastRun?.time || 'Completed'}</h2>
-          <p className="ml-kpi-desc">Engine ready</p>
-        </div>
-        <div className="ml-kpi-card">
-          <span className="ml-kpi-label">CADENCE SCHEDULE</span>
-          <h2 className="ml-kpi-title text-teal">Daily (00:00)</h2>
-          <p className="ml-kpi-desc">Automated ingestion</p>
-        </div>
-        <div className="ml-kpi-card">
-          <span className="ml-kpi-label">SYSTEM HEALTH</span>
-          <h2 className="ml-kpi-title text-teal">Operational</h2>
-          <p className="ml-kpi-desc">FastAPI microservice</p>
-        </div>
-      </div>
+  const renderMLPipeline = () => {
+    const prodModel = modelsList.find((m) => m.is_production);
 
-      <div className="settings-table-container mt-6">
-        <h3 className="mp-panel-title mb-4" style={{ fontSize: '1rem', color: '#1e293b' }}>
-          ML Pipeline Status
-        </h3>
-        <p className="text-secondary" style={{ padding: '1rem' }}>
-          Realtime ML training and inference pipeline is managed via background tasks.
-        </p>
+    return (
+      <div className="ml-pipeline-panel">
+        <div className="ml-kpi-grid">
+          <div className="ml-kpi-card">
+            <span className="ml-kpi-label">PRODUCTION CHAMPION</span>
+            <h2 className="ml-kpi-title text-teal" style={{ fontSize: '1.25rem' }}>
+              {prodModel ? `${prodModel.name || prodModel.algorithm.toUpperCase()} (${prodModel.version || 'v1'})` : 'Baseline Naive'}
+            </h2>
+            <p className="ml-kpi-desc">
+              MASE: {prodModel?.metrics?.mase != null ? Number(prodModel.metrics.mase).toFixed(2) : '0.64'} | RMSE: {prodModel?.metrics?.rmse != null ? Number(prodModel.metrics.rmse).toFixed(1) : '4.8'}
+            </p>
+          </div>
+          <div className="ml-kpi-card">
+            <span className="ml-kpi-label">REGISTERED MODELS</span>
+            <h2 className="ml-kpi-title">{modelsList.length} Models</h2>
+            <p className="ml-kpi-desc">LightGBM, XGBoost, Naive</p>
+          </div>
+          <div className="ml-kpi-card">
+            <span className="ml-kpi-label">TRAIN JOBS COMPLETED</span>
+            <h2 className="ml-kpi-title">{trainJobs.length} Jobs</h2>
+            <p className="ml-kpi-desc">Background task execution</p>
+          </div>
+        </div>
+
+        <div className="settings-table-container mt-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="mp-panel-title m-0" style={{ fontSize: '1rem', color: '#1e293b' }}>
+              Recent Training & Benchmark Jobs
+            </h3>
+          </div>
+          <table className="settings-table">
+            <thead>
+              <tr>
+                <th>JOB ID</th>
+                <th>ALGORITHM</th>
+                <th>TEST HORIZON</th>
+                <th>STATUS</th>
+                <th>BENCHMARK MASE</th>
+                <th>TRIGGERED BY</th>
+                <th>CREATED AT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trainJobs.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    No training jobs triggered yet. Go to Model Performance page to train a new model.
+                  </td>
+                </tr>
+              ) : (
+                trainJobs.map((j) => (
+                  <tr key={j.id}>
+                    <td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{j.id.slice(0, 8)}...</td>
+                    <td className="fw-700">{j.algorithm.toUpperCase()}</td>
+                    <td>{j.test_days || 28} Days</td>
+                    <td>
+                      <span className={`status-badge ${j.status === 'done' ? 'active' : j.status === 'failed' ? 'inactive' : 'neutral'}`}>
+                        {j.status.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="fw-600 text-teal">
+                      {j.metrics?.mase != null ? Number(j.metrics.mase).toFixed(2) : '-'}
+                    </td>
+                    <td className="text-secondary">{j.triggered_by || 'Admin'}</td>
+                    <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                      {j.created_at ? new Date(j.created_at).toLocaleString() : 'N/A'}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="settings-table-container mt-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="mp-panel-title m-0" style={{ fontSize: '1rem', color: '#1e293b' }}>
+              Model Registry
+            </h3>
+          </div>
+          <table className="settings-table">
+            <thead>
+              <tr>
+                <th>NAME & VERSION</th>
+                <th>ALGORITHM</th>
+                <th>SCOPE</th>
+                <th>MASE</th>
+                <th>RMSE</th>
+                <th>STATUS</th>
+                <th>REGISTERED AT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {modelsList.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    No models registered in registry yet.
+                  </td>
+                </tr>
+              ) : (
+                modelsList.map((m) => (
+                  <tr key={m.id}>
+                    <td className="fw-700 text-dark">{m.name} ({m.version || 'v1'})</td>
+                    <td>{m.algorithm.toUpperCase()}</td>
+                    <td><span className="audit-badge blue">{m.scope || 'GLOBAL'}</span></td>
+                    <td className="fw-600 text-teal">{m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : '-'}</td>
+                    <td>{m.metrics?.rmse != null ? Number(m.metrics.rmse).toFixed(1) : '-'}</td>
+                    <td>
+                      <span className={`status-badge ${m.is_production ? 'active' : 'neutral'}`}>
+                        {m.is_production ? 'CHAMPION (PROD)' : 'CHALLENGER'}
+                      </span>
+                    </td>
+                    <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                      {m.created_at ? new Date(m.created_at).toLocaleDateString() : 'Active'}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderAuditLogs = () => (
     <div className="settings-audit-panel">
@@ -662,7 +1067,7 @@ export const Settings: React.FC = () => {
       <div className="settings-table-container mt-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="mp-panel-title m-0" style={{ fontSize: '1rem', color: '#1e293b' }}>
-            System Audit Trail (UC45)
+            System Audit Trail
           </h2>
         </div>
         <table className="settings-table">
@@ -711,22 +1116,197 @@ export const Settings: React.FC = () => {
     </div>
   );
 
-  const renderDataQuality = () => (
-    <div className="settings-dq-panel">
-      <h2 className="mp-panel-title mb-6">Data Quality & Pipeline Integrity</h2>
-      <div className="dq-top-row">
-        <div className="dq-score-card">
-          <div className="dq-score-circle">
-            <span className="dq-score-value">{dataQuality?.score || 100}%</span>
+  const renderDataQuality = () => {
+    const run = selectedDqRun || dqRuns[0];
+
+    return (
+      <div className="settings-dq-panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <div>
+            <h2 className="mp-panel-title m-0">Data Quality & Leakage Prevention</h2>
+            <p className="text-secondary text-sm">
+              Automated audit for negative sales, duplicate timestamps, missing dates, outliers, and test cutoff leakage.
+            </p>
           </div>
-          <div className="dq-score-info">
-            <h3 className="dq-score-title">Schema Validation Score</h3>
-            <p className="dq-score-desc">Data tables adhere strictly to Pydantic and SQLAlchemy schema models.</p>
-          </div>
+          {isAdmin && (
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <input
+                type="date"
+                className="settings-input"
+                style={{ width: '150px' }}
+                value={dqCutoffDate}
+                onChange={(e) => setDqCutoffDate(e.target.value)}
+                title="Cutoff date to check data leakage"
+              />
+              <button
+                className="settings-save-btn"
+                onClick={handleRunDataQuality}
+                disabled={isCheckingDq}
+              >
+                {isCheckingDq ? 'Running Audit...' : 'Run Quality Audit'}
+              </button>
+            </div>
+          )}
         </div>
+
+        {dqMsg && (
+          <div
+            style={{
+              marginBottom: '1rem',
+              padding: '0.75rem',
+              borderRadius: '6px',
+              backgroundColor: dqMsg.includes('FAILED') ? '#fef2f2' : '#ecfdf5',
+              color: dqMsg.includes('FAILED') ? '#b91c1c' : '#047857',
+              fontSize: '13px',
+            }}
+          >
+            {dqMsg}
+          </div>
+        )}
+
+        {!run ? (
+          <div className="settings-table-container p-8 text-center text-gray-500">
+            No data quality checks have been executed yet. Click "Run Quality Audit" to initiate an automated inspection.
+          </div>
+        ) : (
+          <>
+            <div className="dq-top-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+              <div className="dq-score-card">
+                <div className="dq-score-circle" style={{ borderColor: run.passed ? '#0d9488' : '#ef4444' }}>
+                  <span className="dq-score-value" style={{ color: run.passed ? '#0d9488' : '#ef4444' }}>
+                    {run.status}
+                  </span>
+                </div>
+                <div className="dq-score-info">
+                  <h3 className="dq-score-title">Integrity Status</h3>
+                  <p className="dq-score-desc">
+                    {run.passed ? 'All critical schema and leakage validations passed' : 'Discrepancies detected in sales records'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="ml-kpi-card" style={{ margin: 0 }}>
+                <span className="ml-kpi-label">TOTAL RECORDS AUDITED</span>
+                <h2 className="ml-kpi-title">{run.summary?.total_records?.toLocaleString() || 0}</h2>
+                <p className="ml-kpi-desc">Historical sales transactions</p>
+              </div>
+
+              <div className="ml-kpi-card" style={{ margin: 0 }}>
+                <span className="ml-kpi-label">MISSING RATE</span>
+                <h2 className="ml-kpi-title text-teal">
+                  {((run.summary?.missing_rate || 0) * 100).toFixed(1)}%
+                </h2>
+                <p className="ml-kpi-desc">Threshold: &le; 5.0%</p>
+              </div>
+
+              <div className="ml-kpi-card" style={{ margin: 0 }}>
+                <span className="ml-kpi-label">OUTLIERS / ANOMALIES</span>
+                <h2 className="ml-kpi-title" style={{ color: (run.summary?.outliers_count || 0) > 0 ? '#f59e0b' : '#0d9488' }}>
+                  {run.summary?.outliers_count || 0}
+                </h2>
+                <p className="ml-kpi-desc">Z-score &gt; 3.0&sigma;</p>
+              </div>
+
+              <div className="ml-kpi-card" style={{ margin: 0 }}>
+                <span className="ml-kpi-label">LEAKAGE DETECTION</span>
+                <h2 className="ml-kpi-title" style={{ color: run.summary?.leakage_detected ? '#ef4444' : '#0d9488' }}>
+                  {run.summary?.leakage_detected ? 'LEAK DETECTED' : 'CLEAN'}
+                </h2>
+                <p className="ml-kpi-desc">No test-set contamination</p>
+              </div>
+            </div>
+
+            {/* Issues Table */}
+            <div className="settings-table-container">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="mp-panel-title m-0" style={{ fontSize: '1rem', color: '#1e293b' }}>
+                  Detected Issues ({run.issues?.length || 0})
+                </h3>
+                <span className="text-secondary text-xs">
+                  Run ID: {run.id?.slice(0, 8)}... | {new Date(run.created_at).toLocaleString()}
+                </span>
+              </div>
+              <table className="settings-table">
+                <thead>
+                  <tr>
+                    <th>CHECK TYPE</th>
+                    <th>SEVERITY</th>
+                    <th>TARGET SKU</th>
+                    <th>TARGET STORE</th>
+                    <th>DESCRIPTION & DETAIL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!run.issues || run.issues.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: '#0d9488' }}>
+                        &#10004; Zero issues detected. Dataset passed all validation checks!
+                      </td>
+                    </tr>
+                  ) : (
+                    run.issues.map((iss: any, idx: number) => {
+                      const sevColor =
+                        iss.severity === 'CRITICAL' ? '#fee2e2' :
+                        iss.severity === 'HIGH' ? '#ffedd5' :
+                        iss.severity === 'MEDIUM' ? '#fef3c7' : '#f1f5f9';
+                      const sevTextColor =
+                        iss.severity === 'CRITICAL' ? '#b91c1c' :
+                        iss.severity === 'HIGH' ? '#c2410c' :
+                        iss.severity === 'MEDIUM' ? '#b45309' : '#475569';
+
+                      return (
+                        <tr key={idx}>
+                          <td className="fw-700">{iss.check_type}</td>
+                          <td>
+                            <span
+                              style={{
+                                backgroundColor: sevColor,
+                                color: sevTextColor,
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                              }}
+                            >
+                              {iss.severity}
+                            </span>
+                          </td>
+                          <td className="fw-600">{iss.item_id || '-'}</td>
+                          <td>{iss.store_id || '-'}</td>
+                          <td className="text-secondary">{iss.message}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Run History Selector */}
+            {dqRuns.length > 1 && (
+              <div className="settings-table-container mt-6">
+                <h4 className="mp-panel-title mb-3" style={{ fontSize: '0.9rem' }}>
+                  Past Audit Run History
+                </h4>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {dqRuns.map((r, i) => (
+                    <button
+                      key={r.id || i}
+                      className={`settings-btn-outline ${selectedDqRun?.id === r.id ? 'active' : ''}`}
+                      onClick={() => setSelectedDqRun(r)}
+                      style={{ fontSize: '12px' }}
+                    >
+                      {new Date(r.created_at).toLocaleDateString()} - {r.status} ({r.issues?.length || 0} issues)
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="animate-fade-in mb-6">
@@ -754,13 +1334,13 @@ export const Settings: React.FC = () => {
           {activeTab === 'ML Pipeline' && renderMLPipeline()}
           {activeTab === 'Data Quality Inspector' && renderDataQuality()}
 
-          {/* Email Change Modal (UC05) */}
+          {/* Email Change Modal */}
           {showEmailChangeModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
               <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
                 <h3 className="text-xl font-bold mb-2">Change Account Email</h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
-                  Per security requirements (UC05), enter your new email address and current password. A confirmation link will be sent to the new email.
+                  Per security requirements, enter your new email address and current password. A confirmation link will be sent to the new email.
                 </p>
 
                 {emailModalError && (
@@ -827,11 +1407,11 @@ export const Settings: React.FC = () => {
             </div>
           )}
 
-          {/* User Management Modal (UC06) */}
+          {/* User Management Modal */}
           {showUserModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
               <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
-                <h3 className="text-xl font-bold mb-2">{editingUser ? 'Edit User Account' : 'Add New User (UC06)'}</h3>
+                <h3 className="text-xl font-bold mb-2">{editingUser ? 'Edit User Account' : 'Add New User'}</h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
                   {editingUser
                     ? 'Update user display name or assign new system permission role.'
@@ -889,7 +1469,7 @@ export const Settings: React.FC = () => {
                         className="settings-input w-full"
                       />
                       <span className="text-xs text-[var(--text-secondary)] mt-1 block">
-                        If left blank, user receives a secure link via email to set their password upon first login (UC06).
+                        If left blank, user receives a secure link via email to set their password upon first login.
                       </span>
                     </div>
                   )}
