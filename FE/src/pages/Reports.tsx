@@ -1,6 +1,7 @@
 import React from 'react';
 import { TrendingUp, Activity, Grid, Settings as SettingsIcon } from 'lucide-react';
 import { api } from '../services/api.ts';
+import { Pagination } from '../components/ui/Pagination.tsx';
 import './Reports.css';
 
 export const Reports: React.FC = () => {
@@ -11,6 +12,16 @@ export const Reports: React.FC = () => {
   const [sortDesc, setSortDesc] = React.useState(false);
   const [generatingReport, setGeneratingReport] = React.useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = React.useState('');
+
+  // Logs Pagination
+  const [logPage, setLogPage] = React.useState(1);
+  const [logPageSize, setLogPageSize] = React.useState(5);
+
+  const paginatedLogs = React.useMemo(() => {
+    const logs = data?.logs || [];
+    const start = (logPage - 1) * logPageSize;
+    return logs.slice(start, start + logPageSize);
+  }, [data?.logs, logPage, logPageSize]);
 
   const loadReportsData = async () => {
     try {
@@ -232,7 +243,7 @@ export const Reports: React.FC = () => {
                     No generated reports available yet.
                   </div>
                 ) : (
-                  (data.logs || []).map((log: any, idx: number) => (
+                  paginatedLogs.map((log: any, idx: number) => (
                     <div className="log-row" key={idx}>
                       <div className="log-col-1">{log.name}</div>
                       <div className="log-col-2">{log.type}</div>
@@ -254,6 +265,20 @@ export const Reports: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {(data?.logs?.length || 0) > 0 && (
+              <Pagination
+                currentPage={logPage}
+                totalItems={data.logs.length}
+                pageSize={logPageSize}
+                onPageChange={setLogPage}
+                onPageSizeChange={(newSize) => {
+                  setLogPageSize(newSize);
+                  setLogPage(1);
+                }}
+                pageSizeOptions={[5, 10, 20]}
+              />
+            )}
           </div>
         </>
       )}

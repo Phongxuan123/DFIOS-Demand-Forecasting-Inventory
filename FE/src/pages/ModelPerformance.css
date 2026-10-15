@@ -632,3 +632,258 @@
 .registry-action-btn.deploy:hover {
   background-color: #0f766e;
 }
+
+/* Policy Cost Comparison Enhanced Styles */
+.policy-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.policy-stat-card {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.policy-stat-card.highlight {
+  background-color: #f0fdfa;
+  border-color: #99f6e4;
+}
+
+.policy-stat-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.policy-stat-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0.25rem;
+}
+
+.policy-stat-card.highlight .policy-stat-value {
+  color: #0d9488;
+}
+
+.policy-stat-sub {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.policy-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.policy-tag-badge.badge-savings {
+  background-color: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.policy-tag-badge.badge-neutral {
+  background-color: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+/* Cost Composition Visual Comparison Bar */
+.cost-breakdown-section {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.cost-breakdown-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cost-bars-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.cost-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.cost-bar-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.cost-stacked-track {
+  height: 10px;
+  background-color: #f1f5f9;
+  border-radius: 5px;
+  display: flex;
+  overflow: hidden;
+}
+
+.cost-seg-holding {
+  background-color: #0d9488;
+  transition: width 0.3s ease;
+}
+
+.cost-seg-stockout {
+  background-color: #ef4444;
+  transition: width 0.3s ease;
+}
+
+.cost-legend {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 4px;
+}
+
+/* Enhanced Comparison Table */
+.sim-table-elevated {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.sim-table-elevated thead th {
+  background-color: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sim-table-elevated tbody tr {
+  border-bottom: 1px solid #f1f5f9;
+  transition: background-color 0.15s ease;
+}
+
+.sim-table-elevated tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.sim-table-elevated tbody tr.total-row {
+  background-color: #f0fdfa;
+  border-top: 2px solid #0d9488;
+  border-bottom: 2px solid #0d9488;
+  font-weight: 700;
+}
+
+.sim-table-elevated td {
+  padding: 0.85rem 1rem;
+  vertical-align: middle;
+}
+
+.cost-cat-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.cat-icon-box {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cat-icon-holding {
+  background-color: #f0fdfa;
+  color: #0d9488;
+  border: 1px solid #ccfbf1;
+}
+
+.cat-icon-stockout {
+  background-color: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.cat-icon-total {
+  background-color: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+
+.mp-delta-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mp-delta-pill.success {
+  background-color: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.mp-delta-pill.warning {
+  background-color: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.mp-delta-pill.neutral {
+  background-color: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.range-slider-modern {
+  width: 100%;
+  height: 6px;
+  accent-color: #0d9488;
+  cursor: pointer;
+}

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Settings, RefreshCw, Info, X, AlertCircle, Check, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
+import { Pagination } from '../components/ui/Pagination.tsx';
 import './AbcXyzAnalysis.css';
 
 export const AbcXyzAnalysis: React.FC = () => {
@@ -14,6 +15,10 @@ export const AbcXyzAnalysis: React.FC = () => {
   const [thresholds, setThresholds] = useState<any>({ a_cutoff: 80, b_cutoff: 95, cv_x: 0.5, cv_y: 1.0 });
   const [skuList, setSkuList] = useState<any[]>([]);
   const [totalSkus, setTotalSkus] = useState(0);
+
+  // Pagination for SKU table
+  const [skuPage, setSkuPage] = useState(1);
+  const [skuPageSize, setSkuPageSize] = useState(15);
 
   // Filters
   const [selectedSegment, setSelectedSegment] = useState<string>('All');
@@ -60,7 +65,7 @@ export const AbcXyzAnalysis: React.FC = () => {
       const [matrixRes, threshRes, skusRes, catList] = await Promise.all([
         api.classification.getMatrix().catch(() => null),
         api.classification.getThresholds().catch(() => null),
-        api.classification.getSkus({ limit: 100, sort_by: sortBy, order: sortOrder }).catch(() => ({ list: [], total: 0 })),
+        api.classification.getSkus({ skip: 0, limit: skuPageSize, sort_by: sortBy, order: sortOrder }).catch(() => ({ list: [], total: 0 })),
         api.products.getCategories().catch(() => ['FOODS', 'HOBBIES', 'HOUSEHOLD']),
       ]);
 
@@ -94,6 +99,11 @@ export const AbcXyzAnalysis: React.FC = () => {
     };
   }, []);
 
+  // Reset page when filters change
+  useEffect(() => {
+    setSkuPage(1);
+  }, [searchTerm, selectedSegment, selectedAbc, selectedXyz, selectedCategory, sortBy, sortOrder]);
+
   // Debounced search and filter effect
   useEffect(() => {
     if (isLoading) return;
@@ -109,10 +119,27 @@ export const AbcXyzAnalysis: React.FC = () => {
           search: searchTerm.trim() || undefined,
           sort_by: sortBy,
           order: sortOrder,
-          limit: 100,
+          skip: (skuPage - 1) * skuPageSize,
+          limit: skuPageSize,
         });
+        const totalCount = skusRes.total || (skusRes.list || []).length;
         setSkuList(skusRes.list || []);
-        setTotalSkus(skusRes.total || (skusRes.list || []).length);
+        setTotalSkus(totalCount);
+
+        // Prefetch next page in background for instant zero-latency pagination
+        if (skuPage * skuPageSize < totalCount) {
+          api.classification.getSkus({
+            segment: selectedSegment !== 'All' ? selectedSegment : undefined,
+            abc: selectedAbc !== 'All' ? selectedAbc : undefined,
+            xyz: selectedXyz !== 'All' ? selectedXyz : undefined,
+            category: selectedCategory !== 'All' ? selectedCategory : undefined,
+            search: searchTerm.trim() || undefined,
+            sort_by: sortBy,
+            order: sortOrder,
+            skip: skuPage * skuPageSize,
+            limit: skuPageSize,
+          }).catch(() => {});
+        }
       } catch (e) {
         console.error('Failed to filter SKUs', e);
       } finally {
@@ -121,7 +148,7 @@ export const AbcXyzAnalysis: React.FC = () => {
     }, 280);
 
     return () => clearTimeout(timer);
-  }, [searchTerm, selectedSegment, selectedAbc, selectedXyz, selectedCategory, sortBy, sortOrder]);
+  }, [searchTerm, selectedSegment, selectedAbc, selectedXyz, selectedCategory, sortBy, sortOrder, skuPage, skuPageSize]);
 
   // Click cell on matrix
   const handleSelectSegment = async (segment: string) => {
@@ -644,6 +671,20 @@ export const AbcXyzAnalysis: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {totalSkus > 0 && (
+              <Pagination
+                currentPage={skuPage}
+                totalItems={totalSkus}
+                pageSize={skuPageSize}
+                onPageChange={setSkuPage}
+                onPageSizeChange={(newSize) => {
+                  setSkuPageSize(newSize);
+                  setSkuPage(1);
+                }}
+                pageSizeOptions={[10, 15, 25, 50]}
+              />
+            )}
           </div>
 
           {/* Threshold Configuration Modal */}
