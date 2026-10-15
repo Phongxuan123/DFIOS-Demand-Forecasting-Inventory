@@ -64,6 +64,10 @@ class SupplierService:
             id=sup_id,
             name=request.name.strip(),
             lead_time_days=request.lead_time_days,
+            contact_name=request.contact_name.strip() if request.contact_name else None,
+            email=request.email.strip() if request.email else None,
+            phone=request.phone.strip() if request.phone else None,
+            address=request.address.strip() if request.address else None,
         )
         saved = supplier_repository.create(db, new_sup)
 
@@ -96,6 +100,14 @@ class SupplierService:
             sup.name = request.name.strip()
         if request.lead_time_days is not None:
             sup.lead_time_days = request.lead_time_days
+        if request.contact_name is not None:
+            sup.contact_name = request.contact_name.strip() if request.contact_name else None
+        if request.email is not None:
+            sup.email = request.email.strip() if request.email else None
+        if request.phone is not None:
+            sup.phone = request.phone.strip() if request.phone else None
+        if request.address is not None:
+            sup.address = request.address.strip() if request.address else None
 
         db.commit()
         db.refresh(sup)
