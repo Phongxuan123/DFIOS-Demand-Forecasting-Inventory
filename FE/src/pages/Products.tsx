@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Upload, Plus, Calendar as CalendarIcon, ChevronRight, Trash2, Edit } from 'lucide-react';
+import { Search, Upload, Plus, Calendar as CalendarIcon, ChevronRight, Trash2, Edit, Check, AlertCircle, X } from 'lucide-react';
 import { BarChart, Bar, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
@@ -13,6 +13,16 @@ export const Products: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState('Products');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Global Toast Notifications
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ message, type });
+    setTimeout(() => {
+      setNotification((prev) => (prev?.message === message ? null : prev));
+    }, 4000);
+  };
 
   // Products Tab States
   const [products, setProducts] = useState<any[]>([]);
@@ -39,23 +49,61 @@ export const Products: React.FC = () => {
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any>(null);
   const [productFormData, setProductFormData] = useState({ item_id: '', name: '', dept_id: '', cat_id: '' });
+  const [productModalError, setProductModalError] = useState('');
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
 
   // Suppliers Tab States
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [showSupplierModal, setShowSupplierModal] = useState(false);
   const [supplierFormData, setSupplierFormData] = useState({ name: '', email: '', phone: '', lead_time_days: 5 });
+  const [supplierModalError, setSupplierModalError] = useState('');
+  const [isSavingSupplier, setIsSavingSupplier] = useState(false);
 
   // Adjustment History Tab States
   const [adjustments, setAdjustments] = useState<any[]>([]);
   const [adjSearchTerm, setAdjSearchTerm] = useState('');
 
-  // Sales Data (Bulk Import) Tab States
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<any>(null);
+  // Sales Data Tab States
+  const [salesList, setSalesList] = useState<any[]>([]);
+  const [salesTotal, setSalesTotal] = useState(0);
+  const [salesSummary, setSalesSummary] = useState<any>(null);
+  const [salesFilterSku, setSalesFilterSku] = useState('');
+  const [salesFilterStore, setSalesFilterStore] = useState('All');
+  const [salesStartDate, setSalesStartDate] = useState('');
+  const [salesEndDate, setSalesEndDate] = useState('');
+  const [isLoadingSales, setIsLoadingSales] = useState(false);
+  const [showAddSaleModal, setShowAddSaleModal] = useState(false);
+  const [saleFormData, setSaleFormData] = useState({
+    item_id: '',
+    store_id: 'CA_1',
+    sale_date: new Date().toISOString().split('T')[0],
+    quantity: 1,
+  });
+  const [isAddingSale, setIsAddingSale] = useState(false);
+  const [saleModalMsg, setSaleModalMsg] = useState('');
+  const [salesCsvFile, setSalesCsvFile] = useState<File | null>(null);
+  const [isImportingSalesCsv, setIsImportingSalesCsv] = useState(false);
+  const [salesCsvResult, setSalesCsvResult] = useState<any>(null);
 
-  // Events Tab States
+  // Events & Promotions Calendar Tab States
+  const [eventsList, setEventsList] = useState<any[]>([]);
+  const [eventTypes, setEventTypes] = useState<string[]>([]);
+  const [selectedEventType, setSelectedEventType] = useState('All');
+  const [eventSearch, setEventSearch] = useState('');
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+  const [showAddEventModal, setShowAddEventModal] = useState(false);
+  const [calendarEventForm, setCalendarEventForm] = useState({
+    event_name: '',
+    event_type: 'Promotion',
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: new Date().toISOString().split('T')[0],
+    details: '',
+  });
+  const [isCreatingCalendarEvent, setIsCreatingCalendarEvent] = useState(false);
+  const [calendarEventMsg, setCalendarEventMsg] = useState('');
+
+  // Realtime SSE Test trigger
   const [eventForm, setEventForm] = useState({ sku: '', name: '', type: 'Marketing Promotion', lift: '+20%' });
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [eventMessage, setEventMessage] = useState('');
@@ -75,8 +123,14 @@ export const Products: React.FC = () => {
 
       const prodList = prodRes.list || [];
       setProducts(prodList);
-      setTotalProducts(prodRes.total || prodList.length);
-      setSuppliers(suppRes.list || []);
+      const rawSuppliers = suppRes.list || [];
+      const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
+      const mergedSuppliers = rawSuppliers.map((s: any) => ({
+        ...s,
+        email: s.email || savedContacts[s.id]?.email || savedContacts[s.name]?.email || '',
+        phone: s.phone || savedContacts[s.id]?.phone || savedContacts[s.name]?.phone || '',
+      }));
+      setSuppliers(mergedSuppliers);
       setStores(storesRes.length ? storesRes : ['CA_1']);
       setSelectedStore(storesRes[0] || 'CA_1');
       setAdjustments(adjRes.list || []);
@@ -86,8 +140,8 @@ export const Products: React.FC = () => {
       if (prodList.length > 0) {
         selectProductItem(prodList[0], storesRes[0] || 'CA_1');
       }
-      if (suppRes.list?.length > 0) {
-        setSelectedSupplier(suppRes.list[0]);
+      if (mergedSuppliers.length > 0) {
+        setSelectedSupplier(mergedSuppliers[0]);
       }
     } catch (error) {
       console.error('Failed to load products page data', error);
@@ -96,9 +150,67 @@ export const Products: React.FC = () => {
     }
   };
 
+  const loadSalesData = async () => {
+    setIsLoadingSales(true);
+    try {
+      const params: any = { limit: 50 };
+      if (salesFilterSku.trim()) params.item_id = salesFilterSku.trim();
+      if (salesFilterStore !== 'All') params.store_id = salesFilterStore;
+      if (salesStartDate) params.start_date = salesStartDate;
+      if (salesEndDate) params.end_date = salesEndDate;
+
+      const [salesRes, summaryRes] = await Promise.all([
+        api.sales.querySales(params),
+        api.sales.getSummary({
+          item_id: salesFilterSku.trim() || undefined,
+          store_id: salesFilterStore !== 'All' ? salesFilterStore : undefined,
+        }).catch(() => null),
+      ]);
+      setSalesList(salesRes.list || []);
+      setSalesTotal(salesRes.total || 0);
+      setSalesSummary(summaryRes);
+    } catch (e) {
+      console.error('Failed to load sales data', e);
+    } finally {
+      setIsLoadingSales(false);
+    }
+  };
+
+  const loadEventsData = async () => {
+    setIsLoadingEvents(true);
+    try {
+      const [eventsRes, typesRes] = await Promise.all([
+        api.eventsCalendar.listEvents({
+          limit: 200,
+          event_type: selectedEventType !== 'All' ? selectedEventType : undefined,
+        }),
+        api.eventsCalendar.getTypes().catch(() => ['Promotion', 'Holiday', 'Cultural', 'National', 'Religious']),
+      ]);
+      const savedNotes = JSON.parse(localStorage.getItem('event_details') || '{}');
+      const mergedEvents = (eventsRes.list || []).map((ev: any) => ({
+        ...ev,
+        details: ev.details || savedNotes[ev.event_name] || '',
+      }));
+      setEventsList(mergedEvents);
+      setEventTypes(typesRes || []);
+    } catch (e) {
+      console.error('Failed to load events calendar', e);
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  };
+
   useEffect(() => {
     loadInitialData();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'Sales Data') {
+      loadSalesData();
+    } else if (activeTab === 'Events & Promotions') {
+      loadEventsData();
+    }
+  }, [activeTab]);
 
   const selectProductItem = async (prod: any, storeId = selectedStore) => {
     setSelectedProduct(prod);
@@ -112,7 +224,6 @@ export const Products: React.FC = () => {
         setOnHandValue('0');
         setOnOrderValue('0');
       }
-      // Load recent adjustments for this SKU
       const skuAdj = await api.inventory.getAdjustments({ item_id: prod.item_id, limit: 5 });
       setSkuAdjustments(skuAdj.list || []);
     } catch (e) {
@@ -131,7 +242,6 @@ export const Products: React.FC = () => {
         reason: adjustmentReason,
       });
       setStockMessage('Stock updated successfully.');
-      // Refresh adjustment history
       const adjRes = await api.inventory.getAdjustments({ limit: 100 });
       setAdjustments(adjRes.list || []);
       const skuAdj = await api.inventory.getAdjustments({ item_id: selectedProduct.item_id, limit: 5 });
@@ -144,20 +254,28 @@ export const Products: React.FC = () => {
   // Product CRUD
   const handleProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setProductModalError('');
+    if (!productFormData.item_id.trim() || !productFormData.name.trim()) {
+      setProductModalError('Please provide both SKU / Item ID and Product Name.');
+      return;
+    }
+    setIsSavingProduct(true);
     try {
       if (editingProduct) {
         await api.products.updateProduct(editingProduct.item_id, {
-          name: productFormData.name,
+          name: productFormData.name.trim(),
           dept_id: productFormData.dept_id || undefined,
           cat_id: productFormData.cat_id || undefined,
         });
+        showNotification(`Product "${productFormData.name.trim()}" updated successfully.`);
       } else {
         await api.products.createProduct({
-          item_id: productFormData.item_id,
-          name: productFormData.name,
+          item_id: productFormData.item_id.trim(),
+          name: productFormData.name.trim(),
           dept_id: productFormData.dept_id || undefined,
           cat_id: productFormData.cat_id || undefined,
         });
+        showNotification(`Product "${productFormData.name.trim()}" created successfully.`);
       }
       setShowProductModal(false);
       const res = await api.products.getProducts({ limit: 200 });
@@ -165,7 +283,15 @@ export const Products: React.FC = () => {
       setTotalProducts(res.total || res.list?.length || 0);
     } catch (e: any) {
       console.error(e);
-      alert(e.response?.data?.detail || 'Failed to save product');
+      const detail = e.response?.data?.detail;
+      const msg = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d: any) => d.msg).join(', ')
+          : 'Failed to save product';
+      setProductModalError(msg);
+    } finally {
+      setIsSavingProduct(false);
     }
   };
 
@@ -173,6 +299,7 @@ export const Products: React.FC = () => {
     if (!window.confirm(`Are you sure you want to delete SKU ${itemId}?`)) return;
     try {
       await api.products.deleteProduct(itemId);
+      showNotification(`SKU "${itemId}" deleted successfully.`);
       const res = await api.products.getProducts({ limit: 200 });
       setProducts(res.list || []);
       setTotalProducts(res.total || res.list?.length || 0);
@@ -181,18 +308,20 @@ export const Products: React.FC = () => {
       }
     } catch (e: any) {
       console.error(e);
-      alert(e.response?.data?.detail || 'Failed to delete product');
+      showNotification(e.response?.data?.detail || 'Failed to delete product', 'error');
     }
   };
 
   const openAddProduct = () => {
     setEditingProduct(null);
+    setProductModalError('');
     setProductFormData({ item_id: '', name: '', dept_id: '', cat_id: '' });
     setShowProductModal(true);
   };
 
   const openEditProduct = (prod: any) => {
     setEditingProduct(prod);
+    setProductModalError('');
     setProductFormData({
       item_id: prod.item_id,
       name: prod.name,
@@ -206,7 +335,18 @@ export const Products: React.FC = () => {
   const loadSuppliers = async () => {
     try {
       const res = await api.products.getSuppliers();
-      setSuppliers(res.list || []);
+      const rawList = res.list || [];
+      const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
+      const merged = rawList.map((s: any) => ({
+        ...s,
+        email: s.email || savedContacts[s.id]?.email || savedContacts[s.name]?.email || '',
+        phone: s.phone || savedContacts[s.id]?.phone || savedContacts[s.name]?.phone || '',
+      }));
+      setSuppliers(merged);
+      if (selectedSupplier) {
+        const updated = merged.find((s: any) => s.id === selectedSupplier.id || s.name === selectedSupplier.name);
+        if (updated) setSelectedSupplier(updated);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -214,73 +354,194 @@ export const Products: React.FC = () => {
 
   const handleSupplierSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSupplierModalError('');
+    if (!supplierFormData.name.trim()) {
+      setSupplierModalError('Tên nhà cung cấp là bắt buộc.');
+      return;
+    }
+    if (supplierFormData.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supplierFormData.email.trim())) {
+      setSupplierModalError('Địa chỉ email liên hệ không đúng định dạng (ví dụ: contact@supplier.com).');
+      return;
+    }
+    if (supplierFormData.phone?.trim() && !/^[+0-9\s\-()]{6,20}$/.test(supplierFormData.phone.trim())) {
+      setSupplierModalError('Số điện thoại liên hệ phải chứa từ 6-20 ký tự số.');
+      return;
+    }
+
+    setIsSavingSupplier(true);
     try {
+      const payload = {
+        name: supplierFormData.name.trim(),
+        lead_time_days: Number(supplierFormData.lead_time_days) || 1,
+      };
+
+      let supplierId = selectedSupplier?.id;
       if (selectedSupplier && selectedSupplier.id) {
-        await api.products.updateSupplier(selectedSupplier.id, supplierFormData);
+        await api.products.updateSupplier(selectedSupplier.id, payload);
+        showNotification(`Cập nhật thông tin nhà cung cấp "${payload.name}" thành công!`);
       } else {
-        await api.products.createSupplier(supplierFormData);
+        const created = await api.products.createSupplier(payload);
+        supplierId = created?.id;
+        showNotification(`Thêm mới nhà cung cấp "${payload.name}" thành công!`);
       }
+
+      // Persist Contact Info (Email & Phone)
+      const contacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
+      const contactInfo = {
+        email: supplierFormData.email?.trim() || '',
+        phone: supplierFormData.phone?.trim() || '',
+      };
+      if (supplierId) contacts[supplierId] = contactInfo;
+      contacts[payload.name] = contactInfo;
+      localStorage.setItem('supplier_contacts', JSON.stringify(contacts));
+
       setShowSupplierModal(false);
       await loadSuppliers();
     } catch (e: any) {
       console.error(e);
-      alert(e.response?.data?.detail || 'Failed to save supplier');
+      const detail = e.response?.data?.detail;
+      const msg = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d: any) => d.msg).join(', ')
+          : 'Lỗi khi lưu thông tin nhà cung cấp';
+      setSupplierModalError(msg);
+    } finally {
+      setIsSavingSupplier(false);
     }
   };
 
   const handleDeleteSupplier = async () => {
-    if (!selectedSupplier || !window.confirm(`Are you sure you want to delete supplier "${selectedSupplier.name}"?`)) return;
+    if (!selectedSupplier || !window.confirm(`Bạn có chắc chắn muốn xóa nhà cung cấp "${selectedSupplier.name}"?`)) return;
     try {
       await api.products.deleteSupplier(selectedSupplier.id);
+      showNotification(`Đã xóa nhà cung cấp "${selectedSupplier.name}" thành công!`);
       await loadSuppliers();
       setSelectedSupplier(null);
     } catch (e: any) {
       console.error(e);
-      alert(e.response?.data?.detail || 'Failed to delete supplier');
+      showNotification(e.response?.data?.detail || 'Không thể xóa nhà cung cấp', 'error');
     }
   };
 
   const openAddSupplier = () => {
     setSelectedSupplier(null);
+    setSupplierModalError('');
     setSupplierFormData({ name: '', email: '', phone: '', lead_time_days: 5 });
     setShowSupplierModal(true);
   };
 
   const openEditSupplier = () => {
     if (!selectedSupplier) return;
+    setSupplierModalError('');
+    const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
+    const extra = savedContacts[selectedSupplier.id] || savedContacts[selectedSupplier.name] || {};
     setSupplierFormData({
       name: selectedSupplier.name,
-      email: selectedSupplier.email || '',
-      phone: selectedSupplier.phone || '',
+      email: selectedSupplier.email || extra.email || '',
+      phone: selectedSupplier.phone || extra.phone || '',
       lead_time_days: selectedSupplier.lead_time_days || 5,
     });
     setShowSupplierModal(true);
   };
 
-  // Bulk File Upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setSelectedFile(e.target.files[0]);
-      setUploadResult(null);
+  // Sales Handlers
+  const handleAddSaleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsAddingSale(true);
+    setSaleModalMsg('');
+    try {
+      await api.sales.createSale({
+        item_id: saleFormData.item_id.trim(),
+        store_id: saleFormData.store_id.trim(),
+        sale_date: saleFormData.sale_date,
+        quantity: Number(saleFormData.quantity),
+      });
+      setShowAddSaleModal(false);
+      await loadSalesData();
+    } catch (e: any) {
+      setSaleModalMsg(e.response?.data?.detail || 'Failed to create sales record');
+    } finally {
+      setIsAddingSale(false);
     }
   };
 
-  const submitFile = async () => {
-    if (!selectedFile) return;
-    setIsUploading(true);
-    setUploadResult(null);
+  const handleSalesCsvUpload = async () => {
+    if (!salesCsvFile) return;
+    setIsImportingSalesCsv(true);
+    setSalesCsvResult(null);
     try {
-      const result = await api.products.uploadDataFile(selectedFile);
-      setUploadResult(result);
-      setSelectedFile(null);
-      // Reload products
-      const prodRes = await api.products.getProducts({ limit: 200 });
-      setProducts(prodRes.list || []);
-      setTotalProducts(prodRes.total || prodRes.list?.length || 0);
+      const res = await api.sales.importCsv(salesCsvFile);
+      setSalesCsvResult(res);
+      setSalesCsvFile(null);
+      await loadSalesData();
     } catch (e: any) {
-      alert(e.message || 'File upload failed');
+      alert(e.response?.data?.detail || 'Failed to import sales CSV file');
     } finally {
-      setIsUploading(false);
+      setIsImportingSalesCsv(false);
+    }
+  };
+
+  // Events Handlers
+  const handleCreateCalendarEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!calendarEventForm.event_name.trim()) {
+      setCalendarEventMsg('Tên sự kiện là bắt buộc.');
+      return;
+    }
+    if (!calendarEventForm.start_date) {
+      setCalendarEventMsg('Ngày diễn ra sự kiện là bắt buộc.');
+      return;
+    }
+    setIsCreatingCalendarEvent(true);
+    setCalendarEventMsg('');
+    try {
+      await api.eventsCalendar.createEvent({
+        event_name: calendarEventForm.event_name.trim(),
+        event_type: calendarEventForm.event_type,
+        event_date: calendarEventForm.start_date,
+        start_date: calendarEventForm.start_date,
+        end_date: calendarEventForm.end_date || calendarEventForm.start_date,
+        details: calendarEventForm.details?.trim() || undefined,
+      });
+
+      if (calendarEventForm.details?.trim()) {
+        const eventNotes = JSON.parse(localStorage.getItem('event_details') || '{}');
+        eventNotes[calendarEventForm.event_name.trim()] = calendarEventForm.details.trim();
+        localStorage.setItem('event_details', JSON.stringify(eventNotes));
+      }
+
+      setShowAddEventModal(false);
+      showNotification(`Thêm sự kiện "${calendarEventForm.event_name.trim()}" thành công!`);
+      setCalendarEventForm({
+        event_name: '',
+        event_type: eventTypes[0] || 'Promotion',
+        start_date: new Date().toISOString().split('T')[0],
+        end_date: new Date().toISOString().split('T')[0],
+        details: '',
+      });
+      await loadEventsData();
+    } catch (e: any) {
+      const detail = e.response?.data?.detail;
+      const msg = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+          : (detail && typeof detail === 'object' ? JSON.stringify(detail) : 'Không thể tạo sự kiện lịch trình.');
+      setCalendarEventMsg(msg);
+    } finally {
+      setIsCreatingCalendarEvent(false);
+    }
+  };
+
+  const handleDeleteCalendarEvent = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete event "${name}"?`)) return;
+    try {
+      await api.eventsCalendar.deleteEvent(id);
+      showNotification(`Event "${name}" deleted successfully.`);
+      await loadEventsData();
+    } catch (e: any) {
+      showNotification(e.response?.data?.detail || 'Failed to delete event', 'error');
     }
   };
 
@@ -328,11 +589,39 @@ export const Products: React.FC = () => {
       <>
         {showProductModal && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
-              <h3 className="text-xl font-bold mb-4">{editingProduct ? 'Edit Product' : 'Add New SKU / Product'}</h3>
+            <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-md p-6 w-full max-w-md shadow-xl" style={{ borderRadius: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 className="text-lg font-bold" style={{ margin: 0 }}>{editingProduct ? 'Edit Product' : 'Add New SKU / Product'}</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowProductModal(false)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {productModalError && (
+                <div style={{
+                  marginBottom: '1rem',
+                  padding: '0.625rem 0.75rem',
+                  borderRadius: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '12px',
+                  backgroundColor: '#fef2f2',
+                  color: '#b91c1c',
+                  border: '1px solid #fecaca',
+                }}>
+                  <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                  <span>{productModalError}</span>
+                </div>
+              )}
+
               <form onSubmit={handleProductSubmit}>
                 <div className="mb-4">
-                  <label className="block text-sm mb-1 text-[var(--text-secondary)]">SKU / Item ID</label>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">SKU / ITEM ID *</label>
                   <input
                     required
                     type="text"
@@ -341,49 +630,59 @@ export const Products: React.FC = () => {
                     className="settings-input w-full"
                     disabled={!!editingProduct}
                     placeholder="e.g. SKU-8921"
+                    style={{ borderRadius: '4px' }}
                   />
                 </div>
                 <div className="mb-4">
-                  <label className="block text-sm mb-1 text-[var(--text-secondary)]">Product Name</label>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">PRODUCT NAME *</label>
                   <input
                     required
                     type="text"
                     value={productFormData.name}
                     onChange={(e) => setProductFormData({ ...productFormData, name: e.target.value })}
                     className="settings-input w-full"
-                    placeholder="e.g. Nike Air Zoom"
+                    placeholder="e.g. Premium Cotton Shirt"
+                    style={{ borderRadius: '4px' }}
                   />
                 </div>
                 <div className="mb-4">
-                  <label className="block text-sm mb-1 text-[var(--text-secondary)]">Category (Cat ID)</label>
-                  <input
-                    type="text"
-                    value={productFormData.cat_id}
-                    onChange={(e) => setProductFormData({ ...productFormData, cat_id: e.target.value })}
-                    className="settings-input w-full"
-                    placeholder="e.g. Footwear"
-                  />
-                </div>
-                <div className="mb-4">
-                  <label className="block text-sm mb-1 text-[var(--text-secondary)]">Department (Dept ID)</label>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">DEPARTMENT</label>
                   <input
                     type="text"
                     value={productFormData.dept_id}
                     onChange={(e) => setProductFormData({ ...productFormData, dept_id: e.target.value })}
                     className="settings-input w-full"
-                    placeholder="e.g. Athletics"
+                    placeholder="e.g. APPAREL"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">CATEGORY</label>
+                  <input
+                    type="text"
+                    value={productFormData.cat_id}
+                    onChange={(e) => setProductFormData({ ...productFormData, cat_id: e.target.value })}
+                    className="settings-input w-full"
+                    placeholder="e.g. SHIRTS"
+                    style={{ borderRadius: '4px' }}
                   />
                 </div>
                 <div className="flex justify-end gap-2 mt-6">
                   <button
                     type="button"
                     onClick={() => setShowProductModal(false)}
-                    className="px-4 py-2 border border-[var(--border-color)] rounded text-sm hover:bg-[var(--hover-bg)]"
+                    className="px-4 py-2 border border-[var(--border-color)] text-sm hover:bg-[var(--hover-bg)]"
+                    style={{ borderRadius: '4px' }}
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="px-4 py-2 bg-teal-600 text-white rounded text-sm hover:bg-teal-700">
-                    Save Product
+                  <button
+                    type="submit"
+                    disabled={isSavingProduct}
+                    className="px-4 py-2 bg-teal-600 text-white text-sm hover:bg-teal-700 font-semibold"
+                    style={{ borderRadius: '4px' }}
+                  >
+                    {isSavingProduct ? 'Saving...' : 'Save Product'}
                   </button>
                 </div>
               </form>
@@ -394,7 +693,7 @@ export const Products: React.FC = () => {
         <div className="prod-filter-bar">
           <div className="prod-filter-group">
             <div className="prod-filter-item">
-              <label className="prod-filter-label">Category</label>
+              <span className="prod-filter-label">CATEGORY</span>
               <select
                 className="prod-filter-select"
                 value={selectedCategory}
@@ -407,7 +706,7 @@ export const Products: React.FC = () => {
               </select>
             </div>
             <div className="prod-filter-item">
-              <label className="prod-filter-label">Department</label>
+              <span className="prod-filter-label">DEPARTMENT</span>
               <select
                 className="prod-filter-select"
                 value={selectedDept}
@@ -419,84 +718,81 @@ export const Products: React.FC = () => {
                 ))}
               </select>
             </div>
-            <div className="prod-filter-item" style={{ flex: 2 }}>
-              <label className="prod-filter-label">Search SKU or Name</label>
+            <div className="prod-filter-item" style={{ flex: 1 }}>
+              <span className="prod-filter-label">SEARCH</span>
               <input
-                type="text"
                 className="prod-filter-input"
-                placeholder="Search SKU ID or product name..."
+                placeholder="Search SKU or name..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                style={{ width: '100%' }}
               />
             </div>
           </div>
-          <div className="prod-filter-actions">
-            {isAdmin && (
+          {canEdit && (
+            <div className="prod-filter-actions">
               <button className="prod-btn-primary" onClick={openAddProduct}>
-                <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} /> Add Product
+                <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} /> Add SKU
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <div className="prod-main-split">
           <div className="prod-table-area">
-            <h2 className="prod-table-title">Monitored SKUs (Master Data - UC11)</h2>
-
-            <div className="prod-list-header">
-              <div className="prod-col-title prod-col-1">SKU ID</div>
-              <div className="prod-col-title prod-col-2">PRODUCT NAME</div>
-              <div className="prod-col-title prod-col-3">CATEGORY</div>
-              <div className="prod-col-title prod-col-4">DEPARTMENT</div>
-              <div className="prod-col-title prod-col-7" style={{ textAlign: 'right' }}>ACTIONS</div>
+            <div className="prod-table-header">
+              <span className="prod-table-title">Product Catalog ({filteredProducts.length} of {totalProducts} SKUs)</span>
             </div>
-
-            <div>
-              {filteredProducts.length === 0 ? (
-                <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
-                  No SKUs found in master data catalog.
-                </div>
-              ) : (
-                filteredProducts.map((p, idx) => (
-                  <div
-                    className={`prod-row ${selectedProduct?.item_id === p.item_id ? 'active-row' : ''}`}
-                    key={p.item_id || idx}
-                    onClick={() => selectProductItem(p)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <div className="prod-col-1 fw-700">{p.item_id}</div>
-                    <div className="prod-col-2">{p.name}</div>
-                    <div className="prod-col-3">{p.cat_id || 'General'}</div>
-                    <div className="prod-col-4">{p.dept_id || 'Main'}</div>
-                    <div className="prod-col-7" style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
-                      {isAdmin && (
-                        <>
-                          <button
-                            className="p-1 text-slate-500 hover:text-teal-600"
-                            onClick={(e) => { e.stopPropagation(); openEditProduct(p); }}
-                            title="Edit Product"
-                          >
-                            <Edit size={14} />
-                          </button>
-                          <button
-                            className="p-1 text-slate-500 hover:text-red-600"
-                            onClick={(e) => { e.stopPropagation(); handleDeleteProduct(p.item_id); }}
-                            title="Delete Product"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </>
-                      )}
-                    </div>
+            <div className="prod-table">
+              <div className="prod-thead">
+                <div className="col-sku">SKU ID</div>
+                <div className="col-name">NAME</div>
+                <div className="col-dept">DEPT</div>
+                <div className="col-cat">CATEGORY</div>
+                <div className="col-actions">ACTIONS</div>
+              </div>
+              <div className="prod-tbody">
+                {filteredProducts.length === 0 ? (
+                  <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                    No products found matching filters.
                   </div>
-                ))
-              )}
-            </div>
-
-            <div className="prod-table-footer">
-              <div className="prod-showing-text">
-                Showing {filteredProducts.length} of {totalProducts} SKUs
+                ) : (
+                  filteredProducts.map((p) => (
+                    <div
+                      className={`prod-row ${selectedProduct?.item_id === p.item_id ? 'active' : ''}`}
+                      key={p.item_id}
+                      onClick={() => selectProductItem(p)}
+                    >
+                      <div className="col-sku fw-600">{p.item_id}</div>
+                      <div className="col-name">{p.name}</div>
+                      <div className="col-dept">{p.dept_id || '-'}</div>
+                      <div className="col-cat">
+                        <span className="status-pill active">{p.cat_id || 'GENERAL'}</span>
+                      </div>
+                      <div className="col-actions" onClick={(e) => e.stopPropagation()}>
+                        {canEdit && (
+                          <div style={{ display: 'flex', gap: '0.25rem' }}>
+                            <button
+                              onClick={() => openEditProduct(p)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#0d9488' }}
+                              title="Edit product"
+                            >
+                              <Edit size={14} />
+                            </button>
+                            {isAdmin && (
+                              <button
+                                onClick={() => handleDeleteProduct(p.item_id)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }}
+                                title="Delete SKU"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -519,7 +815,7 @@ export const Products: React.FC = () => {
                 {canEdit && (
                   <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1rem', borderRadius: '8px' }}>
                     <h4 className="prod-section-title" style={{ marginBottom: '0.75rem' }}>
-                      UPDATE INVENTORY (UC13)
+                      UPDATE INVENTORY
                     </h4>
                     <div className="prod-param-row">
                       <span className="prod-param-label">Store / Warehouse</span>
@@ -577,14 +873,14 @@ export const Products: React.FC = () => {
                       style={{ marginTop: '0.75rem', width: '100%' }}
                       onClick={handleInventoryUpdate}
                     >
-                      Update Stock (PUT /inventory)
+                      Update Stock
                     </button>
                   </div>
                 )}
 
                 <div style={{ marginBottom: '1.5rem' }}>
                   <h4 className="prod-section-title" style={{ marginBottom: '0.5rem' }}>
-                    RECENT SKU ADJUSTMENTS (UC14)
+                    RECENT SKU ADJUSTMENTS
                   </h4>
                   {skuAdjustments.length === 0 ? (
                     <p style={{ fontSize: '12px', color: '#94a3b8' }}>No adjustments recorded for this SKU.</p>
@@ -625,39 +921,75 @@ export const Products: React.FC = () => {
     <>
       {showSupplierModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-xl font-bold mb-4">{selectedSupplier ? 'Edit Supplier' : 'Add New Supplier'}</h3>
+          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-md p-6 w-full max-w-md shadow-xl" style={{ borderRadius: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 className="text-lg font-bold" style={{ margin: 0 }}>
+                {selectedSupplier ? 'Edit Supplier' : 'Add New Supplier'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowSupplierModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {supplierModalError && (
+              <div style={{
+                marginBottom: '1rem',
+                padding: '0.625rem 0.75rem',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+                backgroundColor: '#fef2f2',
+                color: '#b91c1c',
+                border: '1px solid #fecaca',
+              }}>
+                <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                <span>{supplierModalError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSupplierSubmit}>
               <div className="mb-4">
-                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Supplier Name</label>
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">SUPPLIER NAME *</label>
                 <input
                   required
                   type="text"
                   value={supplierFormData.name}
                   onChange={(e) => setSupplierFormData({ ...supplierFormData, name: e.target.value })}
                   className="settings-input w-full"
+                  placeholder="e.g. Acme Logistics"
+                  style={{ borderRadius: '4px' }}
                 />
               </div>
               <div className="mb-4">
-                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Email</label>
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">EMAIL ADDRESS (CONTACT INFO)</label>
                 <input
                   type="email"
                   value={supplierFormData.email}
                   onChange={(e) => setSupplierFormData({ ...supplierFormData, email: e.target.value })}
                   className="settings-input w-full"
+                  placeholder="e.g. contact@supplier.com"
+                  style={{ borderRadius: '4px' }}
                 />
               </div>
               <div className="mb-4">
-                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Phone</label>
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">PHONE NUMBER (CONTACT INFO)</label>
                 <input
                   type="text"
                   value={supplierFormData.phone}
                   onChange={(e) => setSupplierFormData({ ...supplierFormData, phone: e.target.value })}
                   className="settings-input w-full"
+                  placeholder="e.g. +84 912 345 678"
+                  style={{ borderRadius: '4px' }}
                 />
               </div>
               <div className="mb-4">
-                <label className="block text-sm mb-1 text-[var(--text-secondary)]">Lead Time (Days)</label>
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">LEAD TIME (DAYS) *</label>
                 <input
                   type="number"
                   required
@@ -665,18 +997,25 @@ export const Products: React.FC = () => {
                   value={supplierFormData.lead_time_days}
                   onChange={(e) => setSupplierFormData({ ...supplierFormData, lead_time_days: parseInt(e.target.value) || 1 })}
                   className="settings-input w-full"
+                  style={{ borderRadius: '4px' }}
                 />
               </div>
               <div className="flex justify-end gap-2 mt-6">
                 <button
                   type="button"
                   onClick={() => setShowSupplierModal(false)}
-                  className="px-4 py-2 border border-[var(--border-color)] rounded text-sm hover:bg-[var(--hover-bg)]"
+                  className="px-4 py-2 border border-[var(--border-color)] text-sm hover:bg-[var(--hover-bg)]"
+                  style={{ borderRadius: '4px' }}
                 >
                   Cancel
                 </button>
-                <button type="submit" className="px-4 py-2 bg-teal-600 text-white rounded text-sm hover:bg-teal-700">
-                  Save Supplier
+                <button
+                  type="submit"
+                  disabled={isSavingSupplier}
+                  className="px-4 py-2 bg-teal-600 text-white text-sm hover:bg-teal-700"
+                  style={{ borderRadius: '4px' }}
+                >
+                  {isSavingSupplier ? 'Saving...' : 'Save Supplier'}
                 </button>
               </div>
             </form>
@@ -688,7 +1027,7 @@ export const Products: React.FC = () => {
         <div className="prod-table-area">
           <div className="suppliers-header-bar">
             <h2 className="prod-table-title" style={{ marginBottom: 0 }}>
-              Supplier Directory (Master Data - UC12)
+              Supplier Directory
             </h2>
             <div style={{ display: 'flex', gap: '0.75rem' }}>
               {canEdit && (
@@ -786,102 +1125,607 @@ export const Products: React.FC = () => {
   );
 
   const renderSalesDataTab = () => (
-    <div className="sales-data-view">
-      <div className="sales-upload-area">
-        <div className="upload-box">
-          <Upload size={32} color="#94a3b8" style={{ marginBottom: '1rem' }} />
-          <h3 className="upload-title">Bulk Import Product Master Data (UC11)</h3>
-          <p className="upload-desc">
-            Upload CSV or JSON file containing product catalog items.<br />
-            Required format: <code>item_id, name, dept_id, cat_id</code>.
-          </p>
+    <div className="sales-data-view animate-fade-in">
+      {/* Add Single Sale Modal (Admin) */}
+      {showAddSaleModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-md p-6 w-full max-w-md shadow-xl" style={{ borderRadius: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 className="text-lg font-bold" style={{ margin: 0 }}>Add Historical Sale Record</h3>
+              <button
+                type="button"
+                onClick={() => setShowAddSaleModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {saleModalMsg && (
+              <div style={{
+                marginBottom: '1rem',
+                padding: '0.625rem 0.75rem',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+                backgroundColor: '#fef2f2',
+                color: '#b91c1c',
+                border: '1px solid #fecaca',
+              }}>
+                <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                <span>{saleModalMsg}</span>
+              </div>
+            )}
+            <form onSubmit={handleAddSaleSubmit}>
+              <div className="mb-4">
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">SKU / ITEM ID *</label>
+                <input
+                  required
+                  type="text"
+                  placeholder="e.g. FOODS_1_001"
+                  value={saleFormData.item_id}
+                  onChange={(e) => setSaleFormData({ ...saleFormData, item_id: e.target.value })}
+                  className="settings-input w-full"
+                  style={{ borderRadius: '4px' }}
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">STORE / WAREHOUSE</label>
+                <select
+                  value={saleFormData.store_id}
+                  onChange={(e) => setSaleFormData({ ...saleFormData, store_id: e.target.value })}
+                  className="settings-select w-full"
+                  style={{ borderRadius: '4px' }}
+                >
+                  {stores.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="mb-4">
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">SALE DATE *</label>
+                <input
+                  required
+                  type="date"
+                  value={saleFormData.sale_date}
+                  onChange={(e) => setSaleFormData({ ...saleFormData, sale_date: e.target.value })}
+                  className="settings-input w-full"
+                  style={{ borderRadius: '4px' }}
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">QUANTITY SOLD *</label>
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  value={saleFormData.quantity}
+                  onChange={(e) => setSaleFormData({ ...saleFormData, quantity: parseInt(e.target.value) || 0 })}
+                  className="settings-input w-full"
+                  style={{ borderRadius: '4px' }}
+                />
+              </div>
+              <div className="flex justify-end gap-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowAddSaleModal(false)}
+                  className="px-4 py-2 border border-[var(--border-color)] text-sm hover:bg-[var(--hover-bg)]"
+                  style={{ borderRadius: '4px' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddingSale}
+                  className="px-4 py-2 bg-teal-600 text-white text-sm hover:bg-teal-700"
+                  style={{ borderRadius: '4px' }}
+                >
+                  {isAddingSale ? 'Recording...' : 'Save Record'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
-          {canEdit && (
-            <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+      {/* KPI Cards */}
+      <div className="adj-header-stats" style={{ marginBottom: '1.5rem' }}>
+        <div className="adj-stat-card">
+          <span className="adj-stat-title">TOTAL HISTORICAL VOLUME</span>
+          <div className="adj-stat-val-row">
+            <h2>{salesSummary?.total_quantity?.toLocaleString() ?? 0} units</h2>
+            <span className="adj-stat-badge success">Live Query</span>
+          </div>
+        </div>
+        <div className="adj-stat-card">
+          <span className="adj-stat-title">AVG DAILY DEMAND</span>
+          <div className="adj-stat-val-row">
+            <h2>{salesSummary?.average_daily_quantity != null ? Number(salesSummary.average_daily_quantity).toFixed(1) : '0'} / day</h2>
+            <span className="adj-stat-badge neutral">Aggregated</span>
+          </div>
+        </div>
+        <div className="adj-stat-card">
+          <span className="adj-stat-title">LOGGED TRANSACTIONS</span>
+          <div className="adj-stat-val-row">
+            <h2>{salesSummary?.total_records?.toLocaleString() ?? salesTotal} records</h2>
+            <span className="adj-stat-badge neutral">Historical Data</span>
+          </div>
+        </div>
+        <div className="adj-stat-card">
+          <span className="adj-stat-title">DATE SPAN</span>
+          <div className="adj-stat-val-row">
+            <h2 style={{ fontSize: '1rem', marginTop: '0.25rem' }}>
+              {salesSummary?.min_date ? `${salesSummary.min_date} &rarr; ${salesSummary.max_date}` : 'All time'}
+            </h2>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter & Action Bar */}
+      <div className="prod-filter-bar" style={{ flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+        <div className="prod-filter-group" style={{ flexWrap: 'wrap' }}>
+          <div className="prod-filter-item">
+            <span className="prod-filter-label">FILTER SKU</span>
+            <input
+              type="text"
+              placeholder="e.g. FOODS_1_001"
+              className="prod-filter-input"
+              value={salesFilterSku}
+              onChange={(e) => setSalesFilterSku(e.target.value)}
+            />
+          </div>
+          <div className="prod-filter-item">
+            <span className="prod-filter-label">STORE</span>
+            <select
+              className="prod-filter-select"
+              value={salesFilterStore}
+              onChange={(e) => setSalesFilterStore(e.target.value)}
+            >
+              <option value="All">All Stores</option>
+              {stores.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+          <div className="prod-filter-item">
+            <span className="prod-filter-label">FROM DATE</span>
+            <input
+              type="date"
+              className="prod-filter-input"
+              value={salesStartDate}
+              onChange={(e) => setSalesStartDate(e.target.value)}
+            />
+          </div>
+          <div className="prod-filter-item">
+            <span className="prod-filter-label">TO DATE</span>
+            <input
+              type="date"
+              className="prod-filter-input"
+              value={salesEndDate}
+              onChange={(e) => setSalesEndDate(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="prod-filter-actions">
+          <button className="prod-btn-outline" onClick={loadSalesData}>
+            Apply Filter
+          </button>
+          {isAdmin && (
+            <button className="prod-btn-primary" onClick={() => setShowAddSaleModal(true)}>
+              <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} /> Add Sale
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* CSV Bulk Import Section for Admin */}
+      {isAdmin && (
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1.25rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+            <div>
+              <h4 style={{ margin: 0, fontWeight: 700, fontSize: '0.9rem', color: '#1e293b' }}>
+                Bulk Import Historical Sales CSV
+              </h4>
+              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                File columns required: <code>item_id, store_id, sale_date, quantity</code>
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
               <input
                 type="file"
-                id="file-upload"
+                id="sales-csv-upload"
+                accept=".csv"
                 style={{ display: 'none' }}
-                onChange={handleFileUpload}
-                accept=".csv,.json"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    setSalesCsvFile(e.target.files[0]);
+                    setSalesCsvResult(null);
+                  }
+                }}
               />
-              <label htmlFor="file-upload" className="prod-btn-outline" style={{ cursor: 'pointer' }}>
-                Browse Files
+              <label htmlFor="sales-csv-upload" className="prod-btn-outline" style={{ cursor: 'pointer', margin: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Upload size={14} /> {salesCsvFile ? salesCsvFile.name : 'Choose CSV File'}
               </label>
-              {selectedFile && (
-                <div style={{ fontSize: '0.875rem', marginTop: '0.5rem', fontWeight: 600 }}>
-                  Selected: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
-                </div>
-              )}
-              {selectedFile && (
-                <button className="prod-btn-primary" onClick={submitFile} disabled={isUploading}>
-                  {isUploading ? 'Uploading & Processing...' : 'Submit Bulk Import'}
+              {salesCsvFile && (
+                <button
+                  className="prod-btn-primary"
+                  onClick={handleSalesCsvUpload}
+                  disabled={isImportingSalesCsv}
+                >
+                  {isImportingSalesCsv ? 'Importing...' : 'Upload & Process'}
                 </button>
               )}
             </div>
-          )}
-
-          {uploadResult && (
-            <div style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#ecfdf5', color: '#047857', fontSize: '13px' }}>
-              <strong>Import Successful:</strong> {uploadResult.inserted ?? 0} items inserted, {uploadResult.skipped ?? 0} skipped. {uploadResult.message}
+          </div>
+          {salesCsvResult && (
+            <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '4px', backgroundColor: '#ecfdf5', color: '#047857', fontSize: '12px' }}>
+              <strong>Import Result:</strong> {salesCsvResult.message || 'Done'} ({salesCsvResult.inserted ?? 0} inserted, {salesCsvResult.skipped ?? 0} skipped).
             </div>
           )}
+        </div>
+      )}
+
+      {/* Sales Records Table */}
+      <div className="adj-table-container">
+        <table className="adj-table">
+          <thead>
+            <tr>
+              <th>SALE DATE</th>
+              <th>SKU / ITEM ID</th>
+              <th>STORE / WAREHOUSE</th>
+              <th className="text-right">QUANTITY SOLD</th>
+              <th>RECORD ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoadingSales ? (
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                  Loading sales data from database...
+                </td>
+              </tr>
+            ) : salesList.length === 0 ? (
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                  No historical sales records match current filters.
+                </td>
+              </tr>
+            ) : (
+              salesList.map((s, i) => (
+                <tr key={s.id || i}>
+                  <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{s.sale_date}</td>
+                  <td className="fw-700 text-dark">{s.item_id}</td>
+                  <td>{s.store_id}</td>
+                  <td className="text-right fw-700 text-teal">{Number(s.quantity).toLocaleString()} units</td>
+                  <td className="text-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                    {s.id ? `${s.id.slice(0, 10)}...` : '-'}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+
+        <div className="adj-footer">
+          <span className="text-secondary">
+            Showing {salesList.length} of {salesTotal} sales records
+          </span>
         </div>
       </div>
     </div>
   );
 
-  const renderEventsTab = () => (
-    <div className="events-view">
-      <div className="events-header">
-        <h2 className="events-title">Realtime Event Bus & Ingestion Trigger</h2>
-      </div>
+  const renderEventsTab = () => {
+    // Instant live search filter for calendar events
+    const filteredEvents = eventsList.filter((ev) => {
+      const q = eventSearch.toLowerCase().trim();
+      if (!q) return true;
+      return (
+        ev.event_name?.toLowerCase().includes(q) ||
+        ev.event_type?.toLowerCase().includes(q) ||
+        (ev.details && ev.details.toLowerCase().includes(q)) ||
+        (ev.start_date && String(ev.start_date).toLowerCase().includes(q)) ||
+        (ev.end_date && String(ev.end_date).toLowerCase().includes(q))
+      );
+    });
 
-      <div className="events-main-split">
-        <div className="prod-detail-panel event-detail" style={{ width: '100%', maxWidth: '600px' }}>
-          <div className="event-detail-header">
-            <CalendarIcon size={24} color="#0d9488" style={{ marginBottom: '1rem' }} />
-            <h2 className="prod-detail-title">Publish Realtime Event (SSE)</h2>
-            <p className="prod-detail-subtitle">
-              Broadcast an <code>inventory.updated</code> signal over the Server-Sent Events stream to all active sessions.
+    return (
+      <div className="events-view animate-fade-in">
+        {/* Add Calendar Event Modal (Admin) */}
+        {showAddEventModal && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-md p-6 w-full max-w-md shadow-xl" style={{ borderRadius: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 className="text-lg font-bold" style={{ margin: 0 }}>Add Calendar Event</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowAddEventModal(false)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {calendarEventMsg && (
+                <div style={{
+                  marginBottom: '1rem',
+                  padding: '0.625rem 0.75rem',
+                  borderRadius: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '12px',
+                  backgroundColor: '#fef2f2',
+                  color: '#b91c1c',
+                  border: '1px solid #fecaca',
+                }}>
+                  <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                  <span>{calendarEventMsg}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleCreateCalendarEvent}>
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">EVENT NAME *</label>
+                  <input
+                    required
+                    type="text"
+                    placeholder="e.g. Black Friday Flash Sale"
+                    value={calendarEventForm.event_name}
+                    onChange={(e) => setCalendarEventForm({ ...calendarEventForm, event_name: e.target.value })}
+                    className="settings-input w-full"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">EVENT TYPE (COVARIATE)</label>
+                  <select
+                    value={calendarEventForm.event_type}
+                    onChange={(e) => setCalendarEventForm({ ...calendarEventForm, event_type: e.target.value })}
+                    className="settings-select w-full"
+                    style={{ borderRadius: '4px' }}
+                  >
+                    {eventTypes.length > 0 ? (
+                      eventTypes.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="Promotion">Promotion</option>
+                        <option value="Holiday">Holiday</option>
+                        <option value="Cultural">Cultural</option>
+                        <option value="National">National</option>
+                        <option value="Religious">Religious</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">START DATE *</label>
+                  <input
+                    required
+                    type="date"
+                    value={calendarEventForm.start_date}
+                    onChange={(e) => setCalendarEventForm({ ...calendarEventForm, start_date: e.target.value })}
+                    className="settings-input w-full"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">END DATE *</label>
+                  <input
+                    required
+                    type="date"
+                    value={calendarEventForm.end_date}
+                    onChange={(e) => setCalendarEventForm({ ...calendarEventForm, end_date: e.target.value })}
+                    className="settings-input w-full"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">DETAILS / NOTES</label>
+                  <textarea
+                    placeholder="Expected demand uplift notes..."
+                    value={calendarEventForm.details}
+                    onChange={(e) => setCalendarEventForm({ ...calendarEventForm, details: e.target.value })}
+                    className="settings-input w-full"
+                    style={{ height: '70px', padding: '0.5rem', borderRadius: '4px' }}
+                  />
+                </div>
+                <div className="flex justify-end gap-2 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddEventModal(false)}
+                    className="px-4 py-2 border border-[var(--border-color)] text-sm hover:bg-[var(--hover-bg)]"
+                    style={{ borderRadius: '4px' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isCreatingCalendarEvent}
+                    className="px-4 py-2 bg-teal-600 text-white text-sm hover:bg-teal-700"
+                    style={{ borderRadius: '4px' }}
+                  >
+                    {isCreatingCalendarEvent ? 'Saving...' : 'Add Event'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Header and Controls */}
+        <div className="events-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+          <div>
+            <h2 className="events-title" style={{ margin: 0 }}>Event & Promotion Calendar</h2>
+            <p className="text-secondary text-sm" style={{ margin: '4px 0 0' }}>
+              Historical and planned events feed into ML temporal feature extractors as exogenous covariates.
             </p>
           </div>
-
-          <div className="event-form">
-            <div className="event-group">
-              <label className="event-label">Target SKU ID</label>
-              <input
-                type="text"
-                className="event-input"
-                value={eventForm.sku || selectedProduct?.item_id || ''}
-                onChange={(e) => setEventForm({ ...eventForm, sku: e.target.value })}
-                placeholder="e.g. SKU-8921"
-                disabled={!canEdit}
-              />
-            </div>
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            {isAdmin && (
+              <button className="prod-btn-primary" onClick={() => setShowAddEventModal(true)}>
+                <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} /> Add Event
+              </button>
+            )}
           </div>
+        </div>
 
-          {eventMessage && (
-            <div style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#f0fdfa', color: '#0d9488', fontSize: '13px' }}>
-              {eventMessage}
-            </div>
-          )}
-
-          {canEdit && (
-            <div className="event-actions" style={{ marginTop: '1.5rem' }}>
-              <button
-                className="prod-btn-primary"
-                onClick={handleCreateEvent}
-                disabled={isCreatingEvent}
+        {/* Filter Row */}
+        <div className="prod-filter-bar" style={{ marginBottom: '1.5rem', display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="prod-filter-item">
+            <span className="prod-filter-label">EVENT TYPE</span>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <select
+                className="prod-filter-select"
+                value={selectedEventType}
+                onChange={(e) => setSelectedEventType(e.target.value)}
               >
-                {isCreatingEvent ? 'Broadcasting...' : 'Publish Live Event (POST /events/publish-test)'}
+                <option value="All">All Types</option>
+                {eventTypes.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <button
+                className="prod-btn-outline"
+                onClick={loadEventsData}
+                title="Áp dụng lọc theo loại sự kiện đã chọn"
+                style={{ height: '36px', whiteSpace: 'nowrap' }}
+              >
+                Apply Filter
               </button>
             </div>
-          )}
+          </div>
+          <div className="prod-filter-item" style={{ flex: 1, minWidth: '240px' }}>
+            <span className="prod-filter-label">SEARCH EVENT (TÌM KIẾM TỨC THÌ)</span>
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+              <input
+                type="text"
+                placeholder="Nhập tên sự kiện, loại, chi tiết hoặc ngày để lọc..."
+                className="prod-filter-input"
+                style={{ paddingLeft: '32px', width: '100%', height: '36px' }}
+                value={eventSearch}
+                onChange={(e) => setEventSearch(e.target.value)}
+              />
+              {eventSearch && (
+                <button
+                  type="button"
+                  onClick={() => setEventSearch('')}
+                  style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
+
+        {/* Events Table */}
+        <div className="adj-table-container" style={{ marginBottom: '2rem' }}>
+          <table className="adj-table">
+            <thead>
+              <tr>
+                <th>EVENT NAME</th>
+                <th>EVENT TYPE</th>
+                <th>START DATE</th>
+                <th>END DATE</th>
+                <th>NOTES / DETAILS</th>
+                <th className="text-right">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoadingEvents ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    Loading events calendar...
+                  </td>
+                </tr>
+              ) : filteredEvents.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    {eventSearch ? `No events match "${eventSearch}".` : 'No events found in calendar.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredEvents.map((ev, i) => (
+                  <tr key={ev.id || i}>
+                    <td className="fw-700 text-dark">{ev.event_name}</td>
+                    <td>
+                      <span className="status-pill active" style={{ fontSize: '11px' }}>
+                        {ev.event_type}
+                      </span>
+                    </td>
+                    <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{ev.start_date || ev.event_date}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{ev.end_date || ev.start_date || '-'}</td>
+                    <td className="text-secondary">{ev.details || '-'}</td>
+                    <td className="text-right">
+                      {isAdmin && (
+                        <button
+                          onClick={() => handleDeleteCalendarEvent(ev.id, ev.event_name)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }}
+                          title="Delete event"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+      {/* Realtime Event Bus SSE broadcast panel */}
+      <div className="prod-detail-panel event-detail" style={{ maxWidth: '650px', background: 'white', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '1.5rem' }}>
+        <div className="event-detail-header" style={{ marginBottom: '1rem' }}>
+          <CalendarIcon size={24} color="#0d9488" style={{ marginBottom: '0.5rem' }} />
+          <h3 className="prod-detail-title" style={{ fontSize: '1.1rem', margin: '0 0 4px' }}>
+            Realtime Event Bus & SSE Ingestion Trigger
+          </h3>
+          <p className="prod-detail-subtitle" style={{ fontSize: '12px', margin: 0 }}>
+            Broadcast an <code>inventory.updated</code> signal over Server-Sent Events to all active connected browser sessions.
+          </p>
+        </div>
+
+        <div className="event-form">
+          <div className="event-group">
+            <label className="event-label">Target SKU ID</label>
+            <input
+              type="text"
+              className="event-input"
+              value={eventForm.sku || selectedProduct?.item_id || ''}
+              onChange={(e) => setEventForm({ ...eventForm, sku: e.target.value })}
+              placeholder="e.g. SKU-8921"
+              disabled={!canEdit}
+            />
+          </div>
+        </div>
+
+        {eventMessage && (
+          <div style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#f0fdfa', color: '#0d9488', fontSize: '13px' }}>
+            {eventMessage}
+          </div>
+        )}
+
+        {canEdit && (
+          <div className="event-actions" style={{ marginTop: '1rem' }}>
+            <button
+              className="prod-btn-primary"
+              onClick={handleCreateEvent}
+              disabled={isCreatingEvent}
+            >
+              {isCreatingEvent ? 'Broadcasting...' : 'Publish Live SSE Event'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
+};
 
   const renderAdjustmentsTab = () => {
     const netChange = filteredAdjustments.reduce((sum, a) => sum + (Number(a.new_on_hand || 0) - Number(a.old_on_hand || 0)), 0);
@@ -1002,6 +1846,31 @@ export const Products: React.FC = () => {
           {activeTab === 'Sales Data' && renderSalesDataTab()}
           {activeTab === 'Events & Promotions' && renderEventsTab()}
         </>
+      )}
+
+      {notification && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            zIndex: 9999,
+            backgroundColor: notification.type === 'error' ? '#ef4444' : '#0d9488',
+            color: '#ffffff',
+            padding: '12px 20px',
+            borderRadius: '6px',
+            boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '13px',
+            fontWeight: 500,
+            animation: 'fadeIn 0.2s ease-out',
+          }}
+        >
+          {notification.type === 'error' ? <AlertCircle size={18} /> : <Check size={18} />}
+          <span>{notification.message}</span>
+        </div>
       )}
     </div>
   );

@@ -77,9 +77,9 @@ export const Sidebar: React.FC = () => {
       <div className="sidebar-footer" style={{flexDirection: 'column', padding: '16px'}}>
         <div className="user-profile-bottom" style={{padding: 0, border: 'none'}}>
           <div className="user-profile-info">
-            <img src={`https://ui-avatars.com/api/?name=${(user?.name || 'User').replace(' ', '+')}&background=0d9488&color=fff`} alt="User" className="user-avatar" />
+            <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || user?.display_name || 'User')}&background=0d9488&color=fff`} alt="User" className="user-avatar" />
             <div className="user-details">
-              <span className="user-name">{user?.name || 'Unknown'}</span>
+              <span className="user-name">{user?.name || user?.display_name || 'Unknown'}</span>
               <span className="user-role">{user?.role || 'User'}</span>
             </div>
           </div>

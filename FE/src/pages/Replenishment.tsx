@@ -107,7 +107,7 @@ export const Replenishment: React.FC = () => {
   return (
     <div className="animate-fade-in mb-6 rep-container relative">
       <div className="rep-header-section">
-        <h1 className="rep-page-title">Automated Replenishment Module (UC13)</h1>
+        <h1 className="rep-page-title">Automated Replenishment Module</h1>
         <button
           className="prod-btn-outline flex items-center gap-2"
           onClick={loadData}
@@ -385,7 +385,7 @@ export const Replenishment: React.FC = () => {
               <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header flex justify-between items-start">
                   <div>
-                    <h2>Adjust Stock & Order Quantity (UC13)</h2>
+                    <h2>Adjust Stock & Order Quantity</h2>
                     <p>{selectedItem.item_id} • Store: {selectedItem.store_id}</p>
                   </div>
                   <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
