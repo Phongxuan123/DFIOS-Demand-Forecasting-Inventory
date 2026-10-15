@@ -15,6 +15,8 @@ from app.models.ml_training import MLTrainingJob
 from app.models.model_registry import ModelRegistry
 from app.models.classification import SKUClassification
 from app.models.inventory_param import InventoryParam
+from app.models.replenishment import ReplenishmentRecommendation
+from app.models.alert import Alert
 
 __all__ = [
     "Base",
@@ -37,4 +39,6 @@ __all__ = [
     "ModelRegistry",
     "SKUClassification",
     "InventoryParam",
+    "ReplenishmentRecommendation",
+    "Alert",
 ]
