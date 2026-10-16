@@ -32,7 +32,7 @@ models = [
             "mase": 0.64,
             "wrmsse": 0.58
         },
-        "trained_by": "Kim Anh (Data Engineer)",
+        "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
         "created_at": now,
         "promoted_at": now
@@ -56,7 +56,7 @@ models = [
             "mase": 0.78,
             "wrmsse": 0.71
         },
-        "trained_by": "Kim Anh (Data Engineer)",
+        "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
         "created_at": now,
         "promoted_at": None
@@ -78,7 +78,7 @@ models = [
             "mase": 1.12,
             "wrmsse": 1.05
         },
-        "trained_by": "Kim Anh (Data Engineer)",
+        "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
         "created_at": now,
         "promoted_at": None
