@@ -574,3 +574,44 @@
   color: white;
   cursor: pointer;
 }
+
+.recompute-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: #0d9488;
+  color: white;
+  border: 1px solid #0d9488;
+  padding: 0 1rem;
+  height: 36px;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(13, 148, 136, 0.2);
+}
+
+.recompute-btn:hover:not(:disabled) {
+  background-color: #0f766e;
+  border-color: #0f766e;
+}
+
+.recompute-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.recompute-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  background-color: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 0.375rem;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #0f766e;
+  animation: modal-fade-in 0.2s ease-out;
+}

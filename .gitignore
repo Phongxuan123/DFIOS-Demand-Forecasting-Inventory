@@ -1,3 +1,44 @@
+# Dependency and environment directories
+node_modules/
+FE/node_modules/
+.env
+.env.*
+!.env.example
+BE/.env
+BE/.env.*
+!BE/.env.example
+
+# Build and distribution outputs
+dist/
+FE/dist/
+build/
+*.egg-info/
+.eggs/
+
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+BE/**/__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# User-specified blocks: strictly block all .md files and .gitkeep files
+*.md
+**/*.md
+*.gitkeep
+**/*.gitkeep
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

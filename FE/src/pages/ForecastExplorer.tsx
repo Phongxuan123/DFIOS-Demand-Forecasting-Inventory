@@ -41,6 +41,18 @@ export const ForecastExplorer: React.FC = () => {
   const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
   const [overrideError, setOverrideError] = useState<string>('');
 
+  // Bulk Override Modal state
+  const [isBulkOverrideOpen, setIsBulkOverrideOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState<'percent' | 'fixed'>('percent');
+  const [bulkPercent, setBulkPercent] = useState('15');
+  const [bulkFixedVal, setBulkFixedVal] = useState('80');
+  const [bulkStartDate, setBulkStartDate] = useState('');
+  const [bulkEndDate, setBulkEndDate] = useState('');
+  const [bulkReason, setBulkReason] = useState('Promotional Spike Override');
+  const [bulkNotes, setBulkNotes] = useState('');
+  const [isSubmittingBulk, setIsSubmittingBulk] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 3500);
@@ -104,7 +116,7 @@ export const ForecastExplorer: React.FC = () => {
         const [catList, storeList, prodRes] = await Promise.all([
           api.products.getCategories().catch(() => []),
           api.inventory.getStores().catch(() => []),
-          api.products.getAllProducts().catch(() => ({ list: [] })),
+          api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
         ]);
         setCategories(catList || []);
         setStores(storeList || []);
@@ -278,6 +290,91 @@ export const ForecastExplorer: React.FC = () => {
         ? detail
         : (Array.isArray(detail) ? detail.map((x: any) => x.msg).join(', ') : err.message || 'Lỗi hoàn tác điều chỉnh');
       setToast({ type: 'error', message: msg });
+    }
+  };
+
+  const handleOpenBulkOverride = () => {
+    const matrix = data?.scheduleMatrix || [];
+    if (matrix.length > 0) {
+      setBulkStartDate(matrix[0].date);
+      setBulkEndDate(matrix[matrix.length - 1].date);
+    } else {
+      const today = new Date().toISOString().split('T')[0];
+      setBulkStartDate(today);
+      setBulkEndDate(today);
+    }
+    setBulkMode('percent');
+    setBulkPercent('15');
+    setBulkFixedVal('80');
+    setBulkReason('Promotional Spike Override');
+    setBulkNotes('');
+    setBulkError('');
+    setIsBulkOverrideOpen(true);
+  };
+
+  const bulkPreviewRows = useMemo(() => {
+    if (!isBulkOverrideOpen || !data?.scheduleMatrix) return [];
+    return data.scheduleMatrix
+      .filter((r: any) => {
+        if (bulkStartDate && r.date < bulkStartDate) return false;
+        if (bulkEndDate && r.date > bulkEndDate) return false;
+        return true;
+      })
+      .map((r: any) => {
+        let projected: number;
+        if (bulkMode === 'percent') {
+          const p = Number(bulkPercent) || 0;
+          projected = Math.max(0, Math.round(Number(r.demand || 0) * (1 + p / 100)));
+        } else {
+          projected = Math.max(0, Number(bulkFixedVal) || 0);
+        }
+        return {
+          date: r.date,
+          original: r.demand,
+          projected,
+        };
+      });
+  }, [isBulkOverrideOpen, data?.scheduleMatrix, bulkStartDate, bulkEndDate, bulkMode, bulkPercent, bulkFixedVal]);
+
+  const handleApplyBulkOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!skuSearch || bulkPreviewRows.length === 0) {
+      setBulkError('Vui lòng chọn khoảng thời gian hợp lệ có chứa ngày dự báo.');
+      return;
+    }
+    setIsSubmittingBulk(true);
+    setBulkError('');
+    try {
+      const items = bulkPreviewRows.map((row: any) => ({
+        store_id: selectedStore || 'CA_1',
+        item_id: skuSearch,
+        date: row.date,
+        value: row.projected,
+        reason: `${bulkReason}: ${bulkNotes || (bulkMode === 'percent' ? `Bulk adjusted ${bulkPercent}%` : `Bulk fixed ${bulkFixedVal} units`)}`,
+      }));
+
+      const res = await api.forecasting.bulkOverride(items);
+      setIsBulkOverrideOpen(false);
+      setToast({
+        type: 'success',
+        message: `Đã áp dụng điều chỉnh hàng loạt thành công cho ${res.created_count ?? items.length} ngày!`,
+      });
+      await fetchForecast(skuSearch, horizon, selectedStore);
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      let errMsg = 'Không thể áp dụng điều chỉnh hàng loạt';
+      if (typeof detail === 'string') {
+        errMsg = detail;
+      } else if (Array.isArray(detail)) {
+        errMsg = detail.map((x: any) => x.msg || JSON.stringify(x)).join(', ');
+      } else if (detail && typeof detail === 'object') {
+        errMsg = JSON.stringify(detail);
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+      setBulkError(errMsg);
+    } finally {
+      setIsSubmittingBulk(false);
     }
   };
 
@@ -496,9 +593,14 @@ export const ForecastExplorer: React.FC = () => {
               </span>
             )}
             {canEdit && (
-              <button type="button" className="override-btn" onClick={handleOpenOverride}>
-                Override Forecast
-              </button>
+              <div className="override-btn-group">
+                <button type="button" className="override-btn-secondary" onClick={handleOpenBulkOverride}>
+                  Bulk Override
+                </button>
+                <button type="button" className="override-btn" onClick={handleOpenOverride}>
+                  Single Override
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -744,6 +846,184 @@ export const ForecastExplorer: React.FC = () => {
                   disabled={isSubmittingOverride}
                 >
                   {isSubmittingOverride ? 'Saving Override...' : 'Apply Override'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Bulk Override Modal */}
+      {isBulkOverrideOpen && createPortal(
+        <div className="modal-overlay" onClick={() => setIsBulkOverrideOpen(false)}>
+          <div className="modal-content bulk-modal-content" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setIsBulkOverrideOpen(false)}><X size={16} /></button>
+            <h2 className="modal-title">Bulk Forecast Override</h2>
+            <p className="modal-subtitle">
+              SKU: <strong>{skuSearch}</strong> • Store: {selectedStore || 'CA_1'} • {bulkPreviewRows.length} forecast day(s) selected
+            </p>
+
+            {bulkError ? (
+              <div className="p-3 my-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '4px' }}>
+                {String(bulkError)}
+              </div>
+            ) : null}
+
+            <form onSubmit={handleApplyBulkOverride}>
+              {/* Mode Selector */}
+              <div className="modal-form-group">
+                <label>Adjustment Mode</label>
+                <div className="bulk-mode-toggle">
+                  <button
+                    type="button"
+                    className={`bulk-mode-btn ${bulkMode === 'percent' ? 'active' : ''}`}
+                    onClick={() => setBulkMode('percent')}
+                  >
+                    Percentage Adjustment (+/- %)
+                  </button>
+                  <button
+                    type="button"
+                    className={`bulk-mode-btn ${bulkMode === 'fixed' ? 'active' : ''}`}
+                    onClick={() => setBulkMode('fixed')}
+                  >
+                    Fixed Flat Units
+                  </button>
+                </div>
+              </div>
+
+              {/* Date Range Selector */}
+              <div className="bulk-date-row">
+                <div className="modal-form-group" style={{ flex: 1 }}>
+                  <label>Start Date</label>
+                  <input
+                    type="date"
+                    required
+                    className="modal-input"
+                    value={bulkStartDate}
+                    onChange={(e) => setBulkStartDate(e.target.value)}
+                  />
+                </div>
+                <div className="modal-form-group" style={{ flex: 1 }}>
+                  <label>End Date</label>
+                  <input
+                    type="date"
+                    required
+                    className="modal-input"
+                    value={bulkEndDate}
+                    onChange={(e) => setBulkEndDate(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Value Input */}
+              {bulkMode === 'percent' ? (
+                <div className="modal-form-group">
+                  <div className="flex justify-between items-center mb-1">
+                    <label style={{ margin: 0 }}>Percentage Adjustment (%)</label>
+                    <span className="text-xs font-bold text-teal-700 font-mono">
+                      {Number(bulkPercent) > 0 ? `+${bulkPercent}%` : `${bulkPercent}%`}
+                    </span>
+                  </div>
+                  <div className="modal-input-wrapper">
+                    <input
+                      type="number"
+                      step="1"
+                      required
+                      value={bulkPercent}
+                      onChange={(e) => setBulkPercent(e.target.value)}
+                      className="modal-input"
+                      placeholder="e.g. 15 for +15%, -10 for -10%"
+                    />
+                    <span className="modal-input-suffix">%</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    Positive values scale demand up (e.g. promotional spike), negative values scale down.
+                  </span>
+                </div>
+              ) : (
+                <div className="modal-form-group">
+                  <label>Fixed Demand Quantity Per Day</label>
+                  <div className="modal-input-wrapper">
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={bulkFixedVal}
+                      onChange={(e) => setBulkFixedVal(e.target.value)}
+                      className="modal-input"
+                      placeholder="e.g. 80"
+                    />
+                    <span className="modal-input-suffix">units / day</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Impact Preview Box */}
+              {bulkPreviewRows.length > 0 && (
+                <div className="bulk-preview-box">
+                  <div className="bulk-preview-header">
+                    <span className="font-semibold text-slate-700">Preview Impact: {bulkPreviewRows.length} Days Targeted</span>
+                    <span className="text-slate-500 font-mono text-[11px]">
+                      {bulkStartDate} → {bulkEndDate}
+                    </span>
+                  </div>
+                  <div className="bulk-preview-tags">
+                    {bulkPreviewRows.slice(0, 3).map((r: any, i: number) => (
+                      <span key={i} className="bulk-preview-chip">
+                        {r.date}: <strong>{r.original}</strong> → <span className="text-teal-700">{r.projected} u</span>
+                      </span>
+                    ))}
+                    {bulkPreviewRows.length > 3 && (
+                      <span className="bulk-preview-more">
+                        +{bulkPreviewRows.length - 3} more dates
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="modal-form-group">
+                <label>Override Reason Category</label>
+                <select
+                  className="modal-select"
+                  value={bulkReason}
+                  onChange={(e) => setBulkReason(e.target.value)}
+                >
+                  <option value="Promotional Spike Override">Promotional Campaign Spike</option>
+                  <option value="Seasonal Demand Surge">Seasonal Demand Surge</option>
+                  <option value="Supply Chain Disruption">Supply Chain Disruption / Shortage</option>
+                  <option value="Market Competitor Action">Market Competitor Action</option>
+                  <option value="Unplanned Event">Unplanned Special Event</option>
+                </select>
+              </div>
+
+              <div className="modal-form-group">
+                <label>Detailed Business Justification (Mandatory)</label>
+                <textarea
+                  required
+                  className="modal-textarea"
+                  placeholder="State the justification for this multi-day override (e.g., Black Friday 4-day flash sale promotion across California store)..."
+                  value={bulkNotes}
+                  onChange={(e) => setBulkNotes(e.target.value)}
+                ></textarea>
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="modal-btn-cancel"
+                  onClick={() => setIsBulkOverrideOpen(false)}
+                  disabled={isSubmittingBulk}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="modal-btn-apply"
+                  disabled={isSubmittingBulk || bulkPreviewRows.length === 0}
+                >
+                  {isSubmittingBulk ? 'Saving Bulk Override...' : `Apply Bulk Override (${bulkPreviewRows.length} Days)`}
                 </button>
               </div>
             </form>
