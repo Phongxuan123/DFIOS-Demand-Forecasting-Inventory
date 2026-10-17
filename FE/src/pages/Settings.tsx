@@ -106,18 +106,9 @@ export const Settings: React.FC = () => {
   };
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchInitialSettings = async () => {
       try {
-        const [sysRes, usersResult, auditResult, dqRunsRes, trainJobsRes, modelsRes, actionsResult] = await Promise.all([
-          api.settings.getSystemSettings().catch(() => ({ settings: {}, items: [] })),
-          api.settings.getAllUsers().catch(() => ({ list: [], total: 0 })),
-          api.settings.getAllAuditLogs().catch(() => ({ logs: [], list: [], total: 0 })),
-          api.ml.listAllDataQualityRuns().catch(() => ({ list: [], total: 0 })),
-          api.ml.listAllTrainJobs().catch(() => ({ list: [], total: 0 })),
-          api.ml.getAllModels().catch(() => ({ list: [], total: 0 })),
-          api.settings.getAuditActions().catch(() => []),
-        ]);
-
+        const sysRes = await api.settings.getSystemSettings().catch(() => ({ settings: {}, items: [] }));
         const settingsDict = sysRes?.settings || {};
         setSystemSettings(settingsDict);
         if (settingsDict.timezone) setSettingTimezone(settingsDict.timezone);
@@ -125,25 +116,37 @@ export const Settings: React.FC = () => {
         if (settingsDict.forecast_horizons) {
           setSettingHorizons(Array.isArray(settingsDict.forecast_horizons) ? settingsDict.forecast_horizons.join(', ') : String(settingsDict.forecast_horizons));
         }
-
-        setUsers(usersResult.list || []);
-        setAuditLogs(auditResult.logs || []);
-
-        const dqList = dqRunsRes.list || [];
-        setDqRuns(dqList);
-        if (dqList.length > 0) setSelectedDqRun(dqList[0]);
-
-        setTrainJobs(trainJobsRes.list || []);
-        setModelsList(modelsRes.list || []);
-        setAuditActions(actionsResult || []);
       } catch (error) {
         console.error('Failed to load settings data', error);
       } finally {
         setIsLoading(false);
       }
     };
-    fetchData();
+    fetchInitialSettings();
   }, []);
+
+  // Lazy tab data loading for sub-tabs to maximize load speed
+  useEffect(() => {
+    if (activeTab === 'User Management' && users.length === 0) {
+      loadUsers();
+    } else if (activeTab === 'Audit Logs' && auditLogs.length === 0) {
+      Promise.all([
+        loadAuditLogs(),
+        api.settings.getAuditActions().then(setAuditActions).catch(() => []),
+      ]);
+    } else if (activeTab === 'ML Pipeline' && modelsList.length === 0) {
+      Promise.all([
+        api.ml.listAllTrainJobs().then(res => setTrainJobs(res.list || [])).catch(() => []),
+        api.ml.getAllModels().then(res => setModelsList(res.list || [])).catch(() => []),
+      ]);
+    } else if (activeTab === 'Data Quality Inspector' && dqRuns.length === 0) {
+      api.ml.listAllDataQualityRuns().then(res => {
+        const list = res.list || [];
+        setDqRuns(list);
+        if (list.length > 0) setSelectedDqRun(list[0]);
+      }).catch(() => []);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     setProfileName(user?.name || user?.email || '');

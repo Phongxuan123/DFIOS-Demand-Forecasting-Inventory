@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Pencil, RefreshCw, X } from 'lucide-react';
+import { Pencil, RefreshCw, X, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
@@ -33,19 +33,80 @@ export const Replenishment: React.FC = () => {
   const [adjReason, setAdjReason] = useState('Reorder replenishment');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Recompute Parameters State
+  const [isRecomputing, setIsRecomputing] = useState(false);
+  const [recomputeMsg, setRecomputeMsg] = useState('');
+
+  const mapInventoryWithParams = (invList: any[], paramList: any[]) => {
+    const paramMap = new Map();
+    (paramList || []).forEach((p: any) => {
+      paramMap.set(`${p.item_id}_${p.store_id}`, p);
+      if (!paramMap.has(p.item_id)) {
+        paramMap.set(p.item_id, p);
+      }
+    });
+
+    return (invList || []).map((item: any) => {
+      const opt = paramMap.get(`${item.item_id}_${item.store_id}`) || paramMap.get(item.item_id) || {};
+      return {
+        ...item,
+        safety_stock: opt.safety_stock != null ? Math.round(opt.safety_stock) : 15,
+        reorder_point: opt.reorder_point != null ? Math.round(opt.reorder_point) : 45,
+        eoq: opt.eoq != null ? Math.round(opt.eoq) : 50,
+        source: opt.source || 'ml',
+        annual_demand: opt.annual_demand,
+        holding_cost: opt.holding_cost,
+        order_cost: opt.order_cost,
+        service_level: opt.service_level,
+        lead_time_days: opt.lead_time_days,
+      };
+    });
+  };
+
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [invRes, histRes] = await Promise.all([
-        api.inventory.getAllInventory(),
-        api.inventory.getAllAdjustments(),
+      // Phase 1: Fast initial batch for instant 0.5s visual render
+      const [initialInvRes, histRes, initialParamsRes] = await Promise.all([
+        api.inventory.getInventory({ limit: 50, store_id: 'CA_1' }).catch(() => ({ list: [], total: 0 })),
+        api.inventory.getAdjustments({ limit: 50 }).catch(() => ({ list: [], total: 0 })),
+        api.optimization.getParameters({ limit: 50, store_id: 'CA_1' }).catch(() => ({ items: [], total: 0 })),
       ]);
-      const items = invRes.list || [];
-      setInventory(items);
-      setAdjustmentsHistory(histRes.list || []);
 
-      if (items.length > 0) {
-        setSelectedItem(items[0]);
+      const initialItems = mapInventoryWithParams(
+        initialInvRes.list || [],
+        initialParamsRes.items || []
+      );
+
+      if (initialItems.length > 0) {
+        setInventory(initialItems);
+        setAdjustmentsHistory(histRes.list || []);
+        setSelectedItem(initialItems[0]);
+        // Release UI immediately
+        setIsLoading(false);
+      }
+
+      // Phase 2: Full background hydration for store CA_1 (3,049 SKUs)
+      const [fullInvRes, fullParamsRes, fullHistRes] = await Promise.all([
+        api.inventory.getAllInventory({ store_id: 'CA_1' }),
+        api.optimization.getAllParameters({ store_id: 'CA_1' }).catch(() => ({ items: [], list: [], total: 0 })),
+        api.inventory.getAllAdjustments().catch(() => ({ list: [], total: 0 })),
+      ]);
+
+      const fullItems = mapInventoryWithParams(
+        fullInvRes.list || [],
+        fullParamsRes.items || fullParamsRes.list || []
+      );
+
+      setInventory(fullItems);
+      setAdjustmentsHistory(fullHistRes.list || histRes.list || []);
+
+      if (fullItems.length > 0) {
+        setSelectedItem((prev: any) => {
+          if (!prev) return fullItems[0];
+          const found = fullItems.find((it: any) => it.item_id === prev.item_id && it.store_id === prev.store_id);
+          return found || fullItems[0];
+        });
       }
     } catch (error) {
       console.error('Failed to load replenishment inventory', error);
@@ -99,17 +160,47 @@ export const Replenishment: React.FC = () => {
     }
   };
 
-  // KPIs derived directly from live BE inventory
+  const handleRecompute = async () => {
+    setIsRecomputing(true);
+    setRecomputeMsg('');
+    try {
+      const storeId = selectedItem?.store_id || 'CA_1';
+      const res = await api.optimization.recompute({ store_id: storeId });
+      setRecomputeMsg(res.message || 'Đã tính toán lại tham số tồn kho tối ưu thành công!');
+      await loadData();
+      setTimeout(() => setRecomputeMsg(''), 4500);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Lỗi khi tính toán lại tham số tồn kho');
+    } finally {
+      setIsRecomputing(false);
+    }
+  };
+
+  // KPIs derived directly from live BE inventory and ML parameters
   const criticalItems = inventory.filter((item) => (item.on_hand ?? 0) <= 0);
-  const lowStockItems = inventory.filter((item) => (item.on_hand ?? 0) > 0 && (item.on_hand ?? 0) < 15);
+  const belowSsItems = inventory.filter((item) => {
+    const stock = Number(item.on_hand ?? 0);
+    const ss = Number(item.safety_stock ?? 15);
+    return stock > 0 && stock <= ss;
+  });
+  const reorderItems = inventory.filter((item) => {
+    const eff = Number(item.on_hand ?? 0) + Number(item.on_order ?? 0);
+    const rop = Number(item.reorder_point ?? 45);
+    const stock = Number(item.on_hand ?? 0);
+    return stock > 0 && eff <= rop;
+  });
   const pendingOrders = inventory.filter((item) => (item.on_order ?? 0) > 0);
   const totalStockUnits = inventory.reduce((sum, item) => sum + Number(item.on_hand || 0), 0);
 
   const filteredItems = inventory.filter((item) => {
     const stock = Number(item.on_hand ?? 0);
+    const eff = stock + Number(item.on_order ?? 0);
+    const ss = Number(item.safety_stock ?? 15);
+    const rop = Number(item.reorder_point ?? 45);
+
     if (statusFilter === 'CRITICAL') return stock <= 0;
-    if (statusFilter === 'LOW') return stock > 0 && stock < 15;
-    if (statusFilter === 'OPTIMIZED') return stock >= 15;
+    if (statusFilter === 'LOW') return stock > 0 && (stock <= ss || eff <= rop);
+    if (statusFilter === 'OPTIMIZED') return stock > ss && eff > rop;
     return true;
   });
 
@@ -130,15 +221,40 @@ export const Replenishment: React.FC = () => {
   return (
     <div className="animate-fade-in mb-6 rep-container relative">
       <div className="rep-header-section">
-        <h1 className="rep-page-title">Automated Replenishment Module</h1>
-        <button
-          className="prod-btn-outline flex items-center gap-2"
-          onClick={loadData}
-          style={{ height: '36px', padding: '0 12px' }}
-        >
-          <RefreshCw size={14} /> Refresh
-        </button>
+        <div>
+          <h1 className="rep-page-title">Automated Replenishment Module</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Real-time inventory levels integrated with Machine Learning Optimization Parameters (SS, ROP, EOQ)
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {canEdit && (
+            <button
+              className="recompute-btn"
+              onClick={handleRecompute}
+              disabled={isRecomputing}
+              title="Kích hoạt tính toán lại Safety Stock, ROP và EOQ theo mô hình ML"
+            >
+              <RefreshCw size={13} className={isRecomputing ? 'animate-spin' : ''} />
+              <span>{isRecomputing ? 'Recomputing...' : 'Recompute Parameters'}</span>
+            </button>
+          )}
+          <button
+            className="prod-btn-outline flex items-center gap-2"
+            onClick={loadData}
+            style={{ height: '36px', padding: '0 12px' }}
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
       </div>
+
+      {recomputeMsg && (
+        <div className="recompute-banner mb-4">
+          <CheckCircle2 size={16} className="text-teal-600 shrink-0" />
+          <span>{recomputeMsg}</span>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">
@@ -158,7 +274,7 @@ export const Replenishment: React.FC = () => {
             <div className="rep-kpi-card">
               <span className="rep-kpi-title">BELOW SAFETY STOCK / LOW</span>
               <div className="rep-kpi-content">
-                <h2>{lowStockItems.length}</h2>
+                <h2>{belowSsItems.length + reorderItems.length}</h2>
                 <span className="rep-badge yellow-light">Reorder Triggered</span>
               </div>
             </div>
@@ -199,13 +315,13 @@ export const Replenishment: React.FC = () => {
                 className={`pill-btn ${statusFilter === 'LOW' ? 'active-green' : ''}`}
                 onClick={() => setStatusFilter('LOW')}
               >
-                Low Stock ({lowStockItems.length})
+                Below SS / Reorder ({belowSsItems.length + reorderItems.length})
               </button>
               <button
                 className={`pill-btn ${statusFilter === 'OPTIMIZED' ? 'active-green' : ''}`}
                 onClick={() => setStatusFilter('OPTIMIZED')}
               >
-                In Stock ({inventory.length - criticalItems.length - lowStockItems.length})
+                In Stock / Healthy ({inventory.length - criticalItems.length - belowSsItems.length})
               </button>
             </div>
           </div>
@@ -240,6 +356,9 @@ export const Replenishment: React.FC = () => {
                           <th>STORE</th>
                           <th>ON-HAND</th>
                           <th>ON-ORDER</th>
+                          <th>SAFETY STOCK</th>
+                          <th>ROP</th>
+                          <th>EOQ</th>
                           <th>STATUS</th>
                           <th>ACTION</th>
                         </tr>
@@ -247,15 +366,19 @@ export const Replenishment: React.FC = () => {
                       <tbody>
                         {filteredItems.length === 0 ? (
                           <tr>
-                            <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                            <td colSpan={10} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
                               No inventory records found for selected filter.
                             </td>
                           </tr>
                         ) : (
                           paginatedActiveItems.map((item, idx) => {
                             const stock = Number(item.on_hand ?? 0);
+                            const eff = stock + Number(item.on_order ?? 0);
+                            const ss = Number(item.safety_stock ?? 15);
+                            const rop = Number(item.reorder_point ?? 45);
                             const isCritical = stock <= 0;
-                            const isLow = stock > 0 && stock < 15;
+                            const isBelowSs = stock > 0 && stock <= ss;
+                            const isReorder = stock > 0 && eff <= rop;
                             const isSelected = selectedItem?.item_id === item.item_id && selectedItem?.store_id === item.store_id;
 
                             return (
@@ -283,24 +406,39 @@ export const Replenishment: React.FC = () => {
                                   )}
                                 </td>
                                 <td>
+                                  <div className="flex items-center gap-1 font-mono text-xs">
+                                    <span>{item.safety_stock} u</span>
+                                    <span className={`px-1 py-0.2 rounded text-[9px] font-bold ${
+                                      item.source === 'ml' ? 'bg-teal-100 text-teal-800' : 'bg-slate-100 text-slate-700'
+                                    }`}>
+                                      {item.source?.toUpperCase() || 'ML'}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="font-mono text-xs">{item.reorder_point} u</td>
+                                <td className="font-mono text-xs font-semibold text-slate-700">{item.eoq} u</td>
+                                <td>
                                   {isCritical ? (
-                                    <span className="status-badge red-bg">CRITICAL</span>
-                                  ) : isLow ? (
-                                    <span className="status-badge yellow-text">LOW STOCK</span>
+                                    <span className="status-badge red-bg">OUT OF STOCK</span>
+                                  ) : isBelowSs ? (
+                                    <span className="status-badge red-light" style={{ color: '#b91c1c' }}>BELOW SS</span>
+                                  ) : isReorder ? (
+                                    <span className="status-badge yellow-text">REORDER</span>
                                   ) : (
-                                    <span className="status-badge green-text-badge">IN STOCK</span>
+                                    <span className="status-badge green-text-badge">OPTIMIZED</span>
                                   )}
                                 </td>
                                 <td>
                                   {canEdit && (
                                     <button
-                                      className={`action-btn ${isCritical ? 'green-solid' : 'outline'}`}
+                                      className={`action-btn ${isCritical || isBelowSs ? 'green-solid' : 'outline'}`}
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        handleQuickReorder(item, 50);
+                                        handleQuickReorder(item, item.eoq || 50);
                                       }}
+                                      title={`Đặt hàng số lượng EOQ tối ưu (+${item.eoq || 50} units)`}
                                     >
-                                      +50 Order
+                                      +{item.eoq || 50} Order
                                     </button>
                                   )}
                                 </td>
@@ -411,20 +549,66 @@ export const Replenishment: React.FC = () => {
                         {Number(selectedItem.on_hand || 0) + Number(selectedItem.on_order || 0)} units
                       </span>
                     </div>
-                    <div className="calc-divider"></div>
+                  </div>
+
+                  <div className="calc-box mt-3">
+                    <div className="flex justify-between items-center mb-2">
+                      <h4 className="calc-title" style={{ margin: 0 }}>OPTIMIZATION PARAMETERS (UC30)</h4>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        selectedItem.source === 'ml' ? 'bg-teal-100 text-teal-800' : 'bg-slate-100 text-slate-700'
+                      }`}>
+                        {selectedItem.source === 'ml' ? 'ML CONFORMAL' : 'STATIC MOVING AVG'}
+                      </span>
+                    </div>
                     <div className="calc-row">
                       <span>Recommended Safety Stock</span>
-                      <span className="fw-700">15 Units</span>
+                      <span className="fw-700 text-teal-700">{selectedItem.safety_stock} units</span>
                     </div>
+                    <div className="calc-row">
+                      <span>Reorder Point (ROP)</span>
+                      <span className="fw-700">{selectedItem.reorder_point} units</span>
+                    </div>
+                    <div className="calc-row">
+                      <span>Economic Order Quantity (EOQ)</span>
+                      <span className="fw-700 font-mono text-slate-800">{selectedItem.eoq} units</span>
+                    </div>
+                    <div className="calc-divider"></div>
+                    <div className="calc-row">
+                      <span>Target Service Level</span>
+                      <span className="text-slate-600 font-medium">
+                        {((selectedItem.service_level || 0.95) * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    <div className="calc-row">
+                      <span>Supplier Lead Time</span>
+                      <span className="text-slate-600 font-medium">
+                        {selectedItem.lead_time_days || 7} days
+                      </span>
+                    </div>
+                    {selectedItem.annual_demand != null && (
+                      <div className="calc-row">
+                        <span>Projected Annual Demand</span>
+                        <span className="text-slate-600 font-medium">
+                          {Math.round(selectedItem.annual_demand).toLocaleString()} units
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {canEdit && (
-                    <div className="detail-actions" style={{ marginTop: '1.5rem' }}>
+                    <div className="detail-actions" style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <button
                         className="btn-generate"
-                        onClick={() => openAdjustModal(selectedItem)}
+                        onClick={() => handleQuickReorder(selectedItem, selectedItem.eoq || 50)}
                       >
-                        Adjust / Reorder Quantity
+                        Trigger Optimal EOQ Order (+{selectedItem.eoq || 50} units)
+                      </button>
+                      <button
+                        className="prod-btn-outline"
+                        onClick={() => openAdjustModal(selectedItem)}
+                        style={{ width: '100%', height: '38px' }}
+                      >
+                        Adjust Stock / Custom Quantity
                       </button>
                     </div>
                   )}

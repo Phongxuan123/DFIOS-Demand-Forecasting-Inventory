@@ -73,7 +73,7 @@ export const Products: React.FC = () => {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [showSupplierModal, setShowSupplierModal] = useState(false);
-  const [supplierFormData, setSupplierFormData] = useState({ name: '', email: '', phone: '', lead_time_days: 5 });
+  const [supplierFormData, setSupplierFormData] = useState({ name: '', contact_name: '', email: '', phone: '', address: '', lead_time_days: 5 });
   const [supplierModalError, setSupplierModalError] = useState('');
   const [isSavingSupplier, setIsSavingSupplier] = useState(false);
 
@@ -125,49 +125,55 @@ export const Products: React.FC = () => {
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [eventMessage, setEventMessage] = useState('');
 
-  // Initial Data Load
+  // Initial Data Load with Fast First-Pass Render
   const loadInitialData = async () => {
     setIsLoading(true);
     try {
-      const [prodRes, suppRes, storesRes, adjRes, catRes, deptRes] = await Promise.all([
-        api.products.getAllProducts(),
-        api.products.getAllSuppliers(),
+      // Phase 1: Fast initial batch for instant ~0.6s visual render
+      const [initProdRes, suppRes, storesRes, adjRes, catRes, deptRes] = await Promise.all([
+        api.products.getProducts({ limit: 50 }).catch(() => ({ list: [], total: 0 })),
+        api.products.getAllSuppliers().catch(() => ({ list: [] })),
         api.inventory.getStores().catch(() => ['CA_1']),
-        api.inventory.getAllAdjustments(),
+        api.inventory.getAdjustments({ limit: 50 }).catch(() => ({ list: [] })),
         api.products.getCategories().catch(() => []),
         api.products.getDepartments().catch(() => []),
       ]);
 
-      const prodList = prodRes.list || [];
-      setProducts(prodList);
-      setTotalProducts(prodRes.total || prodList.length);
+      const initialProdList = initProdRes.list || [];
+      if (initialProdList.length > 0) {
+        setProducts(initialProdList);
+        setTotalProducts(initProdRes.total || initialProdList.length);
+        selectProductItem(initialProdList[0], storesRes[0] || 'CA_1');
+      }
+
       const rawSuppliers = suppRes.list || [];
-      const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
-      const mergedSuppliers = rawSuppliers.map((s: any) => ({
-        ...s,
-        email: s.email || savedContacts[s.id]?.email || savedContacts[s.name]?.email || '',
-        phone: s.phone || savedContacts[s.id]?.phone || savedContacts[s.name]?.phone || '',
-      }));
-      setSuppliers(mergedSuppliers);
+      setSuppliers(rawSuppliers);
+      if (rawSuppliers.length > 0) {
+        setSelectedSupplier(rawSuppliers[0]);
+      }
+
       setStores(storesRes.length ? storesRes : ['CA_1']);
       setSelectedStore(storesRes[0] || 'CA_1');
       setAdjustments(adjRes.list || []);
       setCategories(catRes || []);
       setDepartments(deptRes || []);
 
-      if (prodList.length > 0) {
-        selectProductItem(prodList[0], storesRes[0] || 'CA_1');
-      }
-      if (mergedSuppliers.length > 0) {
-        setSelectedSupplier(mergedSuppliers[0]);
-      }
+      // Release UI loading spinner immediately
+      setIsLoading(false);
 
-      // Background preload for inactive tabs (Sales Data & Events)
-      // Allows 0ms instant tab switching while keeping initial catalog render snappy
-      setTimeout(() => {
-        api.sales.queryAllSales().catch(() => {});
-        api.eventsCalendar.listAllEvents().catch(() => {});
-      }, 350);
+      // Phase 2: Background hydration for full product catalog & adjustments
+      Promise.all([
+        api.products.getAllProducts(),
+        api.inventory.getAllAdjustments().catch(() => ({ list: [] })),
+      ]).then(([fullProdRes, fullAdjRes]) => {
+        if (fullProdRes?.list?.length) {
+          setProducts(fullProdRes.list);
+          setTotalProducts(fullProdRes.total || fullProdRes.list.length);
+        }
+        if (fullAdjRes?.list?.length) {
+          setAdjustments(fullAdjRes.list);
+        }
+      }).catch(() => {});
     } catch (error) {
       console.error('Failed to load products page data', error);
     } finally {
@@ -358,17 +364,11 @@ export const Products: React.FC = () => {
   // Suppliers CRUD
   const loadSuppliers = async () => {
     try {
-      const res = await api.products.getSuppliers();
+      const res = await api.products.getAllSuppliers();
       const rawList = res.list || [];
-      const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
-      const merged = rawList.map((s: any) => ({
-        ...s,
-        email: s.email || savedContacts[s.id]?.email || savedContacts[s.name]?.email || '',
-        phone: s.phone || savedContacts[s.id]?.phone || savedContacts[s.name]?.phone || '',
-      }));
-      setSuppliers(merged);
+      setSuppliers(rawList);
       if (selectedSupplier) {
-        const updated = merged.find((s: any) => s.id === selectedSupplier.id || s.name === selectedSupplier.name);
+        const updated = rawList.find((s: any) => s.id === selectedSupplier.id || s.name === selectedSupplier.name);
         if (updated) setSelectedSupplier(updated);
       }
     } catch (e) {
@@ -397,27 +397,19 @@ export const Products: React.FC = () => {
       const payload = {
         name: supplierFormData.name.trim(),
         lead_time_days: Number(supplierFormData.lead_time_days) || 1,
+        contact_name: supplierFormData.contact_name?.trim() || null,
+        email: supplierFormData.email?.trim() || null,
+        phone: supplierFormData.phone?.trim() || null,
+        address: supplierFormData.address?.trim() || null,
       };
 
-      let supplierId = selectedSupplier?.id;
       if (selectedSupplier && selectedSupplier.id) {
         await api.products.updateSupplier(selectedSupplier.id, payload);
         showNotification(`Cập nhật thông tin nhà cung cấp "${payload.name}" thành công!`);
       } else {
-        const created = await api.products.createSupplier(payload);
-        supplierId = created?.id;
+        await api.products.createSupplier(payload);
         showNotification(`Thêm mới nhà cung cấp "${payload.name}" thành công!`);
       }
-
-      // Persist Contact Info (Email & Phone)
-      const contacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
-      const contactInfo = {
-        email: supplierFormData.email?.trim() || '',
-        phone: supplierFormData.phone?.trim() || '',
-      };
-      if (supplierId) contacts[supplierId] = contactInfo;
-      contacts[payload.name] = contactInfo;
-      localStorage.setItem('supplier_contacts', JSON.stringify(contacts));
 
       setShowSupplierModal(false);
       await loadSuppliers();
@@ -451,19 +443,19 @@ export const Products: React.FC = () => {
   const openAddSupplier = () => {
     setSelectedSupplier(null);
     setSupplierModalError('');
-    setSupplierFormData({ name: '', email: '', phone: '', lead_time_days: 5 });
+    setSupplierFormData({ name: '', contact_name: '', email: '', phone: '', address: '', lead_time_days: 5 });
     setShowSupplierModal(true);
   };
 
   const openEditSupplier = () => {
     if (!selectedSupplier) return;
     setSupplierModalError('');
-    const savedContacts = JSON.parse(localStorage.getItem('supplier_contacts') || '{}');
-    const extra = savedContacts[selectedSupplier.id] || savedContacts[selectedSupplier.name] || {};
     setSupplierFormData({
       name: selectedSupplier.name,
-      email: selectedSupplier.email || extra.email || '',
-      phone: selectedSupplier.phone || extra.phone || '',
+      contact_name: selectedSupplier.contact_name || '',
+      email: selectedSupplier.email || '',
+      phone: selectedSupplier.phone || '',
+      address: selectedSupplier.address || '',
       lead_time_days: selectedSupplier.lead_time_days || 5,
     });
     setShowSupplierModal(true);
@@ -1034,48 +1026,74 @@ export const Products: React.FC = () => {
 
             <form onSubmit={handleSupplierSubmit}>
               <div className="mb-4">
-                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">SUPPLIER NAME *</label>
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">SUPPLIER COMPANY NAME *</label>
                 <input
                   required
                   type="text"
                   value={supplierFormData.name}
                   onChange={(e) => setSupplierFormData({ ...supplierFormData, name: e.target.value })}
                   className="settings-input w-full"
-                  placeholder="e.g. Acme Logistics"
+                  placeholder="e.g. Pacific Fresh Logistics Ltd."
                   style={{ borderRadius: '4px' }}
                 />
               </div>
-              <div className="mb-4">
-                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">EMAIL ADDRESS (CONTACT INFO)</label>
-                <input
-                  type="email"
-                  value={supplierFormData.email}
-                  onChange={(e) => setSupplierFormData({ ...supplierFormData, email: e.target.value })}
-                  className="settings-input w-full"
-                  placeholder="e.g. contact@supplier.com"
-                  style={{ borderRadius: '4px' }}
-                />
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">CONTACT PERSON</label>
+                  <input
+                    type="text"
+                    value={supplierFormData.contact_name}
+                    onChange={(e) => setSupplierFormData({ ...supplierFormData, contact_name: e.target.value })}
+                    className="settings-input w-full"
+                    placeholder="e.g. Johnathan Lee"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">CONTRACTED LEAD TIME (DAYS) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={supplierFormData.lead_time_days}
+                    onChange={(e) => setSupplierFormData({ ...supplierFormData, lead_time_days: parseInt(e.target.value) || 1 })}
+                    className="settings-input w-full"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">EMAIL ADDRESS</label>
+                  <input
+                    type="email"
+                    value={supplierFormData.email}
+                    onChange={(e) => setSupplierFormData({ ...supplierFormData, email: e.target.value })}
+                    className="settings-input w-full"
+                    placeholder="contact@supplier.com"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">PHONE NUMBER</label>
+                  <input
+                    type="text"
+                    value={supplierFormData.phone}
+                    onChange={(e) => setSupplierFormData({ ...supplierFormData, phone: e.target.value })}
+                    className="settings-input w-full"
+                    placeholder="+84 912 345 678"
+                    style={{ borderRadius: '4px' }}
+                  />
+                </div>
               </div>
               <div className="mb-4">
-                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">PHONE NUMBER (CONTACT INFO)</label>
+                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">PHYSICAL OFFICE / WAREHOUSE ADDRESS</label>
                 <input
                   type="text"
-                  value={supplierFormData.phone}
-                  onChange={(e) => setSupplierFormData({ ...supplierFormData, phone: e.target.value })}
+                  value={supplierFormData.address}
+                  onChange={(e) => setSupplierFormData({ ...supplierFormData, address: e.target.value })}
                   className="settings-input w-full"
-                  placeholder="e.g. +84 912 345 678"
-                  style={{ borderRadius: '4px' }}
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">LEAD TIME (DAYS) *</label>
-                <input
-                  type="number"
-                  required
-                  min="1"
-                  value={supplierFormData.lead_time_days}
-                  onChange={(e) => setSupplierFormData({ ...supplierFormData, lead_time_days: parseInt(e.target.value) || 1 })}
-                  className="settings-input w-full"
+                  placeholder="e.g. 1024 Harbor Blvd, Long Beach, CA 90802"
                   style={{ borderRadius: '4px' }}
                 />
               </div>
@@ -1119,8 +1137,9 @@ export const Products: React.FC = () => {
 
           <div className="suppliers-table">
             <div className="suppliers-thead">
-              <div className="col-name">SUPPLIER NAME</div>
-              <div className="col-skus">CONTACT INFO</div>
+              <div className="col-name">SUPPLIER & CONTACT</div>
+              <div className="col-skus">CONTACT CHANNELS</div>
+              <div className="col-addr" style={{ flex: 1.5 }}>OFFICE ADDRESS</div>
               <div className="col-lead">LEAD TIME</div>
               <div className="col-rel">STATUS</div>
             </div>
@@ -1139,9 +1158,17 @@ export const Products: React.FC = () => {
                   >
                     <div className="col-name">
                       <div className="supplier-name">{s.name}</div>
-                      <div className="supplier-email">{s.email || 'No email registered'}</div>
+                      <div className="supplier-email" style={{ color: '#0d9488', fontWeight: 600 }}>
+                        {s.contact_name ? `Contact: ${s.contact_name}` : (s.id || 'Vendor')}
+                      </div>
                     </div>
-                    <div className="col-skus">{s.phone || 'N/A'}</div>
+                    <div className="col-skus">
+                      <div style={{ fontSize: '12px', color: '#1e293b' }}>{s.email || '—'}</div>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>{s.phone || '—'}</div>
+                    </div>
+                    <div className="col-addr" style={{ flex: 1.5, fontSize: '12px', color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.address || '—'}
+                    </div>
                     <div className="col-lead">{s.lead_time_days ?? 5} days</div>
                     <div className="col-rel">
                       <span className="status-pill active">ACTIVE</span>
@@ -1172,24 +1199,43 @@ export const Products: React.FC = () => {
           ) : (
             <>
               <div className="supplier-detail-header">
-                <h2 className="prod-detail-title" style={{ marginBottom: '0.25rem' }}>
-                  {selectedSupplier.name}
-                </h2>
+                <div>
+                  <h2 className="prod-detail-title" style={{ marginBottom: '0.25rem' }}>
+                    {selectedSupplier.name}
+                  </h2>
+                  <span style={{ fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>
+                    ID: {selectedSupplier.id}
+                  </span>
+                </div>
                 <span className="status-pill active">PARTNER VENDOR</span>
               </div>
 
               <div className="supplier-config-section">
-                <h4 className="prod-section-title">Contracted Lead Time</h4>
+                <h4 className="prod-section-title">Contracted Delivery Timeline</h4>
                 <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0d9488' }}>
-                  {selectedSupplier.lead_time_days ?? 5} Days
+                  {selectedSupplier.lead_time_days ?? 5} Days Lead Time
                 </div>
                 <span className="supplier-input-hint">Delivery timeline used for Safety Stock and ROP calculations.</span>
               </div>
 
               <div className="supplier-config-section">
-                <h4 className="prod-section-title">Contact Channel</h4>
-                <p style={{ fontSize: '13px', margin: '4px 0' }}>Email: {selectedSupplier.email || 'N/A'}</p>
-                <p style={{ fontSize: '13px', margin: '4px 0' }}>Phone: {selectedSupplier.phone || 'N/A'}</p>
+                <h4 className="prod-section-title">Key Contact Person</h4>
+                <p style={{ fontSize: '13px', margin: '4px 0', fontWeight: 600, color: '#1e293b' }}>
+                  {selectedSupplier.contact_name || 'No contact person recorded'}
+                </p>
+                <p style={{ fontSize: '13px', margin: '4px 0', color: '#475569' }}>
+                  Email: {selectedSupplier.email || 'N/A'}
+                </p>
+                <p style={{ fontSize: '13px', margin: '4px 0', color: '#475569' }}>
+                  Phone: {selectedSupplier.phone || 'N/A'}
+                </p>
+              </div>
+
+              <div className="supplier-config-section">
+                <h4 className="prod-section-title">Registered Business Address</h4>
+                <p style={{ fontSize: '13px', margin: '4px 0', color: '#334155' }}>
+                  {selectedSupplier.address || 'No physical address recorded'}
+                </p>
               </div>
 
               {canEdit && (

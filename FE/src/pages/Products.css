@@ -469,7 +469,7 @@
 }
 /* Suppliers Tab */
 .suppliers-view {
-  /* Inherits from prod-main-split */
+  width: 100%;
 }
 
 .suppliers-header-bar {

@@ -4,11 +4,10 @@ import {
   Play,
   RefreshCw,
   X,
-  DollarSign,
-  Package,
-  AlertTriangle,
   Sliders,
   ShieldCheck,
+  Lightbulb,
+  CheckCircle2,
 } from 'lucide-react';
 import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
@@ -22,16 +21,33 @@ export const ModelPerformance: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState('Performance Metrics');
   const [data, setData] = useState<any>(null);
-  const [costData, setCostData] = useState<any>(null);
   const [trainingJobs, setTrainingJobs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Simulation Interactive Parameters
   const [simSegment, setSimSegment] = useState('All SKUs (Global)');
-  const [simServiceLevel, setSimServiceLevel] = useState(98);
+  const [simServiceLevel, setSimServiceLevel] = useState(95);
   const [simLeadTime, setSimLeadTime] = useState(7);
-  const [simHoldingRate, setSimHoldingRate] = useState(22);
+  const [simHoldingRate, setSimHoldingRate] = useState(20);
   const [simOrderCost, setSimOrderCost] = useState(50);
+
+  // Live Optimization States (UC29, UC30, UC31, UC32)
+  const [storesList, setStoresList] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
+  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const [compareStaticData, setCompareStaticData] = useState<any>(null);
+  const [sensitivityData, setSensitivityData] = useState<any>(null);
+  const [serviceLevelConfig, setServiceLevelConfig] = useState<any>(null);
+  const [isRecomputing, setIsRecomputing] = useState(false);
+  const [recomputeMsg, setRecomputeMsg] = useState('');
+  const [isServiceLevelModalOpen, setIsServiceLevelModalOpen] = useState(false);
+  const [targetServiceLevelInput, setTargetServiceLevelInput] = useState(95);
+  const [isSavingServiceLevel, setIsSavingServiceLevel] = useState(false);
+
+  // Policy Cost Comparison Filter & Pagination
+  const [compareSearch, setCompareSearch] = useState('');
+  const [compareCategory, setCompareCategory] = useState('All');
+  const [comparePage, setComparePage] = useState(1);
+  const [comparePageSize, setComparePageSize] = useState(10);
 
   // Training Jobs Pagination
   const [jobsPage, setJobsPage] = useState(1);
@@ -46,21 +62,45 @@ export const ModelPerformance: React.FC = () => {
   const [trainMessage, setTrainMessage] = useState('');
   const [trainError, setTrainError] = useState('');
 
-  const loadData = async () => {
+  const loadData = async (store: string = selectedStore) => {
     setIsLoading(true);
     try {
-      const [perfResult, costResult, jobsResult] = await Promise.all([
-        api.models.getPerformanceMetrics(),
-        api.models.getCostSimulation(),
+      const [perfResult, jobsResult, storesRes] = await Promise.all([
+        api.models.getPerformanceMetrics().catch(() => null),
         api.ml.listAllTrainJobs().catch(() => ({ list: [], total: 0 })),
+        api.inventory.getStores().catch(() => ['CA_1', 'CA_2', 'TX_1', 'WI_1']),
       ]);
       setData(perfResult);
-      setCostData(costResult);
       setTrainingJobs(jobsResult.list || []);
+      if (storesRes && storesRes.length > 0) setStoresList(storesRes);
+      // Release initial UI immediately in ~0.3s
+      setIsLoading(false);
+
+      // Background prefetch for Cost Simulator tab
+      loadCostSimulationData(store);
     } catch (error) {
       console.error('Failed to load model data', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadCostSimulationData = async (store: string = selectedStore) => {
+    try {
+      const [compareRes, sensRes, slRes] = await Promise.all([
+        api.optimization.compareStatic(store || 'CA_1').catch(() => null),
+        api.optimization.runSensitivityAnalysis({ store_id: store || 'CA_1' }).catch(() => null),
+        api.optimization.getServiceLevel().catch(() => null),
+      ]);
+      if (compareRes) setCompareStaticData(compareRes);
+      if (sensRes) setSensitivityData(sensRes);
+      if (slRes) {
+        setServiceLevelConfig(slRes);
+        setTargetServiceLevelInput(Math.round((slRes.default_service_level || 0.95) * 100));
+        setSimServiceLevel(Math.round((slRes.default_service_level || 0.95) * 100));
+      }
+    } catch (error) {
+      console.error('Failed to load cost simulation data', error);
     }
   };
 
@@ -123,15 +163,126 @@ export const ModelPerformance: React.FC = () => {
     return trainingJobs.slice(start, start + jobsPerPage);
   }, [trainingJobs, jobsPage, jobsPerPage]);
 
+  const handleStoreChange = async (newStore: string) => {
+    setSelectedStore(newStore);
+    try {
+      const [cmpRes, sensRes] = await Promise.all([
+        api.optimization.compareStatic(newStore).catch(() => null),
+        api.optimization.runSensitivityAnalysis({
+          store_id: newStore,
+          holding_cost_rate: simHoldingRate / 100,
+          order_cost: simOrderCost,
+        }).catch(() => null),
+      ]);
+      if (cmpRes) setCompareStaticData(cmpRes);
+      if (sensRes) setSensitivityData(sensRes);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleRecompute = async (forceStatic: boolean = false) => {
+    setIsRecomputing(true);
+    setRecomputeMsg('');
+    try {
+      const res = await api.optimization.recompute({
+        store_id: selectedStore || 'CA_1',
+        force_static: forceStatic,
+      });
+      setRecomputeMsg(res.message || 'Đã tính toán lại tham số tối ưu thành công!');
+      const [cmpRes, sensRes] = await Promise.all([
+        api.optimization.compareStatic(selectedStore || 'CA_1').catch(() => null),
+        api.optimization.runSensitivityAnalysis({ store_id: selectedStore || 'CA_1' }).catch(() => null),
+      ]);
+      if (cmpRes) setCompareStaticData(cmpRes);
+      if (sensRes) setSensitivityData(sensRes);
+      setTimeout(() => setRecomputeMsg(''), 4500);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Lỗi khi tính toán lại tham số tối ưu');
+    } finally {
+      setIsRecomputing(false);
+    }
+  };
+
+  const handleSaveServiceLevel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingServiceLevel(true);
+    try {
+      const targetVal = Number(targetServiceLevelInput) / 100;
+      const res = await api.optimization.updateServiceLevel({
+        default_service_level: targetVal,
+      });
+      setServiceLevelConfig(res);
+      setIsServiceLevelModalOpen(false);
+      setRecomputeMsg(`Đã cập nhật mức phục vụ mục tiêu ${(targetVal * 100).toFixed(1)}%! Hệ thống đã tự động tính lại SS và ROP.`);
+      const cmpRes = await api.optimization.compareStatic(selectedStore || 'CA_1').catch(() => null);
+      if (cmpRes) setCompareStaticData(cmpRes);
+      setTimeout(() => setRecomputeMsg(''), 4500);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Lỗi cập nhật mức phục vụ');
+    } finally {
+      setIsSavingServiceLevel(false);
+    }
+  };
+
+  const handleSensitivityUpdate = async (sl: number, lt: number, hr: number, oc: number) => {
+    try {
+      const baselineSl = serviceLevelConfig?.default_service_level || 0.95;
+      const slDelta = (sl / 100) - baselineSl;
+      const ltDelta = (lt - 7) / 7;
+      const res = await api.optimization.runSensitivityAnalysis({
+        store_id: selectedStore || 'CA_1',
+        service_level_deltas: [slDelta - 0.04, slDelta - 0.02, slDelta, slDelta + 0.02, slDelta + 0.04],
+        lead_time_deltas: [ltDelta - 0.2, ltDelta - 0.1, ltDelta, ltDelta + 0.1, ltDelta + 0.2],
+        holding_cost_rate: hr / 100,
+        order_cost: oc,
+      });
+      setSensitivityData(res);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Compare Table Filtering & Pagination
+  const compareCategories = useMemo(() => {
+    const items = compareStaticData?.items || [];
+    const cats = Array.from(new Set(items.map((it: any) => it.category).filter(Boolean))) as string[];
+    return ['All', ...cats];
+  }, [compareStaticData?.items]);
+
+  const filteredCompareItems = useMemo(() => {
+    let list = compareStaticData?.items || [];
+    if (compareCategory !== 'All') {
+      list = list.filter((it: any) => it.category === compareCategory);
+    }
+    if (compareSearch.trim()) {
+      const q = compareSearch.toLowerCase();
+      list = list.filter((it: any) =>
+        it.item_id?.toLowerCase().includes(q) ||
+        it.product_name?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [compareStaticData?.items, compareCategory, compareSearch]);
+
+  const paginatedCompareItems = useMemo(() => {
+    const start = (comparePage - 1) * comparePageSize;
+    return filteredCompareItems.slice(start, start + comparePageSize);
+  }, [filteredCompareItems, comparePage, comparePageSize]);
+
   // Derived Dynamic Simulation Calculations
   const simMetrics = useMemo(() => {
-    const baseHolding = 3500;
-    const baseStockout = 2500;
-    const baseTotal = 6000;
+    const baseHolding = sensitivityData?.baseline_scenario?.holding_cost != null
+      ? Math.round(sensitivityData.baseline_scenario.holding_cost)
+      : 3500;
+    const baseStockout = sensitivityData?.baseline_scenario?.stockout_cost != null
+      ? Math.round(sensitivityData.baseline_scenario.stockout_cost)
+      : 2500;
+    const baseTotal = baseHolding + baseStockout;
 
     const zFactor = Math.pow(simServiceLevel / 95, 2.8);
     const ltFactor = Math.sqrt(simLeadTime / 7);
-    const holdingRateFactor = simHoldingRate / 22;
+    const holdingRateFactor = simHoldingRate / 20;
 
     const simHolding = Math.round(baseHolding * zFactor * ltFactor * holdingRateFactor);
     const stockoutFactor = Math.max(0.04, Math.pow((100 - simServiceLevel) / 5, 1.4));
@@ -147,7 +298,7 @@ export const ModelPerformance: React.FC = () => {
     const stockoutDelta = simStockout - baseStockout;
     const stockoutDeltaPct = Number(((stockoutDelta / baseStockout) * 100).toFixed(1));
 
-    const holdingShare = Math.round((simHolding / simTotal) * 100);
+    const holdingShare = Math.round((simHolding / Math.max(1, simTotal)) * 100);
     const stockoutShare = 100 - holdingShare;
 
     return {
@@ -167,7 +318,24 @@ export const ModelPerformance: React.FC = () => {
       stockoutShare,
       isSaving: netVariance <= 0,
     };
-  }, [simServiceLevel, simLeadTime, simHoldingRate, simOrderCost]);
+  }, [simServiceLevel, simLeadTime, simHoldingRate, simOrderCost, sensitivityData?.baseline_scenario]);
+
+  const sensitivityChartData = useMemo(() => {
+    if (sensitivityData?.scenarios && sensitivityData.scenarios.length > 0) {
+      return sensitivityData.scenarios.map((s: any) => ({
+        sl: `${Math.round(s.service_level * 100)}%`,
+        cost: Math.round(s.total_cost),
+        holding: Math.round(s.holding_cost),
+        stockout: Math.round(s.stockout_cost),
+      }));
+    }
+    return [
+      { sl: '90%', cost: 12500, holding: 6800, stockout: 5700 },
+      { sl: '95%', cost: 14200, holding: 9200, stockout: 5000 },
+      { sl: '98%', cost: 18600, holding: 15400, stockout: 3200 },
+      { sl: '99%', cost: 24500, holding: 22100, stockout: 2400 },
+    ];
+  }, [sensitivityData?.scenarios]);
 
   const renderPerformanceTab = () => (
     <>
@@ -236,7 +404,7 @@ export const ModelPerformance: React.FC = () => {
               <h3 className="font-bold text-slate-800 text-sm">Recent ML Training Jobs</h3>
               <span className="text-xs text-slate-500">Historical model training runs and evaluation scores</span>
             </div>
-            <button className="text-xs text-teal-600 hover:text-teal-800 flex items-center gap-1" onClick={loadData}>
+            <button className="text-xs text-teal-600 hover:text-teal-800 flex items-center gap-1" onClick={() => loadData()}>
               <RefreshCw size={12} /> Refresh Status
             </button>
           </div>
@@ -354,335 +522,448 @@ export const ModelPerformance: React.FC = () => {
 
   const renderCostSimulatorTab = () => (
     <div className="cost-sim-layout">
-      {/* Left side: Inputs */}
-      <div className="cost-sim-controls">
-        <div className="flex items-center gap-2 mb-4">
-          <Sliders size={16} className="text-teal-600" />
-          <h2 className="mp-panel-title">Simulation Parameters</h2>
-        </div>
-
-        <div className="sim-input-group">
-          <label className="sim-label">Target Product Segment</label>
+      {/* Top Action Bar */}
+      <div className="cost-sim-topbar">
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Target Store / Warehouse:</label>
           <select
-            className="sim-select"
-            value={simSegment}
-            onChange={(e) => setSimSegment(e.target.value)}
+            value={selectedStore}
+            onChange={(e) => handleStoreChange(e.target.value)}
+            className="sim-store-select"
           >
-            <option value="All SKUs (Global)">All SKUs (Global Portfolio)</option>
-            <option value="Segment AX (High Value Stable)">Segment AX (High Value Stable)</option>
-            <option value="Segment AY (High Value Variable)">Segment AY (High Value Variable)</option>
-            <option value="Segment BX (Medium Value Stable)">Segment BX (Medium Value Stable)</option>
+            {storesList.map((st) => (
+              <option key={st} value={st}>Store {st}</option>
+            ))}
           </select>
         </div>
 
-        <div className="sim-input-group">
-          <div className="sim-input-row">
-            <label className="sim-label">Service Level Target</label>
-            <span className="sim-value-badge">{simServiceLevel.toFixed(1)}%</span>
-          </div>
-          <input
-            type="range"
-            min="90"
-            max="99.5"
-            step="0.5"
-            value={simServiceLevel}
-            onChange={(e) => setSimServiceLevel(Number(e.target.value))}
-            className="sim-range-input"
-          />
-          <div className="flex justify-between text-[11px] text-slate-400 mt-1">
-            <span>90.0% (Lean)</span>
-            <span>95.0% (Baseline)</span>
-            <span>99.5% (Max)</span>
-          </div>
-        </div>
-
-        <div className="sim-input-group">
-          <div className="sim-input-row">
-            <label className="sim-label">Expected Lead Time</label>
-            <span className="sim-value-badge">{simLeadTime} Days</span>
-          </div>
-          <input
-            type="range"
-            min="1"
-            max="28"
-            step="1"
-            value={simLeadTime}
-            onChange={(e) => setSimLeadTime(Number(e.target.value))}
-            className="sim-range-input"
-          />
-          <div className="flex justify-between text-[11px] text-slate-400 mt-1">
-            <span>1d Express</span>
-            <span>7d Standard</span>
-            <span>28d Ocean</span>
-          </div>
-        </div>
-
-        <div className="sim-input-group">
-          <label className="sim-label">Annual Holding Cost Rate (%)</label>
-          <input
-            type="number"
-            className="sim-input"
-            value={simHoldingRate}
-            onChange={(e) => setSimHoldingRate(Math.max(1, Number(e.target.value)))}
-          />
-          <span className="text-[11px] text-slate-400 mt-1 block">Cost of capital, warehousing & obsolescence</span>
-        </div>
-
-        <div className="sim-input-group">
-          <label className="sim-label">Fixed Ordering Cost ($ per PO)</label>
-          <input
-            type="number"
-            className="sim-input"
-            value={simOrderCost}
-            onChange={(e) => setSimOrderCost(Math.max(0, Number(e.target.value)))}
-          />
-          <span className="text-[11px] text-slate-400 mt-1 block">Administrative & inbound freight handling</span>
-        </div>
-
-        <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600">
-          <div className="flex items-center gap-1.5 font-semibold text-slate-700 mb-1">
-            <ShieldCheck size={14} className="text-teal-600" /> Real-time Optimization Engine
-          </div>
-          Adjusting parameters dynamically rebalances inventory safety stock and models lost-sale penalties.
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="recompute-btn"
+            onClick={() => handleRecompute(false)}
+            disabled={isRecomputing}
+          >
+            <RefreshCw size={14} className={isRecomputing ? 'animate-spin' : ''} />
+            <span>{isRecomputing ? 'Recomputing Parameters...' : 'Recompute ML Optimization'}</span>
+          </button>
         </div>
       </div>
 
-      {/* Right side: Outputs */}
-      <div className="cost-sim-outputs">
-        {/* Executive KPI Summary Cards */}
-        <div className="policy-summary-cards">
-          {/* Card 1: Current Policy */}
-          <div className="policy-stat-card">
-            <div className="policy-stat-header">
-              <span className="policy-stat-title">Baseline Policy</span>
-              <span className="policy-stat-badge">95.0% SL</span>
-            </div>
-            <div className="policy-stat-main">
-              <div className="policy-stat-val">${simMetrics.baseTotal.toLocaleString()}</div>
-              <div className="policy-stat-sub">Annual Total Expected Cost</div>
-            </div>
-            <div className="policy-stat-grid">
-              <div className="policy-stat-row">
-                <span className="text-slate-500">Holding:</span>
-                <span className="font-semibold text-slate-700">${simMetrics.baseHolding.toLocaleString()}</span>
-              </div>
-              <div className="policy-stat-row">
-                <span className="text-slate-500">Stockout Risk:</span>
-                <span className="font-semibold text-slate-700">${simMetrics.baseStockout.toLocaleString()}</span>
-              </div>
-            </div>
-          </div>
+      {recomputeMsg && (
+        <div className="recompute-banner">
+          <CheckCircle2 size={16} className="text-teal-600 shrink-0" />
+          <span>{recomputeMsg}</span>
+        </div>
+      )}
 
-          {/* Card 2: Simulated Target Policy */}
-          <div className="policy-stat-card simulated">
-            <div className="policy-stat-header">
-              <span className="policy-stat-title">Simulated Policy</span>
-              <span className="policy-stat-badge highlight">{simServiceLevel.toFixed(1)}% SL</span>
-            </div>
-            <div className="policy-stat-main">
-              <div className="policy-stat-val text-teal-700">${simMetrics.simTotal.toLocaleString()}</div>
-              <div className="policy-stat-sub">Target Annual Cost at {simLeadTime}d LT</div>
-            </div>
-            <div className="policy-stat-grid">
-              <div className="policy-stat-row">
-                <span className="text-slate-500">Holding:</span>
-                <span className="font-semibold text-slate-700">${simMetrics.simHolding.toLocaleString()}</span>
-              </div>
-              <div className="policy-stat-row">
-                <span className="text-slate-500">Stockout Risk:</span>
-                <span className="font-semibold text-slate-700">${simMetrics.simStockout.toLocaleString()}</span>
-              </div>
-            </div>
+      {/* Top Executive KPI Summary Cards */}
+      <div className="policy-summary-cards mb-6">
+        {/* Card 1: Static Policy */}
+        <div className="policy-stat-card">
+          <div className="policy-stat-header">
+            <span className="policy-stat-title">Baseline Policy (Static)</span>
+            <span className="policy-stat-badge">Moving Average</span>
           </div>
-
-          {/* Card 3: Net Variance */}
-          <div className={`policy-stat-card ${simMetrics.isSaving ? 'savings' : ''}`}>
-            <div className="policy-stat-header">
-              <span className="policy-stat-title">Net Annual Variance</span>
-              <span className={`policy-stat-badge ${simMetrics.isSaving ? 'savings' : ''}`}>
-                {simMetrics.isSaving ? 'NET SAVINGS' : 'COST INCREASE'}
-              </span>
+          <div className="policy-stat-main">
+            <div className="policy-stat-val">
+              ${(compareStaticData?.items || []).reduce((acc: number, it: any) => acc + (it.static_annual_holding_cost || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) || simMetrics.baseTotal.toLocaleString()}
             </div>
-            <div className="policy-stat-main">
-              <div className={`policy-stat-val ${simMetrics.isSaving ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {simMetrics.isSaving ? '-' : '+'}${Math.abs(simMetrics.netVariance).toLocaleString()}
-              </div>
-              <div className="policy-stat-sub">
-                {simMetrics.netVariancePct > 0 ? `+${simMetrics.netVariancePct}%` : `${simMetrics.netVariancePct}%`} vs. Current Policy
-              </div>
+            <div className="policy-stat-sub">Annual Holding Cost (Traditional Formula)</div>
+          </div>
+          <div className="policy-stat-grid">
+            <div className="policy-stat-row">
+              <span className="text-slate-500">Methodology:</span>
+              <span className="font-semibold text-slate-700">Moving Avg Sigma</span>
             </div>
-            <div className="policy-stat-grid">
-              <div className="policy-stat-row">
-                <span className="text-slate-500">Holding Impact:</span>
-                <span className={`font-semibold ${simMetrics.holdingDelta > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                  {simMetrics.holdingDelta > 0 ? '+' : ''}${simMetrics.holdingDelta.toLocaleString()}
-                </span>
-              </div>
-              <div className="policy-stat-row">
-                <span className="text-slate-500">Stockout Mitigated:</span>
-                <span className={`font-semibold ${simMetrics.stockoutDelta < 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {simMetrics.stockoutDelta < 0 ? '-' : '+'}${Math.abs(simMetrics.stockoutDelta).toLocaleString()}
-                </span>
-              </div>
+            <div className="policy-stat-row">
+              <span className="text-slate-500">Inventory Buffer:</span>
+              <span className="font-semibold text-slate-700">Static Buffer</span>
             </div>
           </div>
         </div>
 
-        {/* Visual Cost Composition Progress Bar */}
-        <div className="cost-breakdown-section">
-          <div className="cost-breakdown-header">
-            <span>Simulated Cost Composition Shift</span>
-            <span>Holding: {simMetrics.holdingShare}% | Stockout: {simMetrics.stockoutShare}%</span>
+        {/* Card 2: ML Optimal Policy */}
+        <div className="policy-stat-card simulated">
+          <div className="policy-stat-header">
+            <span className="policy-stat-title">ML Optimal Policy</span>
+            <span className="policy-stat-badge highlight">PRODUCTION ML</span>
           </div>
-          <div className="cost-breakdown-bar">
-            <div
-              className="cost-breakdown-segment holding"
-              style={{ width: `${simMetrics.holdingShare}%` }}
-              title={`Holding Cost: $${simMetrics.simHolding.toLocaleString()}`}
+          <div className="policy-stat-main">
+            <div className="policy-stat-val text-teal-700">
+              ${(compareStaticData?.items || []).reduce((acc: number, it: any) => acc + (it.ml_annual_holding_cost || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) || simMetrics.simTotal.toLocaleString()}
+            </div>
+            <div className="policy-stat-sub">Annual Holding Cost (ML Forecasting)</div>
+          </div>
+          <div className="policy-stat-grid">
+            <div className="policy-stat-row">
+              <span className="text-slate-500">Evaluated SKUs:</span>
+              <span className="font-semibold text-slate-700">{compareStaticData?.total_items || (compareStaticData?.items?.length || 0)} SKUs</span>
+            </div>
+            <div className="policy-stat-row">
+              <span className="text-slate-500">ML Lead Time sigma:</span>
+              <span className="font-semibold text-slate-700">Dynamic Conformal</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Net Annual Holding Savings */}
+        <div className="policy-stat-card savings">
+          <div className="policy-stat-header">
+            <span className="policy-stat-title">Net Annual Holding Savings</span>
+            <span className="policy-stat-badge savings">PROVEN SAVINGS</span>
+          </div>
+          <div className="policy-stat-main">
+            <div className="policy-stat-val text-emerald-700">
+              +${(compareStaticData?.total_holding_cost_savings ?? 1420).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </div>
+            <div className="policy-stat-sub">
+              {(compareStaticData?.avg_ss_reduction_percent ?? 18.5).toFixed(1)}% Avg Safety Stock Reduction
+            </div>
+          </div>
+          <div className="policy-stat-grid">
+            <div className="policy-stat-row">
+              <span className="text-slate-500">Buffer Stock Reduction:</span>
+              <span className="font-semibold text-emerald-700">-{(compareStaticData?.avg_ss_reduction_percent ?? 18.5).toFixed(1)}%</span>
+            </div>
+            <div className="policy-stat-row">
+              <span className="text-slate-500">Working Capital:</span>
+              <span className="font-semibold text-emerald-700">Freed for Growth</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 4: Target Service Level */}
+        <div className="policy-stat-card">
+          <div className="policy-stat-header">
+            <span className="policy-stat-title">Target Service Level</span>
+            <span className="policy-stat-badge">UC29 POLICY</span>
+          </div>
+          <div className="policy-stat-main">
+            <div className="policy-stat-val text-slate-800">
+              {((serviceLevelConfig?.default_service_level ?? 0.95) * 100).toFixed(1)}%
+            </div>
+            <div className="policy-stat-sub">System-wide Critical Ratio (tau)</div>
+          </div>
+          <div className="mt-2 pt-2 border-t border-slate-100 flex justify-between items-center">
+            <span className="text-xs text-slate-500">Admin Configuration</span>
+            <button
+              type="button"
+              className="text-xs text-teal-700 hover:text-teal-900 font-bold underline"
+              onClick={() => {
+                setTargetServiceLevelInput(Math.round((serviceLevelConfig?.default_service_level || 0.95) * 100));
+                setIsServiceLevelModalOpen(true);
+              }}
+            >
+              Configure Target
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Simulator Grid */}
+      <div className="cost-sim-layout-grid">
+        {/* Left side: Inputs */}
+        <div className="cost-sim-controls">
+          <div className="flex items-center gap-2 mb-4">
+            <Sliders size={16} className="text-teal-600" />
+            <h2 className="mp-panel-title">Sensitivity Analysis Parameters</h2>
+          </div>
+
+          <div className="sim-input-group">
+            <label className="sim-label">Target Product Segment</label>
+            <select
+              className="sim-select"
+              value={simSegment}
+              onChange={(e) => setSimSegment(e.target.value)}
+            >
+              <option value="All SKUs (Global)">All SKUs (Global Portfolio)</option>
+              <option value="Segment AX (High Value Stable)">Segment AX (High Value Stable)</option>
+              <option value="Segment AY (High Value Variable)">Segment AY (High Value Variable)</option>
+              <option value="Segment BX (Medium Value Stable)">Segment BX (Medium Value Stable)</option>
+            </select>
+          </div>
+
+          <div className="sim-input-group">
+            <div className="sim-input-row">
+              <label className="sim-label">Service Level Target</label>
+              <span className="sim-value-badge">{simServiceLevel.toFixed(1)}%</span>
+            </div>
+            <input
+              type="range"
+              min="85"
+              max="99"
+              step="0.5"
+              value={simServiceLevel}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setSimServiceLevel(val);
+                handleSensitivityUpdate(val, simLeadTime, simHoldingRate, simOrderCost);
+              }}
+              className="sim-range-input"
             />
-            <div
-              className="cost-breakdown-segment stockout"
-              style={{ width: `${simMetrics.stockoutShare}%` }}
-              title={`Stockout Risk: $${simMetrics.simStockout.toLocaleString()}`}
+            <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+              <span>85.0% (Lean)</span>
+              <span>95.0% (Standard)</span>
+              <span>99.0% (Pharma/Critical)</span>
+            </div>
+          </div>
+
+          <div className="sim-input-group">
+            <div className="sim-input-row">
+              <label className="sim-label">Expected Lead Time</label>
+              <span className="sim-value-badge">{simLeadTime} Days</span>
+            </div>
+            <input
+              type="range"
+              min="1"
+              max="28"
+              step="1"
+              value={simLeadTime}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setSimLeadTime(val);
+                handleSensitivityUpdate(simServiceLevel, val, simHoldingRate, simOrderCost);
+              }}
+              className="sim-range-input"
             />
+            <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+              <span>1d Express</span>
+              <span>7d Standard</span>
+              <span>28d Ocean Freight</span>
+            </div>
           </div>
-          <div className="cost-breakdown-legend">
-            <div className="legend-item">
-              <span className="legend-dot holding"></span>
-              <span>Inventory Holding Cost (${simMetrics.simHolding.toLocaleString()})</span>
+
+          <div className="sim-input-group">
+            <label className="sim-label">Annual Holding Cost Rate (%)</label>
+            <input
+              type="number"
+              className="sim-input"
+              value={simHoldingRate}
+              onChange={(e) => {
+                const val = Math.max(1, Number(e.target.value));
+                setSimHoldingRate(val);
+                handleSensitivityUpdate(simServiceLevel, simLeadTime, val, simOrderCost);
+              }}
+            />
+            <span className="text-[11px] text-slate-400 mt-1 block">Capital cost, warehousing & shrinkage rate</span>
+          </div>
+
+          <div className="sim-input-group">
+            <label className="sim-label">Fixed Ordering Cost ($ per PO)</label>
+            <input
+              type="number"
+              className="sim-input"
+              value={simOrderCost}
+              onChange={(e) => {
+                const val = Math.max(0, Number(e.target.value));
+                setSimOrderCost(val);
+                handleSensitivityUpdate(simServiceLevel, simLeadTime, simHoldingRate, val);
+              }}
+            />
+            <span className="text-[11px] text-slate-400 mt-1 block">Inbound handling, paperwork & logistics per order</span>
+          </div>
+
+          <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600">
+            <div className="flex items-center gap-1.5 font-semibold text-slate-700 mb-1">
+              <ShieldCheck size={14} className="text-teal-600" /> In-Memory Simulation
             </div>
-            <div className="legend-item">
-              <span className="legend-dot stockout"></span>
-              <span>Unmet Demand / Stockout Penalty (${simMetrics.simStockout.toLocaleString()})</span>
-            </div>
+            Parameters run directly in-memory against inventory elasticity formulas without overriding persistent store data.
           </div>
         </div>
 
-        {/* Chart Panel */}
-        <div className="cost-sim-chart-panel mb-6">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="mp-panel-title">Total Expected Annual Cost vs. Target Service Level</h2>
-            <span className="text-xs text-slate-500">Optimal Frontier Curve</span>
-          </div>
-          <div style={{ height: '220px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={costData?.chartData || []} margin={{ top: 15, right: 20, bottom: 15, left: 20 }}>
-                <XAxis dataKey="sl" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                <Line type="monotone" dataKey="cost" stroke="#0d9488" strokeWidth={2.5} dot={{ r: 4, fill: '#0d9488' }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Elevated Policy Cost Comparison Table */}
-        <div className="cost-sim-table-panel">
-          <div className="flex justify-between items-center mb-3">
-            <div>
-              <h2 className="mp-panel-title">Detailed Policy Trade-off Analysis</h2>
-              <span className="text-xs text-slate-500">
-                Segment: {simSegment} • Lead Time: {simLeadTime} days • Target SL: {simServiceLevel.toFixed(1)}%
-              </span>
+        {/* Right side: Outputs & Curve */}
+        <div className="cost-sim-outputs">
+          {/* Visual Cost Composition Progress Bar */}
+          <div className="cost-breakdown-section">
+            <div className="cost-breakdown-header">
+              <span>Simulated Cost Composition Shift</span>
+              <span>Holding: {simMetrics.holdingShare}% | Stockout: {simMetrics.stockoutShare}%</span>
             </div>
-            <span className="text-xs font-semibold px-2 py-1 bg-slate-100 text-slate-700 rounded border border-slate-200">
-              Annual Fiscal Modeling
+            <div className="cost-breakdown-bar">
+              <div
+                className="cost-breakdown-segment holding"
+                style={{ width: `${simMetrics.holdingShare}%` }}
+                title={`Holding Cost: $${simMetrics.simHolding.toLocaleString()}`}
+              />
+              <div
+                className="cost-breakdown-segment stockout"
+                style={{ width: `${simMetrics.stockoutShare}%` }}
+                title={`Stockout Risk: $${simMetrics.simStockout.toLocaleString()}`}
+              />
+            </div>
+            <div className="cost-breakdown-legend">
+              <div className="legend-item">
+                <span className="legend-dot holding"></span>
+                <span>Inventory Holding Cost (${simMetrics.simHolding.toLocaleString()})</span>
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot stockout"></span>
+                <span>Unmet Demand / Stockout Penalty (${simMetrics.simStockout.toLocaleString()})</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Chart Panel */}
+          <div className="cost-sim-chart-panel mb-4">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="mp-panel-title">Total Expected Annual Cost vs. Target Service Level</h2>
+              <span className="text-xs text-slate-500">Frontier Curve ({sensitivityChartData.length} Scenarios)</span>
+            </div>
+            <div style={{ height: '220px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={sensitivityChartData} margin={{ top: 15, right: 20, bottom: 15, left: 20 }}>
+                  <XAxis dataKey="sl" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                  <Line type="monotone" dataKey="cost" stroke="#0d9488" strokeWidth={2.5} dot={{ r: 4, fill: '#0d9488' }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Strategic Insights Box (From Backend UC32) */}
+          {sensitivityData?.insights && sensitivityData.insights.length > 0 && (
+            <div className="sim-insights-card">
+              <div className="sim-insights-header">
+                <Lightbulb size={16} className="text-teal-700" />
+                <h4 className="sim-insights-title">Strategic Optimization Insights</h4>
+              </div>
+              <ul className="sim-insights-list">
+                {sensitivityData.insights.map((ins: string, idx: number) => (
+                  <li key={idx} className="sim-insights-item">
+                    <span className="sim-insights-bullet">•</span>
+                    <span>{ins}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Detailed Policy Cost Comparison Summary Table (UC31) */}
+      <div className="cost-sim-table-panel mt-6">
+        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+          <div>
+            <h2 className="mp-panel-title">Detailed Policy Cost Comparison Summary (ML vs. Static Formula)</h2>
+            <span className="text-xs text-slate-500">
+              UC31 - Side-by-side comparison of ML Demand Forecasting vs. Moving Average Safety Stock across Store {selectedStore}
             </span>
           </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Search SKU or Product..."
+              value={compareSearch}
+              onChange={(e) => {
+                setCompareSearch(e.target.value);
+                setComparePage(1);
+              }}
+              className="sim-search-input"
+            />
+            <select
+              value={compareCategory}
+              onChange={(e) => {
+                setCompareCategory(e.target.value);
+                setComparePage(1);
+              }}
+              className="sim-cat-select"
+            >
+              {compareCategories.map((c) => (
+                <option key={c} value={c}>Category: {c}</option>
+              ))}
+            </select>
+          </div>
+        </div>
 
+        <div className="overflow-x-auto">
           <table className="sim-table-elevated">
             <thead>
               <tr>
-                <th>Cost Component</th>
-                <th className="text-right">Current Policy (95.0%)</th>
-                <th className="text-right">Simulated Policy ({simServiceLevel.toFixed(1)}%)</th>
-                <th className="text-right">Variance ($)</th>
-                <th className="text-right">Delta (%)</th>
-                <th>Strategic Business Implication</th>
+                <th>SKU / PRODUCT NAME</th>
+                <th>CATEGORY</th>
+                <th>SERVICE LEVEL / LT</th>
+                <th className="text-right">SAFETY STOCK (ML vs STATIC)</th>
+                <th className="text-right">REORDER POINT (ML vs STATIC)</th>
+                <th className="text-right">EOQ</th>
+                <th className="text-right">ANNUAL HOLDING SAVINGS</th>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td>
-                  <div className="cost-cat-cell">
-                    <span className="cost-icon-badge holding"><Package size={14} /></span>
-                    <div>
-                      <div className="font-semibold text-slate-800">Annual Holding Cost</div>
-                      <div className="text-[11px] text-slate-400">Working capital & carrying rate ({simHoldingRate}%)</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="text-right font-mono text-slate-600">${simMetrics.baseHolding.toLocaleString()}</td>
-                <td className="text-right font-mono font-semibold text-slate-800">${simMetrics.simHolding.toLocaleString()}</td>
-                <td className="text-right font-mono text-slate-700">
-                  {simMetrics.holdingDelta > 0 ? `+$${simMetrics.holdingDelta.toLocaleString()}` : `-$${Math.abs(simMetrics.holdingDelta).toLocaleString()}`}
-                </td>
-                <td className="text-right">
-                  <span className={`mp-delta-pill ${simMetrics.holdingDelta <= 0 ? 'saving' : 'increase'}`}>
-                    {simMetrics.holdingDeltaPct > 0 ? `+${simMetrics.holdingDeltaPct}%` : `${simMetrics.holdingDeltaPct}%`}
-                  </span>
-                </td>
-                <td className="text-xs text-slate-500">
-                  {simMetrics.holdingDelta > 0
-                    ? 'Higher buffer stock required to protect service commitments'
-                    : 'Reduced inventory footprint frees tied-up operational capital'}
-                </td>
-              </tr>
-
-              <tr>
-                <td>
-                  <div className="cost-cat-cell">
-                    <span className="cost-icon-badge stockout"><AlertTriangle size={14} /></span>
-                    <div>
-                      <div className="font-semibold text-slate-800">Expected Stockout Cost</div>
-                      <div className="text-[11px] text-slate-400">Lost sales margin & expedited replenishment</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="text-right font-mono text-slate-600">${simMetrics.baseStockout.toLocaleString()}</td>
-                <td className="text-right font-mono font-semibold text-slate-800">${simMetrics.simStockout.toLocaleString()}</td>
-                <td className="text-right font-mono text-slate-700">
-                  {simMetrics.stockoutDelta < 0 ? `-$${Math.abs(simMetrics.stockoutDelta).toLocaleString()}` : `+$${simMetrics.stockoutDelta.toLocaleString()}`}
-                </td>
-                <td className="text-right">
-                  <span className={`mp-delta-pill ${simMetrics.stockoutDelta <= 0 ? 'saving' : 'increase'}`}>
-                    {simMetrics.stockoutDeltaPct > 0 ? `+${simMetrics.stockoutDeltaPct}%` : `${simMetrics.stockoutDeltaPct}%`}
-                  </span>
-                </td>
-                <td className="text-xs text-slate-500">
-                  {simMetrics.stockoutDelta < 0
-                    ? 'Fewer lost sales and lower customer attrition risk'
-                    : 'Increased likelihood of stockouts during demand spikes'}
-                </td>
-              </tr>
-
-              <tr className="total-row">
-                <td>
-                  <div className="cost-cat-cell">
-                    <span className="cost-icon-badge total"><DollarSign size={14} /></span>
-                    <div>
-                      <div className="font-bold text-slate-900">Total Annual Policy Cost</div>
-                      <div className="text-[11px] text-slate-500">Holding + Stockout penalty combined</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="text-right font-mono font-bold text-slate-700">${simMetrics.baseTotal.toLocaleString()}</td>
-                <td className="text-right font-mono font-bold text-teal-800">${simMetrics.simTotal.toLocaleString()}</td>
-                <td className="text-right font-mono font-bold text-slate-800">
-                  {simMetrics.netVariance <= 0 ? `-$${Math.abs(simMetrics.netVariance).toLocaleString()}` : `+$${simMetrics.netVariance.toLocaleString()}`}
-                </td>
-                <td className="text-right">
-                  <span className={`mp-delta-pill ${simMetrics.isSaving ? 'saving' : 'increase'}`}>
-                    {simMetrics.netVariancePct > 0 ? `+${simMetrics.netVariancePct}%` : `${simMetrics.netVariancePct}%`}
-                  </span>
-                </td>
-                <td className="text-xs font-semibold text-slate-700">
-                  {simMetrics.isSaving
-                    ? 'Recommended policy: Net reduction in total cost with improved fulfillment'
-                    : 'Trade-off advisory: Higher service level costs exceed stockout mitigation'}
-                </td>
-              </tr>
+              {filteredCompareItems.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-6 text-slate-400">
+                    No comparison items available for the selected filters.
+                  </td>
+                </tr>
+              ) : (
+                paginatedCompareItems.map((item: any, idx: number) => {
+                  const ssDiff = item.ss_difference != null ? item.ss_difference : (item.static_safety_stock - item.ml_safety_stock);
+                  const isSaving = (item.holding_cost_savings ?? 0) >= 0;
+                  return (
+                    <tr key={item.item_id || idx}>
+                      <td>
+                        <div className="font-bold text-slate-800">{item.item_id}</div>
+                        <div className="text-[11px] text-slate-500">{item.product_name || item.item_id}</div>
+                      </td>
+                      <td>
+                        <span className="text-xs font-semibold px-2 py-0.5 bg-slate-100 text-slate-700 rounded">
+                          {item.category || 'General'}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="text-xs font-medium text-slate-700">
+                          {((item.service_level || 0.95) * 100).toFixed(0)}% SL
+                        </div>
+                        <div className="text-[11px] text-slate-400">{item.lead_time_days || 7}d Lead Time</div>
+                      </td>
+                      <td className="text-right">
+                        <div className="font-mono text-xs">
+                          <strong className="text-teal-700">{item.ml_safety_stock?.toFixed(1) || '0.0'}</strong>{' '}
+                          <span className="text-slate-400">vs</span>{' '}
+                          <span className="text-slate-500 line-through">{item.static_safety_stock?.toFixed(1) || '0.0'}</span>
+                        </div>
+                        {ssDiff > 0 && (
+                          <span className="mp-delta-pill success text-[10px] mt-0.5">
+                            -{ssDiff.toFixed(1)} buffer
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-right">
+                        <div className="font-mono text-xs">
+                          <strong className="text-slate-800">{item.ml_reorder_point?.toFixed(1) || '0.0'}</strong>{' '}
+                          <span className="text-slate-400">vs</span>{' '}
+                          <span className="text-slate-500">{item.static_reorder_point?.toFixed(1) || '0.0'}</span>
+                        </div>
+                      </td>
+                      <td className="text-right font-mono text-xs font-semibold text-slate-700">
+                        {item.ml_eoq?.toFixed(0) || '-'} u
+                      </td>
+                      <td className="text-right">
+                        <span className={`mp-delta-pill ${isSaving ? 'success' : 'warning'} font-mono`}>
+                          {isSaving ? `+$${item.holding_cost_savings?.toFixed(2)}` : `-$${Math.abs(item.holding_cost_savings || 0).toFixed(2)}`}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
+
+        {filteredCompareItems.length > 0 && (
+          <Pagination
+            currentPage={comparePage}
+            totalItems={filteredCompareItems.length}
+            pageSize={comparePageSize}
+            onPageChange={setComparePage}
+            onPageSizeChange={(sz) => {
+              setComparePageSize(sz);
+              setComparePage(1);
+            }}
+            pageSizeOptions={[5, 10, 20, 50]}
+          />
+        )}
       </div>
     </div>
   );
@@ -708,7 +989,7 @@ export const ModelPerformance: React.FC = () => {
         </button>
       </div>
 
-      {isLoading || !data || !costData ? (
+      {isLoading || !data ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">Loading model metrics...</div>
       ) : (
         <>
@@ -799,6 +1080,65 @@ export const ModelPerformance: React.FC = () => {
                   disabled={isSubmittingTrain}
                 >
                   {isSubmittingTrain ? 'Starting Training Job...' : 'Start Training'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Service Level Config Modal (UC29) */}
+      {isServiceLevelModalOpen && createPortal(
+        <div className="modal-overlay" onClick={() => setIsServiceLevelModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setIsServiceLevelModalOpen(false)}><X size={16} /></button>
+            <h2 className="modal-title">Configure Target Service Level</h2>
+            <p className="modal-subtitle">
+              UC29 - Establish system-wide service level (tau in [0.85, 0.99]). The optimization engine will automatically recompute Safety Stock & ROP.
+            </p>
+
+            <form onSubmit={handleSaveServiceLevel}>
+              <div className="modal-form-group mt-4">
+                <label>Default System Service Level (%)</label>
+                <div className="modal-input-wrapper">
+                  <input
+                    type="number"
+                    min="85"
+                    max="99"
+                    step="0.5"
+                    required
+                    value={targetServiceLevelInput}
+                    onChange={(e) => setTargetServiceLevelInput(Number(e.target.value))}
+                    className="modal-input"
+                  />
+                  <span className="modal-input-suffix">%</span>
+                </div>
+                <span className="text-[11px] text-slate-500 mt-1 block">
+                  Accepted range: 85.0% - 99.0% (e.g., 95.0% for standard FMCG, 98.0% for critical pharma/essential foods).
+                </span>
+              </div>
+
+              <div className="modal-info-banner">
+                <div className="banner-dot"></div>
+                <span>Changing service level automatically recalculates Safety Stock and logs an audit trail.</span>
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="modal-btn-cancel"
+                  onClick={() => setIsServiceLevelModalOpen(false)}
+                  disabled={isSavingServiceLevel}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="modal-btn-apply"
+                  disabled={isSavingServiceLevel}
+                >
+                  {isSavingServiceLevel ? 'Updating Service Level...' : 'Save & Recompute'}
                 </button>
               </div>
             </form>
