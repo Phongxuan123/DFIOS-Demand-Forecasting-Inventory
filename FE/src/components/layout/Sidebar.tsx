@@ -21,7 +21,10 @@ export const Sidebar: React.FC = () => {
       <div className="sidebar-header">
         <div className="logo-container">
           <div className="logo-icon">DF</div>
-          <span className="logo-text">DFIOS</span>
+          <div className="logo-text">
+            <h2>DFIOS</h2>
+            <span>DEMAND FORECASTING</span>
+          </div>
         </div>
       </div>
 
