@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.users import router as users_router
+from app.api.v1.endpoints.dashboard import router as dashboard_router
 from app.api.v1.endpoints.events import router as events_router
 from app.api.v1.endpoints.audit_logs import router as audit_logs_router
 from app.api.v1.endpoints.products import router as products_router
@@ -21,6 +22,9 @@ api_router.include_router(auth_router, prefix="/auth", tags=["Authentication & A
 
 # UC06: User & Role Management (Admin)
 api_router.include_router(users_router, prefix="/users", tags=["User & Role Management"])
+
+# UC07 - UC10: Dashboard & Alerts (Module B)
+api_router.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard & Alerts (UC07-UC10)"])
 
 # UC11: Master Data - Products (SKU CRUD)
 api_router.include_router(products_router, prefix="/products", tags=["Master Data - Products (UC11)"])
