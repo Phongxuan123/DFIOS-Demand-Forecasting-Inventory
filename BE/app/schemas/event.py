@@ -12,6 +12,7 @@ class EventType(str, Enum):
     """
     INVENTORY_UPDATED = "inventory.updated"
     ALERT_CREATED = "alert.created"
+    STOCK_ALERT = "stock.alert"
 
 
 class InventoryUpdatedData(BaseModel):
@@ -24,6 +25,21 @@ class InventoryUpdatedData(BaseModel):
     sku_id: str
     at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     actor_id: str
+
+
+class StockAlertData(BaseModel):
+    """
+    Dữ liệu payload cho sự kiện stock.alert (UC10).
+    """
+    type: str = EventType.STOCK_ALERT.value
+    item_id: str
+    store_id: str
+    severity: str
+    on_hand: float
+    reorder_point: float
+    safety_stock: float
+    message: str
+    at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class SystemEvent(BaseModel):
@@ -56,4 +72,34 @@ def create_inventory_updated_event(sku_id: str, actor_id: str, event_id: Optiona
         event=EventType.INVENTORY_UPDATED.value,
         data=payload.model_dump(),
     )
+
+
+def create_stock_alert_event(
+    item_id: str,
+    store_id: str,
+    severity: str,
+    on_hand: float,
+    reorder_point: float,
+    safety_stock: float,
+    message: str,
+    event_id: Optional[int] = None,
+) -> SystemEvent:
+    """
+    Hàm tiện ích khởi tạo sự kiện stock.alert cho UC10.
+    """
+    payload = StockAlertData(
+        item_id=item_id,
+        store_id=store_id,
+        severity=severity,
+        on_hand=on_hand,
+        reorder_point=reorder_point,
+        safety_stock=safety_stock,
+        message=message,
+    )
+    return SystemEvent(
+        id=event_id,
+        event=EventType.STOCK_ALERT.value,
+        data=payload.model_dump(),
+    )
+
 
