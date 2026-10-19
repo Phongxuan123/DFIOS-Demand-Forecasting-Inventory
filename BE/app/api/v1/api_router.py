@@ -59,16 +59,22 @@ api_router.include_router(replenishments_router, prefix="/replenishments", tags=
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 
+# UC39 - UC43: Reports & Analytics (Module H)
+from app.api.v1.endpoints.reports import router as reports_router
+api_router.include_router(reports_router, prefix="/reports", tags=["Reports & Analytics (UC39-UC43)"])
+
 # UC45: System Administration & Audit Logs (Admin)
 api_router.include_router(audit_logs_router, prefix="/audit-logs", tags=["System Administration & Audit Logs (UC45)"])
 
 # UC44: System Administration - General Settings
 api_router.include_router(settings_router, prefix="/settings", tags=["System Administration - General Settings (UC44)"])
 
-# UC46, UC47, UC48: ML Pipeline & Model Ops
+# UC46 - UC50: ML Pipeline & Model Ops (Module J)
+from app.api.v1.endpoints.pipeline import router as pipeline_router
 api_router.include_router(data_quality_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC46)"])
 api_router.include_router(ml_training_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC47)"])
 api_router.include_router(model_registry_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC48)"])
+api_router.include_router(pipeline_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC49, UC50)"])
 
 # Alias cho /me/email và /me/email/confirm (đáp ứng cả 2 cấu trúc URL)
 from app.api.v1.endpoints.auth import request_change_email, confirm_change_email
