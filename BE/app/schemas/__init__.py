@@ -106,6 +106,23 @@ from app.schemas.optimization import (
     SensitivityAnalysisRequest,
     SensitivityAnalysisResponse,
 )
+from app.schemas.replenishment import (
+    ReplenishmentItemResponse,
+    ReplenishmentListResponse,
+    ReplenishmentAdjustRequest,
+    ReplenishmentActionRequest,
+    ReplenishmentGenerateResponse,
+)
+from app.schemas.dashboard import (
+    DashboardKPIs,
+    DemandTrendPoint,
+    DemandTrendResponse,
+    InventoryAlertItem,
+    AlertSummary,
+    DashboardAlertsResponse,
+    RealtimeStockAlertTriggerResponse,
+    DashboardOverviewResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -193,6 +210,19 @@ __all__ = [
     "SensitivityScenario",
     "SensitivityAnalysisRequest",
     "SensitivityAnalysisResponse",
+    "ReplenishmentItemResponse",
+    "ReplenishmentListResponse",
+    "ReplenishmentAdjustRequest",
+    "ReplenishmentActionRequest",
+    "ReplenishmentGenerateResponse",
+    "DashboardKPIs",
+    "DemandTrendPoint",
+    "DemandTrendResponse",
+    "InventoryAlertItem",
+    "AlertSummary",
+    "DashboardAlertsResponse",
+    "RealtimeStockAlertTriggerResponse",
+    "DashboardOverviewResponse",
 ]
 
 

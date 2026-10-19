@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.users import router as users_router
+from app.api.v1.endpoints.dashboard import router as dashboard_router
 from app.api.v1.endpoints.events import router as events_router
 from app.api.v1.endpoints.audit_logs import router as audit_logs_router
 from app.api.v1.endpoints.products import router as products_router
@@ -21,6 +22,9 @@ api_router.include_router(auth_router, prefix="/auth", tags=["Authentication & A
 
 # UC06: User & Role Management (Admin)
 api_router.include_router(users_router, prefix="/users", tags=["User & Role Management"])
+
+# UC07 - UC10: Dashboard & Alerts (Module B)
+api_router.include_router(dashboard_router, prefix="/dashboard", tags=["Dashboard & Alerts (UC07-UC10)"])
 
 # UC11: Master Data - Products (SKU CRUD)
 api_router.include_router(products_router, prefix="/products", tags=["Master Data - Products (UC11)"])
@@ -47,6 +51,10 @@ api_router.include_router(classification_router, prefix="/classification", tags=
 # UC29 - UC32: Inventory Optimization (Module F)
 from app.api.v1.endpoints.optimization import router as optimization_router
 api_router.include_router(optimization_router, prefix="/optimization", tags=["Inventory Optimization (UC29-UC32)"])
+
+# UC33 - UC38: Replenishment Recommendations (Module G)
+from app.api.v1.endpoints.replenishments import router as replenishments_router
+api_router.include_router(replenishments_router, prefix="/replenishments", tags=["Replenishment Recommendations (UC33-UC38)"])
 
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
