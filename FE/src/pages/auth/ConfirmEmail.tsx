@@ -1,34 +1,44 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { apiClient } from '../../services/apiClient.ts';
+import { CheckCircle2, AlertCircle } from 'lucide-react';
 import './Login.css';
 
 export const ConfirmEmail: React.FC = () => {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get('token') || '';
-  const [status, setStatus] = useState<'verifying' | 'success' | 'error'>('verifying');
+  const urlToken = searchParams.get('token') || '';
+  const [token, setToken] = useState(() => urlToken);
+  const [status, setStatus] = useState<'idle' | 'verifying' | 'success' | 'error'>(() => urlToken ? 'verifying' : 'idle');
   const [message, setMessage] = useState('');
 
-  useEffect(() => {
-    if (!token) {
+  const executeConfirm = async (tokenToVerify: string) => {
+    if (!tokenToVerify.trim()) {
       setStatus('error');
-      setMessage('Invalid or missing confirmation token.');
+      setMessage('Vui lòng nhập mã xác thực (Token) để xác nhận đổi email.');
       return;
     }
 
-    const confirm = async () => {
-      try {
-        const res = await apiClient.post('/auth/me/email/confirm', { token });
-        setStatus('success');
-        setMessage(res.data?.message || 'Your email address has been confirmed and updated successfully!');
-      } catch (err: any) {
-        setStatus('error');
-        setMessage(err.response?.data?.detail || 'Email confirmation link is invalid or has expired.');
-      }
-    };
+    setStatus('verifying');
+    try {
+      const res = await apiClient.post('/auth/me/email/confirm', { token: tokenToVerify.trim() });
+      setStatus('success');
+      setMessage(res.data?.message || 'Địa chỉ email của bạn đã được xác nhận và cập nhật thành công!');
+    } catch (err: any) {
+      setStatus('error');
+      setMessage(err.response?.data?.detail || 'Liên kết hoặc mã xác nhận không hợp lệ hoặc đã hết hạn.');
+    }
+  };
 
-    confirm();
-  }, [token]);
+  useEffect(() => {
+    if (urlToken) {
+      executeConfirm(urlToken);
+    }
+  }, [urlToken]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeConfirm(token);
+  };
 
   return (
     <div className="login-container">
@@ -50,11 +60,11 @@ export const ConfirmEmail: React.FC = () => {
           </div>
 
           <div className="login-footer">
-            <p className="login-footer-title">Enterprise Inventory Optimization</p>
+            <p className="login-footer-title">Enterprise Supply Chain & Demand Intelligence</p>
             <div className="login-footer-brands">
-              <span>APEX SUPPLY</span>
-              <span>NEXUS RETAIL</span>
-              <span>VORTEX LABS</span>
+              <span>WALMART M5 BENCHMARK</span>
+              <span>CONFORMAL ML ENGINE</span>
+              <span>MULTI-ECHELON SCM</span>
             </div>
           </div>
         </div>
@@ -63,12 +73,15 @@ export const ConfirmEmail: React.FC = () => {
       {/* Right Side */}
       <div className="login-right">
         <div className="login-form-container">
-          <h2 className="login-title">Email Confirmation</h2>
-          <p className="login-subtitle">Verifying your updated contact email address.</p>
+          <h2 className="login-title">Xác nhận cập nhật email</h2>
+          <p className="login-subtitle">Xác minh quyền sở hữu hòm thư liên hệ mới của tài khoản DFIOS.</p>
 
           {status === 'verifying' && (
-            <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>
-              <div className="flex justify-center mb-4">Verifying token, please wait...</div>
+            <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: '#64748b' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                <div className="auth-splash-spinner" style={{ borderColor: 'rgba(13, 148, 136, 0.2)', borderTopColor: '#0d9488' }}></div>
+                <span style={{ fontSize: '0.875rem', color: '#475569' }}>Đang xác thực liên kết email, vui lòng đợi trong giây lát...</span>
+              </div>
             </div>
           )}
 
@@ -79,28 +92,60 @@ export const ConfirmEmail: React.FC = () => {
                   backgroundColor: '#ccfbf1',
                   color: '#0f766e',
                   padding: '1.25rem',
-                  borderRadius: '0.375rem',
+                  borderRadius: '0.5rem',
                   marginBottom: '1.5rem',
                   fontSize: '0.875rem',
                   lineHeight: '1.5',
+                  border: '1px solid #99f6e4',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.75rem',
                 }}
               >
-                {message}
+                <CheckCircle2 size={18} className="text-teal-600 flex-shrink-0 mt-0.5" />
+                <span>{message}</span>
               </div>
               <Link to="/login" className="btn-primary login-btn" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
-                Back to Sign In
+                Đăng nhập vào hệ thống
               </Link>
             </div>
           )}
 
-          {status === 'error' && (
+          {status !== 'success' && status !== 'verifying' && (
             <div>
-              <div className="login-error" style={{ marginBottom: '1.5rem' }}>
-                {message}
+              {status === 'error' && (
+                <div className="login-error-card" style={{ marginBottom: '1.5rem' }}>
+                  <AlertCircle size={16} className="login-error-icon" />
+                  <span>{message}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="login-form">
+                <div className="form-group">
+                  <label className="form-label">Mã xác nhận (Token từ email mới)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={token}
+                    onChange={(e) => {
+                      setToken(e.target.value.trim());
+                      if (status === 'error') setStatus('idle');
+                    }}
+                    placeholder="Dán mã token xác nhận từ email mới..."
+                    required
+                  />
+                </div>
+
+                <button type="submit" className="btn-primary login-btn">
+                  Xác nhận thay đổi email
+                </button>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
+                <Link to="/login" style={{ color: '#0d9488', fontSize: '0.875rem', fontWeight: 600, textDecoration: 'none' }}>
+                  Quay lại trang Đăng nhập
+                </Link>
               </div>
-              <Link to="/login" className="btn-secondary sso-btn" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
-                Return to Login
-              </Link>
             </div>
           )}
         </div>

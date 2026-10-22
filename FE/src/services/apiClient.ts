@@ -3,6 +3,7 @@ import axios from 'axios';
 // Base API configuration
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -26,11 +27,19 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    // Optionally handle 401 Unauthorized here (e.g., dispatch a logout event)
+    // Automatically redirect to /login when 401 Unauthorized occurs on protected endpoints
     if (error.response && error.response.status === 401) {
-      // Clear token and redirect to login?
-      // localStorage.removeItem('access_token');
-      // window.location.href = '/login';
+      const isLoginRequest = error.config?.url?.includes('/auth/login');
+      if (!isLoginRequest) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user');
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('dfios_session_expired', 'true');
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+        }
+      }
     }
     return Promise.reject(error);
   }

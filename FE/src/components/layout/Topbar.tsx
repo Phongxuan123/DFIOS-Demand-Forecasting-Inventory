@@ -29,7 +29,14 @@ export const Topbar: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [results, setResults] = useState<any[]>([]);
-  const [history, setHistory] = useState<string[]>(['Nike Ultra Boost', 'SKU-4402']);
+  const [history, setHistory] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('dfios_search_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [showNotifications, setShowNotifications] = useState(false);
   const [stockAlerts, setStockAlerts] = useState<any[]>([]);
   
@@ -57,8 +64,8 @@ export const Topbar: React.FC = () => {
     if (sse.data && sse.data.type !== 'connected' && sse.data.type !== 'close') {
       const newNotif = {
         name: `[Event: ${sse.data.type}]`,
-        details: JSON.stringify(sse.data.payload),
-        actionText: 'Dismiss',
+        details: typeof sse.data.payload === 'object' ? JSON.stringify(sse.data.payload) : String(sse.data.payload || ''),
+        status: 'WARNING',
         statusClass: 'warning',
       };
       setStockAlerts((prev) => [newNotif, ...prev]);
@@ -186,14 +193,9 @@ export const Topbar: React.FC = () => {
                       <div className="cp-section-title">Settings</div>
                       <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Profile & Account</span></div>
                       <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>System Configuration</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Notifications</span></div>
-                    </div>
-
-                    <div className="cp-section">
-                      <div className="cp-section-title">Theme</div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); }}><ArrowRight size={14} className="cp-item-icon" /><span>Light Mode</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); }}><ArrowRight size={14} className="cp-item-icon" /><span>Dark Mode</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); }}><ArrowRight size={14} className="cp-item-icon" /><span>System Default</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>User Management</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Audit Logs</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>ML Pipeline & Quality</span></div>
                     </div>
                   </>
                 )}
@@ -212,7 +214,9 @@ export const Topbar: React.FC = () => {
                       <div key={idx} className="cp-item" onClick={() => {
                         setSearchTerm(res.name || res.title);
                         if (!history.includes(res.name || res.title)) {
-                          setHistory([res.name || res.title, ...history].slice(0, 5));
+                          const updated = [res.name || res.title, ...history].slice(0, 5);
+                          setHistory(updated);
+                          try { localStorage.setItem('dfios_search_history', JSON.stringify(updated)); } catch {}
                         }
                         setIsCommandPaletteOpen(false);
                       }}>
@@ -242,7 +246,12 @@ export const Topbar: React.FC = () => {
             <div className="topbar-notifications-dropdown">
               <div className="notifications-header">
                 <h3>Stock Alerts</h3>
-                <a href="#">Mark all read</a>
+                <button
+                  onClick={() => setStockAlerts([])}
+                  style={{ background: 'none', border: 'none', color: '#0d9488', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  Mark all read
+                </button>
               </div>
               <div className="notifications-list">
                 {stockAlerts.length === 0 && (
@@ -254,12 +263,21 @@ export const Topbar: React.FC = () => {
                     </div>
                   </div>
                 )}
-                {stockAlerts.slice(0, 5).map((alert) => (
-                  <div className="notification-item" key={`${alert.id}-${alert.store}`}>
+                {stockAlerts.slice(0, 5).map((alert, idx) => (
+                  <div className="notification-item" key={alert.id ? `${alert.id}-${alert.store || idx}` : `event-${idx}`}>
                     <div className={`notif-dot ${alert.status === 'CRITICAL' ? 'red' : 'orange'}`}></div>
                     <div className="notif-content">
-                      <p><strong>{alert.id} {alert.name}</strong> is below ROP ({alert.rop}). Current: {alert.stock} units</p>
-                      <span>{alert.store} - updated now</span>
+                      {alert.details ? (
+                        <>
+                          <p><strong>{alert.name}</strong>: {alert.details}</p>
+                          <span>Realtime SSE &bull; Just now</span>
+                        </>
+                      ) : (
+                        <>
+                          <p><strong>{alert.id} {alert.name}</strong> is below ROP ({alert.rop}). Current: {alert.stock} units</p>
+                          <span>{alert.store || 'Store'} &bull; Updated now</span>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}

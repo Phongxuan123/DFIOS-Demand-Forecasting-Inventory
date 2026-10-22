@@ -65,6 +65,25 @@ export const Settings: React.FC = () => {
   const [trainJobs, setTrainJobs] = useState<any[]>([]);
   const [modelsList, setModelsList] = useState<any[]>([]);
 
+  // UC49: Batch Schedules State
+  const [batchSchedules, setBatchSchedules] = useState<any[]>([]);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleName, setScheduleName] = useState('');
+  const [scheduleCron, setScheduleCron] = useState('0 2 * * *');
+  const [scheduleModel, setScheduleModel] = useState('lightgbm');
+  const [scheduleHorizon, setScheduleHorizon] = useState(28);
+  const [scheduleStore, setScheduleStore] = useState('CA_1');
+  const [scheduleAutoOpt, setScheduleAutoOpt] = useState(true);
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+
+  // UC50: Pipeline Run State
+  const [showPipelineModal, setShowPipelineModal] = useState(false);
+  const [pipelineModel, setPipelineModel] = useState('lightgbm');
+  const [pipelineHorizon, setPipelineHorizon] = useState(28);
+  const [pipelineStore, setPipelineStore] = useState('CA_1');
+  const [isExecutingPipeline, setIsExecutingPipeline] = useState(false);
+  const [pipelineResult, setPipelineResult] = useState<any>(null);
+
   // User management modal & state
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -134,10 +153,11 @@ export const Settings: React.FC = () => {
         loadAuditLogs(),
         api.settings.getAuditActions().then(setAuditActions).catch(() => []),
       ]);
-    } else if (activeTab === 'ML Pipeline' && modelsList.length === 0) {
+    } else if (activeTab === 'ML Pipeline') {
       Promise.all([
         api.ml.listAllTrainJobs().then(res => setTrainJobs(res.list || [])).catch(() => []),
         api.ml.getAllModels().then(res => setModelsList(res.list || [])).catch(() => []),
+        api.ml.listBatchSchedules().then(res => setBatchSchedules(res.items || [])).catch(() => []),
       ]);
     } else if (activeTab === 'Data Quality Inspector' && dqRuns.length === 0) {
       api.ml.listAllDataQualityRuns().then(res => {
@@ -147,6 +167,12 @@ export const Settings: React.FC = () => {
       }).catch(() => []);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!isAdmin && (activeTab === 'User Management' || activeTab === 'Audit Logs')) {
+      setActiveTab('General Settings');
+    }
+  }, [isAdmin, activeTab]);
 
   useEffect(() => {
     setProfileName(user?.name || user?.email || '');
@@ -317,6 +343,59 @@ export const Settings: React.FC = () => {
       setEmailCurrentPassword('');
     } catch (err: any) {
       setEmailModalError(err.response?.data?.detail || 'Failed to request email change.');
+    }
+  };
+
+  const handleCreateSchedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!scheduleName.trim()) return;
+    setIsSavingSchedule(true);
+    try {
+      await api.ml.createBatchSchedule({
+        name: scheduleName.trim(),
+        cron_expression: scheduleCron.trim(),
+        model_name: scheduleModel,
+        horizon: scheduleHorizon,
+        store_id: scheduleStore,
+        auto_trigger_optimization: scheduleAutoOpt,
+      });
+      setShowScheduleModal(false);
+      setScheduleName('');
+      const res = await api.ml.listBatchSchedules();
+      setBatchSchedules(res.items || []);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Failed to create schedule');
+    } finally {
+      setIsSavingSchedule(false);
+    }
+  };
+
+  const handleDeleteSchedule = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this batch forecast schedule?')) return;
+    try {
+      await api.ml.deleteBatchSchedule(id);
+      const res = await api.ml.listBatchSchedules();
+      setBatchSchedules(res.items || []);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Failed to delete schedule');
+    }
+  };
+
+  const handleExecutePipeline = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsExecutingPipeline(true);
+    try {
+      const res = await api.ml.triggerPipelineRun({
+        model_name: pipelineModel,
+        horizon: pipelineHorizon,
+        store_id: pipelineStore,
+      });
+      setPipelineResult(res);
+      setShowPipelineModal(false);
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Pipeline execution failed');
+    } finally {
+      setIsExecutingPipeline(false);
     }
   };
 
@@ -982,16 +1061,16 @@ export const Settings: React.FC = () => {
           <div className="ml-kpi-card">
             <span className="ml-kpi-label">PRODUCTION CHAMPION</span>
             <h2 className="ml-kpi-title text-teal" style={{ fontSize: '1.25rem' }}>
-              {prodModel ? `${prodModel.name || prodModel.algorithm.toUpperCase()} (${prodModel.version || 'v1'})` : 'Baseline Naive'}
+              {prodModel ? `${prodModel.name || prodModel.algorithm.toUpperCase()} (${prodModel.version || 'v1'})` : 'None (No active model)'}
             </h2>
             <p className="ml-kpi-desc">
-              MASE: {prodModel?.metrics?.mase != null ? Number(prodModel.metrics.mase).toFixed(2) : '0.64'} | RMSE: {prodModel?.metrics?.rmse != null ? Number(prodModel.metrics.rmse).toFixed(1) : '4.8'}
+              MASE: {prodModel?.metrics?.mase != null ? Number(prodModel.metrics.mase).toFixed(2) : '-'} | RMSE: {prodModel?.metrics?.rmse != null ? Number(prodModel.metrics.rmse).toFixed(1) : '-'}
             </p>
           </div>
           <div className="ml-kpi-card">
             <span className="ml-kpi-label">REGISTERED MODELS</span>
             <h2 className="ml-kpi-title">{modelsList.length} Models</h2>
-            <p className="ml-kpi-desc">LightGBM, XGBoost, Naive</p>
+            <p className="ml-kpi-desc">{modelsList.length > 0 ? Array.from(new Set(modelsList.map((m: any) => m.algorithm.toUpperCase()))).join(', ') : 'None'}</p>
           </div>
           <div className="ml-kpi-card">
             <span className="ml-kpi-label">TRAIN JOBS COMPLETED</span>
@@ -999,6 +1078,102 @@ export const Settings: React.FC = () => {
             <p className="ml-kpi-desc">Background task execution</p>
           </div>
         </div>
+
+        {/* UC50: Closed-Loop Pipeline Action Card */}
+        <div style={{
+          marginTop: '1.5rem',
+          padding: '1.25rem 1.5rem',
+          borderRadius: '12px',
+          background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.95))',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '1rem',
+          flexWrap: 'wrap'
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+              <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '4px', background: '#0d9488', color: '#fff' }}>
+                UC50 ENGINE
+              </span>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#f8fafc' }}>
+                Full Closed-Loop Pipeline Execution
+              </h3>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.85rem', color: '#94a3b8' }}>
+              Sequentially executes: Demand Inference &rarr; SS/ROP/EOQ Multi-objective Optimization &rarr; Dynamic ABC/XYZ Reclassification &rarr; Actionable Replenishment Recommendations.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowPipelineModal(true)}
+            style={{
+              backgroundColor: '#0d9488',
+              color: '#ffffff',
+              border: 'none',
+              padding: '0.65rem 1.25rem',
+              borderRadius: '8px',
+              fontSize: '0.875rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              boxShadow: '0 4px 12px rgba(13, 148, 136, 0.3)',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            <span>▶</span> Execute Closed-Loop Pipeline (UC50)
+          </button>
+        </div>
+
+        {pipelineResult && (
+          <div style={{
+            marginTop: '1rem',
+            padding: '1.25rem',
+            borderRadius: '10px',
+            backgroundColor: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+            color: '#166534',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontWeight: 800, fontSize: '1rem' }}>✓ Closed-Loop Pipeline Completed Successfully</span>
+                <span style={{ fontFamily: 'monospace', fontSize: '11px', background: '#dcfce7', padding: '2px 6px', borderRadius: '4px' }}>
+                  Run ID: {pipelineResult.run_id || 'N/A'}
+                </span>
+              </div>
+              <button
+                onClick={() => setPipelineResult(null)}
+                style={{ background: 'none', border: 'none', color: '#166534', cursor: 'pointer', fontWeight: 700 }}
+              >
+                &times; Close
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginTop: '0.75rem', fontSize: '0.875rem' }}>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+                <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>EXECUTION DURATION</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.duration_seconds != null ? `${pipelineResult.duration_seconds}s` : 'Instant'}</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+                <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>FORECASTS GENERATED</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.forecasts_generated ?? '-'}</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+                <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>SS / ROP OPTIMIZED</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.inventory_params_updated ?? '-'} SKUs</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+                <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>ABC/XYZ UPDATED</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.classifications_updated ?? '-'} Items</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #0d9488' }}>
+                <div style={{ fontSize: '11px', color: '#0d9488', fontWeight: 700 }}>REPLENISHMENTS CREATED</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0d9488' }}>{pipelineResult.replenishments_generated ?? '-'}</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="settings-table-container mt-6">
           <div className="flex justify-between items-center mb-4">
@@ -1122,6 +1297,73 @@ export const Settings: React.FC = () => {
               pageSizeOptions={[5, 10, 20]}
             />
           )}
+        </div>
+
+        {/* UC49: Batch Forecast Schedules Table */}
+        <div className="settings-table-container mt-6">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="mp-panel-title m-0" style={{ fontSize: '1rem', color: '#1e293b' }}>
+                Automated Batch Forecast Schedules (UC49)
+              </h3>
+              <span style={{ fontSize: '11px', color: '#64748b' }}>Cron jobs executing periodic multi-horizon demand inference</span>
+            </div>
+            <button
+              onClick={() => setShowScheduleModal(true)}
+              style={{ backgroundColor: '#0ea5e9', color: '#fff', border: 'none', padding: '0.35rem 0.75rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer' }}
+            >
+              + Add Schedule
+            </button>
+          </div>
+          <table className="settings-table">
+            <thead>
+              <tr>
+                <th>SCHEDULE NAME</th>
+                <th>CRON EXPRESSION</th>
+                <th>MODEL</th>
+                <th>HORIZON</th>
+                <th>STORE</th>
+                <th>AUTO OPTIMIZATION</th>
+                <th>STATUS</th>
+                <th className="text-right">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batchSchedules.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    No automated batch schedules configured. Click "+ Add Schedule" to set up a cron job.
+                  </td>
+                </tr>
+              ) : (
+                batchSchedules.map((sch) => (
+                  <tr key={sch.id}>
+                    <td className="fw-700 text-slate-800">{sch.name}</td>
+                    <td style={{ fontFamily: 'monospace', color: '#0ea5e9', fontWeight: 700 }}>{sch.cron_expression}</td>
+                    <td>{sch.model_name?.toUpperCase()}</td>
+                    <td>{sch.horizon} Days</td>
+                    <td>{sch.store_id}</td>
+                    <td>
+                      <span style={{ fontSize: '11px', color: sch.auto_trigger_optimization ? '#10b981' : '#64748b' }}>
+                        {sch.auto_trigger_optimization ? 'Yes (UC50)' : 'Forecast Only'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="status-badge active">ACTIVE</span>
+                    </td>
+                    <td className="text-right">
+                      <button
+                        onClick={() => handleDeleteSchedule(sch.id)}
+                        style={{ color: '#ef4444', background: 'none', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -1437,7 +1679,12 @@ export const Settings: React.FC = () => {
       ) : (
         <>
           <div className="settings-tabs-container">
-            {['General Settings', 'User Management', 'Audit Logs', 'ML Pipeline', 'Data Quality Inspector'].map((tab) => (
+            {([
+              'General Settings',
+              ...(isAdmin ? ['User Management', 'Audit Logs'] : []),
+              'ML Pipeline',
+              'Data Quality Inspector'
+            ]).map((tab) => (
               <button
                 key={tab}
                 className={`settings-tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -1607,6 +1854,170 @@ export const Settings: React.FC = () => {
                       className="settings-save-btn"
                     >
                       {editingUser ? 'Save Changes' : 'Create Account'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* UC49: Schedule Batch Forecast Modal */}
+          {showScheduleModal && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+                <h3 className="text-xl font-bold mb-2">Configure Batch Forecast Schedule (UC49)</h3>
+                <p className="text-sm text-[var(--text-secondary)] mb-4">
+                  Set up a cron expression to execute automated multi-horizon demand inference periodically.
+                </p>
+
+                <form onSubmit={handleCreateSchedule}>
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Schedule Name *</label>
+                    <input
+                      required
+                      type="text"
+                      placeholder="e.g. Nightly CA_1 Demand Forecast"
+                      value={scheduleName}
+                      onChange={(e) => setScheduleName(e.target.value)}
+                      className="settings-input w-full"
+                    />
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Cron Expression *</label>
+                    <input
+                      required
+                      type="text"
+                      placeholder="0 2 * * * (runs daily at 2:00 AM)"
+                      value={scheduleCron}
+                      onChange={(e) => setScheduleCron(e.target.value)}
+                      className="settings-input w-full"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div>
+                      <label className="block text-sm mb-1 text-[var(--text-secondary)]">Model</label>
+                      <select value={scheduleModel} onChange={(e) => setScheduleModel(e.target.value)} className="settings-input w-full">
+                        <option value="lightgbm">LightGBM Production</option>
+                        <option value="tft">TFT Transformer</option>
+                        <option value="xgboost">XGBoost Baseline</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm mb-1 text-[var(--text-secondary)]">Store</label>
+                      <select value={scheduleStore} onChange={(e) => setScheduleStore(e.target.value)} className="settings-input w-full">
+                        <option value="CA_1">CA_1</option>
+                        <option value="CA_2">CA_2</option>
+                        <option value="TX_1">TX_1</option>
+                        <option value="WI_1">WI_1</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm mb-1 text-[var(--text-secondary)]">Horizon (Days)</label>
+                      <input
+                        type="number"
+                        min="7"
+                        max="28"
+                        value={scheduleHorizon}
+                        onChange={(e) => setScheduleHorizon(Number(e.target.value))}
+                        className="settings-input w-full"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mb-6 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="schAutoOpt"
+                      checked={scheduleAutoOpt}
+                      onChange={(e) => setScheduleAutoOpt(e.target.checked)}
+                    />
+                    <label htmlFor="schAutoOpt" className="text-xs text-[var(--text-secondary)] cursor-pointer">
+                      Auto-trigger SS/ROP/EOQ recomputation & ABC/XYZ classification (UC50)
+                    </label>
+                  </div>
+
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => setShowScheduleModal(false)}
+                      className="settings-btn-outline"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingSchedule || !scheduleName.trim()}
+                      className="settings-save-btn"
+                    >
+                      {isSavingSchedule ? 'Saving...' : 'Create Schedule'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* UC50: Pipeline Run Trigger Modal */}
+          {showPipelineModal && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+                <h3 className="text-xl font-bold mb-2">Execute Closed-Loop Pipeline (UC50)</h3>
+                <p className="text-sm text-[var(--text-secondary)] mb-4">
+                  Runs the full four-step sequence: Multi-horizon Forecast &rarr; SS/ROP/EOQ Optimization &rarr; ABC/XYZ Reclassification &rarr; Replenishment Recommendation Generation.
+                </p>
+
+                <form onSubmit={handleExecutePipeline}>
+                  <div className="mb-4">
+                    <label className="block text-sm mb-1 text-[var(--text-secondary)]">Model</label>
+                    <select value={pipelineModel} onChange={(e) => setPipelineModel(e.target.value)} className="settings-input w-full">
+                      <option value="lightgbm">LightGBM Production</option>
+                      <option value="tft">TFT Transformer</option>
+                      <option value="xgboost">XGBoost Baseline</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 mb-6">
+                    <div>
+                      <label className="block text-sm mb-1 text-[var(--text-secondary)]">Store</label>
+                      <select value={pipelineStore} onChange={(e) => setPipelineStore(e.target.value)} className="settings-input w-full">
+                        <option value="CA_1">CA_1</option>
+                        <option value="CA_2">CA_2</option>
+                        <option value="TX_1">TX_1</option>
+                        <option value="WI_1">WI_1</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm mb-1 text-[var(--text-secondary)]">Horizon</label>
+                      <input
+                        type="number"
+                        min="7"
+                        max="28"
+                        value={pipelineHorizon}
+                        onChange={(e) => setPipelineHorizon(Number(e.target.value))}
+                        className="settings-input w-full"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => setShowPipelineModal(false)}
+                      className="settings-btn-outline"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isExecutingPipeline}
+                      className="settings-save-btn"
+                    >
+                      {isExecutingPipeline ? 'Executing...' : 'Run Pipeline'}
                     </button>
                   </div>
                 </form>

@@ -77,7 +77,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      const response = await apiClient.post('/auth/login', { email, password });
+      const response = await apiClient.post('/auth/login', { email: email.trim().toLowerCase(), password });
       const { access_token, user: userData } = response.data;
       const normalizedUser = normalizeUser(userData);
       
@@ -87,25 +87,52 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setIsAuthenticated(true);
       setUser(normalizedUser);
     } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || 'Invalid credentials';
+      let errorMessage = 'Đăng nhập không thành công. Vui lòng kiểm tra lại thông tin.';
+      if (error.response?.data?.detail) {
+        if (typeof error.response.data.detail === 'string') {
+          errorMessage = error.response.data.detail;
+        } else if (Array.isArray(error.response.data.detail)) {
+          errorMessage = error.response.data.detail.map((d: any) => d.msg || d.message || JSON.stringify(d)).join(', ');
+        }
+      } else if (error.code === 'ECONNABORTED') {
+        errorMessage = 'Kết nối đến máy chủ quá thời gian chờ (Timeout). Vui lòng kiểm tra lại mạng hoặc thử lại sau.';
+      } else if (error.code === 'ERR_NETWORK' || !error.response) {
+        errorMessage = 'Không thể kết nối đến máy chủ Backend (Port 8000). Vui lòng đảm bảo dịch vụ Backend đang hoạt động.';
+      } else if (error.response?.status === 502 || error.response?.status === 504) {
+        errorMessage = 'Máy chủ Backend đang khởi động lại hoặc không phản hồi (502/504). Vui lòng thử lại sau giây lát.';
+      } else if (error.response?.status === 401) {
+        errorMessage = 'Email hoặc mật khẩu không chính xác.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
       throw new Error(errorMessage);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const logout = async () => {
-    try {
-      if (localStorage.getItem('access_token')) {
-        await apiClient.post('/auth/logout');
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('user');
-      setIsAuthenticated(false);
-      setUser(null);
+  const logout = () => {
+    const token = localStorage.getItem('access_token');
+    
+    // 1. Instantly purge credentials and state on client (0ms optimistic logout)
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('user');
+    setIsAuthenticated(false);
+    setUser(null);
+
+    // 2. Notify backend in background with short 2.5s timeout (non-blocking fire-and-forget)
+    if (token) {
+      apiClient.post('/auth/logout', null, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 2500,
+      }).catch((err) => {
+        console.debug('Background logout notification completed or ignored:', err.message);
+      });
+    }
+
+    // 3. Guarantee immediate redirect to /login
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.href = '/login';
     }
   };
 

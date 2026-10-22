@@ -123,6 +123,87 @@
   text-align: center;
 }
 
+.login-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  background-color: #fef2f2;
+  color: #991b1b;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  border: 1px solid #fecaca;
+  box-sizing: border-box;
+  line-height: 1.45;
+}
+
+.login-error-icon {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+  color: #dc2626;
+}
+
+.session-expired-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  background-color: #fffbeb;
+  color: #92400e;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  border: 1px solid #fde68a;
+  box-sizing: border-box;
+  line-height: 1.45;
+}
+
+.caps-lock-badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #b45309;
+  background-color: #fef3c7;
+  border: 1px solid #fde68a;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  margin-left: auto;
+}
+
+
+
+.login-onboarding-hint {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e2e8f0;
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.login-onboarding-hint span {
+  font-weight: 600;
+  color: #334155;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.login-onboarding-hint p {
+  margin: 0;
+}
+
+.login-activate-link {
+  color: #0d9488;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.login-activate-link:hover {
+  color: #0f766e;
+}
+
 .login-form {
   display: flex;
   flex-direction: column;
@@ -244,34 +325,7 @@
   background-color: var(--accent-secondary);
 }
 
-.sso-divider {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 2rem 0 1.5rem 0;
-}
-
-.sso-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background-color: #e2e8f0;
-}
-
-.sso-text {
-  position: relative;
-  background-color: white;
-  padding: 0 1rem;
-  font-size: 0.625rem;
-  font-weight: 700;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.btn-secondary.sso-btn {
+.btn-secondary {
   width: 100%;
   background-color: white;
   border: 1px solid #e2e8f0;
@@ -287,14 +341,11 @@
   gap: 0.5rem;
   transition: background-color 0.2s;
   box-shadow: var(--shadow-sm);
+  box-sizing: border-box;
 }
 
-.btn-secondary.sso-btn:hover {
+.btn-secondary:hover {
   background-color: #f8fafc;
-}
-
-.sso-icon {
-  color: #475569;
 }
 
 /* Responsive */
