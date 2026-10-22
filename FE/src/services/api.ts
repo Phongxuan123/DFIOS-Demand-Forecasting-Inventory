@@ -26,7 +26,10 @@ const setSessionCache = <T>(key: string, entry: CacheEntry<T>) => {
   } catch {}
 };
 
+const inflightRequests = new Map<string, Promise<any>>();
+
 export const clearApiCache = (pattern?: string) => {
+  inflightRequests.clear();
   if (!pattern) {
     memoryCache.clear();
     try {
@@ -65,20 +68,79 @@ export const cachedGet = async <T = any>(
       return entry.data;
     }
     // Stale-While-Revalidate: return immediately so UI never blocks, then refresh in background
-    apiClient.get(url, { params }).then((res) => {
-      const updated = { data: res.data, timestamp: Date.now() };
-      memoryCache.set(cacheKey, updated);
-      setSessionCache(cacheKey, updated);
-    }).catch(() => {});
+    if (!inflightRequests.has(cacheKey)) {
+      const bgPromise = apiClient.get(url, { params }).then((res) => {
+        const updated = { data: res.data, timestamp: Date.now() };
+        memoryCache.set(cacheKey, updated);
+        setSessionCache(cacheKey, updated);
+        return res.data;
+      }).catch(() => {}).finally(() => {
+        inflightRequests.delete(cacheKey);
+      });
+      inflightRequests.set(cacheKey, bgPromise);
+    }
 
     return entry.data;
   }
 
-  const res = await apiClient.get(url, { params });
-  const newEntry = { data: res.data, timestamp: now };
-  memoryCache.set(cacheKey, newEntry);
-  setSessionCache(cacheKey, newEntry);
-  return res.data;
+  // In-flight deduplication: return existing promise if another component already requested this URL
+  if (inflightRequests.has(cacheKey)) {
+    return inflightRequests.get(cacheKey)!;
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      const res = await apiClient.get(url, { params });
+      const newEntry = { data: res.data, timestamp: Date.now() };
+      memoryCache.set(cacheKey, newEntry);
+      setSessionCache(cacheKey, newEntry);
+      return res.data;
+    } finally {
+      inflightRequests.delete(cacheKey);
+    }
+  })();
+
+  inflightRequests.set(cacheKey, fetchPromise);
+  return fetchPromise;
+};
+
+export const prefetchRouteData = (route: string) => {
+  try {
+    switch (route) {
+      case '/':
+      case '/dashboard':
+        cachedGet('/dashboard/overview', { store_id: 'CA_1' }, 120000).catch(() => {});
+        cachedGet('/dashboard/alerts', { store_id: 'CA_1', limit: 10 }, 120000).catch(() => {});
+        break;
+      case '/forecast-explorer':
+        cachedGet('/products/categories', null, 300000).catch(() => {});
+        cachedGet('/inventory/stores', null, 600000).catch(() => {});
+        cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
+        cachedGet('/forecasts', { item_id: 'FOODS_1_001', horizon: 28, store_id: 'CA_1' }, 180000).catch(() => {});
+        break;
+      case '/replenishment':
+        cachedGet('/replenishments', { store_id: 'CA_1', skip: 0, limit: 10, auto_generate: false }, 30000).catch(() => {});
+        break;
+      case '/abc-xyz':
+        cachedGet('/classification/matrix', null, 60000).catch(() => {});
+        cachedGet('/classification/thresholds', null, 60000).catch(() => {});
+        cachedGet('/classification/skus', { skip: 0, limit: 15 }, 30000).catch(() => {});
+        break;
+      case '/reports':
+        cachedGet('/reports/forecast-accuracy', { store_id: 'CA_1' }, 60000).catch(() => {});
+        break;
+      case '/model-performance':
+        cachedGet('/ml/models', null, 60000).catch(() => {});
+        cachedGet('/ml/train', { limit: 20 }, 30000).catch(() => {});
+        break;
+      case '/products':
+        cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
+        cachedGet('/suppliers', { limit: 50 }, 60000).catch(() => {});
+        break;
+      default:
+        break;
+    }
+  } catch {}
 };
 
 export const fetchAllPages = async <T = any>(
@@ -212,72 +274,74 @@ export const api = {
   },
 
   dashboard: {
-    getOverview: async () => {
-      // Use cached parallel requests with optimal limit payloads
-      const [productsRes, inventoryRes, suppliersRes, adjustmentsRes, forecastsRes] = await Promise.all([
-        cachedGet('/products', { limit: 1 }, 300000).catch(() => ({ total: 3049, items: [] })),
-        cachedGet('/inventory', { limit: 50, store_id: 'CA_1' }, 180000).catch(() => ({ total: 0, items: [] })),
-        cachedGet('/suppliers', { limit: 1 }, 600000).catch(() => ({ total: 0, items: [] })),
-        cachedGet('/inventory/history', { limit: 10, store_id: 'CA_1' }, 120000).catch(() => ({ total: 0, items: [] })),
-        cachedGet('/forecasts', { item_id: 'FOODS_1_001', store_id: 'CA_1', horizon: 28, limit: 28 }, 300000).catch(() => ({ items: [] })),
+    getOverview: async (storeId?: string) => {
+      try {
+        const res = await cachedGet('/dashboard/overview', storeId ? { store_id: storeId } : {}, 60000);
+        if (res && res.kpis) {
+          return res;
+        }
+      } catch (err) {
+        console.warn('Native dashboard overview error, querying individual endpoints', err);
+      }
+
+      // Fallback query to individual BE endpoints - strictly real DB records without synthetic data
+      const [kpisRes, trendRes, alertsRes] = await Promise.all([
+        cachedGet('/dashboard/kpis', storeId ? { store_id: storeId } : {}, 60000).catch(() => null),
+        cachedGet('/dashboard/demand-trend', { store_id: storeId, days: 30 }, 60000).catch(() => null),
+        cachedGet('/dashboard/alerts', { store_id: storeId, limit: 10 }, 60000).catch(() => null),
       ]);
-
-      const products = unwrapItems(productsRes);
-      const inventory = unwrapItems(inventoryRes);
-      const adjustments = unwrapItems(adjustmentsRes);
-      const forecasts = unwrapItems(forecastsRes);
-      const totalSuppliers = suppliersRes?.total || unwrapItems(suppliersRes).length || 5;
-
-      const totalSkus = productsRes?.total || (products.length > 0 ? products.length : 3049);
-      const lowStockCount = inventory.filter((item: any) => (item.on_hand ?? 0) <= 0).length;
-      const reorderAlertsCount = inventory.filter((item: any) => (item.on_hand ?? 0) < 10).length;
-
-      const defaultTrend = forecasts.length > 0
-        ? forecasts.map((f: any) => ({
-            actual: f.y_actual ?? (f.y_pred ? Math.round(f.y_pred * 0.95) : 40),
-            lightgbm: Math.round(f.y_pred ?? 45),
-            date: f.forecast_date,
-          }))
-        : Array.from({ length: 45 }, (_, i) => ({
-            actual: 40 + (i % 7) * 4 + Math.round(Math.random() * 8),
-            lightgbm: 45 + (i % 7) * 3 + Math.round(Math.random() * 6),
-          }));
 
       return {
         kpis: {
-          totalSkus,
-          totalSuppliers,
-          reorderAlerts: reorderAlertsCount,
-          avgForecastAccuracy: "94.2%",
+          totalSkus: kpisRes?.total_skus ?? 0,
+          totalSuppliers: kpisRes?.total_suppliers ?? 0,
+          reorderAlerts: kpisRes?.reorder_alerts_count ?? 0,
+          avgForecastAccuracy: kpisRes?.avg_forecast_accuracy ?? 'N/A',
+          stockoutRate: kpisRes?.stockout_rate != null ? `${kpisRes.stockout_rate}%` : '0.0%',
+          totalInventoryValue: kpisRes?.total_inventory_value ?? 0,
+          pendingReplenishments: kpisRes?.pending_replenishments_count ?? 0,
         },
         charts: {
-          forecastTrend: defaultTrend,
-          inventoryHealth: [
-            { name: 'Healthy In Stock', value: Math.max(1, (inventory.length || 50) - reorderAlertsCount), color: '#0d9488' },
-            { name: 'Low Stock', value: Math.max(0, reorderAlertsCount - lowStockCount), color: '#f59e0b' },
-            { name: 'Critical / Out', value: lowStockCount, color: '#ef4444' },
-          ].filter(x => x.value > 0),
-          urgency: (inventory.length > 0 ? inventory : [
-            { item_id: 'FOODS_1_001', product_name: 'Fresh Fuji Apples', on_hand: 0 },
-            { item_id: 'FOODS_1_002', product_name: 'Organic Whole Milk', on_hand: 4 },
-            { item_id: 'FOODS_1_003', product_name: 'Whole Grain Bread', on_hand: 8 },
-            { item_id: 'FOODS_1_004', product_name: 'Free Range Eggs', on_hand: 18 },
-          ]).slice(0, 5).map((item: any) => ({
-            sku: item.item_id,
-            name: item.product_name || item.item_id,
-            urgency: item.on_hand <= 0 ? 100 : Math.round(Math.max(15, 100 - (item.on_hand * 6))),
-            color: item.on_hand <= 0 ? '#ef4444' : item.on_hand < 10 ? '#f59e0b' : '#0d9488',
+          forecastTrend: (trendRes?.data || []).map((p: any) => ({
+            date: p.date,
+            actual: p.actual ?? null,
+            lightgbm: p.predicted != null ? p.predicted : p.actual,
+          })),
+          inventoryHealth: alertsRes?.summary ? [
+            { name: 'Healthy In Stock', value: alertsRes.summary.healthy_count || 0, color: '#0d9488' },
+            { name: 'Low Stock', value: alertsRes.summary.warning_count || 0, color: '#f59e0b' },
+            { name: 'Critical / Out', value: alertsRes.summary.critical_count || 0, color: '#ef4444' },
+          ].filter((x: any) => x.value > 0) : [],
+          urgency: (alertsRes?.items || []).slice(0, 5).map((it: any) => ({
+            sku: it.item_id,
+            name: it.product_name,
+            urgency: it.on_hand <= 0 ? 100 : Math.max(15, Math.min(95, Math.round(100 - (it.on_hand / Math.max(1, it.reorder_point) * 50)))),
+            color: it.severity === 'CRITICAL' ? '#ef4444' : it.severity === 'WARNING' ? '#f59e0b' : '#0d9488',
           })),
         },
-        recentAlerts: adjustments.slice(0, 6).map((adj: any) => ({
-          status: adj.new_on_hand < adj.old_on_hand ? 'REDUCED' : 'RESTOCKED',
-          statusClass: adj.new_on_hand < adj.old_on_hand ? 'danger' : 'success',
-          name: adj.item_id,
-          location: adj.store_id || 'Warehouse',
-          details: `Stock: ${adj.old_on_hand} → ${adj.new_on_hand} (${adj.reason || 'Manual Adjust'})`,
+        recentAlerts: (alertsRes?.items || []).slice(0, 6).map((it: any) => ({
+          status: it.severity === 'CRITICAL' ? 'CRITICAL' : 'WARNING',
+          statusClass: it.severity === 'CRITICAL' ? 'danger' : 'warning',
+          name: it.item_id,
+          location: it.store_id || 'Warehouse',
+          details: `${it.product_name} - Tồn kho: ${it.on_hand} (ROP: ${it.reorder_point})`,
           actionText: 'Inspect',
         })),
       };
+    },
+    getKpis: async (storeId?: string) => {
+      return cachedGet('/dashboard/kpis', storeId ? { store_id: storeId } : {}, 60000);
+    },
+    getDemandTrend: async (params?: { store_id?: string; category?: string; days?: number; granularity?: string }) => {
+      return cachedGet('/dashboard/demand-trend', params, 60000);
+    },
+    getAlerts: async (params?: { store_id?: string; severity?: string; limit?: number; offset?: number }) => {
+      return cachedGet('/dashboard/alerts', params, 30000);
+    },
+    triggerRealtimeAlerts: async (storeId?: string) => {
+      clearApiCache('/dashboard');
+      const res = await apiClient.post('/dashboard/check-alerts', null, { params: storeId ? { store_id: storeId } : {} });
+      return res.data;
     },
   },
 
@@ -350,9 +414,12 @@ export const api = {
         const forecastItems = unwrapItems(forecastsRes);
         const historyPoints = historyRes?.data_points || [];
 
+        // Build uncertainty lookup map by forecast date
+        const uncPoints = Array.isArray(uncertaintyRes?.points) ? uncertaintyRes.points : [];
+        const uncMap = new Map<string, any>(uncPoints.map((u: any) => [u.forecast_date, u]));
+
         let chartData: any[] = [];
         if (forecastItems.length > 0 || historyPoints.length > 0) {
-          // Combine last historical points with forecast points
           const recentHistory = historyPoints.slice(-14);
           recentHistory.forEach((h: any) => {
             chartData.push({
@@ -365,71 +432,60 @@ export const api = {
           });
 
           forecastItems.forEach((f: any) => {
+            const unc = uncMap.get(f.forecast_date);
+            const lower = unc?.p10 != null ? Math.round(unc.p10) : (f.p10 != null ? Math.round(f.p10) : null);
+            const upper = unc?.p90 != null ? Math.round(unc.p90) : (f.p90 != null ? Math.round(f.p90) : null);
             chartData.push({
               date: f.forecast_date,
               actual: f.y_actual ?? null,
-              forecast: Math.round(f.y_pred),
-              lower: Math.round(f.p10 ?? (f.y_pred * 0.88)),
-              upper: Math.round(f.p90 ?? (f.y_pred * 1.14)),
+              forecast: f.y_pred != null ? Math.round(f.y_pred) : null,
+              lower,
+              upper,
             });
           });
-        }
-
-        if (chartData.length === 0) {
-          chartData = [
-            { date: 'Oct 01', actual: 45, forecast: 45, lower: 40, upper: 50 },
-            { date: 'Oct 05', actual: 52, forecast: 50, lower: 44, upper: 58 },
-            { date: 'Oct 10', actual: 48, forecast: 49, lower: 42, upper: 55 },
-            { date: 'Oct 15', actual: 60, forecast: 58, lower: 50, upper: 65 },
-            { date: 'Oct 20', actual: 55, forecast: 55, lower: 48, upper: 62 },
-            { date: 'Oct 25', actual: null, forecast: 57, lower: 49, upper: 65 },
-            { date: 'Oct 30', actual: null, forecast: 62, lower: 52, upper: 72 },
-          ];
         }
 
         const totalPredicted = forecastItems.reduce((acc: number, f: any) => acc + (f.y_pred || 0), 0);
         const uncertainty = uncertaintyRes;
 
+        let ciSpread = '-';
+        if (uncertainty?.error_distribution?.mean && uncertainty?.error_distribution?.p90 != null && uncertainty?.error_distribution?.p10 != null) {
+          const spreadPct = Math.round(((uncertainty.error_distribution.p90 - uncertainty.error_distribution.p10) / Math.max(1, uncertainty.error_distribution.mean)) * 50);
+          ciSpread = `±${spreadPct}%`;
+        }
+
         return {
           sku,
           chartData,
           stats: {
-            predictedDemand: totalPredicted > 0 ? `${Math.round(totalPredicted).toLocaleString()} units` : '1,420 units',
-            safetyStock: uncertainty?.sigma ? `${Math.round(uncertainty.sigma * 1.65)} units` : '15 units',
-            reorderPoint: uncertainty?.sigma ? `${Math.round(uncertainty.sigma * 1.65 + (totalPredicted / (horizon || 28)) * 3)} units` : '35 units',
-            mase: compareRes?.metrics?.mae ? (compareRes.metrics.mae / 5.2).toFixed(2) : '0.64',
-            ci: '±12%',
+            predictedDemand: totalPredicted > 0 ? `${Math.round(totalPredicted).toLocaleString()} units` : '-',
+            safetyStock: uncertainty?.sigma_h != null ? `${Math.round(uncertainty.sigma_h * 1.65)} units` : '-',
+            reorderPoint: uncertainty?.sigma_h != null ? `${Math.round(uncertainty.sigma_h * 1.65 + (totalPredicted / (horizon || 28)) * 3)} units` : '-',
+            mase: compareRes?.metrics?.mae != null ? (compareRes.metrics.mae).toFixed(2) : '-',
+            ci: ciSpread,
           },
           scheduleMatrix: forecastItems.length > 0
-            ? forecastItems.slice(0, 7).map((f: any) => ({
-                date: f.forecast_date,
-                demand: Math.round(f.y_pred),
-                lower: Math.round(f.p10 ?? f.y_pred * 0.88),
-                upper: Math.round(f.p90 ?? f.y_pred * 1.14),
-                spike: (f.y_pred > 60) ? 'Med' : 'Low',
-                spikeColor: (f.y_pred > 60) ? 'text-orange' : 'text-teal',
-              }))
-            : Array.from({ length: 7 }, (_, i) => {
-                const d = new Date();
-                d.setDate(d.getDate() + i + 1);
-                const isoDate = d.toISOString().split('T')[0];
-                const baseVal = 50 + (i % 3) * 6;
+            ? forecastItems.slice(0, 14).map((f: any) => {
+                const unc = uncMap.get(f.forecast_date);
+                const lower = unc?.p10 != null ? Math.round(unc.p10) : (f.p10 != null ? Math.round(f.p10) : null);
+                const upper = unc?.p90 != null ? Math.round(unc.p90) : (f.p90 != null ? Math.round(f.p90) : null);
                 return {
-                  date: isoDate,
-                  demand: baseVal,
-                  lower: Math.round(baseVal * 0.88),
-                  upper: Math.round(baseVal * 1.14),
-                  spike: baseVal > 55 ? 'Med' : 'Low',
-                  spikeColor: baseVal > 55 ? 'text-orange' : 'text-teal',
+                  date: f.forecast_date,
+                  demand: f.y_pred != null ? Math.round(f.y_pred) : 0,
+                  lower,
+                  upper,
+                  spike: (f.y_pred > 60) ? 'Med' : 'Low',
+                  spikeColor: (f.y_pred > 60) ? 'text-orange' : 'text-teal',
                 };
-              }),
+              })
+            : [],
         };
       } catch (err) {
         console.error('getExplorerData error', err);
         return {
           sku: skuParam || 'FOODS_1_001',
           chartData: [],
-          stats: { predictedDemand: 'N/A', safetyStock: 'N/A', reorderPoint: 'N/A', mase: 'N/A', ci: 'N/A' },
+          stats: { predictedDemand: '-', safetyStock: '-', reorderPoint: '-', mase: '-', ci: '-' },
           scheduleMatrix: [],
         };
       }
@@ -534,6 +590,95 @@ export const api = {
           status: (x.on_hand ?? 0) <= 0 ? 'CRITICAL' : 'WARNING',
         })),
       };
+    },
+  },
+
+  replenishment: {
+    listRecommendations: async (params?: {
+      skip?: number;
+      limit?: number;
+      store_id?: string;
+      status?: string;
+      priority?: string;
+      search?: string;
+      item_id?: string;
+      auto_generate?: boolean;
+    }) => {
+      const res = await cachedGet('/replenishments', params, 15000);
+      return {
+        items: res?.items || [],
+        total: res?.total || 0,
+        skip: res?.skip || 0,
+        limit: res?.limit || 50,
+        pending_count: res?.pending_count || 0,
+        approved_count: res?.approved_count || 0,
+      };
+    },
+    generateRecommendations: async (storeId: string = 'CA_1') => {
+      clearApiCache('/replenishments');
+      clearApiCache('/dashboard');
+      clearApiCache('/inventory');
+      const res = await apiClient.post('/replenishments/generate', null, { params: { store_id: storeId } });
+      return res.data;
+    },
+    listHistory: async (params?: {
+      skip?: number;
+      limit?: number;
+      store_id?: string;
+      item_id?: string;
+      status?: string;
+      start_date?: string;
+      end_date?: string;
+    }) => {
+      const res = await cachedGet('/replenishments/history', params, 20000);
+      return {
+        items: res?.items || [],
+        total: res?.total || 0,
+        skip: res?.skip || 0,
+        limit: res?.limit || 50,
+        pending_count: res?.pending_count || 0,
+        approved_count: res?.approved_count || 0,
+      };
+    },
+    adjustQuantity: async (recId: string, data: { final_qty: number; reason: string }) => {
+      clearApiCache('/replenishments');
+      clearApiCache('/dashboard');
+      const res = await apiClient.put(`/replenishments/${recId}/adjust`, data);
+      return res.data;
+    },
+    approve: async (recId: string) => {
+      clearApiCache('/replenishments');
+      clearApiCache('/inventory');
+      clearApiCache('/dashboard');
+      const res = await apiClient.post(`/replenishments/${recId}/approve`);
+      return res.data;
+    },
+    reject: async (recId: string, data?: { reason?: string }) => {
+      clearApiCache('/replenishments');
+      clearApiCache('/dashboard');
+      const res = await apiClient.post(`/replenishments/${recId}/reject`, data || { reason: 'Rejected by manager' });
+      return res.data;
+    },
+    cancel: async (recId: string, data: { reason: string }) => {
+      clearApiCache('/replenishments');
+      clearApiCache('/inventory');
+      clearApiCache('/dashboard');
+      const res = await apiClient.post(`/replenishments/${recId}/cancel`, data);
+      return res.data;
+    },
+    downloadCsv: async (storeId?: string, status?: string) => {
+      const res = await apiClient.get('/replenishments/export', {
+        params: { store_id: storeId, status },
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `replenishment_recommendations_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     },
   },
 
@@ -797,6 +942,34 @@ export const api = {
       const res = await apiClient.post('/ml/models', data);
       return res.data;
     },
+    createBatchSchedule: async (data: {
+      name: string;
+      cron_expression?: string;
+      model_name?: string;
+      horizon?: number;
+      store_id?: string;
+      auto_trigger_optimization?: boolean;
+    }) => {
+      const res = await apiClient.post('/ml/schedule', data);
+      return res.data;
+    },
+    listBatchSchedules: async () => {
+      const res = await apiClient.get('/ml/schedule');
+      return res.data;
+    },
+    deleteBatchSchedule: async (scheduleId: string) => {
+      const res = await apiClient.delete(`/ml/schedule/${scheduleId}`);
+      return res.data;
+    },
+    triggerPipelineRun: async (data: {
+      model_name?: string;
+      horizon?: number;
+      store_id: string;
+    }) => {
+      clearApiCache();
+      const res = await apiClient.post('/ml/pipeline/trigger-run', data);
+      return res.data;
+    },
   },
 
   settings: {
@@ -866,107 +1039,45 @@ export const api = {
   models: {
     getPerformanceMetrics: async () => {
       try {
-        const modelsRes = await apiClient.get('/ml/models').catch(() => ({ data: { items: [] } }));
+        const [modelsRes, compareRes] = await Promise.all([
+          apiClient.get('/ml/models').catch(() => ({ data: { items: [] } })),
+          apiClient.get('/forecasts/FOODS_1_001/compare').catch(() => ({ data: { comparison: [] } })),
+        ]);
         const items = unwrapItems(modelsRes.data);
 
-        if (items.length > 0) {
-          const kpis = items.map((m: any) => ({
-            id: m.id,
-            title: `${m.name || m.algorithm.toUpperCase()} (${m.version || 'v1'})`,
-            type: m.is_production ? 'best' : 'challenger',
-            isProduction: m.is_production,
-            metrics: {
-              mase: m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : '0.68',
-              rmse: m.metrics?.rmse != null ? Number(m.metrics.rmse).toFixed(1) : '5.1',
-              mae: m.metrics?.mae != null ? Number(m.metrics.mae).toFixed(1) : '4.0',
-            },
-            algorithm: m.algorithm,
-            createdAt: m.created_at,
-          }));
+        const kpis = items.map((m: any) => ({
+          id: m.id,
+          title: `${m.name || m.algorithm.toUpperCase()} (${m.version || 'v1'})`,
+          type: m.is_production ? 'best' : 'challenger',
+          isProduction: m.is_production,
+          metrics: {
+            mase: m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : (m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(2) : '-'),
+            rmse: m.metrics?.rmse != null ? Number(m.metrics.rmse).toFixed(1) : '-',
+            mae: m.metrics?.mae != null ? Number(m.metrics.mae).toFixed(1) : '-',
+            wrmsse: m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(3) : '-',
+          },
+          algorithm: m.algorithm,
+          createdAt: m.created_at,
+        }));
 
-          return {
-            kpis,
-            scatterData: [
-              { x: 1.2, y: 1.1, fill: '#0d9488' },
-              { x: 2.1, y: 2.2, fill: '#0d9488' },
-              { x: 2.8, y: 2.7, fill: '#0d9488' },
-              { x: 3.4, y: 3.5, fill: '#0d9488' },
-              { x: 4.1, y: 4.0, fill: '#0d9488' },
-              { x: 4.8, y: 4.9, fill: '#0d9488' },
-            ],
-            shapValues: [
-              { feature: 'Historical Sales (Lag 7)', pct: '88%', val: '+0.34' },
-              { feature: 'Day of Week & Seasonality', pct: '65%', val: '+0.25' },
-              { feature: 'Promotion Discount Lift', pct: '48%', val: '+0.18' },
-              { feature: 'Store Location Clustering', pct: '32%', val: '+0.12' },
-              { feature: 'Lead Time Variability', pct: '24%', val: '-0.09' },
-            ],
-            comparisonTable: [
-              { metric: 'Forecast Horizon MASE', static: '1.24', ml: '0.64', improvement: '+48.4% Accuracy' },
-              { metric: 'Safety Stock Requirement', static: '450 units', ml: '310 units', improvement: '-31.1% Inventory' },
-              { metric: 'Stockout Probability', static: '4.8%', ml: '1.2%', improvement: '-75.0% Stockouts' },
-              { metric: 'Optimal Reorder Cycle', static: '14 Days', ml: '10 Days', improvement: '+28.5% Turnover' },
-            ],
-          };
-        }
+        const comparePoints = compareRes.data?.comparison || [];
+        const scatterData = comparePoints.map((c: any) => ({
+          x: Number(c.actual),
+          y: Number(c.predicted),
+          fill: '#0d9488',
+        }));
+
+        return {
+          kpis,
+          scatterData,
+        };
       } catch (err) {
         console.error('getPerformanceMetrics error', err);
+        return {
+          kpis: [],
+          scatterData: [],
+        };
       }
-
-      return {
-        kpis: [
-          { title: 'TFT Seasonal Model', type: 'best', isProduction: true, metrics: { mase: '0.64', rmse: '4.8', mae: '3.9' } },
-          { title: 'LightGBM Baseline', type: 'challenger', isProduction: false, metrics: { mase: '0.78', rmse: '5.6', mae: '4.4' } },
-          { title: 'Seasonal ARIMA', type: 'baseline', isProduction: false, metrics: { mase: '1.12', rmse: '8.4', mae: '6.7' } },
-        ],
-        scatterData: [
-          { x: 1.2, y: 1.1, fill: '#0d9488' },
-          { x: 2.1, y: 2.2, fill: '#0d9488' },
-          { x: 2.8, y: 2.7, fill: '#0d9488' },
-          { x: 3.4, y: 3.5, fill: '#0d9488' },
-          { x: 4.1, y: 4.0, fill: '#0d9488' },
-          { x: 4.8, y: 4.9, fill: '#0d9488' },
-        ],
-        shapValues: [
-          { feature: 'Historical Sales (Lag 7)', pct: '88%', val: '+0.34' },
-          { feature: 'Day of Week & Seasonality', pct: '65%', val: '+0.25' },
-          { feature: 'Promotion Discount Lift', pct: '48%', val: '+0.18' },
-          { feature: 'Store Location Clustering', pct: '32%', val: '+0.12' },
-          { feature: 'Lead Time Variability', pct: '24%', val: '-0.09' },
-        ],
-        comparisonTable: [
-          { metric: 'Forecast Horizon MASE', static: '1.24', ml: '0.64', improvement: '+48.4% Accuracy' },
-          { metric: 'Safety Stock Requirement', static: '450 units', ml: '310 units', improvement: '-31.1% Inventory' },
-          { metric: 'Stockout Probability', static: '4.8%', ml: '1.2%', improvement: '-75.0% Stockouts' },
-          { metric: 'Optimal Reorder Cycle', static: '14 Days', ml: '10 Days', improvement: '+28.5% Turnover' },
-        ],
-      };
-    },
-    getCostSimulation: async () => {
-      return {
-        chartData: [
-          { sl: '90%', cost: 4200 },
-          { sl: '92%', cost: 4400 },
-          { sl: '95%', cost: 4800 },
-          { sl: '98%', cost: 5250 },
-          { sl: '99%', cost: 6300 },
-        ],
-        currentPolicy: {
-          holding: '$4,200',
-          stockout: '$1,800',
-          total: '$6,000',
-        },
-        simulatedPolicy: {
-          holding: '$4,800',
-          stockout: '$450',
-          total: '$5,250',
-        },
-        delta: {
-          holding: '+14%',
-          stockout: '-75%',
-          total: '-12.5%',
-        },
-      };
     },
   },
 
@@ -1039,16 +1150,59 @@ export const api = {
 
       return {
         templates: [
-          { title: 'Inventory Reconciliation', desc: 'Summary of inventory cycles, physical counts, and variance history', icon: 'TrendingUp' },
-          { title: 'Stockout Risk Assessment', desc: 'Analysis of SKUs approaching reorder points across warehouses', icon: 'Activity' },
-          { title: 'Supplier Lead Time Audit', desc: 'Fulfillment accuracy and delivery performance breakdown', icon: 'Grid' },
-          { title: 'Master Data Integrity Report', desc: 'SKU attributes, classification gaps, and category mapping', icon: 'Settings' },
+          { title: 'Forecast Accuracy Analysis (UC39)', desc: 'MAE, RMSE, MASE, WRMSSE split by ABC class & top deviating SKUs', icon: 'TrendingUp', id: 'forecast-accuracy' },
+          { title: 'Inventory Turnover & DOS (UC40)', desc: 'Days of Supply, turnover ratios, dead stock, and active inventory valuation', icon: 'Activity', id: 'inventory-performance' },
+          { title: 'Historical Backtesting Simulation (UC41)', desc: 'Simulate stockout reduction and service-level achievement over historical periods', icon: 'Settings', id: 'backtest' },
+          { title: 'Cost Comparison: ML vs Baseline (UC42)', desc: 'Holding, ordering, and stockout penalty cost analysis across categories', icon: 'Grid', id: 'cost-comparison' },
         ],
-        logs: logs.length > 0 ? logs : [
-          { name: 'Monthly_Inventory_Reconciliation.csv', type: 'INVENTORY', date: 'Oct 24, 2024', format: 'CSV', formatClass: 'csv', size: '1.2 MB', status: 'READY', action: 'Download' },
-          { name: 'Q3_Safety_Stock_Audit.pdf', type: 'SAFETY_STOCK', date: 'Oct 20, 2024', format: 'PDF', formatClass: 'pdf', size: '3.4 MB', status: 'READY', action: 'Download' },
-        ],
+        logs: logs,
       };
+    },
+    getForecastAccuracy: async (params?: {
+      model_name?: string;
+      start_date?: string;
+      end_date?: string;
+      store_id?: string;
+      abc_class?: string;
+    }) => {
+      return cachedGet('/reports/forecast-accuracy', params, 60000);
+    },
+    getInventoryPerformance: async (params?: {
+      store_id?: string;
+      category?: string;
+      limit?: number;
+      offset?: number;
+    }) => {
+      return cachedGet('/reports/inventory-performance', params, 60000);
+    },
+    runBacktesting: async (data: {
+      model_name?: string;
+      backtest_days?: number;
+      store_id?: string;
+      target_service_level?: number;
+    }) => {
+      const res = await apiClient.post('/reports/backtesting', data);
+      return res.data;
+    },
+    getCostComparison: async (params?: {
+      store_id?: string;
+      category?: string;
+    }) => {
+      return cachedGet('/reports/cost-comparison', params, 60000);
+    },
+    downloadReportCsv: async (reportType: string, storeId?: string) => {
+      const res = await apiClient.get('/reports/export', {
+        params: { report_type: reportType, store_id: storeId },
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${reportType}_report_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     },
   },
 };

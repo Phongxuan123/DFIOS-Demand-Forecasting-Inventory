@@ -9,7 +9,7 @@ import {
   Lightbulb,
   CheckCircle2,
 } from 'lucide-react';
-import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine, Tooltip } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
@@ -228,12 +228,20 @@ export const ModelPerformance: React.FC = () => {
   const handleSensitivityUpdate = async (sl: number, lt: number, hr: number, oc: number) => {
     try {
       const baselineSl = serviceLevelConfig?.default_service_level || 0.95;
-      const slDelta = (sl / 100) - baselineSl;
-      const ltDelta = (lt - 7) / 7;
+      const targetSl = sl / 100;
+      const baseLt = 7;
+      const slDeltas = Array.from(new Set([
+        -0.10, -0.05, -0.02, 0.0, Number((targetSl - baselineSl).toFixed(4)), 0.02, 0.04
+      ])).sort((a, b) => a - b);
+
+      const ltDeltas = Array.from(new Set([
+        -0.2, -0.1, 0.0, Number(((lt - baseLt) / baseLt).toFixed(4)), 0.1, 0.2
+      ])).sort((a, b) => a - b);
+
       const res = await api.optimization.runSensitivityAnalysis({
         store_id: selectedStore || 'CA_1',
-        service_level_deltas: [slDelta - 0.04, slDelta - 0.02, slDelta, slDelta + 0.02, slDelta + 0.04],
-        lead_time_deltas: [ltDelta - 0.2, ltDelta - 0.1, ltDelta, ltDelta + 0.1, ltDelta + 0.2],
+        service_level_deltas: slDeltas,
+        lead_time_deltas: ltDeltas,
         holding_cost_rate: hr / 100,
         order_cost: oc,
       });
@@ -243,15 +251,51 @@ export const ModelPerformance: React.FC = () => {
     }
   };
 
-  // Compare Table Filtering & Pagination
-  const compareCategories = useMemo(() => {
-    const items = compareStaticData?.items || [];
-    const cats = Array.from(new Set(items.map((it: any) => it.category).filter(Boolean))) as string[];
-    return ['All', ...cats];
+  // Effective comparison items strictly from Backend (UC31)
+  const effectiveCompareItems = useMemo(() => {
+    if (compareStaticData?.items && Array.isArray(compareStaticData.items)) {
+      return compareStaticData.items;
+    }
+    return [];
   }, [compareStaticData?.items]);
 
+  // Aggregate portfolio summary stats strictly from Backend
+  const portfolioStats = useMemo(() => {
+    const totalStaticHolding = effectiveCompareItems.reduce(
+      (acc: number, it: any) => acc + (it.static_annual_holding_cost || 0),
+      0
+    );
+    const totalMlHolding = effectiveCompareItems.reduce(
+      (acc: number, it: any) => acc + (it.ml_annual_holding_cost || 0),
+      0
+    );
+    const totalSavings = compareStaticData?.total_holding_cost_savings != null
+      ? compareStaticData.total_holding_cost_savings
+      : effectiveCompareItems.reduce((acc: number, it: any) => acc + (it.holding_cost_savings || 0), 0);
+
+    const avgReductionPct = compareStaticData?.avg_ss_reduction_percent != null
+      ? compareStaticData.avg_ss_reduction_percent
+      : totalStaticHolding > 0
+        ? ((totalStaticHolding - totalMlHolding) / totalStaticHolding) * 100
+        : 0;
+
+    return {
+      totalStaticHolding: Math.round(totalStaticHolding),
+      totalMlHolding: Math.round(totalMlHolding),
+      totalSavings: Math.round(totalSavings),
+      avgReductionPct: Number(avgReductionPct.toFixed(1)),
+      totalSkus: effectiveCompareItems.length,
+    };
+  }, [effectiveCompareItems, compareStaticData]);
+
+  // Compare Table Filtering & Pagination
+  const compareCategories = useMemo(() => {
+    const cats = Array.from(new Set(effectiveCompareItems.map((it: any) => it.category).filter(Boolean))) as string[];
+    return ['All', ...cats];
+  }, [effectiveCompareItems]);
+
   const filteredCompareItems = useMemo(() => {
-    let list = compareStaticData?.items || [];
+    let list = effectiveCompareItems;
     if (compareCategory !== 'All') {
       list = list.filter((it: any) => it.category === compareCategory);
     }
@@ -263,42 +307,57 @@ export const ModelPerformance: React.FC = () => {
       );
     }
     return list;
-  }, [compareStaticData?.items, compareCategory, compareSearch]);
+  }, [effectiveCompareItems, compareCategory, compareSearch]);
 
   const paginatedCompareItems = useMemo(() => {
     const start = (comparePage - 1) * comparePageSize;
     return filteredCompareItems.slice(start, start + comparePageSize);
   }, [filteredCompareItems, comparePage, comparePageSize]);
 
-  // Derived Dynamic Simulation Calculations
+  // Dynamic Simulation Calculations strictly bound to Backend Scenarios
   const simMetrics = useMemo(() => {
-    const baseHolding = sensitivityData?.baseline_scenario?.holding_cost != null
-      ? Math.round(sensitivityData.baseline_scenario.holding_cost)
-      : 3500;
-    const baseStockout = sensitivityData?.baseline_scenario?.stockout_cost != null
-      ? Math.round(sensitivityData.baseline_scenario.stockout_cost)
-      : 2500;
-    const baseTotal = baseHolding + baseStockout;
+    const baseline = sensitivityData?.baseline_scenario;
+    const baseHolding = baseline?.holding_cost != null ? Math.round(baseline.holding_cost) : 0;
+    const baseStockout = baseline?.stockout_cost != null ? Math.round(baseline.stockout_cost) : 0;
+    const baseTotal = baseline?.total_cost != null ? Math.round(baseline.total_cost) : (baseHolding + baseStockout);
 
-    const zFactor = Math.pow(simServiceLevel / 95, 2.8);
-    const ltFactor = Math.sqrt(simLeadTime / 7);
-    const holdingRateFactor = simHoldingRate / 20;
+    const scenarios: any[] = sensitivityData?.scenarios || [];
+    const targetSl = simServiceLevel / 100;
 
-    const simHolding = Math.round(baseHolding * zFactor * ltFactor * holdingRateFactor);
-    const stockoutFactor = Math.max(0.04, Math.pow((100 - simServiceLevel) / 5, 1.4));
-    const simStockout = Math.round(baseStockout * stockoutFactor * ltFactor);
-    const simTotal = simHolding + simStockout;
+    // Find the scenario from BE that best matches current simulated Service Level and Lead Time
+    let chosenScenario: any = null;
+    let minDistance = Number.MAX_VALUE;
 
-    const netVariance = simTotal - baseTotal;
-    const netVariancePct = Number(((netVariance / baseTotal) * 100).toFixed(1));
+    for (const scn of scenarios) {
+      const slDist = Math.abs((scn.service_level ?? 0.95) - targetSl);
+      const ltDist = Math.abs((scn.lead_time_days ?? 7) - simLeadTime) / 7;
+      const totalDist = slDist * 2 + ltDist;
+      if (totalDist < minDistance) {
+        minDistance = totalDist;
+        chosenScenario = scn;
+      }
+    }
+
+    if (!chosenScenario || (Math.abs(targetSl - (baseline?.service_level ?? 0.95)) < 0.005 && simLeadTime === (baseline?.lead_time_days ?? 7))) {
+      chosenScenario = baseline;
+    }
+
+    const simHolding = chosenScenario?.holding_cost != null ? Math.round(chosenScenario.holding_cost) : baseHolding;
+    const simStockout = chosenScenario?.stockout_cost != null ? Math.round(chosenScenario.stockout_cost) : baseStockout;
+    const simTotal = chosenScenario?.total_cost != null ? Math.round(chosenScenario.total_cost) : (simHolding + simStockout);
+
+    const netVariance = chosenScenario?.cost_difference_vs_baseline != null
+      ? Math.round(chosenScenario.cost_difference_vs_baseline)
+      : (simTotal - baseTotal);
+    const netVariancePct = baseTotal > 0 ? Number(((netVariance / baseTotal) * 100).toFixed(1)) : 0;
 
     const holdingDelta = simHolding - baseHolding;
-    const holdingDeltaPct = Number(((holdingDelta / baseHolding) * 100).toFixed(1));
+    const holdingDeltaPct = baseHolding > 0 ? Number(((holdingDelta / baseHolding) * 100).toFixed(1)) : 0;
 
     const stockoutDelta = simStockout - baseStockout;
-    const stockoutDeltaPct = Number(((stockoutDelta / baseStockout) * 100).toFixed(1));
+    const stockoutDeltaPct = baseStockout > 0 ? Number(((stockoutDelta / baseStockout) * 100).toFixed(1)) : 0;
 
-    const holdingShare = Math.round((simHolding / Math.max(1, simTotal)) * 100);
+    const holdingShare = simTotal > 0 ? Math.round((simHolding / simTotal) * 100) : 50;
     const stockoutShare = 100 - holdingShare;
 
     return {
@@ -318,24 +377,59 @@ export const ModelPerformance: React.FC = () => {
       stockoutShare,
       isSaving: netVariance <= 0,
     };
-  }, [simServiceLevel, simLeadTime, simHoldingRate, simOrderCost, sensitivityData?.baseline_scenario]);
+  }, [simServiceLevel, simLeadTime, sensitivityData]);
 
+  // Trade-off Frontier Curve mapped directly from BE Sensitivity Analysis Scenarios
   const sensitivityChartData = useMemo(() => {
-    if (sensitivityData?.scenarios && sensitivityData.scenarios.length > 0) {
-      return sensitivityData.scenarios.map((s: any) => ({
-        sl: `${Math.round(s.service_level * 100)}%`,
-        cost: Math.round(s.total_cost),
-        holding: Math.round(s.holding_cost),
-        stockout: Math.round(s.stockout_cost),
-      }));
+    const scenarios: any[] = sensitivityData?.scenarios || [];
+    if (scenarios.length === 0) {
+      if (sensitivityData?.baseline_scenario) {
+        const b = sensitivityData.baseline_scenario;
+        const slPct = Math.round(b.service_level * 100);
+        return [{
+          sl: `${slPct}%`,
+          rawSl: slPct,
+          cost: Math.round(b.total_cost),
+          holding: Math.round(b.holding_cost),
+          stockout: Math.round(b.stockout_cost),
+        }];
+      }
+      return [];
     }
-    return [
-      { sl: '90%', cost: 12500, holding: 6800, stockout: 5700 },
-      { sl: '95%', cost: 14200, holding: 9200, stockout: 5000 },
-      { sl: '98%', cost: 18600, holding: 15400, stockout: 3200 },
-      { sl: '99%', cost: 24500, holding: 22100, stockout: 2400 },
-    ];
-  }, [sensitivityData?.scenarios]);
+
+    // Pick distinct lead time closest to user's selected simLeadTime
+    const distinctLts = Array.from(new Set(scenarios.map((s: any) => s.lead_time_days))) as number[];
+    const targetLt = distinctLts.reduce((prev, curr) =>
+      Math.abs(curr - simLeadTime) < Math.abs(prev - simLeadTime) ? curr : prev, distinctLts[0] || simLeadTime
+    );
+
+    const ltScenarios = scenarios.filter((s: any) => s.lead_time_days === targetLt);
+    const combined = [...ltScenarios];
+    if (sensitivityData?.baseline_scenario && sensitivityData.baseline_scenario.lead_time_days === targetLt) {
+      if (!combined.some((s: any) => Math.abs(s.service_level - sensitivityData.baseline_scenario.service_level) < 0.001)) {
+        combined.push(sensitivityData.baseline_scenario);
+      }
+    }
+
+    combined.sort((a: any, b: any) => a.service_level - b.service_level);
+
+    const seen = new Set<number>();
+    const result: any[] = [];
+    for (const scn of combined) {
+      const slPct = Math.round(scn.service_level * 100);
+      if (seen.has(slPct)) continue;
+      seen.add(slPct);
+      result.push({
+        sl: `${slPct}%`,
+        rawSl: slPct,
+        cost: Math.round(scn.total_cost),
+        holding: Math.round(scn.holding_cost),
+        stockout: Math.round(scn.stockout_cost),
+      });
+    }
+
+    return result;
+  }, [sensitivityData, simLeadTime]);
 
   const renderPerformanceTab = () => (
     <>
@@ -463,40 +557,62 @@ export const ModelPerformance: React.FC = () => {
         {/* Left: Accuracy Comparison */}
         <div className="mp-acc-panel">
           <h2 className="mp-panel-title">Accuracy Metric Comparison</h2>
-          <div style={{ height: '250px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <div style={{ minHeight: '250px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <div className="acc-metric-group">
               <div className="acc-metric-title">MASE (Lower is Better)</div>
               <div className="acc-bars">
-                <div className="acc-bar-item">
-                  <div className="acc-bar-bg" style={{ width: '180px' }}></div>
-                  <span className="acc-bar-label">Baseline Naive (1.12)</span>
-                </div>
-                <div className="acc-bar-item">
-                  <div className="acc-bar-bg" style={{ width: '130px' }}></div>
-                  <span className="acc-bar-label">XGBoost Challenger (0.78)</span>
-                </div>
-                <div className="acc-bar-item">
-                  <div className="acc-bar-bg" style={{ width: '100px', backgroundColor: '#0d9488' }}></div>
-                  <span className="acc-bar-label font-bold text-teal">LightGBM Champion (0.64)</span>
-                </div>
+                {(data?.kpis || []).length > 0 ? (
+                  data.kpis.map((kpi: any, idx: number) => {
+                    const maseNum = parseFloat(kpi.metrics?.mase);
+                    const widthPx = !isNaN(maseNum) && maseNum > 0 ? Math.min(200, Math.max(35, Math.round(maseNum * 120))) : 80;
+                    const isProd = kpi.isProduction || kpi.type === 'best';
+                    return (
+                      <div className="acc-bar-item" key={kpi.id || idx}>
+                        <div
+                          className="acc-bar-bg"
+                          style={{
+                            width: `${widthPx}px`,
+                            backgroundColor: isProd ? '#0d9488' : '#94a3b8',
+                          }}
+                        />
+                        <span className={`acc-bar-label ${isProd ? 'font-bold text-teal' : ''}`}>
+                          {kpi.title} ({kpi.metrics?.mase ?? '-'})
+                        </span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-xs text-slate-400 py-3">Chưa có mô hình trong Model Registry</div>
+                )}
               </div>
             </div>
 
             <div className="acc-metric-group">
               <div className="acc-metric-title">MAE (Scaled Error)</div>
               <div className="acc-bars">
-                <div className="acc-bar-item">
-                  <div className="acc-bar-bg" style={{ width: '140px' }}></div>
-                  <span className="acc-bar-label">Baseline (6.7)</span>
-                </div>
-                <div className="acc-bar-item">
-                  <div className="acc-bar-bg" style={{ width: '100px' }}></div>
-                  <span className="acc-bar-label">XGBoost (4.4)</span>
-                </div>
-                <div className="acc-bar-item">
-                  <div className="acc-bar-bg" style={{ width: '85px', backgroundColor: '#0d9488' }}></div>
-                  <span className="acc-bar-label font-bold text-teal">LightGBM (3.9)</span>
-                </div>
+                {(data?.kpis || []).length > 0 ? (
+                  data.kpis.map((kpi: any, idx: number) => {
+                    const maeNum = parseFloat(kpi.metrics?.mae);
+                    const widthPx = !isNaN(maeNum) && maeNum > 0 ? Math.min(200, Math.max(35, Math.round(maeNum * 25))) : 80;
+                    const isProd = kpi.isProduction || kpi.type === 'best';
+                    return (
+                      <div className="acc-bar-item" key={kpi.id || idx}>
+                        <div
+                          className="acc-bar-bg"
+                          style={{
+                            width: `${widthPx}px`,
+                            backgroundColor: isProd ? '#0d9488' : '#94a3b8',
+                          }}
+                        />
+                        <span className={`acc-bar-label ${isProd ? 'font-bold text-teal' : ''}`}>
+                          {kpi.title} ({kpi.metrics?.mae ?? '-'})
+                        </span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-xs text-slate-400 py-3">Chưa có mô hình trong Model Registry</div>
+                )}
               </div>
             </div>
           </div>
@@ -506,14 +622,20 @@ export const ModelPerformance: React.FC = () => {
         <div className="mp-resid-panel">
           <h2 className="mp-panel-title">Residual Diagnostic Scatter</h2>
           <div style={{ height: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                <XAxis type="number" dataKey="x" name="Actual Demand" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} />
-                <YAxis type="number" dataKey="y" name="Predicted Demand" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} />
-                <ReferenceLine stroke="#e2e8f0" strokeDasharray="3 3" />
-                <Scatter name="Residuals" data={data?.scatterData || []} fill="#0d9488" />
-              </ScatterChart>
-            </ResponsiveContainer>
+            {data?.scatterData && data.scatterData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                  <XAxis type="number" dataKey="x" name="Actual Demand" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                  <YAxis type="number" dataKey="y" name="Predicted Demand" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                  <ReferenceLine stroke="#e2e8f0" strokeDasharray="3 3" />
+                  <Scatter name="Residuals" data={data.scatterData} fill="#0d9488" />
+                </ScatterChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
+                <span>Chưa có dữ liệu kiểm định phần dư (Residuals) từ các dự báo thực tế.</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -525,14 +647,14 @@ export const ModelPerformance: React.FC = () => {
       {/* Top Action Bar */}
       <div className="cost-sim-topbar">
         <div className="flex items-center gap-3">
-          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Target Store / Warehouse:</label>
+          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">CỬA HÀNG / KHO MỤC TIÊU:</label>
           <select
             value={selectedStore}
             onChange={(e) => handleStoreChange(e.target.value)}
             className="sim-store-select"
           >
             {storesList.map((st) => (
-              <option key={st} value={st}>Store {st}</option>
+              <option key={st} value={st}>Cửa hàng {st}</option>
             ))}
           </select>
         </div>
@@ -545,90 +667,90 @@ export const ModelPerformance: React.FC = () => {
             disabled={isRecomputing}
           >
             <RefreshCw size={14} className={isRecomputing ? 'animate-spin' : ''} />
-            <span>{isRecomputing ? 'Recomputing Parameters...' : 'Recompute ML Optimization'}</span>
+            <span>{isRecomputing ? 'Đang tính toán lại tham số...' : 'Tính toán lại tối ưu ML'}</span>
           </button>
         </div>
       </div>
 
       {recomputeMsg && (
         <div className="recompute-banner">
-          <CheckCircle2 size={16} className="text-teal-600 shrink-0" />
+          <CheckCircle2 size={16} className="text-slate-700 shrink-0" />
           <span>{recomputeMsg}</span>
         </div>
       )}
 
-      {/* Top Executive KPI Summary Cards */}
+      {/* Top Executive KPI Summary Cards (4 Columns) */}
       <div className="policy-summary-cards mb-6">
         {/* Card 1: Static Policy */}
         <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">Baseline Policy (Static)</span>
+            <span className="policy-stat-title">CHÍNH SÁCH CƠ SỞ (STATIC)</span>
             <span className="policy-stat-badge">Moving Average</span>
           </div>
           <div className="policy-stat-main">
-            <div className="policy-stat-val">
-              ${(compareStaticData?.items || []).reduce((acc: number, it: any) => acc + (it.static_annual_holding_cost || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) || simMetrics.baseTotal.toLocaleString()}
+            <div className="policy-stat-val text-slate-900">
+              ${portfolioStats.totalStaticHolding.toLocaleString()}
             </div>
-            <div className="policy-stat-sub">Annual Holding Cost (Traditional Formula)</div>
+            <div className="policy-stat-sub">Chi phí lưu kho hàng năm (Công thức thống kê truyền thống)</div>
           </div>
           <div className="policy-stat-grid">
             <div className="policy-stat-row">
-              <span className="text-slate-500">Methodology:</span>
+              <span className="text-slate-500">Phương pháp luận:</span>
               <span className="font-semibold text-slate-700">Moving Avg Sigma</span>
             </div>
             <div className="policy-stat-row">
-              <span className="text-slate-500">Inventory Buffer:</span>
+              <span className="text-slate-500">Cơ chế an toàn:</span>
               <span className="font-semibold text-slate-700">Static Buffer</span>
             </div>
           </div>
         </div>
 
         {/* Card 2: ML Optimal Policy */}
-        <div className="policy-stat-card simulated">
+        <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">ML Optimal Policy</span>
+            <span className="policy-stat-title">CHÍNH SÁCH TỐI ƯU ML</span>
             <span className="policy-stat-badge highlight">PRODUCTION ML</span>
           </div>
           <div className="policy-stat-main">
-            <div className="policy-stat-val text-teal-700">
-              ${(compareStaticData?.items || []).reduce((acc: number, it: any) => acc + (it.ml_annual_holding_cost || 0), 0).toLocaleString(undefined, { maximumFractionDigits: 0 }) || simMetrics.simTotal.toLocaleString()}
+            <div className="policy-stat-val text-slate-900">
+              ${portfolioStats.totalMlHolding.toLocaleString()}
             </div>
-            <div className="policy-stat-sub">Annual Holding Cost (ML Forecasting)</div>
+            <div className="policy-stat-sub">Chi phí lưu kho hàng năm (Dự báo nhu cầu ML)</div>
           </div>
           <div className="policy-stat-grid">
             <div className="policy-stat-row">
-              <span className="text-slate-500">Evaluated SKUs:</span>
-              <span className="font-semibold text-slate-700">{compareStaticData?.total_items || (compareStaticData?.items?.length || 0)} SKUs</span>
+              <span className="text-slate-500">Quy mô đánh giá:</span>
+              <span className="font-semibold text-slate-700">{portfolioStats.totalSkus} SKUs</span>
             </div>
             <div className="policy-stat-row">
-              <span className="text-slate-500">ML Lead Time sigma:</span>
+              <span className="text-slate-500">Độ lệch chuẩn LT:</span>
               <span className="font-semibold text-slate-700">Dynamic Conformal</span>
             </div>
           </div>
         </div>
 
         {/* Card 3: Net Annual Holding Savings */}
-        <div className="policy-stat-card savings">
+        <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">Net Annual Holding Savings</span>
+            <span className="policy-stat-title">TIẾT KIỆM LƯU KHO RÒNG</span>
             <span className="policy-stat-badge savings">PROVEN SAVINGS</span>
           </div>
           <div className="policy-stat-main">
             <div className="policy-stat-val text-emerald-700">
-              +${(compareStaticData?.total_holding_cost_savings ?? 1420).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              +${portfolioStats.totalSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </div>
             <div className="policy-stat-sub">
-              {(compareStaticData?.avg_ss_reduction_percent ?? 18.5).toFixed(1)}% Avg Safety Stock Reduction
+              {portfolioStats.avgReductionPct.toFixed(1)}% Giảm tồn kho an toàn trung bình
             </div>
           </div>
           <div className="policy-stat-grid">
             <div className="policy-stat-row">
-              <span className="text-slate-500">Buffer Stock Reduction:</span>
-              <span className="font-semibold text-emerald-700">-{(compareStaticData?.avg_ss_reduction_percent ?? 18.5).toFixed(1)}%</span>
+              <span className="text-slate-500">Giảm lượng đệm kho:</span>
+              <span className="font-semibold text-emerald-700">-{portfolioStats.avgReductionPct.toFixed(1)}%</span>
             </div>
             <div className="policy-stat-row">
-              <span className="text-slate-500">Working Capital:</span>
-              <span className="font-semibold text-emerald-700">Freed for Growth</span>
+              <span className="text-slate-500">Vốn lưu động:</span>
+              <span className="font-semibold text-emerald-700">Giải phóng cho kinh doanh</span>
             </div>
           </div>
         </div>
@@ -636,26 +758,26 @@ export const ModelPerformance: React.FC = () => {
         {/* Card 4: Target Service Level */}
         <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">Target Service Level</span>
-            <span className="policy-stat-badge">UC29 POLICY</span>
+            <span className="policy-stat-title">MỨC PHỤC VỤ MỤC TIÊU</span>
+            <span className="policy-stat-badge">TOÀN HỆ THỐNG</span>
           </div>
           <div className="policy-stat-main">
-            <div className="policy-stat-val text-slate-800">
+            <div className="policy-stat-val text-slate-900">
               {((serviceLevelConfig?.default_service_level ?? 0.95) * 100).toFixed(1)}%
             </div>
-            <div className="policy-stat-sub">System-wide Critical Ratio (tau)</div>
+            <div className="policy-stat-sub">Hệ số đáp ứng đơn hàng toàn hệ thống (tau)</div>
           </div>
           <div className="mt-2 pt-2 border-t border-slate-100 flex justify-between items-center">
-            <span className="text-xs text-slate-500">Admin Configuration</span>
+            <span className="text-xs text-slate-500">Cấu hình quản trị</span>
             <button
               type="button"
-              className="text-xs text-teal-700 hover:text-teal-900 font-bold underline"
+              className="text-xs text-slate-800 hover:text-slate-900 font-semibold px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50 transition-colors"
               onClick={() => {
                 setTargetServiceLevelInput(Math.round((serviceLevelConfig?.default_service_level || 0.95) * 100));
                 setIsServiceLevelModalOpen(true);
               }}
             >
-              Configure Target
+              Thiết lập tham số
             </button>
           </div>
         </div>
@@ -666,27 +788,27 @@ export const ModelPerformance: React.FC = () => {
         {/* Left side: Inputs */}
         <div className="cost-sim-controls">
           <div className="flex items-center gap-2 mb-4">
-            <Sliders size={16} className="text-teal-600" />
-            <h2 className="mp-panel-title">Sensitivity Analysis Parameters</h2>
+            <Sliders size={16} className="text-slate-700" />
+            <h3 className="mp-panel-title">Tham Số Phân Tích Độ Nhạy</h3>
           </div>
 
           <div className="sim-input-group">
-            <label className="sim-label">Target Product Segment</label>
+            <label className="sim-label">Phân khúc sản phẩm mục tiêu</label>
             <select
-              className="sim-select"
+              className="sim-input-field"
               value={simSegment}
               onChange={(e) => setSimSegment(e.target.value)}
             >
-              <option value="All SKUs (Global)">All SKUs (Global Portfolio)</option>
-              <option value="Segment AX (High Value Stable)">Segment AX (High Value Stable)</option>
-              <option value="Segment AY (High Value Variable)">Segment AY (High Value Variable)</option>
-              <option value="Segment BX (Medium Value Stable)">Segment BX (Medium Value Stable)</option>
+              <option value="All SKUs (Global)">Tất cả SKUs (Toàn bộ danh mục)</option>
+              <option value="Segment AX (High Value Stable)">Nhóm AX (Giá trị cao, nhu cầu ổn định)</option>
+              <option value="Segment AY (High Value Variable)">Nhóm AY (Giá trị cao, nhu cầu biến động)</option>
+              <option value="Segment BX (Medium Value Stable)">Nhóm BX (Giá trị TB, nhu cầu ổn định)</option>
             </select>
           </div>
 
           <div className="sim-input-group">
             <div className="sim-input-row">
-              <label className="sim-label">Service Level Target</label>
+              <label className="sim-label">Mức phục vụ mục tiêu (Service Level)</label>
               <span className="sim-value-badge">{simServiceLevel.toFixed(1)}%</span>
             </div>
             <input
@@ -702,17 +824,17 @@ export const ModelPerformance: React.FC = () => {
               }}
               className="sim-range-input"
             />
-            <div className="flex justify-between text-[11px] text-slate-400 mt-1">
-              <span>85.0% (Lean)</span>
-              <span>95.0% (Standard)</span>
-              <span>99.0% (Pharma/Critical)</span>
+            <div className="sim-range-labels">
+              <span>85.0% (Tiết kiệm vốn)</span>
+              <span>95.0% (Chuẩn FMCG)</span>
+              <span>99.0% (Hàng trọng yếu)</span>
             </div>
           </div>
 
           <div className="sim-input-group">
             <div className="sim-input-row">
-              <label className="sim-label">Expected Lead Time</label>
-              <span className="sim-value-badge">{simLeadTime} Days</span>
+              <label className="sim-label">Thời gian cung ứng kỳ vọng (Lead Time)</label>
+              <span className="sim-value-badge">{simLeadTime} Ngày</span>
             </div>
             <input
               type="range"
@@ -727,18 +849,18 @@ export const ModelPerformance: React.FC = () => {
               }}
               className="sim-range-input"
             />
-            <div className="flex justify-between text-[11px] text-slate-400 mt-1">
-              <span>1d Express</span>
-              <span>7d Standard</span>
-              <span>28d Ocean Freight</span>
+            <div className="sim-range-labels">
+              <span>1d Giao nhanh</span>
+              <span>7d Tiêu chuẩn</span>
+              <span>28d Đường biển</span>
             </div>
           </div>
 
           <div className="sim-input-group">
-            <label className="sim-label">Annual Holding Cost Rate (%)</label>
+            <label className="sim-label">Tỷ suất chi phí giữ hàng năm (%)</label>
             <input
               type="number"
-              className="sim-input"
+              className="sim-input-field"
               value={simHoldingRate}
               onChange={(e) => {
                 const val = Math.max(1, Number(e.target.value));
@@ -746,14 +868,14 @@ export const ModelPerformance: React.FC = () => {
                 handleSensitivityUpdate(simServiceLevel, simLeadTime, val, simOrderCost);
               }}
             />
-            <span className="text-[11px] text-slate-400 mt-1 block">Capital cost, warehousing & shrinkage rate</span>
+            <span className="sim-input-desc">Bao gồm chi phí vốn, kho bãi, hao hụt & bảo hiểm</span>
           </div>
 
           <div className="sim-input-group">
-            <label className="sim-label">Fixed Ordering Cost ($ per PO)</label>
+            <label className="sim-label">Chi phí đặt hàng cố định ($/đơn)</label>
             <input
               type="number"
-              className="sim-input"
+              className="sim-input-field"
               value={simOrderCost}
               onChange={(e) => {
                 const val = Math.max(0, Number(e.target.value));
@@ -761,14 +883,15 @@ export const ModelPerformance: React.FC = () => {
                 handleSensitivityUpdate(simServiceLevel, simLeadTime, simHoldingRate, val);
               }}
             />
-            <span className="text-[11px] text-slate-400 mt-1 block">Inbound handling, paperwork & logistics per order</span>
+            <span className="sim-input-desc">Chi phí xử lý chứng từ, tiếp nhận hàng & logistics</span>
           </div>
 
-          <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600">
-            <div className="flex items-center gap-1.5 font-semibold text-slate-700 mb-1">
-              <ShieldCheck size={14} className="text-teal-600" /> In-Memory Simulation
+          <div className="sim-notice-card">
+            <div className="sim-notice-title">
+              <ShieldCheck size={14} className="text-slate-700" />
+              <span>Mô Phỏng Tức Thời Trong Bộ Nhớ</span>
             </div>
-            Parameters run directly in-memory against inventory elasticity formulas without overriding persistent store data.
+            Tính toán trực tiếp theo mô hình đàn hồi tồn kho vi mô, không ghi đè dữ liệu cấu hình vận hành thực tế của cửa hàng.
           </div>
         </div>
 
@@ -777,82 +900,113 @@ export const ModelPerformance: React.FC = () => {
           {/* Visual Cost Composition Progress Bar */}
           <div className="cost-breakdown-section">
             <div className="cost-breakdown-header">
-              <span>Simulated Cost Composition Shift</span>
-              <span>Holding: {simMetrics.holdingShare}% | Stockout: {simMetrics.stockoutShare}%</span>
+              <span>CƠ CẤU CHI PHÍ DỰ KIẾN KHI ĐIỀU CHỈNH THAM SỐ</span>
+              <span>Lưu giữ kho: {simMetrics.holdingShare}% | Rủi ro thiếu hàng: {simMetrics.stockoutShare}%</span>
             </div>
             <div className="cost-breakdown-bar">
               <div
                 className="cost-breakdown-segment holding"
                 style={{ width: `${simMetrics.holdingShare}%` }}
-                title={`Holding Cost: $${simMetrics.simHolding.toLocaleString()}`}
+                title={`Chi phí lưu kho: $${simMetrics.simHolding.toLocaleString()}`}
               />
               <div
                 className="cost-breakdown-segment stockout"
                 style={{ width: `${simMetrics.stockoutShare}%` }}
-                title={`Stockout Risk: $${simMetrics.simStockout.toLocaleString()}`}
+                title={`Rủi ro thiếu hàng: $${simMetrics.simStockout.toLocaleString()}`}
               />
             </div>
             <div className="cost-breakdown-legend">
               <div className="legend-item">
                 <span className="legend-dot holding"></span>
-                <span>Inventory Holding Cost (${simMetrics.simHolding.toLocaleString()})</span>
+                <span>Chi phí giữ hàng dự kiến (${simMetrics.simHolding.toLocaleString()})</span>
               </div>
               <div className="legend-item">
                 <span className="legend-dot stockout"></span>
-                <span>Unmet Demand / Stockout Penalty (${simMetrics.simStockout.toLocaleString()})</span>
+                <span>Tổn thất thiếu hàng dự kiến (${simMetrics.simStockout.toLocaleString()})</span>
               </div>
             </div>
           </div>
 
-          {/* Chart Panel */}
-          <div className="cost-sim-chart-panel mb-4">
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="mp-panel-title">Total Expected Annual Cost vs. Target Service Level</h2>
-              <span className="text-xs text-slate-500">Frontier Curve ({sensitivityChartData.length} Scenarios)</span>
+          {/* Dynamic Frontier Curve Panel */}
+          <div className="cost-sim-chart-panel">
+            <div className="cost-chart-header">
+              <div>
+                <h3 className="cost-chart-title">Đường Biên Chi Phí Tổng Thể Kỳ Vọng Theo Mức Phục Vụ</h3>
+                <span className="cost-chart-sub">Đồ thị tương quan Trade-off Frontier (Thời gian cung ứng: {simLeadTime} ngày, Tỷ suất giữ hàng: {simHoldingRate}%)</span>
+              </div>
+              <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 bg-slate-900 inline-block"></span>
+                  <span className="font-semibold text-slate-700">Tổng chi phí</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 border-t border-dashed border-slate-500 inline-block"></span>
+                  <span className="text-slate-500">Giữ hàng</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 border-t border-dashed border-amber-600 inline-block"></span>
+                  <span className="text-amber-700">Thiếu hàng</span>
+                </div>
+              </div>
             </div>
             <div style={{ height: '220px' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={sensitivityChartData} margin={{ top: 15, right: 20, bottom: 15, left: 20 }}>
-                  <XAxis dataKey="sl" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                  <Line type="monotone" dataKey="cost" stroke="#0d9488" strokeWidth={2.5} dot={{ r: 4, fill: '#0d9488' }} />
+                  <XAxis dataKey="sl" axisLine={{ stroke: '#e2e8f0' }} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(val) => `$${(val / 1000).toFixed(1)}k`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderRadius: '6px', border: 'none', color: '#fff', fontSize: '12px' }}
+                    formatter={(val: any, name: any) => [
+                      `$${Number(val).toLocaleString()}`,
+                      name === 'cost' ? 'Tổng chi phí' : name === 'holding' ? 'Chi phí lưu kho' : 'Rủi ro thiếu hàng'
+                    ]}
+                  />
+                  <ReferenceLine x={`${Math.round(simServiceLevel)}%`} stroke="#0f172a" strokeDasharray="3 3" />
+                  <Line type="monotone" dataKey="holding" stroke="#64748b" strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="stockout" stroke="#d97706" strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="cost" stroke="#0f172a" strokeWidth={2.5} dot={{ r: 4, fill: '#0f172a' }} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Strategic Insights Box (From Backend UC32) */}
-          {sensitivityData?.insights && sensitivityData.insights.length > 0 && (
-            <div className="sim-insights-card">
-              <div className="sim-insights-header">
-                <Lightbulb size={16} className="text-teal-700" />
-                <h4 className="sim-insights-title">Strategic Optimization Insights</h4>
-              </div>
-              <ul className="sim-insights-list">
-                {sensitivityData.insights.map((ins: string, idx: number) => (
+          {/* Strategic Insights Card */}
+          <div className="sim-insights-card">
+            <div className="sim-insights-header">
+              <Lightbulb size={16} className="text-slate-700" />
+              <h4 className="sim-insights-title">Thông Tin Tối Ưu Hóa Chiến Lược</h4>
+            </div>
+            <ul className="sim-insights-list">
+              {sensitivityData?.insights && sensitivityData.insights.length > 0 ? (
+                sensitivityData.insights.map((ins: string, idx: number) => (
                   <li key={idx} className="sim-insights-item">
                     <span className="sim-insights-bullet">•</span>
                     <span>{ins}</span>
                   </li>
-                ))}
-              </ul>
-            </div>
-          )}
+                ))
+              ) : (
+                <li className="sim-insights-item text-slate-400 italic">
+                  Đang tổng hợp thông tin tối ưu hóa chiến lược từ mô hình phân tích Backend...
+                </li>
+              )}
+            </ul>
+          </div>
         </div>
       </div>
 
-      {/* Detailed Policy Cost Comparison Summary Table (UC31) */}
+      {/* Detailed Policy Cost Comparison Summary Table */}
       <div className="cost-sim-table-panel mt-6">
-        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+        <div className="sim-table-header-row">
           <div>
-            <h2 className="mp-panel-title">Detailed Policy Cost Comparison Summary (ML vs. Static Formula)</h2>
-            <span className="text-xs text-slate-500">
-              UC31 - Side-by-side comparison of ML Demand Forecasting vs. Moving Average Safety Stock across Store {selectedStore}
-            </span>
+            <h3 className="sim-table-title">Bảng Đối So Sánh Chi Tiết: Mô Hình ML vs. Thống Kê Truyền Thống</h3>
+            <div className="sim-table-sub">
+              So sánh chi tiết tồn kho an toàn, điểm đặt hàng và chi phí lưu kho theo từng mã sản phẩm tại Cửa hàng {selectedStore}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <input
               type="text"
-              placeholder="Search SKU or Product..."
+              placeholder="Tìm kiếm mã SKU, tên sản phẩm..."
               value={compareSearch}
               onChange={(e) => {
                 setCompareSearch(e.target.value);
@@ -869,7 +1023,7 @@ export const ModelPerformance: React.FC = () => {
               className="sim-cat-select"
             >
               {compareCategories.map((c) => (
-                <option key={c} value={c}>Category: {c}</option>
+                <option key={c} value={c}>Ngành hàng: {c === 'All' ? 'Tất cả' : c}</option>
               ))}
             </select>
           </div>
@@ -879,20 +1033,26 @@ export const ModelPerformance: React.FC = () => {
           <table className="sim-table-elevated">
             <thead>
               <tr>
-                <th>SKU / PRODUCT NAME</th>
-                <th>CATEGORY</th>
-                <th>SERVICE LEVEL / LT</th>
-                <th className="text-right">SAFETY STOCK (ML vs STATIC)</th>
-                <th className="text-right">REORDER POINT (ML vs STATIC)</th>
+                <th>MÃ SKU / TÊN SẢN PHẨM</th>
+                <th>NGÀNH HÀNG</th>
+                <th>MỨC PHỤC VỤ / LT</th>
+                <th className="text-right">TỒN KHO AN TOÀN (ML vs STATIC)</th>
+                <th className="text-right">ĐIỂM ĐẶT HÀNG (ROP)</th>
                 <th className="text-right">EOQ</th>
-                <th className="text-right">ANNUAL HOLDING SAVINGS</th>
+                <th className="text-right">TIẾT KIỆM LƯU KHO/NĂM</th>
               </tr>
             </thead>
             <tbody>
-              {filteredCompareItems.length === 0 ? (
+              {effectiveCompareItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-6 text-slate-400">
-                    No comparison items available for the selected filters.
+                  <td colSpan={7} className="text-center py-8 text-slate-400">
+                    Chưa có dữ liệu so sánh chính sách ML vs Static cho cửa hàng này. Vui lòng bấm &quot;Tính toán lại tối ưu ML&quot; để hệ thống cập nhật.
+                  </td>
+                </tr>
+              ) : filteredCompareItems.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-8 text-slate-400">
+                    Không tìm thấy sản phẩm phù hợp với bộ lọc tìm kiếm.
                   </td>
                 </tr>
               ) : (
@@ -902,40 +1062,40 @@ export const ModelPerformance: React.FC = () => {
                   return (
                     <tr key={item.item_id || idx}>
                       <td>
-                        <div className="font-bold text-slate-800">{item.item_id}</div>
+                        <div className="font-bold text-slate-900">{item.item_id}</div>
                         <div className="text-[11px] text-slate-500">{item.product_name || item.item_id}</div>
                       </td>
                       <td>
-                        <span className="text-xs font-semibold px-2 py-0.5 bg-slate-100 text-slate-700 rounded">
+                        <span className="text-xs font-semibold px-2 py-0.5 bg-slate-100 text-slate-700 rounded border border-slate-200">
                           {item.category || 'General'}
                         </span>
                       </td>
                       <td>
-                        <div className="text-xs font-medium text-slate-700">
+                        <div className="text-xs font-medium text-slate-800">
                           {((item.service_level || 0.95) * 100).toFixed(0)}% SL
                         </div>
                         <div className="text-[11px] text-slate-400">{item.lead_time_days || 7}d Lead Time</div>
                       </td>
                       <td className="text-right">
                         <div className="font-mono text-xs">
-                          <strong className="text-teal-700">{item.ml_safety_stock?.toFixed(1) || '0.0'}</strong>{' '}
+                          <strong className="text-slate-900">{item.ml_safety_stock?.toFixed(1) || '0.0'}</strong>{' '}
                           <span className="text-slate-400">vs</span>{' '}
                           <span className="text-slate-500 line-through">{item.static_safety_stock?.toFixed(1) || '0.0'}</span>
                         </div>
                         {ssDiff > 0 && (
                           <span className="mp-delta-pill success text-[10px] mt-0.5">
-                            -{ssDiff.toFixed(1)} buffer
+                            -{ssDiff.toFixed(1)} đệm kho
                           </span>
                         )}
                       </td>
                       <td className="text-right">
                         <div className="font-mono text-xs">
-                          <strong className="text-slate-800">{item.ml_reorder_point?.toFixed(1) || '0.0'}</strong>{' '}
+                          <strong className="text-slate-900">{item.ml_reorder_point?.toFixed(1) || '0.0'}</strong>{' '}
                           <span className="text-slate-400">vs</span>{' '}
                           <span className="text-slate-500">{item.static_reorder_point?.toFixed(1) || '0.0'}</span>
                         </div>
                       </td>
-                      <td className="text-right font-mono text-xs font-semibold text-slate-700">
+                      <td className="text-right font-mono text-xs font-semibold text-slate-800">
                         {item.ml_eoq?.toFixed(0) || '-'} u
                       </td>
                       <td className="text-right">
@@ -952,17 +1112,19 @@ export const ModelPerformance: React.FC = () => {
         </div>
 
         {filteredCompareItems.length > 0 && (
-          <Pagination
-            currentPage={comparePage}
-            totalItems={filteredCompareItems.length}
-            pageSize={comparePageSize}
-            onPageChange={setComparePage}
-            onPageSizeChange={(sz) => {
-              setComparePageSize(sz);
-              setComparePage(1);
-            }}
-            pageSizeOptions={[5, 10, 20, 50]}
-          />
+          <div className="mt-4">
+            <Pagination
+              currentPage={comparePage}
+              totalItems={filteredCompareItems.length}
+              pageSize={comparePageSize}
+              onPageChange={setComparePage}
+              onPageSizeChange={(sz) => {
+                setComparePageSize(sz);
+                setComparePage(1);
+              }}
+              pageSizeOptions={[5, 10, 20, 50]}
+            />
+          </div>
         )}
       </div>
     </div>

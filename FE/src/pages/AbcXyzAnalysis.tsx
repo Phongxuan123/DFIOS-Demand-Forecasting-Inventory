@@ -447,7 +447,9 @@ export const AbcXyzAnalysis: React.FC = () => {
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: '#94a3b8', padding: '1rem' }}>
                   <Info size={28} style={{ marginBottom: '0.5rem', opacity: 0.6 }} />
                   <p style={{ fontSize: '12px', margin: 0 }}>
-                    Nhấp vào bất kỳ ô nào trong ma trận 3x3 để xem chiến lược tồn kho, chu kỳ kiểm kê và chính sách bổ hàng tương ứng.
+                    {!canManage && selectedSegment !== 'All'
+                      ? 'Tài khoản có quyền Người xem (Viewer). Khuyến nghị chính sách tồn kho chi tiết chỉ dành cho Quản lý kho (Manager) và Quản trị viên (Admin).'
+                      : 'Nhấp vào bất kỳ ô nào trong ma trận 3x3 để xem chiến lược tồn kho, chu kỳ kiểm kê và chính sách bổ hàng tương ứng.'}
                   </p>
                 </div>
               )}

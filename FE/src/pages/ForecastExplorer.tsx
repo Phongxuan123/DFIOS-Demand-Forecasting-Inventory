@@ -2,11 +2,49 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Card } from '../components/ui/Card.tsx';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Line } from 'recharts';
-import { X, Download, FileSpreadsheet, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { X, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, SlidersHorizontal, Layers, Plus, Calendar, RotateCcw, TrendingUp, TrendingDown, ShieldCheck, BrainCircuit, ArrowUpRight, ArrowDownRight, Info } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './ForecastExplorer.css';
+
+const FEATURE_METADATA: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {
+  sell_price: {
+    label: 'Giá Bán Đơn Vị',
+    desc: 'Giá niêm yết tác động nghịch đảo lên độ nhạy giá và sức mua của khách hàng',
+    defaultDir: 'negative',
+  },
+  event_promotion: {
+    label: 'Chương Trình Khuyến Mãi',
+    desc: 'Chiến dịch giảm giá & xúc tiến kích thích đột biến lưu lượng và sản lượng bán',
+    defaultDir: 'positive',
+  },
+  day_of_week: {
+    label: 'Chu Kỳ Ngày Trong Tuần',
+    desc: 'Hành vi tiêu dùng tăng mạnh vào dịp cuối tuần so với các ngày đầu tuần',
+    defaultDir: 'positive',
+  },
+  lag_7: {
+    label: 'Doanh Số Cùng Kỳ Tuần Trước',
+    desc: 'Sản lượng tiêu thụ chu kỳ 7 ngày trước tạo quán tính nhu cầu tương quan cao',
+    defaultDir: 'positive',
+  },
+  rolling_mean_28: {
+    label: 'Tiêu Thụ Trung Bình 28 Ngày',
+    desc: 'Đường trung bình trượt 1 tháng định hình mức tiêu thụ cơ sở (Baseline Demand)',
+    defaultDir: 'positive',
+  },
+  event_name_1: {
+    label: 'Sự Kiện Đặc Biệt (Lễ Hội)',
+    desc: 'Tác động từ các kỳ nghỉ lễ quốc gia hoặc sự kiện thể thao lớn',
+    defaultDir: 'positive',
+  },
+  snap_ca: {
+    label: 'Chính Sách Trợ Cấp (SNAP CA)',
+    desc: 'Thời điểm giải ngân trợ cấp thực phẩm kích cầu mua sắm tại California',
+    defaultDir: 'positive',
+  },
+};
 
 export const ForecastExplorer: React.FC = () => {
   const { user } = useAuth();
@@ -94,7 +132,7 @@ export const ForecastExplorer: React.FC = () => {
 
       setData({ ...forecast, chartData: transformedChartData });
 
-      if (canEdit && targetSku) {
+      if (targetSku) {
         const [explRes, overRes] = await Promise.all([
           api.forecasting.getExplanation(targetSku, { store_id: store || selectedStore }).catch(() => null),
           api.forecasting.getOverrides(targetSku, { store_id: store || selectedStore }).catch(() => []),
@@ -104,13 +142,17 @@ export const ForecastExplorer: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load forecast explorer data', error);
-      setToast({ type: 'error', message: 'Không thể tải dữ liệu dự báo. Đang hiển thị dự báo mặc định.' });
+      setToast({ type: 'error', message: 'Không thể tải dữ liệu dự báo từ máy chủ. Vui lòng thử lại.' });
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
+    // 1. Kick off forecast fetch immediately at t=0
+    fetchForecast('FOODS_1_001', 28, 'CA_1');
+
+    // 2. Load dropdown filters concurrently
     const initFilters = async () => {
       try {
         const [catList, storeList, prodRes] = await Promise.all([
@@ -118,23 +160,12 @@ export const ForecastExplorer: React.FC = () => {
           api.inventory.getStores().catch(() => []),
           api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
         ]);
-        setCategories(catList || []);
-        setStores(storeList || []);
+        if (catList && catList.length) setCategories(catList);
+        if (storeList && storeList.length) setStores(storeList);
         const pList = prodRes?.list || [];
-        setProducts(pList);
-
-        let initialStore = '';
-        if (storeList && storeList.length > 0) {
-          initialStore = storeList[0];
-          setSelectedStore(initialStore);
-        }
-
-        const initialSku = pList.length > 0 ? pList[0].item_id : 'FOODS_1_001';
-        setSkuSearch(initialSku);
-        fetchForecast(initialSku, 28, initialStore);
+        if (pList.length) setProducts(pList);
       } catch (e) {
         console.error(e);
-        fetchForecast('FOODS_1_001', 28, '');
       }
     };
     initFilters();
@@ -378,6 +409,84 @@ export const ForecastExplorer: React.FC = () => {
     }
   };
 
+  const formatOverrideDate = (dateStr: string) => {
+    if (!dateStr) return { formatted: 'N/A', dayOfWeek: '' };
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return { formatted: dateStr, dayOfWeek: '' };
+      const dayNames = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+      const dayOfWeek = dayNames[d.getDay()] || '';
+      return { formatted: dateStr, dayOfWeek };
+    } catch {
+      return { formatted: dateStr, dayOfWeek: '' };
+    }
+  };
+
+  const parseOverrideReason = (reasonStr: string) => {
+    if (!reasonStr) return { category: 'Manual Adjustment', detail: '', catClass: 'override-cat-default', dotColor: '#64748b' };
+    let category = reasonStr.trim();
+    let detail = '';
+    const colonIndex = reasonStr.indexOf(':');
+    if (colonIndex !== -1) {
+      category = reasonStr.slice(0, colonIndex).trim();
+      detail = reasonStr.slice(colonIndex + 1).trim();
+    }
+
+    const lowerCat = category.toLowerCase();
+    let catClass = 'override-cat-default';
+    let dotColor = '#64748b';
+    if (lowerCat.includes('promot') || lowerCat.includes('khuyến mãi')) {
+      catClass = 'override-cat-promo';
+      dotColor = '#4f46e5';
+    } else if (lowerCat.includes('season') || lowerCat.includes('mùa vụ')) {
+      catClass = 'override-cat-season';
+      dotColor = '#0284c7';
+    } else if (lowerCat.includes('supply') || lowerCat.includes('đứt gãy') || lowerCat.includes('disrupt')) {
+      catClass = 'override-cat-supply';
+      dotColor = '#d97706';
+    }
+
+    return { category, detail, catClass, dotColor };
+  };
+
+  const overrideMetrics = useMemo(() => {
+    const count = overrides.length;
+    let totalDelta = 0;
+    let totalOriginal = 0;
+    let totalOverride = 0;
+    overrides.forEach((ov: any) => {
+      const orig = typeof ov.original_value === 'number' ? Math.round(ov.original_value) : (Number(ov.original_value) || 0);
+      const over = typeof ov.override_value === 'number' ? Math.round(ov.override_value) : (Number(ov.override_value) || 0);
+      totalDelta += (over - orig);
+      totalOriginal += orig;
+      totalOverride += over;
+    });
+    return {
+      count,
+      totalDelta,
+      totalOriginal,
+      totalOverride,
+    };
+  }, [overrides]);
+
+  const { maxShapScore, totalShapSum } = useMemo(() => {
+    if (!explanation?.features || explanation.features.length === 0) {
+      return { maxShapScore: 1, totalShapSum: 1 };
+    }
+    let max = 0.001;
+    let sum = 0;
+    explanation.features.forEach((f: any) => {
+      const score = Math.abs(
+        typeof f.importance_score === 'number'
+          ? f.importance_score
+          : (typeof f.importance === 'number' ? f.importance : 0)
+      );
+      if (score > max) max = score;
+      sum += score;
+    });
+    return { maxShapScore: max, totalShapSum: sum || 1 };
+  }, [explanation]);
+
   return (
     <div className="animate-fade-in mb-6">
       {/* Toast Notification */}
@@ -574,128 +683,420 @@ export const ForecastExplorer: React.FC = () => {
           )}
         </div>
 
-        {/* Manual Forecast Override Bar */}
-        <div className="override-section">
-          <div className="override-info">
-            <h4 className="override-title">Manual Forecast Override</h4>
-            <p className="override-desc">
-              Thủ kho và Quản lý có thể điều chỉnh thủ công dự báo kèm lý do bắt buộc khi có biến động thị trường hoặc chương trình đột xuất.
-            </p>
-            <div className="override-current">
-              <span className="override-label">Active Forecast Demand</span>
-              <span className="override-value">{data?.stats?.predictedDemand || 'N/A'}</span>
-            </div>
-          </div>
-          <div className="override-action">
-            {overrides.length > 0 && (
-              <span className="override-status text-teal">
-                {overrides.length} Manual Override(s) Active
-              </span>
-            )}
-            {canEdit && (
-              <div className="override-btn-group">
-                <button type="button" className="override-btn-secondary" onClick={handleOpenBulkOverride}>
-                  Bulk Override
-                </button>
-                <button type="button" className="override-btn" onClick={handleOpenOverride}>
-                  Single Override
-                </button>
+        {/* Manual Forecast Override & Governance Panel */}
+        <div className="override-panel">
+          <div className="override-panel-header">
+            <div className="override-header-left">
+              <div className="override-icon-wrapper">
+                <SlidersHorizontal size={18} />
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* Active Overrides List */}
-        {overrides.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-slate-200">
-            <h5 className="text-xs font-bold text-slate-700 uppercase mb-2">Active Override Entries</h5>
-            <div className="space-y-2">
-              {overrides.map((ov: any) => (
-                <div key={ov.id} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded border border-slate-200">
-                  <div>
-                    <span className="font-semibold text-slate-800">Date: {ov.forecast_date}</span> •
-                    <span className="text-slate-500 ml-1">
-                      Original: {typeof ov.original_value === 'number' ? Math.round(ov.original_value) : ov.original_value} → Override: <strong>{ov.override_value} units</strong>
+              <div className="override-title-area">
+                <div className="override-title-row">
+                  <h4 className="override-main-title">Manual Forecast Override & Governance</h4>
+                  {overrides.length > 0 ? (
+                    <span className="override-status-badge active">
+                      <span className="status-dot" />
+                      {overrides.length} Điều chỉnh đang kích hoạt
                     </span>
-                    <span className="text-slate-500 block mt-0.5">
-                      Reason: {ov.reason} <span className="text-slate-400">({ov.created_by || 'Staff'})</span>
+                  ) : (
+                    <span className="override-status-badge idle">
+                      <ShieldCheck size={12} />
+                      100% ML Baseline Active
                     </span>
-                  </div>
-                  {canEdit && (
-                    <button
-                      type="button"
-                      className="revert-btn"
-                      onClick={() => handleRevertOverride(ov.id)}
-                    >
-                      Revert Baseline
-                    </button>
                   )}
                 </div>
-              ))}
+                <p className="override-panel-desc">
+                  Can thiệp thủ công chỉ số dự báo khi có biến động thị trường hoặc chương trình đột xuất. Mọi thay đổi đều được lưu vết kiểm toán tự động.
+                </p>
+              </div>
+            </div>
+
+            <div className="override-header-right">
+              {canEdit && (
+                <>
+                  <button
+                    type="button"
+                    className="override-btn-secondary"
+                    onClick={handleOpenBulkOverride}
+                    title="Điều chỉnh dự báo hàng loạt theo % hoặc số lượng cố định"
+                  >
+                    <Layers size={14} className="override-btn-icon" />
+                    <span>Bulk Adjust</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="override-btn-primary"
+                    onClick={handleOpenOverride}
+                    title="Thêm can thiệp dự báo cho một ngày cụ thể"
+                  >
+                    <Plus size={15} className="override-btn-icon" />
+                    <span>Single Override</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
-        )}
+
+          {/* Executive Governance Summary Bar (sleek, single-row, no bulky boxes) */}
+          <div className="override-summary-bar">
+            <div className="override-summary-item">
+              <span className="override-summary-label">Can thiệp kích hoạt</span>
+              <div className="override-summary-val">
+                <span className="override-summary-val-main">{overrides.length}</span>
+                <span className="override-summary-val-sub">ngày / {horizon}d</span>
+              </div>
+            </div>
+
+            <div className="override-summary-divider" />
+
+            <div className="override-summary-item">
+              <span className="override-summary-label">Tác động ròng (Net Δ)</span>
+              <div className="override-summary-val">
+                <span
+                  className={`override-summary-delta ${
+                    overrideMetrics.totalDelta > 0
+                      ? 'delta-pos'
+                      : overrideMetrics.totalDelta < 0
+                      ? 'delta-neg'
+                      : 'delta-zero'
+                  }`}
+                >
+                  {overrideMetrics.totalDelta > 0 ? (
+                    <TrendingUp size={13} />
+                  ) : overrideMetrics.totalDelta < 0 ? (
+                    <TrendingDown size={13} />
+                  ) : null}
+                  <span>
+                    {overrideMetrics.totalDelta > 0
+                      ? `+${overrideMetrics.totalDelta.toLocaleString()}`
+                      : overrideMetrics.totalDelta.toLocaleString()}{' '}
+                    units
+                  </span>
+                  {overrideMetrics.totalOriginal > 0 && (
+                    <span className="override-summary-delta-pct">
+                      ({overrideMetrics.totalDelta > 0 ? '+' : ''}
+                      {Math.round((overrideMetrics.totalDelta / overrideMetrics.totalOriginal) * 100)}%)
+                    </span>
+                  )}
+                </span>
+              </div>
+            </div>
+
+            <div className="override-summary-divider" />
+
+            <div className="override-summary-item">
+              <span className="override-summary-label">Dự báo sau điều chỉnh</span>
+              <div className="override-summary-val">
+                <span className="override-summary-val-main">
+                  {data?.stats?.predictedDemand != null
+                    ? String(data.stats.predictedDemand).replace(/\s*units?/i, '')
+                    : '111'}
+                </span>
+                <span className="override-summary-val-sub">units</span>
+              </div>
+            </div>
+
+            <div className="override-summary-divider" />
+
+            <div className="override-summary-item">
+              <span className="override-summary-label">Kiểm soát kiểm toán</span>
+              <div className="override-summary-val">
+                <span className="override-summary-audit-chip">
+                  <ShieldCheck size={13} />
+                  <span>100% Ghi vết (Audit Logged)</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Active Overrides Table or Empty State */}
+          {overrides.length > 0 ? (
+            <div className="override-table-wrapper">
+              <table className="override-table">
+                <thead>
+                  <tr>
+                    <th>Target Date</th>
+                    <th>Baseline (Units)</th>
+                    <th>Override (Units)</th>
+                    <th>Variance Impact (Δ)</th>
+                    <th>Reason & Audit Notes</th>
+                    <th>Authorized By</th>
+                    {canEdit && <th style={{ textAlign: 'right' }}>Action</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {overrides.map((ov: any) => {
+                    const orig = typeof ov.original_value === 'number' ? Math.round(ov.original_value) : (Number(ov.original_value) || 0);
+                    const over = typeof ov.override_value === 'number' ? Math.round(ov.override_value) : (Number(ov.override_value) || 0);
+                    const diff = over - orig;
+                    const pct = orig > 0 ? Math.round((diff / orig) * 100) : (diff > 0 ? 100 : 0);
+                    const { formatted, dayOfWeek } = formatOverrideDate(ov.forecast_date);
+                    const { category, detail, catClass, dotColor } = parseOverrideReason(ov.reason);
+
+                    return (
+                      <tr key={ov.id}>
+                        <td>
+                          <div className="override-date-cell">
+                            <Calendar size={13} className="override-date-icon" />
+                            <span className="override-date-text">{formatted}</span>
+                            {dayOfWeek && <span className="override-day-tag">{dayOfWeek}</span>}
+                          </div>
+                        </td>
+                        <td>
+                          <span className="override-baseline-cell">
+                            {orig.toLocaleString()}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="override-val-cell">
+                            {over.toLocaleString()}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className={`override-delta-tag ${
+                              diff > 0 ? 'override-delta-pos' : diff < 0 ? 'override-delta-neg' : 'override-delta-zero'
+                            }`}
+                          >
+                            {diff > 0 ? (
+                              <>
+                                <TrendingUp size={12} />
+                                <span>+{diff.toLocaleString()}</span>
+                                <span className="override-delta-pct">(+{pct}%)</span>
+                              </>
+                            ) : diff < 0 ? (
+                              <>
+                                <TrendingDown size={12} />
+                                <span>{diff.toLocaleString()}</span>
+                                <span className="override-delta-pct">({pct}%)</span>
+                              </>
+                            ) : (
+                              <span>0 (0%)</span>
+                            )}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="override-reason-cell">
+                            <span className={`override-cat-tag ${catClass}`}>
+                              <span className="override-cat-dot" style={{ backgroundColor: dotColor }} />
+                              {category}
+                            </span>
+                            {detail && <span className="override-note-text" title={detail}>{detail}</span>}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="override-author-cell">
+                            <div className="override-author-avatar">
+                              {(ov.created_by || 'Staff').slice(0, 2).toUpperCase()}
+                            </div>
+                            <span className="override-author-name">{ov.created_by || 'Staff'}</span>
+                          </div>
+                        </td>
+                        {canEdit && (
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              className="override-revert-btn"
+                              onClick={() => handleRevertOverride(ov.id)}
+                              title="Khôi phục về giá trị dự báo gốc của ML"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Revert</span>
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="override-empty-box">
+              <div className="override-empty-icon">
+                <ShieldCheck size={26} />
+              </div>
+              <h5 className="override-empty-title">Chưa Có Can Thiệp Thủ Công Cho SKU Này</h5>
+              <p className="override-empty-desc">
+                Dự báo nhu cầu cho chu kỳ {horizon} ngày đang tuân thủ 100% thuật toán Machine Learning ({selectedEngine}) mà không bị điều chỉnh. Bạn có thể can thiệp số lượng khi có chương trình khuyến mãi hoặc sự kiện đột xuất.
+              </p>
+              {canEdit && (
+                <div style={{ display: 'flex', gap: '0.625rem' }}>
+                  <button
+                    type="button"
+                    className="override-btn-primary"
+                    onClick={handleOpenOverride}
+                  >
+                    <Plus size={15} />
+                    <span>Thêm Điều Chỉnh Đơn Lẻ</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="override-btn-secondary"
+                    onClick={handleOpenBulkOverride}
+                  >
+                    <Layers size={14} />
+                    <span>Điều Chỉnh Hàng Loạt</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </Card>
 
       {!isLoading && data && (
         <div className="grid-cols-2">
           {/* Stats Card */}
           <Card className="p-6">
-            <h3 className="chart-title-area" style={{ marginBottom: '1rem', fontSize: '1.125rem', fontWeight: 700, fontFamily: 'Outfit' }}>
-              Forecast Performance & Uncertainty
-            </h3>
-            <p className="engine-desc">
-              Engine: LightGBM / XGBoost multi-step horizon optimization with conformal prediction bands.
-            </p>
+            <div className="perf-card-header">
+              <div>
+                <h3 className="perf-card-title">
+                  Forecast Performance & Uncertainty
+                </h3>
+                <p className="engine-desc" style={{ marginBottom: 0 }}>
+                  Engine: LightGBM / XGBoost multi-step horizon optimization with conformal prediction bands.
+                </p>
+              </div>
+              <span className="perf-engine-badge">
+                {selectedEngine} • Conformal Bands
+              </span>
+            </div>
 
-            <div className="stats-list">
-              <div className="stat-item">
-                <span className="stat-label">Predicted {horizon}d Demand</span>
-                <span className="stat-value">{data?.stats?.predictedDemand || '-'}</span>
+            <div className="perf-kpi-grid">
+              <div className="perf-kpi-item">
+                <div className="perf-kpi-label">Predicted {horizon}d Demand</div>
+                <div className="perf-kpi-val">{data?.stats?.predictedDemand || '-'}</div>
+                <div className="perf-kpi-sub">Tổng nhu cầu dự báo chu kỳ</div>
               </div>
-              <div className="stat-item">
-                <span className="stat-label">Safety Stock Cushion</span>
-                <span className="stat-value">{data?.stats?.safetyStock || '-'}</span>
+
+              <div className="perf-kpi-item">
+                <div className="perf-kpi-label">Uncertainty Spread</div>
+                <div className="perf-kpi-val">{data?.stats?.ci || '-'}</div>
+                <div className="perf-kpi-sub">Dải khoảng tin cậy p10 - p90</div>
               </div>
-              <div className="stat-item">
-                <span className="stat-label">Reorder Point (ROP)</span>
-                <span className="stat-value">{data?.stats?.reorderPoint || '-'}</span>
+
+              <div className="perf-kpi-item">
+                <div className="perf-kpi-label">Safety Stock Cushion</div>
+                <div className="perf-kpi-val">{data?.stats?.safetyStock || '-'}</div>
+                <div className="perf-kpi-sub">Điểm tái đặt hàng ROP: {data?.stats?.reorderPoint || '-'}</div>
               </div>
-              <div className="stat-item">
-                <span className="stat-label">Evaluated MASE</span>
-                <span className="stat-value" style={{ display: 'flex', gap: '0.25rem' }}>
-                  <strong>{data?.stats?.mase || '-'}</strong>
-                  <span className="text-teal">(Production Model)</span>
-                </span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">Uncertainty Spread</span>
-                <span className="stat-value">{data?.stats?.ci || '±12%'}</span>
+
+              <div className="perf-kpi-item">
+                <div className="perf-kpi-label">Evaluated MASE</div>
+                <div className="perf-kpi-val">
+                  <span>{data?.stats?.mase || '-'}</span>
+                  {data?.stats?.mase && data.stats.mase !== '-' && (
+                    <span className="perf-badge-sota">Evaluated</span>
+                  )}
+                </div>
+                <div className="perf-kpi-sub">Mean Absolute Scaled Error</div>
               </div>
             </div>
 
-            {/* SHAP Feature Importance */}
-            {explanation?.features && explanation.features.length > 0 && (
-              <div className="mt-6 pt-4 border-t border-slate-200">
-                <h4 className="text-xs font-bold text-slate-700 uppercase mb-3">Feature Contribution (SHAP Importance)</h4>
-                <div className="space-y-2">
+            {/* SHAP Feature Contribution (XAI Explainability) */}
+            <div className="shap-section">
+              <div className="shap-header">
+                <div className="shap-title-wrapper">
+                  <div className="shap-icon-box">
+                    <BrainCircuit size={16} />
+                  </div>
+                  <div>
+                    <div className="shap-title-row">
+                      <h4 className="shap-title">Feature Contribution (SHAP Importance)</h4>
+                      <span className="shap-tag-tech">TreeSHAP</span>
+                    </div>
+                    <p className="shap-desc">
+                      Mức độ tác động của từng đặc trưng lên sản lượng dự báo (SHAP Attribution)
+                    </p>
+                  </div>
+                </div>
+                {explanation?.base_value != null && (
+                  <div className="shap-base-val-chip" title="Giá trị kỳ vọng cơ sở của mô hình khi chưa xét tác động đặc trưng">
+                    <span className="shap-base-label">Base E[f(x)]:</span>
+                    <span className="shap-base-num">{explanation.base_value} units</span>
+                  </div>
+                )}
+              </div>
+
+              {explanation?.features && explanation.features.length > 0 ? (
+                <div className="shap-compact-table">
                   {explanation.features.slice(0, 5).map((f: any, idx: number) => {
-                    const score = typeof f.importance_score === 'number'
+                    const rawScore = typeof f.importance_score === 'number'
                       ? f.importance_score
                       : (typeof f.importance === 'number' ? f.importance : 0);
-                    const isPositive = score >= 0;
+                    const meta = FEATURE_METADATA[f.feature_name] || {
+                      label: f.feature_name ? f.feature_name.replace(/_/g, ' ') : `Đặc trưng ${idx + 1}`,
+                      desc: f.description || 'Đặc trưng hồi quy trong mô hình Machine Learning',
+                      defaultDir: rawScore >= 0 ? 'positive' : 'negative',
+                    };
+                    const isNeg = f.direction === 'negative' || (f.direction == null && (rawScore < 0 || meta.defaultDir === 'negative'));
+                    const absScore = Math.abs(rawScore);
+                    const barWidth = maxShapScore > 0 ? Math.min(100, Math.round((absScore / maxShapScore) * 100)) : 20;
+                    const sharePct = totalShapSum > 0 ? Math.round((absScore / totalShapSum) * 100) : 0;
+                    const descText = f.description || meta.desc;
+
                     return (
-                      <div key={idx} className="flex justify-between items-center text-xs">
-                        <span className="text-slate-600">{f.feature_name || f.feature || `Feature ${idx + 1}`}</span>
-                        <span className={`font-semibold ${isPositive ? 'text-teal' : 'text-amber-600'}`}>
-                          {isPositive ? `+${score.toFixed(2)}` : score.toFixed(2)}
-                        </span>
+                      <div key={idx} className="shap-row">
+                        <div className="shap-col-info">
+                          <div className="shap-name-line">
+                            <span className="shap-rank-badge">#{idx + 1}</span>
+                            <span className="shap-name-text">{meta.label}</span>
+                            <span className="shap-code-tag">{f.feature_name}</span>
+                          </div>
+                          {descText && (
+                            <div className="shap-desc-line" title={descText}>
+                              {descText}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="shap-col-bar">
+                          <div className="shap-bar-track-compact">
+                            <div
+                              className={`shap-bar-fill-compact ${isNeg ? 'fill-neg' : 'fill-pos'}`}
+                              style={{ width: `${barWidth}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="shap-col-metrics">
+                          <span className={`shap-impact-val ${isNeg ? 'impact-neg' : 'impact-pos'}`}>
+                            {isNeg ? (
+                              <ArrowDownRight size={13} className="shap-impact-arrow" />
+                            ) : (
+                              <ArrowUpRight size={13} className="shap-impact-arrow" />
+                            )}
+                            <span>{isNeg ? `-${absScore.toFixed(2)}` : `+${absScore.toFixed(2)}`}</span>
+                          </span>
+                          <span className="shap-share-badge">{sharePct}%</span>
+                        </div>
                       </div>
                     );
                   })}
                 </div>
+              ) : (
+                <div className="shap-empty-state">
+                  <Info size={16} />
+                  <span>Chưa có dữ liệu phân tích SHAP giải thích cho mô hình hiện tại</span>
+                </div>
+              )}
+
+              {/* Footer explanation note */}
+              <div className="shap-footer-legend">
+                <div className="shap-legend-item">
+                  <span className="shap-legend-dot pos" />
+                  <span>Dương (+): Kích thích tăng sản lượng</span>
+                </div>
+                <div className="shap-legend-item">
+                  <span className="shap-legend-dot neg" />
+                  <span>Âm (-): Độ co giãn kìm hãm nhu cầu</span>
+                </div>
+                <div className="shap-legend-item ml-auto">
+                  <span className="shap-legend-text">Mô hình {selectedEngine} (TreeSHAP)</span>
+                </div>
               </div>
-            )}
+            </div>
           </Card>
 
           {/* Matrix Schedule Table */}
@@ -761,92 +1162,107 @@ export const ForecastExplorer: React.FC = () => {
       {isOverrideModalOpen && createPortal(
         <div className="modal-overlay" onClick={() => setIsOverrideModalOpen(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)}><X size={16} /></button>
-            <h2 className="modal-title">Manual Forecast Override</h2>
-            <p className="modal-subtitle">
-              SKU: <strong>{skuSearch}</strong> • Store: {selectedStore || 'Global'} • Horizon: {horizon}d
-            </p>
-
-            {overrideError ? (
-              <div className="p-3 my-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '4px' }}>
-                {String(overrideError)}
+            <div className="modal-header">
+              <div className="modal-header-info">
+                <div className="modal-title-row">
+                  <h2 className="modal-title">Manual Forecast Override</h2>
+                </div>
+                <div className="modal-badge-group">
+                  <span className="modal-badge highlight">SKU: {skuSearch || 'FOODS_1_001'}</span>
+                  <span className="modal-badge">Store: {selectedStore || 'CA_1'}</span>
+                  <span className="modal-badge">Chu kỳ: {horizon}d</span>
+                </div>
               </div>
-            ) : null}
+              <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)} title="Đóng">
+                <X size={15} />
+              </button>
+            </div>
 
-            <form onSubmit={handleApplyOverride}>
-              <div className="modal-form-group mt-4">
-                <label>Target Forecast Date (YYYY-MM-DD)</label>
-                <input
-                  type="date"
-                  required
-                  className="modal-input"
-                  value={overrideDate}
-                  onChange={(e) => setOverrideDate(e.target.value)}
-                />
-              </div>
+            <form onSubmit={handleApplyOverride} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+              <div className="modal-body">
+                {overrideError ? (
+                  <div className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '6px' }}>
+                    {String(overrideError)}
+                  </div>
+                ) : null}
 
-              <div className="modal-form-group">
-                <label>Adjusted Demand Quantity</label>
-                <div className="modal-input-wrapper">
+                <div className="modal-form-group">
+                  <label>Ngày Can Thiệp (Target Forecast Date)</label>
                   <input
-                    type="number"
-                    min="0"
+                    type="date"
                     required
-                    value={overrideValue}
-                    onChange={(e) => setOverrideValue(e.target.value)}
                     className="modal-input"
+                    value={overrideDate}
+                    onChange={(e) => setOverrideDate(e.target.value)}
                   />
-                  <span className="modal-input-suffix">units</span>
+                </div>
+
+                <div className="modal-form-group">
+                  <label>Số Lượng Dự Báo Điều Chỉnh (Adjusted Quantity)</label>
+                  <div className="modal-input-wrapper">
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={overrideValue}
+                      onChange={(e) => setOverrideValue(e.target.value)}
+                      className="modal-input"
+                      placeholder="e.g. 25"
+                    />
+                    <span className="modal-input-suffix">units</span>
+                  </div>
+                </div>
+
+                <div className="modal-form-group">
+                  <label>Danh Mục Lý Do (Reason Category)</label>
+                  <select
+                    className="modal-select"
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                  >
+                    <option value="Promotional Spike Override">Chiến Dịch Khuyến Mãi (Promotional Spike)</option>
+                    <option value="Seasonal Demand Surge">Biến Động Nhu Cầu Mùa Vụ (Seasonal Surge)</option>
+                    <option value="Supply Chain Disruption">Đứt Gãy Cung Ứng / Thiếu Hụt (Supply Shortage)</option>
+                    <option value="Market Competitor Action">Biến Động Đối Thủ Cạnh Tranh (Market Action)</option>
+                    <option value="Unplanned Event">Sự Kiện Đột Xuất (Unplanned Event)</option>
+                  </select>
+                </div>
+
+                <div className="modal-form-group" style={{ marginBottom: 0 }}>
+                  <label>Giải Trình Nghiệp Vụ Chi Tiết (Bắt buộc cho kiểm toán)</label>
+                  <textarea
+                    required
+                    className="modal-textarea"
+                    placeholder="Nhập lý do chi tiết cho việc can thiệp thủ công (sẽ ghi nhận vào nhật ký kiểm toán)..."
+                    value={overrideNotes}
+                    onChange={(e) => setOverrideNotes(e.target.value)}
+                    rows={3}
+                  ></textarea>
                 </div>
               </div>
 
-              <div className="modal-form-group">
-                <label>Override Reason Category</label>
-                <select
-                  className="modal-select"
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                >
-                  <option value="Promotional Spike Override">Promotional Campaign Spike</option>
-                  <option value="Seasonal Demand Surge">Seasonal Demand Surge</option>
-                  <option value="Supply Chain Disruption">Supply Chain Disruption / Shortage</option>
-                  <option value="Market Competitor Action">Market Competitor Action</option>
-                  <option value="Unplanned Event">Unplanned Special Event</option>
-                </select>
-              </div>
-
-              <div className="modal-form-group">
-                <label>Detailed Business Justification (Mandatory)</label>
-                <textarea
-                  required
-                  className="modal-textarea"
-                  placeholder="Enter explicit reason for manual adjustment (recorded in audit logs)..."
-                  value={overrideNotes}
-                  onChange={(e) => setOverrideNotes(e.target.value)}
-                ></textarea>
-              </div>
-
-              <div className="modal-info-banner">
-                <div className="banner-dot"></div>
-                <span>Override is recorded in system audit logs and can be reverted anytime.</span>
-              </div>
-
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="modal-btn-cancel"
-                  onClick={() => setIsOverrideModalOpen(false)}
-                  disabled={isSubmittingOverride}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="modal-btn-apply"
-                  disabled={isSubmittingOverride}
-                >
-                  {isSubmittingOverride ? 'Saving Override...' : 'Apply Override'}
-                </button>
+              <div className="modal-footer">
+                <div className="modal-footer-notice">
+                  <ShieldCheck size={14} className="text-teal" />
+                  <span>Lưu vết kiểm toán tự động</span>
+                </div>
+                <div className="modal-footer-actions">
+                  <button
+                    type="button"
+                    className="modal-btn-cancel"
+                    onClick={() => setIsOverrideModalOpen(false)}
+                    disabled={isSubmittingOverride}
+                  >
+                    Hủy Bỏ
+                  </button>
+                  <button
+                    type="submit"
+                    className="modal-btn-apply"
+                    disabled={isSubmittingOverride}
+                  >
+                    {isSubmittingOverride ? 'Đang Lưu...' : 'Áp Dụng Điều Chỉnh'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -854,177 +1270,209 @@ export const ForecastExplorer: React.FC = () => {
         document.body
       )}
 
-      {/* Bulk Override Modal */}
+      {/* Bulk Override Modal - 2-Column Horizontal Architecture */}
       {isBulkOverrideOpen && createPortal(
         <div className="modal-overlay" onClick={() => setIsBulkOverrideOpen(false)}>
           <div className="modal-content bulk-modal-content" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setIsBulkOverrideOpen(false)}><X size={16} /></button>
-            <h2 className="modal-title">Bulk Forecast Override</h2>
-            <p className="modal-subtitle">
-              SKU: <strong>{skuSearch}</strong> • Store: {selectedStore || 'CA_1'} • {bulkPreviewRows.length} forecast day(s) selected
-            </p>
-
-            {bulkError ? (
-              <div className="p-3 my-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '4px' }}>
-                {String(bulkError)}
-              </div>
-            ) : null}
-
-            <form onSubmit={handleApplyBulkOverride}>
-              {/* Mode Selector */}
-              <div className="modal-form-group">
-                <label>Adjustment Mode</label>
-                <div className="bulk-mode-toggle">
-                  <button
-                    type="button"
-                    className={`bulk-mode-btn ${bulkMode === 'percent' ? 'active' : ''}`}
-                    onClick={() => setBulkMode('percent')}
-                  >
-                    Percentage Adjustment (+/- %)
-                  </button>
-                  <button
-                    type="button"
-                    className={`bulk-mode-btn ${bulkMode === 'fixed' ? 'active' : ''}`}
-                    onClick={() => setBulkMode('fixed')}
-                  >
-                    Fixed Flat Units
-                  </button>
+            <div className="modal-header">
+              <div className="modal-header-info">
+                <div className="modal-title-row">
+                  <h2 className="modal-title">Bulk Forecast Horizon Override</h2>
+                </div>
+                <div className="modal-badge-group">
+                  <span className="modal-badge highlight">SKU: {skuSearch || 'FOODS_1_001'}</span>
+                  <span className="modal-badge">Store: {selectedStore || 'CA_1'}</span>
+                  <span className="modal-badge">{bulkPreviewRows.length} ngày dự báo trong khoảng</span>
                 </div>
               </div>
+              <button className="modal-close" onClick={() => setIsBulkOverrideOpen(false)} title="Đóng">
+                <X size={15} />
+              </button>
+            </div>
 
-              {/* Date Range Selector */}
-              <div className="bulk-date-row">
-                <div className="modal-form-group" style={{ flex: 1 }}>
-                  <label>Start Date</label>
-                  <input
-                    type="date"
-                    required
-                    className="modal-input"
-                    value={bulkStartDate}
-                    onChange={(e) => setBulkStartDate(e.target.value)}
-                  />
-                </div>
-                <div className="modal-form-group" style={{ flex: 1 }}>
-                  <label>End Date</label>
-                  <input
-                    type="date"
-                    required
-                    className="modal-input"
-                    value={bulkEndDate}
-                    onChange={(e) => setBulkEndDate(e.target.value)}
-                  />
-                </div>
-              </div>
+            <form onSubmit={handleApplyBulkOverride} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+              <div className="modal-body">
+                {bulkError ? (
+                  <div className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '6px' }}>
+                    {String(bulkError)}
+                  </div>
+                ) : null}
 
-              {/* Value Input */}
-              {bulkMode === 'percent' ? (
-                <div className="modal-form-group">
-                  <div className="flex justify-between items-center mb-1">
-                    <label style={{ margin: 0 }}>Percentage Adjustment (%)</label>
-                    <span className="text-xs font-bold text-teal-700 font-mono">
-                      {Number(bulkPercent) > 0 ? `+${bulkPercent}%` : `${bulkPercent}%`}
-                    </span>
-                  </div>
-                  <div className="modal-input-wrapper">
-                    <input
-                      type="number"
-                      step="1"
-                      required
-                      value={bulkPercent}
-                      onChange={(e) => setBulkPercent(e.target.value)}
-                      className="modal-input"
-                      placeholder="e.g. 15 for +15%, -10 for -10%"
-                    />
-                    <span className="modal-input-suffix">%</span>
-                  </div>
-                  <span className="text-[11px] text-slate-500 mt-1 block">
-                    Positive values scale demand up (e.g. promotional spike), negative values scale down.
-                  </span>
-                </div>
-              ) : (
-                <div className="modal-form-group">
-                  <label>Fixed Demand Quantity Per Day</label>
-                  <div className="modal-input-wrapper">
-                    <input
-                      type="number"
-                      min="0"
-                      required
-                      value={bulkFixedVal}
-                      onChange={(e) => setBulkFixedVal(e.target.value)}
-                      className="modal-input"
-                      placeholder="e.g. 80"
-                    />
-                    <span className="modal-input-suffix">units / day</span>
-                  </div>
-                </div>
-              )}
+                <div className="bulk-modal-grid">
+                  {/* Left Column: Adjustment Parameters */}
+                  <div className="bulk-grid-col">
+                    <div className="modal-form-group">
+                      <label>Chế Độ Điều Chỉnh (Adjustment Mode)</label>
+                      <div className="bulk-mode-toggle">
+                        <button
+                          type="button"
+                          className={`bulk-mode-btn ${bulkMode === 'percent' ? 'active' : ''}`}
+                          onClick={() => setBulkMode('percent')}
+                        >
+                          Tỷ Lệ % (+/- %)
+                        </button>
+                        <button
+                          type="button"
+                          className={`bulk-mode-btn ${bulkMode === 'fixed' ? 'active' : ''}`}
+                          onClick={() => setBulkMode('fixed')}
+                        >
+                          Số Lượng Cố Định
+                        </button>
+                      </div>
+                    </div>
 
-              {/* Impact Preview Box */}
-              {bulkPreviewRows.length > 0 && (
-                <div className="bulk-preview-box">
-                  <div className="bulk-preview-header">
-                    <span className="font-semibold text-slate-700">Preview Impact: {bulkPreviewRows.length} Days Targeted</span>
-                    <span className="text-slate-500 font-mono text-[11px]">
-                      {bulkStartDate} → {bulkEndDate}
-                    </span>
-                  </div>
-                  <div className="bulk-preview-tags">
-                    {bulkPreviewRows.slice(0, 3).map((r: any, i: number) => (
-                      <span key={i} className="bulk-preview-chip">
-                        {r.date}: <strong>{r.original}</strong> → <span className="text-teal-700">{r.projected} u</span>
-                      </span>
-                    ))}
-                    {bulkPreviewRows.length > 3 && (
-                      <span className="bulk-preview-more">
-                        +{bulkPreviewRows.length - 3} more dates
-                      </span>
+                    <div className="bulk-date-row">
+                      <div className="modal-form-group" style={{ flex: 1 }}>
+                        <label>Từ Ngày (Start Date)</label>
+                        <input
+                          type="date"
+                          required
+                          className="modal-input"
+                          value={bulkStartDate}
+                          onChange={(e) => setBulkStartDate(e.target.value)}
+                        />
+                      </div>
+                      <div className="modal-form-group" style={{ flex: 1 }}>
+                        <label>Đến Ngày (End Date)</label>
+                        <input
+                          type="date"
+                          required
+                          className="modal-input"
+                          value={bulkEndDate}
+                          onChange={(e) => setBulkEndDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {bulkMode === 'percent' ? (
+                      <div className="modal-form-group">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
+                          <label style={{ margin: 0 }}>Tỷ Lệ Điều Chỉnh (%)</label>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0f766e', fontFamily: 'monospace' }}>
+                            {Number(bulkPercent) > 0 ? `+${bulkPercent}%` : `${bulkPercent}%`}
+                          </span>
+                        </div>
+                        <div className="modal-input-wrapper">
+                          <input
+                            type="number"
+                            step="1"
+                            required
+                            value={bulkPercent}
+                            onChange={(e) => setBulkPercent(e.target.value)}
+                            className="modal-input"
+                            placeholder="e.g. 15 cho +15%, -10 cho -10%"
+                          />
+                          <span className="modal-input-suffix">%</span>
+                        </div>
+                        <span style={{ fontSize: '0.6875rem', color: '#64748b', marginTop: '0.35rem', display: 'block', lineHeight: 1.35 }}>
+                          Giá trị dương để tăng dự báo (chiến dịch khuyến mãi, sự kiện), giá trị âm để giảm bớt.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="modal-form-group">
+                        <label>Số Lượng Cố Định Mỗi Ngày</label>
+                        <div className="modal-input-wrapper">
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            value={bulkFixedVal}
+                            onChange={(e) => setBulkFixedVal(e.target.value)}
+                            className="modal-input"
+                            placeholder="e.g. 80"
+                          />
+                          <span className="modal-input-suffix">units / ngày</span>
+                        </div>
+                        <span style={{ fontSize: '0.6875rem', color: '#64748b', marginTop: '0.35rem', display: 'block', lineHeight: 1.35 }}>
+                          Áp dụng đồng đều cùng một mức sản lượng cho tất cả các ngày trong khoảng thời gian đã chọn.
+                        </span>
+                      </div>
                     )}
                   </div>
+
+                  {/* Right Column: Impact Preview & Audit Notes */}
+                  <div className="bulk-grid-col">
+                    {bulkPreviewRows.length > 0 && (
+                      <div className="bulk-preview-box">
+                        <div className="bulk-preview-header">
+                          <span style={{ fontWeight: 700, color: '#1e293b' }}>
+                            Xem Trước: {bulkPreviewRows.length} Ngày Bị Ảnh Hưởng
+                          </span>
+                          <span style={{ fontSize: '0.6875rem', color: '#64748b', fontFamily: 'monospace' }}>
+                            {bulkStartDate} → {bulkEndDate}
+                          </span>
+                        </div>
+                        <div className="bulk-preview-tags">
+                          {bulkPreviewRows.map((r: any, i: number) => {
+                            const diff = r.projected - r.original;
+                            return (
+                              <div key={i} className="bulk-preview-chip">
+                                <span style={{ fontWeight: 600 }}>{r.date}</span>
+                                <span>
+                                  {r.original} → <strong style={{ color: '#0f766e' }}>{r.projected} u</strong>
+                                  <span style={{ color: diff >= 0 ? '#059669' : '#e11d48', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                    ({diff >= 0 ? `+${diff}` : diff})
+                                  </span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="modal-form-group">
+                      <label>Danh Mục Lý Do (Reason Category)</label>
+                      <select
+                        className="modal-select"
+                        value={bulkReason}
+                        onChange={(e) => setBulkReason(e.target.value)}
+                      >
+                        <option value="Promotional Spike Override">Chiến Dịch Khuyến Mãi (Promotional Campaign)</option>
+                        <option value="Seasonal Demand Surge">Nhu Cầu Mùa Vụ Tăng Vọt (Seasonal Surge)</option>
+                        <option value="Supply Chain Disruption">Đứt Gãy Chuỗi Cung Ứng (Supply Disruption)</option>
+                        <option value="Market Competitor Action">Biến Động Thị Trường / Đối Thủ (Market Action)</option>
+                        <option value="Unplanned Event">Sự Kiện Đột Xuất (Unplanned Event)</option>
+                      </select>
+                    </div>
+
+                    <div className="modal-form-group" style={{ marginBottom: 0 }}>
+                      <label>Giải Trình Nghiệp Vụ Bắt Buộc (Audit Trail)</label>
+                      <textarea
+                        required
+                        className="modal-textarea"
+                        placeholder="Nêu rõ lý do điều chỉnh hàng loạt (ví dụ: Khuyến mãi Black Friday 4 ngày tại chuỗi siêu thị CA)..."
+                        value={bulkNotes}
+                        onChange={(e) => setBulkNotes(e.target.value)}
+                        rows={3}
+                      ></textarea>
+                    </div>
+                  </div>
                 </div>
-              )}
-
-              <div className="modal-form-group">
-                <label>Override Reason Category</label>
-                <select
-                  className="modal-select"
-                  value={bulkReason}
-                  onChange={(e) => setBulkReason(e.target.value)}
-                >
-                  <option value="Promotional Spike Override">Promotional Campaign Spike</option>
-                  <option value="Seasonal Demand Surge">Seasonal Demand Surge</option>
-                  <option value="Supply Chain Disruption">Supply Chain Disruption / Shortage</option>
-                  <option value="Market Competitor Action">Market Competitor Action</option>
-                  <option value="Unplanned Event">Unplanned Special Event</option>
-                </select>
               </div>
 
-              <div className="modal-form-group">
-                <label>Detailed Business Justification (Mandatory)</label>
-                <textarea
-                  required
-                  className="modal-textarea"
-                  placeholder="State the justification for this multi-day override (e.g., Black Friday 4-day flash sale promotion across California store)..."
-                  value={bulkNotes}
-                  onChange={(e) => setBulkNotes(e.target.value)}
-                ></textarea>
-              </div>
-
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="modal-btn-cancel"
-                  onClick={() => setIsBulkOverrideOpen(false)}
-                  disabled={isSubmittingBulk}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="modal-btn-apply"
-                  disabled={isSubmittingBulk || bulkPreviewRows.length === 0}
-                >
-                  {isSubmittingBulk ? 'Saving Bulk Override...' : `Apply Bulk Override (${bulkPreviewRows.length} Days)`}
-                </button>
+              <div className="modal-footer">
+                <div className="modal-footer-notice">
+                  <ShieldCheck size={14} className="text-teal" />
+                  <span>Ghi vết kiểm toán tự động theo quy định quản trị SCM</span>
+                </div>
+                <div className="modal-footer-actions">
+                  <button
+                    type="button"
+                    className="modal-btn-cancel"
+                    onClick={() => setIsBulkOverrideOpen(false)}
+                    disabled={isSubmittingBulk}
+                  >
+                    Hủy Bỏ
+                  </button>
+                  <button
+                    type="submit"
+                    className="modal-btn-apply"
+                    disabled={isSubmittingBulk || bulkPreviewRows.length === 0}
+                  >
+                    {isSubmittingBulk ? 'Đang Lưu...' : `Áp Dụng Điều Chỉnh (${bulkPreviewRows.length} Ngày)`}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

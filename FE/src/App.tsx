@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Layout } from './components/layout/Layout.tsx';
 import { Dashboard } from './pages/Dashboard.tsx';
 import { ForecastExplorer } from './pages/ForecastExplorer.tsx';
@@ -17,8 +17,19 @@ import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, isLoading } = useAuth();
-  if (isLoading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0b1120', color: '#94a3b8' }}>Loading...</div>;
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  const location = useLocation();
+  if (isLoading) {
+    return (
+      <div className="auth-splash-screen">
+        <div className="auth-splash-card">
+          <div className="auth-splash-logo">D</div>
+          <div className="auth-splash-spinner"></div>
+          <p className="auth-splash-text">Đang khởi tạo hệ thống DFIOS...</p>
+        </div>
+      </div>
+    );
+  }
+  if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location }} />;
   return <>{children}</>;
 };
 
