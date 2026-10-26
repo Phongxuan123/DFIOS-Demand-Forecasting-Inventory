@@ -31,7 +31,7 @@ for _, row in reorder_items.iterrows():
         "final_qty": row["eoq"],
         "priority": priority,
         "status": "PENDING",
-        "reason": "On-hand stock at or below reorder point (ROP)",
+        "reason": "C³-OUT trigger: On-hand stock at or below reorder point (ROP)",
         "created_at": now,
         "decided_at": None,
         "decided_by": None

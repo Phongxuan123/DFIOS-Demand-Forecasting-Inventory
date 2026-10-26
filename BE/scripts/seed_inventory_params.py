@@ -1,6 +1,11 @@
 import sys
 import os
 
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
@@ -16,6 +21,19 @@ TAU = 0.95
 Z_TAU = 1.645
 HOLDING_COST = 2.0
 ORDER_COST = 50.0
+
+C3_EXP_THETA = {
+    "AX": 1.095,
+    "AY": 1.201,
+    "AZ": 1.481,
+    "BX": 1.094,
+    "BY": 1.172,
+    "BZ": 1.468,
+    "CX": 1.149,
+    "CY": 1.133,
+    "CZ": 1.397,
+}
+DEFAULT_EXP_THETA = 1.15
 
 forecast_path = os.path.join(SCRIPT_DIR, "production_forecast.parquet")
 sigma_path = os.path.join(SCRIPT_DIR, "production_sigma.parquet")
@@ -33,7 +51,14 @@ dl_df.rename(columns={"y_pred": "d_l"}, inplace=True)
 merged = pd.merge(dl_df, sg_store[["item_id", "sigma_d_h7"]], on="item_id", how="left")
 merged["sigma_d_h7"] = merged["sigma_d_h7"].fillna(1.5)
 
-merged["safety_stock"] = (Z_TAU * merged["sigma_d_h7"]).round(2).clip(lower=0.0)
+with engine.connect() as conn:
+    class_df = pd.read_sql("SELECT item_id, segment as class FROM sku_classifications", conn)
+
+merged = pd.merge(merged, class_df, on="item_id", how="left")
+merged["class"] = merged["class"].fillna("BY")
+merged["exp_theta"] = merged["class"].map(C3_EXP_THETA).fillna(DEFAULT_EXP_THETA)
+
+merged["safety_stock"] = (Z_TAU * merged["sigma_d_h7"] * merged["exp_theta"]).round(2).clip(lower=0.0)
 merged["reorder_point"] = (merged["d_l"] + merged["safety_stock"]).round(2).clip(lower=0.0)
 merged["annual_demand"] = ((merged["d_l"] / LEAD_TIME) * 365).round(2).clip(lower=1.0)
 merged["eoq"] = np.sqrt((2 * merged["annual_demand"] * ORDER_COST) / HOLDING_COST).round(2).clip(lower=1.0)
@@ -46,7 +71,7 @@ merged["lead_time_days"] = LEAD_TIME
 merged["holding_cost"] = HOLDING_COST
 merged["order_cost"] = ORDER_COST
 merged["unit_price"] = 10.0
-merged["source"] = "ml"
+merged["source"] = "c3out"
 merged["updated_at"] = now
 
 final_params = merged[[
@@ -59,4 +84,4 @@ with engine.begin() as conn:
     conn.execute(text("DELETE FROM inventory_params WHERE store_id = :s"), {"s": STORE_ID})
 
 final_params.to_sql("inventory_params", engine, if_exists="append", index=False, chunksize=1000, method="multi")
-print(f"Seeded {len(final_params)} inventory_params records!")
+print(f"Seeded {len(final_params)} inventory_params records with C3-OUT calibration factors!")
