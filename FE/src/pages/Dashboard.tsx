@@ -173,7 +173,7 @@ export const Dashboard: React.FC = () => {
         <Card className="kpi-card">
           <p className="kpi-label">Total Monitored SKUs</p>
           <div className="kpi-value-row">
-            <h2 className="kpi-value">{data?.kpis?.totalSkus != null ? data.kpis.totalSkus.toLocaleString() : '-'}</h2>
+            <h2 className="kpi-value">{data?.kpis?.totalSkus != null ? data?.kpis?.totalSkus.toLocaleString() : '-'}</h2>
             <span className="kpi-badge success">Active</span>
           </div>
         </Card>
@@ -182,7 +182,7 @@ export const Dashboard: React.FC = () => {
           <p className="kpi-label">Total Inventory Valuation</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value">
-              {data?.kpis?.totalInventoryValue != null ? `$${Number(data.kpis.totalInventoryValue).toLocaleString()}` : '-'}
+              {data?.kpis?.totalInventoryValue != null ? `$${Number(data?.kpis?.totalInventoryValue).toLocaleString()}` : '-'}
             </h2>
             <span className="kpi-badge neutral">Valuation</span>
           </div>
@@ -214,11 +214,11 @@ export const Dashboard: React.FC = () => {
         <Card className="kpi-card">
           <p className="kpi-label">Reorder Stock Alerts (&le; ROP)</p>
           <div className="kpi-value-row">
-            <h2 className="kpi-value" style={{ color: (data.kpis?.reorderAlerts ?? 0) > 0 ? '#f59e0b' : '#0d9488' }}>
-              {data.kpis?.reorderAlerts ?? 0}
+            <h2 className="kpi-value" style={{ color: (data?.kpis?.reorderAlerts ?? 0) > 0 ? '#f59e0b' : '#0d9488' }}>
+              {data?.kpis?.reorderAlerts ?? 0}
             </h2>
-            <span className={`kpi-badge ${(data.kpis?.reorderAlerts ?? 0) > 0 ? 'warning' : 'success'}`}>
-              {(data.kpis?.reorderAlerts ?? 0) > 0 ? 'Action Needed' : 'Normal'}
+            <span className={`kpi-badge ${(data?.kpis?.reorderAlerts ?? 0) > 0 ? 'warning' : 'success'}`}>
+              {(data?.kpis?.reorderAlerts ?? 0) > 0 ? 'Action Needed' : 'Normal'}
             </span>
           </div>
         </Card>
@@ -231,7 +231,7 @@ export const Dashboard: React.FC = () => {
           <p className="kpi-label">Pending Replenishments</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value" style={{ color: '#0d9488' }}>
-              {data.kpis?.pendingReplenishments ?? 12}
+              {data?.kpis?.pendingReplenishments != null ? data?.kpis?.pendingReplenishments : '-'}
             </h2>
             <div className="flex items-center gap-1 text-teal" style={{ fontSize: '0.8rem', fontWeight: 600 }}>
               <span>Review POs</span>
@@ -243,7 +243,7 @@ export const Dashboard: React.FC = () => {
         <Card className="kpi-card">
           <p className="kpi-label">Active Suppliers</p>
           <div className="kpi-value-row">
-            <h2 className="kpi-value">{data.kpis?.totalSuppliers ?? 5}</h2>
+            <h2 className="kpi-value">{data?.kpis?.totalSuppliers != null ? data?.kpis?.totalSuppliers : '-'}</h2>
             <span className="kpi-badge neutral">Lead Time Sync</span>
           </div>
         </Card>
