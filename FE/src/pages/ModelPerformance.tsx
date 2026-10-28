@@ -562,7 +562,7 @@ export const ModelPerformance: React.FC = () => {
               <div className="acc-metric-title">MASE (Lower is Better)</div>
               <div className="acc-bars">
                 {(data?.kpis || []).length > 0 ? (
-                  data.kpis.map((kpi: any, idx: number) => {
+                  data?.kpis?.map((kpi: any, idx: number) => {
                     const maseNum = parseFloat(kpi.metrics?.mase);
                     const widthPx = !isNaN(maseNum) && maseNum > 0 ? Math.min(200, Math.max(35, Math.round(maseNum * 120))) : 80;
                     const isProd = kpi.isProduction || kpi.type === 'best';
@@ -591,7 +591,7 @@ export const ModelPerformance: React.FC = () => {
               <div className="acc-metric-title">MAE (Scaled Error)</div>
               <div className="acc-bars">
                 {(data?.kpis || []).length > 0 ? (
-                  data.kpis.map((kpi: any, idx: number) => {
+                  data?.kpis?.map((kpi: any, idx: number) => {
                     const maeNum = parseFloat(kpi.metrics?.mae);
                     const widthPx = !isNaN(maeNum) && maeNum > 0 ? Math.min(200, Math.max(35, Math.round(maeNum * 25))) : 80;
                     const isProd = kpi.isProduction || kpi.type === 'best';
