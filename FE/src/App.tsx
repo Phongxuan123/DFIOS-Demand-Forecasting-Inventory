@@ -14,9 +14,11 @@ import { ForgotPassword } from './pages/auth/ForgotPassword.tsx';
 import { ActivateAccount } from './pages/auth/ActivateAccount.tsx';
 import { ConfirmEmail } from './pages/auth/ConfirmEmail.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
+import { LanguageProvider, useLanguage } from './context/LanguageContext.tsx';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, isLoading } = useAuth();
+  const { t } = useLanguage();
   const location = useLocation();
   if (isLoading) {
     return (
@@ -24,7 +26,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
         <div className="auth-splash-card">
           <div className="auth-splash-logo">D</div>
           <div className="auth-splash-spinner"></div>
-          <p className="auth-splash-text">Đang khởi tạo hệ thống DFIOS...</p>
+          <p className="auth-splash-text">{t('common.loading', 'Initializing DFIOS Cockpit...')}</p>
         </div>
       </div>
     );
@@ -35,32 +37,34 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 
 const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ForgotPassword />} />
-          <Route path="/activate" element={<ActivateAccount />} />
-          <Route path="/confirm-email" element={<ConfirmEmail />} />
-          
-          <Route path="/" element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }>
-            <Route index element={<Dashboard />} />
-            <Route path="forecast-explorer" element={<ForecastExplorer />} />
-            <Route path="replenishment" element={<Replenishment />} />
-            <Route path="abc-xyz" element={<AbcXyzAnalysis />} />
-            <Route path="reports" element={<Reports />} />
-            <Route path="products" element={<Products />} />
-            <Route path="model-performance" element={<ModelPerformance />} />
-            <Route path="settings" element={<Settings />} />
-          </Route>
-        </Routes>
-      </Router>
-    </AuthProvider>
+    <LanguageProvider>
+      <AuthProvider>
+        <Router>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ForgotPassword />} />
+            <Route path="/activate" element={<ActivateAccount />} />
+            <Route path="/confirm-email" element={<ConfirmEmail />} />
+            
+            <Route path="/" element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }>
+              <Route index element={<Dashboard />} />
+              <Route path="forecast-explorer" element={<ForecastExplorer />} />
+              <Route path="replenishment" element={<Replenishment />} />
+              <Route path="abc-xyz" element={<AbcXyzAnalysis />} />
+              <Route path="reports" element={<Reports />} />
+              <Route path="products" element={<Products />} />
+              <Route path="model-performance" element={<ModelPerformance />} />
+              <Route path="settings" element={<Settings />} />
+            </Route>
+          </Routes>
+        </Router>
+      </AuthProvider>
+    </LanguageProvider>
   );
 };
 

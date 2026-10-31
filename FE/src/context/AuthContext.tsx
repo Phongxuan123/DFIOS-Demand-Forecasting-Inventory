@@ -87,7 +87,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setIsAuthenticated(true);
       setUser(normalizedUser);
     } catch (error: any) {
-      let errorMessage = 'Đăng nhập không thành công. Vui lòng kiểm tra lại thông tin.';
+      let errorMessage = 'Login failed. Please check your credentials.';
       if (error.response?.data?.detail) {
         if (typeof error.response.data.detail === 'string') {
           errorMessage = error.response.data.detail;
@@ -95,13 +95,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           errorMessage = error.response.data.detail.map((d: any) => d.msg || d.message || JSON.stringify(d)).join(', ');
         }
       } else if (error.code === 'ECONNABORTED') {
-        errorMessage = 'Kết nối đến máy chủ quá thời gian chờ (Timeout). Vui lòng kiểm tra lại mạng hoặc thử lại sau.';
+        errorMessage = 'Connection timed out. Please check your network connection or try again later.';
       } else if (error.code === 'ERR_NETWORK' || !error.response) {
-        errorMessage = 'Không thể kết nối đến máy chủ Backend (Port 8000). Vui lòng đảm bảo dịch vụ Backend đang hoạt động.';
+        errorMessage = 'Cannot connect to Backend API server (Port 8000). Please ensure Backend is running.';
       } else if (error.response?.status === 502 || error.response?.status === 504) {
-        errorMessage = 'Máy chủ Backend đang khởi động lại hoặc không phản hồi (502/504). Vui lòng thử lại sau giây lát.';
+        errorMessage = 'Backend service is restarting or unresponsive (502/504). Please try again shortly.';
       } else if (error.response?.status === 401) {
-        errorMessage = 'Email hoặc mật khẩu không chính xác.';
+        errorMessage = 'Incorrect email address or password.';
       } else if (error.message) {
         errorMessage = error.message;
       }

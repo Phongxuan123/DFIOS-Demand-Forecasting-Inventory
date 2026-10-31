@@ -2,12 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Settings, RefreshCw, Info, X, AlertCircle, Check, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './AbcXyzAnalysis.css';
 
 export const AbcXyzAnalysis: React.FC = () => {
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
   const isAdmin = user?.role?.toUpperCase() === 'ADMIN';
   const canManage = isAdmin || user?.role?.toUpperCase() === 'WAREHOUSE MANAGER';
 
@@ -86,7 +89,7 @@ export const AbcXyzAnalysis: React.FC = () => {
       setTotalSkus(skusRes.total || (skusRes.list || []).length);
     } catch (error) {
       console.error('Failed to load classification data', error);
-      showNotification('Không thể tải ma trận phân loại ABC/XYZ.', 'error');
+      showNotification(isVi ? 'Không thể tải ma trận phân loại ABC/XYZ.' : 'Failed to load ABC/XYZ classification matrix.', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -183,14 +186,14 @@ export const AbcXyzAnalysis: React.FC = () => {
 
   const handleRecompute = async () => {
     setIsRecomputing(true);
-    showNotification('Đang quét lịch sử bán hàng và tính toán phân loại toàn bộ danh mục SKU...', 'success');
+    showNotification(isVi ? 'Đang quét lịch sử bán hàng và tính toán phân loại toàn bộ danh mục SKU...' : 'Scanning sales history and reclassifying entire SKU portfolio...', 'success');
     try {
       const res = await api.classification.recompute();
       await loadData();
       const count = res.total_skus_classified ?? res.total ?? '';
-      showNotification(res.message || `Đã phân loại lại thành công cho ${count} SKU sản phẩm!`, 'success');
+      showNotification(res.message || (isVi ? `Đã phân loại lại thành công cho ${count} SKU sản phẩm!` : `Successfully reclassified ${count} SKUs!`), 'success');
     } catch (err: any) {
-      const errMsg = err.response?.data?.detail || 'Lỗi khi tính toán lại phân loại. Vui lòng kiểm tra lại.';
+      const errMsg = err.response?.data?.detail || (isVi ? 'Lỗi khi tính toán lại phân loại. Vui lòng kiểm tra lại.' : 'Error recomputing classification. Please try again.');
       showNotification(errMsg, 'error');
     } finally {
       setIsRecomputing(false);
@@ -200,7 +203,7 @@ export const AbcXyzAnalysis: React.FC = () => {
   const handleSaveThresholds = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
-      setConfigMessage({ text: 'Chỉ tài khoản Admin mới có quyền cập nhật cấu hình ngưỡng.', isError: true });
+      setConfigMessage({ text: isVi ? 'Chỉ tài khoản Admin mới có quyền cập nhật cấu hình ngưỡng.' : 'Only Administrators can update threshold configurations.', isError: true });
       return;
     }
     setConfigMessage(null);
@@ -219,8 +222,8 @@ export const AbcXyzAnalysis: React.FC = () => {
       setSaveStage(3);
       await loadData();
 
-      setConfigMessage({ text: 'Cập nhật cấu hình ngưỡng và phân loại lại danh mục thành công!', isError: false });
-      showNotification('Cấu hình ngưỡng ABC/XYZ đã được lưu và cập nhật!', 'success');
+      setConfigMessage({ text: isVi ? 'Cập nhật cấu hình ngưỡng và phân loại lại danh mục thành công!' : 'Threshold configuration updated and portfolio reclassified successfully!', isError: false });
+      showNotification(isVi ? 'Cấu hình ngưỡng ABC/XYZ đã được lưu và cập nhật!' : 'ABC/XYZ thresholds saved and updated!', 'success');
       setTimeout(() => {
         setIsConfigOpen(false);
         setConfigMessage(null);
@@ -232,7 +235,7 @@ export const AbcXyzAnalysis: React.FC = () => {
         ? detail
         : Array.isArray(detail)
           ? detail.map((d: any) => d.msg).join(', ')
-          : 'Không thể cập nhật cấu hình ngưỡng.';
+          : (isVi ? 'Không thể cập nhật cấu hình ngưỡng.' : 'Failed to update threshold configuration.');
       setConfigMessage({ text: msg, isError: true });
       setSaveStage(0);
     } finally {
@@ -269,7 +272,7 @@ export const AbcXyzAnalysis: React.FC = () => {
       {isLoading ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">
           <RefreshCw size={20} className="animate-spin inline mr-2 text-teal-600" />
-          Đang tải ma trận phân loại ABC/XYZ...
+          {isVi ? 'Đang tải ma trận phân loại ABC/XYZ...' : 'Loading ABC/XYZ classification matrix...'}
         </div>
       ) : (
         <>
@@ -281,7 +284,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <h2 className="panel-title">ABC/XYZ Classification Matrix</h2>
                   <p className="panel-subtitle">
                     Pareto revenue cutoffs: A (top {thresholds.a_cutoff}%), B ({thresholds.a_cutoff}-{thresholds.b_cutoff}%), C (remaining).
-                    Demand variability: X (CV ≤ {thresholds.cv_x}), Y ({thresholds.cv_x} &lt; CV ≤ {thresholds.cv_y}), Z (CV &gt; {thresholds.cv_y}). Nhấp vào từng ô để lọc chi tiết.
+                    Demand variability: X (CV ≤ {thresholds.cv_x}), Y ({thresholds.cv_x} &lt; CV ≤ {thresholds.cv_y}), Z (CV &gt; {thresholds.cv_y}). {isVi ? 'Nhấp vào từng ô để lọc chi tiết.' : 'Click any matrix cell to filter detailed SKUs.'}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -290,11 +293,11 @@ export const AbcXyzAnalysis: React.FC = () => {
                       className="configure-btn"
                       onClick={handleRecompute}
                       disabled={isRecomputing}
-                      title="Chạy lại thuật toán phân loại ABC & XYZ cho toàn bộ SKU"
+                      title={isVi ? "Chạy lại thuật toán phân loại ABC & XYZ cho toàn bộ SKU" : "Re-run ABC & XYZ classification for all SKUs"}
                       style={{ borderRadius: '4px' }}
                     >
                       <RefreshCw size={13} className={isRecomputing ? 'animate-spin' : ''} style={{ marginRight: '6px' }} />
-                      {isRecomputing ? 'Đang tính toán...' : 'Recompute Matrix'}
+                      {isRecomputing ? (isVi ? 'Đang tính toán...' : 'Recomputing...') : (isVi ? 'Tính lại Ma trận' : 'Recompute Matrix')}
                     </button>
                   )}
                   <button
@@ -305,7 +308,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                       setIsConfigOpen(true);
                     }}
                     style={{ borderRadius: '4px' }}
-                    title={isAdmin ? 'Cấu hình tham số ngưỡng phân loại' : 'Xem cấu hình ngưỡng phân loại'}
+                    title={isAdmin ? (isVi ? 'Cấu hình tham số ngưỡng phân loại' : 'Configure classification thresholds') : (isVi ? 'Xem cấu hình ngưỡng phân loại' : 'View classification thresholds')}
                   >
                     <Settings size={13} style={{ marginRight: '6px' }} /> Configure Thresholds
                   </button>
@@ -418,27 +421,27 @@ export const AbcXyzAnalysis: React.FC = () => {
               {selectedRecommendation ? (
                 <div style={{ marginTop: '0.75rem', fontSize: '12px', lineHeight: '1.6' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <span className="font-bold text-base text-teal-700">Phân khúc {selectedRecommendation.segment}</span>
+                    <span className="font-bold text-base text-teal-700">{isVi ? "Phân khúc" : "Segment"} {selectedRecommendation.segment}</span>
                     <span className="px-2 py-0.5 bg-teal-100 text-teal-800 text-xs font-semibold" style={{ borderRadius: '4px' }}>
-                      Ưu tiên: {selectedRecommendation.priority}
+                      {isVi ? "Ưu tiên:" : "Priority:"} {selectedRecommendation.priority}
                     </span>
                   </div>
                   <p className="text-secondary mb-3">{selectedRecommendation.description}</p>
                   <div className="policy-spec-box">
                     <div>
-                      <span className="font-semibold text-slate-700 block">Chiến lược tồn kho:</span>
+                      <span className="font-semibold text-slate-700 block">{isVi ? "Chiến lược tồn kho:" : "Inventory Policy:"}</span>
                       <span className="text-slate-600">{selectedRecommendation.strategy}</span>
                     </div>
                     <div>
-                      <span className="font-semibold text-slate-700 block">Tần suất rà soát:</span>
+                      <span className="font-semibold text-slate-700 block">{isVi ? "Tần suất rà soát:" : "Review Frequency:"}</span>
                       <span className="text-slate-600">{selectedRecommendation.review_frequency}</span>
                     </div>
                     <div>
-                      <span className="font-semibold text-slate-700 block">Chính sách đặt hàng:</span>
+                      <span className="font-semibold text-slate-700 block">{isVi ? "Chính sách đặt hàng:" : "Replenishment Strategy:"}</span>
                       <span className="text-slate-600">{selectedRecommendation.replenishment_policy}</span>
                     </div>
                     <div>
-                      <span className="font-semibold text-slate-700 block">Mức đệm an toàn:</span>
+                      <span className="font-semibold text-slate-700 block">{isVi ? "Mức đệm an toàn:" : "Safety Stock Buffer:"}</span>
                       <span className="text-slate-600">{selectedRecommendation.safety_stock_level}</span>
                     </div>
                   </div>
@@ -448,8 +451,8 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <Info size={28} style={{ marginBottom: '0.5rem', opacity: 0.6 }} />
                   <p style={{ fontSize: '12px', margin: 0 }}>
                     {!canManage && selectedSegment !== 'All'
-                      ? 'Tài khoản có quyền Người xem (Viewer). Khuyến nghị chính sách tồn kho chi tiết chỉ dành cho Quản lý kho (Manager) và Quản trị viên (Admin).'
-                      : 'Nhấp vào bất kỳ ô nào trong ma trận 3x3 để xem chiến lược tồn kho, chu kỳ kiểm kê và chính sách bổ hàng tương ứng.'}
+                      ? (isVi ? 'Tài khoản có quyền Người xem (Viewer). Khuyến nghị chính sách tồn kho chi tiết chỉ dành cho Quản lý kho (Manager) và Quản trị viên (Admin).' : 'Viewer account detected. Detailed inventory policy recommendations are restricted to Managers and Administrators.')
+                      : (isVi ? 'Nhấp vào bất kỳ ô nào trong ma trận 3x3 để xem chiến lược tồn kho, chu kỳ kiểm kê và chính sách bổ hàng tương ứng.' : 'Click any cell in the 3x3 matrix to view strategic inventory policy, review cycle, and replenishment rules.')}
                   </p>
                 </div>
               )}
@@ -464,11 +467,11 @@ export const AbcXyzAnalysis: React.FC = () => {
                   SKU Classification Registry
                 </h2>
                 <span className="text-xs text-[var(--text-secondary)]">
-                  Hiển thị {skuList.length} trên tổng số {totalSkus} SKUs
-                  {selectedSegment !== 'All' && <span> • Phân khúc: <strong>{selectedSegment}</strong></span>}
-                  {selectedCategory !== 'All' && <span> • Ngành hàng: <strong>{selectedCategory}</strong></span>}
-                  {selectedAbc !== 'All' && <span> • ABC: <strong>Nhóm {selectedAbc}</strong></span>}
-                  {selectedXyz !== 'All' && <span> • XYZ: <strong>Nhóm {selectedXyz}</strong></span>}
+                  {isVi ? `Hiển thị ${skuList.length} trên tổng số ${totalSkus} SKUs` : `Showing ${skuList.length} of ${totalSkus} SKUs`}
+                  {selectedSegment !== 'All' && <span> • {isVi ? 'Phân khúc:' : 'Segment:'} <strong>{selectedSegment}</strong></span>}
+                  {selectedCategory !== 'All' && <span> • {isVi ? 'Ngành hàng:' : 'Category:'} <strong>{selectedCategory}</strong></span>}
+                  {selectedAbc !== 'All' && <span> • ABC: <strong>{isVi ? `Nhóm ${selectedAbc}` : `Class ${selectedAbc}`}</strong></span>}
+                  {selectedXyz !== 'All' && <span> • XYZ: <strong>{isVi ? `Nhóm ${selectedXyz}` : `Class ${selectedXyz}`}</strong></span>}
                 </span>
               </div>
 
@@ -478,7 +481,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   onClick={handleResetFilters}
                   style={{ borderRadius: '4px', padding: '0.35rem 0.75rem', color: '#0d9488' }}
                 >
-                  Xóa tất cả bộ lọc <X size={12} className="inline ml-1" />
+                  {isVi ? "Xóa tất cả bộ lọc" : "Clear all filters"} <X size={12} className="inline ml-1" />
                 </button>
               )}
             </div>
@@ -486,7 +489,7 @@ export const AbcXyzAnalysis: React.FC = () => {
             {/* Filter Dropdowns and Search Bar */}
             <div className="abc-filter-row" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '1rem' }}>
               <div className="abc-filter-item">
-                <span className="abc-filter-label">PHÂN KHÚC</span>
+                <span className="abc-filter-label">{isVi ? "PHÂN KHÚC" : "SEGMENT"}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedSegment}
@@ -502,7 +505,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                     }
                   }}
                 >
-                  <option value="All">All Segments (9 ô)</option>
+                  <option value="All">{isVi ? "Tất cả phân khúc (9 ô)" : "All Segments (9 cells)"}</option>
                   {['AX', 'AY', 'AZ', 'BX', 'BY', 'BZ', 'CX', 'CY', 'CZ'].map((seg) => (
                     <option key={seg} value={seg}>{seg}</option>
                   ))}
@@ -510,13 +513,13 @@ export const AbcXyzAnalysis: React.FC = () => {
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">NGÀNH HÀNG (CATEGORY)</span>
+                <span className="abc-filter-label">{isVi ? "NGÀNH HÀNG (CATEGORY)" : "CATEGORY"}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
                 >
-                  <option value="All">Tất cả ngành hàng</option>
+                  <option value="All">{isVi ? "Tất cả ngành hàng" : "All Categories"}</option>
                   {categories.map((cat) => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
@@ -524,7 +527,7 @@ export const AbcXyzAnalysis: React.FC = () => {
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">NHÓM ABC</span>
+                <span className="abc-filter-label">{isVi ? "NHÓM ABC" : "ABC CLASS"}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedAbc}
@@ -537,15 +540,15 @@ export const AbcXyzAnalysis: React.FC = () => {
                     }
                   }}
                 >
-                  <option value="All">Tất cả (A, B, C)</option>
-                  <option value="A">Nhóm A (Top Doanh thu)</option>
-                  <option value="B">Nhóm B (Doanh thu Trung bình)</option>
-                  <option value="C">Nhóm C (Doanh thu Thấp)</option>
+                  <option value="All">{isVi ? "Tất cả (A, B, C)" : "All (A, B, C)"}</option>
+                  <option value="A">{isVi ? "Nhóm A (Top Doanh thu)" : "Class A (Top Revenue)"}</option>
+                  <option value="B">{isVi ? "Nhóm B (Doanh thu Trung bình)" : "Class B (Mid Revenue)"}</option>
+                  <option value="C">{isVi ? "Nhóm C (Doanh thu Thấp)" : "Class C (Low Revenue)"}</option>
                 </select>
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">NHÓM XYZ</span>
+                <span className="abc-filter-label">{isVi ? "NHÓM XYZ" : "XYZ CLASS"}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedXyz}
@@ -558,15 +561,15 @@ export const AbcXyzAnalysis: React.FC = () => {
                     }
                   }}
                 >
-                  <option value="All">Tất cả (X, Y, Z)</option>
-                  <option value="X">Nhóm X (Nhu cầu ổn định)</option>
-                  <option value="Y">Nhóm Y (Nhu cầu biến động vừa)</option>
-                  <option value="Z">Nhóm Z (Nhu cầu thất thường)</option>
+                  <option value="All">{isVi ? "Tất cả (X, Y, Z)" : "All (X, Y, Z)"}</option>
+                  <option value="X">{isVi ? "Nhóm X (Nhu cầu ổn định)" : "Class X (Stable Demand)"}</option>
+                  <option value="Y">{isVi ? "Nhóm Y (Nhu cầu biến động vừa)" : "Class Y (Moderate Volatility)"}</option>
+                  <option value="Z">{isVi ? "Nhóm Z (Nhu cầu thất thường)" : "Class Z (High Volatility)"}</option>
                 </select>
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">SẮP XẾP THEO</span>
+                <span className="abc-filter-label">{isVi ? "SẮP XẾP THEO" : "SORT BY"}</span>
                 <select
                   className="abc-filter-select"
                   value={`${sortBy}_${sortOrder}`}
@@ -576,23 +579,23 @@ export const AbcXyzAnalysis: React.FC = () => {
                     setSortOrder(ord as any);
                   }}
                 >
-                  <option value="revenue_desc">Doanh thu cao nhất</option>
-                  <option value="revenue_asc">Doanh thu thấp nhất</option>
-                  <option value="revenue_share_desc">Tỷ trọng doanh thu (%)</option>
-                  <option value="cv_asc">Độ ổn định cao (CV thấp)</option>
-                  <option value="cv_desc">Độ biến động cao (CV cao)</option>
-                  <option value="mean_demand_desc">Nhu cầu bình quân cao</option>
-                  <option value="item_id_asc">Mã SKU (A-Z)</option>
+                  <option value="revenue_desc">{isVi ? "Doanh thu cao nhất" : "Highest Revenue"}</option>
+                  <option value="revenue_asc">{isVi ? "Doanh thu thấp nhất" : "Lowest Revenue"}</option>
+                  <option value="revenue_share_desc">{isVi ? "Tỷ trọng doanh thu (%)" : "Revenue Share (%)"}</option>
+                  <option value="cv_asc">{isVi ? "Độ ổn định cao (CV thấp)" : "Lowest Volatility (Low CV)"}</option>
+                  <option value="cv_desc">{isVi ? "Độ biến động cao (CV cao)" : "Highest Volatility (High CV)"}</option>
+                  <option value="mean_demand_desc">{isVi ? "Nhu cầu bình quân cao" : "Highest Mean Demand"}</option>
+                  <option value="item_id_asc">{isVi ? "Mã SKU (A-Z)" : "SKU Code (A-Z)"}</option>
                 </select>
               </div>
 
               <div className="abc-filter-item" style={{ flex: 1, minWidth: '220px' }}>
-                <span className="abc-filter-label">TÌM KIẾM SKU / SẢN PHẨM (TỨC THÌ)</span>
+                <span className="abc-filter-label">{isVi ? "TÌM KIẾM SKU / SẢN PHẨM (TỨC THÌ)" : "SEARCH SKU / PRODUCT (INSTANT)"}</span>
                 <div style={{ position: 'relative' }}>
                   <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
-                    placeholder="Tìm theo mã SKU hoặc tên sản phẩm..."
+                    placeholder={isVi ? "Tìm theo mã SKU hoặc tên sản phẩm..." : "Search by SKU code or product name..."}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="abc-filter-input"
@@ -614,23 +617,23 @@ export const AbcXyzAnalysis: React.FC = () => {
             <div className="log-table">
               <div className="log-header-row">
                 <div className="log-col-header" style={{ width: '16%' }}>SKU ID</div>
-                <div className="log-col-header" style={{ width: '28%' }}>TÊN SẢN PHẨM</div>
-                <div className="log-col-header" style={{ width: '10%' }}>NHÓM ABC</div>
-                <div className="log-col-header" style={{ width: '10%' }}>NHÓM XYZ</div>
-                <div className="log-col-header" style={{ width: '12%' }}>PHÂN KHÚC</div>
+                <div className="log-col-header" style={{ width: '28%' }}>{isVi ? "TÊN SẢN PHẨM" : "PRODUCT NAME"}</div>
+                <div className="log-col-header" style={{ width: '10%' }}>{isVi ? "NHÓM ABC" : "CLASS ABC"}</div>
+                <div className="log-col-header" style={{ width: '10%' }}>{isVi ? "NHÓM XYZ" : "CLASS XYZ"}</div>
+                <div className="log-col-header" style={{ width: '12%' }}>{isVi ? "PHÂN KHÚC" : "SEGMENT"}</div>
                 <div className="log-col-header" style={{ width: '12%' }}>DOANH THU</div>
-                <div className="log-col-header" style={{ width: '12%' }}>HỆ SỐ CV</div>
+                <div className="log-col-header" style={{ width: '12%' }}>{isVi ? "HỆ SỐ CV" : "DEMAND CV"}</div>
               </div>
 
               <div>
                 {isLoadingSkus ? (
                   <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
                     <RefreshCw size={16} className="animate-spin inline mr-2 text-teal-600" />
-                    Đang lọc danh sách SKU...
+                    {isVi ? "Đang lọc danh sách SKU..." : "Filtering SKU list..."}
                   </div>
                 ) : skuList.length === 0 ? (
                   <div style={{ padding: '2.5rem', textAlign: 'center', color: '#94a3b8' }}>
-                    {hasActiveFilter ? 'Không có SKU nào khớp với bộ lọc đã chọn.' : 'Chưa có bản ghi phân loại SKU. Nhấp "Recompute" ở trên để khởi chạy.'}
+                    {hasActiveFilter ? (isVi ? 'Không có SKU nào khớp với bộ lọc đã chọn.' : 'No SKUs matched the selected filter criteria.') : (isVi ? 'Chưa có bản ghi phân loại SKU. Nhấp "Recompute" ở trên để khởi chạy.' : 'No SKU classification records found. Click "Recompute Matrix" to evaluate.')}
                   </div>
                 ) : (
                   skuList.map((row: any, idx: number) => (
@@ -707,7 +710,7 @@ export const AbcXyzAnalysis: React.FC = () => {
 
                 {!isAdmin && (
                   <div className="p-3 my-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded" style={{ borderRadius: '4px' }}>
-                    Chế độ chỉ xem: Chỉ tài khoản Admin mới có quyền cập nhật ngưỡng phân loại hệ thống.
+                    {isVi ? 'Chế độ chỉ xem: Chỉ tài khoản Admin mới có quyền cập nhật ngưỡng phân loại hệ thống.' : 'View-only mode: Only Administrator accounts have permission to update system classification thresholds.'}
                   </div>
                 )}
 
@@ -736,17 +739,17 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <div style={{ marginBottom: '1.25rem', padding: '0.75rem', borderRadius: '4px', backgroundColor: '#f0fdfa', border: '1px solid #99f6e4', fontSize: '12px', color: '#0f766e' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, marginBottom: '6px' }}>
                       <RefreshCw size={13} className="animate-spin" />
-                      <span>Tiến trình cập nhật ngưỡng & phân loại lại:</span>
+                      <span>{isVi ? 'Tiến trình cập nhật ngưỡng & phân loại lại:' : 'Threshold update & reclassification progress:'}</span>
                     </div>
                     <div style={{ paddingLeft: '1rem', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       <span style={{ color: saveStage >= 1 ? '#047857' : '#94a3b8', fontWeight: saveStage === 1 ? 600 : 400 }}>
-                        {saveStage > 1 ? '✓' : '●'} Giai đoạn 1: Xác thực tham số Cutoff A/B và CV X/Y
+                        {saveStage > 1 ? '✓' : '●'} {isVi ? 'Giai đoạn 1: Xác thực tham số Cutoff A/B và CV X/Y' : 'Stage 1: Validating Cutoff A/B and CV X/Y parameters'}
                       </span>
                       <span style={{ color: saveStage >= 2 ? '#047857' : '#94a3b8', fontWeight: saveStage === 2 ? 600 : 400 }}>
-                        {saveStage > 2 ? '✓' : '●'} Giai đoạn 2: BE đang phân loại Pareto doanh thu & CV toàn bộ SKU
+                        {saveStage > 2 ? '✓' : '●'} {isVi ? 'Giai đoạn 2: BE đang phân loại Pareto doanh thu & CV toàn bộ SKU' : 'Stage 2: Engine evaluating Pareto revenue & demand CV for all SKUs'}
                       </span>
                       <span style={{ color: saveStage >= 3 ? '#047857' : '#94a3b8', fontWeight: saveStage === 3 ? 600 : 400 }}>
-                        {saveStage === 3 ? '●' : '○'} Giai đoạn 3: Đồng bộ ma trận 3x3 và danh mục SKU
+                        {saveStage === 3 ? '●' : '○'} {isVi ? 'Giai đoạn 3: Đồng bộ ma trận 3x3 và danh mục SKU' : 'Stage 3: Syncing 3x3 matrix and SKU classification catalog'}
                       </span>
                     </div>
                   </div>
@@ -754,10 +757,10 @@ export const AbcXyzAnalysis: React.FC = () => {
 
                 <form onSubmit={handleSaveThresholds}>
                   <div className="modal-body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                    <h4 className="threshold-section-title" style={{ marginTop: 0 }}>Ngưỡng Pareto Doanh Thu (ABC Cutoffs)</h4>
+                    <h4 className="threshold-section-title" style={{ marginTop: 0 }}>{isVi ? "Ngưỡng Pareto Doanh Thu (ABC Cutoffs)" : "Cumulative Revenue Pareto Thresholds (ABC Cutoffs)"}</h4>
                     <div className="mb-4">
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Ngưỡng tích lũy nhóm A (Class A Cutoff %):
+                        {isVi ? "Ngưỡng tích lũy nhóm A (Class A Cutoff %):" : "Cumulative Class A Cutoff (%):"}
                       </label>
                       <input
                         type="number"
@@ -772,13 +775,13 @@ export const AbcXyzAnalysis: React.FC = () => {
                         onChange={(e) => setFormThresholds({ ...formThresholds, a_cutoff: parseFloat(e.target.value) || 0 })}
                       />
                       <span className="text-[11px] text-slate-500 mt-1 block">
-                        Chiếm tỷ trọng doanh thu cao nhất (Mặc định: 80%)
+                        {isVi ? "Chiếm tỷ trọng doanh thu cao nhất (Mặc định: 80%)" : "Generates top revenue volume (Default: 80%)"}
                       </span>
                     </div>
 
                     <div className="mb-4">
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Ngưỡng tích lũy nhóm B (Class B Cutoff %):
+                        {isVi ? "Ngưỡng tích lũy nhóm B (Class B Cutoff %):" : "Cumulative Class B Cutoff (%):"}
                       </label>
                       <input
                         type="number"
@@ -793,14 +796,14 @@ export const AbcXyzAnalysis: React.FC = () => {
                         onChange={(e) => setFormThresholds({ ...formThresholds, b_cutoff: parseFloat(e.target.value) || 0 })}
                       />
                       <span className="text-[11px] text-slate-500 mt-1 block">
-                        Tầng doanh thu tiếp theo (Mặc định: 95%). Phần còn lại đến 100% là nhóm C.
+                        {isVi ? "Tầng doanh thu tiếp theo (Mặc định: 95%). Phần còn lại đến 100% là nhóm C." : "Next revenue tier (Default: 95%). Remaining up to 100% belongs to Class C."}
                       </span>
                     </div>
 
-                    <h4 className="threshold-section-title mt-6">Ngưỡng Biến Động Nhu Cầu (XYZ CV Cutoffs)</h4>
+                    <h4 className="threshold-section-title mt-6">{isVi ? "Ngưỡng Biến Động Nhu Cầu (XYZ CV Cutoffs)" : "Demand Volatility Thresholds (XYZ CV Cutoffs)"}</h4>
                     <div className="mb-4">
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Ngưỡng hệ số biến động nhóm X (Max CV):
+                        {isVi ? "Ngưỡng hệ số biến động nhóm X (Max CV):" : "Class X Maximum CoV Threshold:"}
                       </label>
                       <input
                         type="number"
@@ -815,13 +818,13 @@ export const AbcXyzAnalysis: React.FC = () => {
                         onChange={(e) => setFormThresholds({ ...formThresholds, cv_x: parseFloat(e.target.value) || 0 })}
                       />
                       <span className="text-[11px] text-slate-500 mt-1 block">
-                        Nhu cầu ổn định, dễ dự báo: CV ≤ ngưỡng này (Mặc định: 0.5)
+                        {isVi ? "Nhu cầu ổn định, dễ dự báo: CV ≤ ngưỡng này (Mặc định: 0.5)" : "Stable, predictable demand: CoV ≤ threshold (Default: 0.5)"}
                       </span>
                     </div>
 
                     <div className="mb-4">
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Ngưỡng hệ số biến động nhóm Y (Max CV):
+                        {isVi ? "Ngưỡng hệ số biến động nhóm Y (Max CV):" : "Class Y Maximum CoV Threshold:"}
                       </label>
                       <input
                         type="number"
@@ -836,7 +839,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                         onChange={(e) => setFormThresholds({ ...formThresholds, cv_y: parseFloat(e.target.value) || 0 })}
                       />
                       <span className="text-[11px] text-slate-500 mt-1 block">
-                        Nhu cầu biến động vừa: cv_x &lt; CV ≤ cv_y (Mặc định: 1.0). Lớn hơn là nhóm Z.
+                        {isVi ? "Nhu cầu biến động vừa: cv_x < CV ≤ cv_y (Mặc định: 1.0). Lớn hơn là nhóm Z." : "Moderate variability: cv_x < CoV ≤ cv_y (Default: 1.0). Greater is Class Z."}
                       </span>
                     </div>
                   </div>
@@ -849,7 +852,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                       disabled={isSavingThresholds}
                       style={{ borderRadius: '4px', padding: '0.5rem 1rem' }}
                     >
-                      Đóng
+                      {isVi ? "Đóng" : "Close"}
                     </button>
                     {isAdmin && (
                       <button
@@ -859,7 +862,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                         style={{ borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px', padding: '0.5rem 1.25rem' }}
                       >
                         {isSavingThresholds && <RefreshCw size={13} className="animate-spin inline" />}
-                        <span>{isSavingThresholds ? 'Đang lưu & tính toán...' : 'Lưu & Phân loại lại'}</span>
+                        <span>{isSavingThresholds ? (isVi ? 'Đang lưu & tính toán...' : 'Saving & Recomputing...') : (isVi ? 'Lưu & Phân loại lại' : 'Save & Reclassify')}</span>
                       </button>
                     )}
                   </div>

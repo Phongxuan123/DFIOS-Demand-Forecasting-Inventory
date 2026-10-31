@@ -451,3 +451,33 @@
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ==========================================================================
+   Responsive Adaptations (Tablet & Mobile)
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .reports-top-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .reports-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .reports-cards-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reports-store-picker {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .executive-report-card {
+    padding: 1.125rem;
+  }
+}
+

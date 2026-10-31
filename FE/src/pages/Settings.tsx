@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './Settings.css';
 
 export const Settings: React.FC = () => {
   const { user, updateCurrentUser } = useAuth();
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
   const role = user?.role?.toUpperCase() || 'VIEWER';
   const isAdmin = role === 'ADMIN';
 
@@ -192,9 +195,9 @@ export const Settings: React.FC = () => {
       updateCurrentUser({ name: newName, display_name: newName });
       setProfileName(newName);
       await loadUsers();
-      setSettingsMessage('Cập nhật tên hiển thị tài khoản thành công!');
+      setSettingsMessage(isVi ? 'Cập nhật tên hiển thị tài khoản thành công!' : 'Account display name updated successfully!');
     } catch (error: any) {
-      setSettingsMessage(error.response?.data?.detail || 'Không thể cập nhật thông tin tài khoản.');
+      setSettingsMessage(error.response?.data?.detail || (isVi ? 'Không thể cập nhật thông tin tài khoản.' : 'Failed to update account information.'));
     } finally {
       setIsSavingProfile(false);
     }

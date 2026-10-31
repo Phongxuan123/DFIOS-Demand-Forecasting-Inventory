@@ -415,3 +415,64 @@
   background-color: #f1f5f9;
   color: var(--text-primary);
 }
+
+/* ==========================================================================
+   Responsive Adaptations (Tablet & Mobile)
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .abc-top-split {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .abc-matrix-panel,
+  .abc-policy-panel {
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 768px) {
+  .matrix-grid-container {
+    grid-template-columns: 80px 1fr 1fr 1fr;
+    gap: 0.35rem;
+  }
+
+  .matrix-cell {
+    padding: 0.625rem 0.25rem;
+    min-height: 64px;
+  }
+
+  .matrix-cell-count {
+    font-size: 0.9375rem;
+  }
+
+  .matrix-cell-pct {
+    font-size: 0.625rem;
+  }
+
+  .log-table-container {
+    overflow-x: auto;
+  }
+
+  .log-header-row,
+  .log-row {
+    min-width: 700px;
+  }
+}
+
+@media (max-width: 480px) {
+  .matrix-grid-container {
+    grid-template-columns: 60px 1fr 1fr 1fr;
+  }
+
+  .matrix-row-header {
+    font-size: 0.5625rem;
+    padding-right: 0.25rem;
+  }
+
+  .matrix-col-header {
+    font-size: 0.5625rem;
+  }
+}
+

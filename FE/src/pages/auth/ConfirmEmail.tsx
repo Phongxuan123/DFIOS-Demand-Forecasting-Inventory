@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { apiClient } from '../../services/apiClient.ts';
+import { useLanguage } from '../../context/LanguageContext.tsx';
+import { LanguageToggle } from '../../components/common/LanguageToggle.tsx';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 import './Login.css';
 
 export const ConfirmEmail: React.FC = () => {
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
   const [searchParams] = useSearchParams();
   const urlToken = searchParams.get('token') || '';
   const [token, setToken] = useState(() => urlToken);
@@ -14,7 +18,7 @@ export const ConfirmEmail: React.FC = () => {
   const executeConfirm = async (tokenToVerify: string) => {
     if (!tokenToVerify.trim()) {
       setStatus('error');
-      setMessage('Vui lòng nhập mã xác thực (Token) để xác nhận đổi email.');
+      setMessage(isVi ? 'Vui lòng nhập mã xác thực (Token) để xác nhận đổi email.' : 'Please enter the verification token to confirm your email change.');
       return;
     }
 
@@ -22,10 +26,10 @@ export const ConfirmEmail: React.FC = () => {
     try {
       const res = await apiClient.post('/auth/me/email/confirm', { token: tokenToVerify.trim() });
       setStatus('success');
-      setMessage(res.data?.message || 'Địa chỉ email của bạn đã được xác nhận và cập nhật thành công!');
+      setMessage(res.data?.message || (isVi ? 'Địa chỉ email của bạn đã được xác nhận và cập nhật thành công!' : 'Your email address has been verified and updated successfully!'));
     } catch (err: any) {
       setStatus('error');
-      setMessage(err.response?.data?.detail || 'Liên kết hoặc mã xác nhận không hợp lệ hoặc đã hết hạn.');
+      setMessage(err.response?.data?.detail || (isVi ? 'Liên kết hoặc mã xác nhận không hợp lệ hoặc đã hết hạn.' : 'Invalid or expired confirmation link or token.'));
     }
   };
 
@@ -72,15 +76,18 @@ export const ConfirmEmail: React.FC = () => {
 
       {/* Right Side */}
       <div className="login-right">
+        <div style={{ position: "absolute", top: 20, right: 20, zIndex: 10 }}>
+          <LanguageToggle />
+        </div>
         <div className="login-form-container">
-          <h2 className="login-title">Xác nhận cập nhật email</h2>
-          <p className="login-subtitle">Xác minh quyền sở hữu hòm thư liên hệ mới của tài khoản DFIOS.</p>
+          <h2 className="login-title">{isVi ? "Xác nhận cập nhật email" : "Confirm Email Update"}</h2>
+          <p className="login-subtitle">{isVi ? "Xác minh quyền sở hữu hòm thư liên hệ mới của tài khoản DFIOS." : "Verify ownership of the updated corporate email address for your DFIOS account."}</p>
 
           {status === 'verifying' && (
             <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: '#64748b' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
                 <div className="auth-splash-spinner" style={{ borderColor: 'rgba(13, 148, 136, 0.2)', borderTopColor: '#0d9488' }}></div>
-                <span style={{ fontSize: '0.875rem', color: '#475569' }}>Đang xác thực liên kết email, vui lòng đợi trong giây lát...</span>
+                <span style={{ fontSize: '0.875rem', color: '#475569' }}>{isVi ? "Đang xác thực liên kết email, vui lòng đợi trong giây lát..." : "Verifying email confirmation link, please wait..."}</span>
               </div>
             </div>
           )}
@@ -106,7 +113,7 @@ export const ConfirmEmail: React.FC = () => {
                 <span>{message}</span>
               </div>
               <Link to="/login" className="btn-primary login-btn" style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}>
-                Đăng nhập vào hệ thống
+                {isVi ? "Đăng nhập vào hệ thống" : "Sign In to Dashboard"}
               </Link>
             </div>
           )}
@@ -122,7 +129,7 @@ export const ConfirmEmail: React.FC = () => {
 
               <form onSubmit={handleSubmit} className="login-form">
                 <div className="form-group">
-                  <label className="form-label">Mã xác nhận (Token từ email mới)</label>
+                  <label className="form-label">{isVi ? "Mã xác nhận (Token từ email mới)" : "Confirmation Token (from new email)"}</label>
                   <input
                     type="text"
                     className="form-input"
@@ -131,19 +138,19 @@ export const ConfirmEmail: React.FC = () => {
                       setToken(e.target.value.trim());
                       if (status === 'error') setStatus('idle');
                     }}
-                    placeholder="Dán mã token xác nhận từ email mới..."
+                    placeholder={isVi ? "Dán mã token xác nhận từ email mới..." : "Paste confirmation token from email..."}
                     required
                   />
                 </div>
 
                 <button type="submit" className="btn-primary login-btn">
-                  Xác nhận thay đổi email
+                  {isVi ? "Xác nhận thay đổi email" : "Confirm Email Change"}
                 </button>
               </form>
 
               <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
                 <Link to="/login" style={{ color: '#0d9488', fontSize: '0.875rem', fontWeight: 600, textDecoration: 'none' }}>
-                  Quay lại trang Đăng nhập
+                  {isVi ? "Quay lại trang Đăng nhập" : "Back to Sign In"}
                 </Link>
               </div>
             </div>

@@ -324,7 +324,7 @@ export const api = {
           statusClass: it.severity === 'CRITICAL' ? 'danger' : 'warning',
           name: it.item_id,
           location: it.store_id || 'Warehouse',
-          details: `${it.product_name} - Tồn kho: ${it.on_hand} (ROP: ${it.reorder_point})`,
+          details: `${it.product_name} - On-Hand: ${it.on_hand} (ROP: ${it.reorder_point})`,
           actionText: 'Inspect',
         })),
       };

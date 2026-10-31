@@ -790,10 +790,25 @@
   .cockpit-controls {
     width: 100%;
     justify-content: space-between;
+    flex-direction: column;
+    align-items: stretch;
   }
   .store-segmented-control {
     width: 100%;
     justify-content: space-between;
   }
+  .cockpit-scan-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .alert-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .alert-status, .alert-name, .alert-location, .alert-details, .alert-action {
+    width: 100% !important;
+  }
 }
+
 

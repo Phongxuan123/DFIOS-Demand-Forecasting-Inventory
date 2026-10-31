@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { useLanguage } from '../../context/LanguageContext.tsx';
+import { LanguageToggle } from '../../components/common/LanguageToggle.tsx';
 import { Eye, EyeOff, AlertCircle, Loader2, Info } from 'lucide-react';
 import './Login.css';
 
 export const Login: React.FC = () => {
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
   const [email, setEmail] = useState(() => localStorage.getItem('dfios_remembered_email') || '');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('dfios_remember_me') !== 'false');
@@ -62,7 +66,7 @@ export const Login: React.FC = () => {
       }
       navigate(from, { replace: true });
     } catch (err: any) {
-      setError(err.message || 'Đăng nhập không thành công');
+      setError(err.message || (isVi ? 'Đăng nhập không thành công' : 'Login failed. Please check your credentials.'));
     }
   };
 
@@ -119,6 +123,9 @@ export const Login: React.FC = () => {
 
       {/* Right Side - Form */}
       <div className="login-right">
+        <div style={{ position: "absolute", top: 20, right: 20, zIndex: 10 }}>
+          <LanguageToggle />
+        </div>
         <div className="login-form-container">
           <h2 className="login-title">Welcome back</h2>
           <p className="login-subtitle">Enter your credentials to access your DFIOS cockpit.</p>
@@ -126,7 +133,7 @@ export const Login: React.FC = () => {
           {sessionExpiredNotice && (
             <div className="session-expired-card">
               <Info size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
-              <span>Phiên làm việc đã hết hạn vì lý do bảo mật. Vui lòng đăng nhập lại để tiếp tục.</span>
+              <span>{isVi ? 'Phiên làm việc đã hết hạn vì lý do bảo mật. Vui lòng đăng nhập lại để tiếp tục.' : 'Your session has expired for security reasons. Please sign in again.'}</span>
             </div>
           )}
 
@@ -159,7 +166,7 @@ export const Login: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <label className="form-label" style={{ marginBottom: 0 }}>Password</label>
                   {capsLockActive && (
-                    <span className="caps-lock-badge">Caps Lock đang bật</span>
+                    <span className="caps-lock-badge">{isVi ? "Caps Lock đang bật" : "Caps Lock is ON"}</span>
                   )}
                 </div>
                 <Link to="/forgot-password" className="forgot-password">Forgot Password?</Link>
@@ -221,12 +228,12 @@ export const Login: React.FC = () => {
 
           {/* Onboarding / Account Activation Guidance */}
           <div className="login-onboarding-hint">
-            <span>Chưa có tài khoản đăng nhập?</span>
+            <span>{isVi ? "Chưa có tài khoản đăng nhập?" : "Need an account?"}</span>
             <p>
-              DFIOS là nền tảng quản trị chuỗi cung ứng doanh nghiệp nội bộ. Tài khoản mới được phân quyền bởi Quản trị viên (Admin).
-              Nếu bạn đã nhận email thư mời, hãy nhấp vào{' '}
+              {isVi ? "DFIOS là nền tảng quản trị chuỗi cung ứng doanh nghiệp nội bộ. Tài khoản mới được phân quyền bởi Quản trị viên (Admin)." : "DFIOS is an internal enterprise platform. New accounts are provisioned by your System Administrator."}
+              {isVi ? "Nếu bạn đã nhận email thư mời, hãy nhấp vào " : "If you received an invitation email, click "}
               <Link to="/activate" className="login-activate-link">
-                Kích hoạt tài khoản
+                {isVi ? "Kích hoạt tài khoản" : "Activate Account"}
               </Link>.
             </p>
           </div>

@@ -1,29 +1,36 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, Bell, Calendar, X, Loader2, ArrowRight } from 'lucide-react';
+import { Search, Bell, Calendar, X, Loader2, ArrowRight, Menu } from 'lucide-react';
 import { api } from '../../services/api.ts';
 import { useSSE } from '../../hooks/useSSE.ts';
+import { useLanguage } from '../../context/LanguageContext.tsx';
+import { LanguageToggle } from '../common/LanguageToggle.tsx';
 import './Topbar.css';
 
-const getPageConfig = (pathname: string) => {
+interface TopbarProps {
+  onToggleMobileSidebar?: () => void;
+}
+
+const getPageConfig = (pathname: string, t: (k: string, fb?: string) => string) => {
   switch (pathname) {
-    case '/': return { title: 'Inventory Optimization Cockpit', placeholder: 'Search products, locations...', context: 'dashboard' };
-    case '/forecast-explorer': return { title: 'Forecast Explorer & Overrides', placeholder: 'Search SKUs for forecast data...', context: 'forecast' };
-    case '/replenishment': return { title: 'Replenishment & Order Management', placeholder: 'Search orders, suppliers...', context: 'replenishment' };
-    case '/abc-xyz': return { title: 'ABC/XYZ Inventory Analysis Matrix', placeholder: 'Search SKUs to see classification...', context: 'abcxyz' };
-    case '/model-performance': return { title: 'Model Performance & Diagnostics', placeholder: 'Search models, metrics...', context: 'models' };
-    case '/reports': return { title: 'Reports & Analytics', placeholder: 'Search report templates...', context: 'reports' };
-    case '/products': return { title: 'Product Catalog', placeholder: 'Search product names or SKUs...', context: 'products' };
-    case '/settings': return { title: 'System Settings', placeholder: 'Search settings, parameters...', context: 'settings' };
-    default: return { title: 'DFIOS', placeholder: 'Search...', context: 'general' };
+    case '/': return { title: t('dashboard.hero_title', 'Inventory Optimization Cockpit'), placeholder: t('topbar.search_placeholder', 'Search products, locations...'), context: 'dashboard' };
+    case '/forecast-explorer': return { title: t('forecast.title', 'Forecast Explorer & Overrides'), placeholder: t('topbar.search_placeholder', 'Search SKUs for forecast data...'), context: 'forecast' };
+    case '/replenishment': return { title: t('replenishment.title', 'Replenishment & Order Management'), placeholder: t('topbar.search_placeholder', 'Search orders, suppliers...'), context: 'replenishment' };
+    case '/abc-xyz': return { title: t('abcxyz.title', 'ABC/XYZ Inventory Analysis Matrix'), placeholder: t('topbar.search_placeholder', 'Search SKUs to see classification...'), context: 'abcxyz' };
+    case '/model-performance': return { title: t('modelPerformance.title', 'Model Performance & Diagnostics'), placeholder: t('topbar.search_placeholder', 'Search models, metrics...'), context: 'models' };
+    case '/reports': return { title: t('reports.title', 'Reports & Analytics'), placeholder: t('topbar.search_placeholder', 'Search report templates...'), context: 'reports' };
+    case '/products': return { title: t('products.title', 'Product Catalog'), placeholder: t('topbar.search_placeholder', 'Search product names or SKUs...'), context: 'products' };
+    case '/settings': return { title: t('settings.title', 'System Settings'), placeholder: t('topbar.search_placeholder', 'Search settings, parameters...'), context: 'settings' };
+    default: return { title: 'DFIOS', placeholder: t('topbar.search_placeholder', 'Search...'), context: 'general' };
   }
 };
 
-export const Topbar: React.FC = () => {
+export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const config = getPageConfig(location.pathname);
+  const { t, language } = useLanguage();
+  const config = getPageConfig(location.pathname, t);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -118,20 +125,43 @@ export const Topbar: React.FC = () => {
     return () => clearTimeout(delay);
   }, [searchTerm, config.context]);
 
-
   const handleSelectHistory = (term: string) => {
     setSearchTerm(term);
   };
 
   return (
     <header className="topbar">
-      <h1 className="topbar-page-title">{config.title}</h1>
+      <div className="topbar-left">
+        {onToggleMobileSidebar && (
+          <button 
+            type="button" 
+            className="topbar-mobile-menu-btn" 
+            onClick={onToggleMobileSidebar}
+            aria-label="Toggle navigation menu"
+          >
+            <Menu size={20} />
+          </button>
+        )}
+        <h1 className="topbar-page-title">{config.title}</h1>
+      </div>
       
       <div className="topbar-actions-right">
-        <div className="topbar-search-trigger" onClick={() => setIsCommandPaletteOpen(true)}>
-          <Search size={14} />
-          <span className="search-placeholder">Search...</span>
+        {/* Search trigger button opening Command Palette */}
+        <div 
+          className="topbar-search-trigger" 
+          onClick={() => setIsCommandPaletteOpen(true)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsCommandPaletteOpen(true); }}
+          aria-label={t('topbar.search_placeholder', 'Search products, locations, SKUs')}
+        >
+          <Search size={14} className="search-icon-svg" />
+          <span className="search-placeholder">{t('topbar.search', 'Search...')}</span>
+          <kbd className="search-kbd">⌘K</kbd>
         </div>
+
+        {/* Nút chuyển đổi ngôn ngữ EN / VI ngay cạnh thanh tìm kiếm */}
+        <LanguageToggle />
 
         {/* Command Palette Modal */}
         {isCommandPaletteOpen && createPortal(
@@ -141,32 +171,32 @@ export const Topbar: React.FC = () => {
                 <Search size={18} className="cp-icon" />
                 <input 
                   type="text" 
-                  placeholder={config.placeholder || "Type a command or search..."}
+                  placeholder={config.placeholder || t('topbar.command_palette_placeholder', 'Type a command or search...')}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="cp-input"
                   autoFocus
                 />
                 {searchTerm && (
-                  <button className="cp-clear-input-btn" onClick={() => setSearchTerm('')}>
+                  <button className="cp-clear-input-btn" onClick={() => setSearchTerm('')} aria-label="Clear search">
                     <X size={14} />
                   </button>
                 )}
-                <button className="cp-close-btn" onClick={() => setIsCommandPaletteOpen(false)}>
-                  <span style={{ fontSize: '10px', fontWeight: 600 }}>ESC</span>
+                <button className="cp-close-btn" onClick={() => setIsCommandPaletteOpen(false)} aria-label="Close command palette">
+                  <span style={{ fontSize: '10px', fontWeight: 600 }}>{t('topbar.esc_to_close', 'ESC')}</span>
                 </button>
               </div>
               
               <div className="cp-body">
                 {isSearching && (
                   <div className="cp-loading">
-                    <Loader2 size={16} className="animate-spin" style={{marginRight: '8px'}} /> Searching...
+                    <Loader2 size={16} className="animate-spin" style={{marginRight: '8px'}} /> {t('common.loading', 'Searching...')}
                   </div>
                 )}
                 
                 {!searchTerm && history.length > 0 && (
                   <div className="cp-section">
-                    <div className="cp-section-title">Recent Searches</div>
+                    <div className="cp-section-title">{t('topbar.recent_searches', 'Recent Searches')}</div>
                     {history.map((h, i) => (
                       <div key={i} className="cp-item" onClick={() => handleSelectHistory(h)}>
                         <ArrowRight size={14} className="cp-item-icon" />
@@ -179,37 +209,37 @@ export const Topbar: React.FC = () => {
                 {!searchTerm && (
                   <>
                     <div className="cp-section">
-                      <div className="cp-section-title">Navigation</div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Dashboard</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/forecast-explorer'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Forecast Explorer</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/replenishment'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Replenishment</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/abc-xyz'); }}><ArrowRight size={14} className="cp-item-icon" /><span>ABC/XYZ Analysis</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/model-performance'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Model Performance</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/reports'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Reports</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/products'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Products</span></div>
+                      <div className="cp-section-title">{t('topbar.navigation_section', 'Navigation')}</div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.dashboard', 'Dashboard')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/forecast-explorer'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.forecast_explorer', 'Forecast Explorer')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/replenishment'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.replenishment', 'Replenishment')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/abc-xyz'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.abc_xyz', 'ABC/XYZ Analysis')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/model-performance'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.model_performance', 'Model Performance')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/reports'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.reports', 'Reports & Analytics')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/products'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('nav.products', 'Products')}</span></div>
                     </div>
                     
                     <div className="cp-section">
-                      <div className="cp-section-title">Settings</div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Profile & Account</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>System Configuration</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>User Management</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>Audit Logs</span></div>
-                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>ML Pipeline & Quality</span></div>
+                      <div className="cp-section-title">{t('topbar.settings_section', 'Settings & Administration')}</div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('settings.tab_profile', 'Profile & Account')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('settings.tab_config', 'System Configuration')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('settings.tab_users', 'User Management')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('settings.tab_audit', 'Audit Logs')}</span></div>
+                      <div className="cp-item" onClick={() => { setIsCommandPaletteOpen(false); navigate('/settings'); }}><ArrowRight size={14} className="cp-item-icon" /><span>{t('settings.tab_pipeline', 'ML Pipeline & Quality')}</span></div>
                     </div>
                   </>
                 )}
                 
                 {searchTerm && !isSearching && results.length === 0 && (
                   <div className="cp-no-results">
-                    <p style={{ margin: 0, fontWeight: 500, color: '#334155' }}>No results found for "{searchTerm}"</p>
-                    <span className="cp-search-hint">Try searching for a different keyword, SKU, or check your spelling.</span>
+                    <p style={{ margin: 0, fontWeight: 500, color: '#334155' }}>{t('topbar.no_results_found', 'No results found for')} "{searchTerm}"</p>
+                    <span className="cp-search-hint">{t('topbar.search_hint', 'Try searching for a different keyword, SKU, or check your spelling.')}</span>
                   </div>
                 )}
                 
                 {searchTerm && !isSearching && results.length > 0 && (
                   <div className="cp-section">
-                    <div className="cp-section-title">Suggested Results</div>
+                    <div className="cp-section-title">{t('topbar.suggested_results', 'Suggested Results')}</div>
                     {results.slice(0, 5).map((res, idx) => (
                       <div key={idx} className="cp-item" onClick={() => {
                         setSearchTerm(res.name || res.title);
@@ -237,7 +267,12 @@ export const Topbar: React.FC = () => {
         )}
 
         <div className="notif-wrapper" ref={notifRef}>
-          <button className="topbar-bell-btn" onClick={() => setShowNotifications(!showNotifications)}>
+          <button 
+            type="button" 
+            className="topbar-bell-btn" 
+            onClick={() => setShowNotifications(!showNotifications)}
+            aria-label={t('topbar.notifications', 'Notifications')}
+          >
             <Bell size={16} />
             {stockAlerts.length > 0 && <span className="topbar-bell-badge">{stockAlerts.length}</span>}
           </button>
@@ -245,12 +280,13 @@ export const Topbar: React.FC = () => {
           {showNotifications && (
             <div className="topbar-notifications-dropdown">
               <div className="notifications-header">
-                <h3>Stock Alerts</h3>
+                <h3>{t('topbar.stock_alerts', 'Stock Alerts')}</h3>
                 <button
+                  type="button"
                   onClick={() => setStockAlerts([])}
                   style={{ background: 'none', border: 'none', color: '#0d9488', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
                 >
-                  Mark all read
+                  {t('topbar.mark_all_read', 'Mark all read')}
                 </button>
               </div>
               <div className="notifications-list">
@@ -258,8 +294,8 @@ export const Topbar: React.FC = () => {
                   <div className="notification-item">
                     <div className="notif-dot teal"></div>
                     <div className="notif-content">
-                      <p>No SKU is currently below reorder point.</p>
-                      <span>Updated now</span>
+                      <p>{t('topbar.no_alerts', 'No SKU is currently below reorder point.')}</p>
+                      <span>{t('topbar.updated_now', 'Updated now')}</span>
                     </div>
                   </div>
                 )}
@@ -270,12 +306,12 @@ export const Topbar: React.FC = () => {
                       {alert.details ? (
                         <>
                           <p><strong>{alert.name}</strong>: {alert.details}</p>
-                          <span>Realtime SSE &bull; Just now</span>
+                          <span>Realtime SSE &bull; {t('topbar.updated_now', 'Updated now')}</span>
                         </>
                       ) : (
                         <>
                           <p><strong>{alert.id} {alert.name}</strong> is below ROP ({alert.rop}). Current: {alert.stock} units</p>
-                          <span>{alert.store || 'Store'} &bull; Updated now</span>
+                          <span>{alert.store || 'Store'} &bull; {t('topbar.updated_now', 'Updated now')}</span>
                         </>
                       )}
                     </div>
@@ -288,7 +324,13 @@ export const Topbar: React.FC = () => {
         
         <div className="topbar-date-display">
           <Calendar size={14} />
-          {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
+          <span>
+            {new Date().toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US', { 
+              month: 'short', 
+              day: 'numeric', 
+              year: 'numeric' 
+            })}
+          </span>
         </div>
       </div>
     </header>
