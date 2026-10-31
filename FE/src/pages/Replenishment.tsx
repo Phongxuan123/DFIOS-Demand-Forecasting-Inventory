@@ -17,32 +17,47 @@ import {
   Store as StoreIcon
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './Replenishment.css';
 
 // Helper formatters
-const formatQty = (val: number | string | null | undefined): string => {
+const formatQty = (val: number | string | null | undefined, locale: string = 'en-US'): string => {
   if (val == null || isNaN(Number(val))) return '0';
-  return Math.round(Number(val)).toLocaleString('vi-VN');
+  return Math.round(Number(val)).toLocaleString(locale);
 };
 
-const formatDecimal = (val: number | string | null | undefined, digits: number = 1): string => {
+const formatDecimal = (val: number | string | null | undefined, digits: number = 1, locale: string = 'en-US'): string => {
   if (val == null || isNaN(Number(val))) return '0';
-  return Number(val).toLocaleString('vi-VN', {
+  return Number(val).toLocaleString(locale, {
     minimumFractionDigits: 0,
     maximumFractionDigits: digits,
   });
 };
 
-const PRIORITY_LABELS: Record<string, string> = {
+const PRIORITY_LABELS_EN: Record<string, string> = {
+  CRITICAL: 'Critical',
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+};
+
+const PRIORITY_LABELS_VI: Record<string, string> = {
   CRITICAL: 'Khẩn cấp',
   HIGH: 'Cao',
   MEDIUM: 'Trung bình',
   LOW: 'Thấp',
 };
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS_EN: Record<string, string> = {
+  PENDING: 'Pending',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+};
+
+const STATUS_LABELS_VI: Record<string, string> = {
   PENDING: 'Chờ duyệt',
   APPROVED: 'Đã duyệt',
   REJECTED: 'Từ chối',
@@ -51,7 +66,13 @@ const STATUS_LABELS: Record<string, string> = {
 
 export const Replenishment: React.FC = () => {
   const { user } = useAuth();
+  const { t, language } = useLanguage();
   const canEdit = user?.role?.toUpperCase() !== 'VIEWER';
+
+  const isVi = language === 'vi';
+  const localeStr = isVi ? 'vi-VN' : 'en-US';
+  const priorityLabels = isVi ? PRIORITY_LABELS_VI : PRIORITY_LABELS_EN;
+  const statusLabels = isVi ? STATUS_LABELS_VI : STATUS_LABELS_EN;
 
   // Store selector
   const [selectedStore, setSelectedStore] = useState<string>('CA_1');
@@ -206,10 +227,10 @@ export const Replenishment: React.FC = () => {
     setIsGenerating(true);
     try {
       const res = await api.replenishment.generateRecommendations(selectedStore);
-      showToast(res.message || `Đã quét và tạo danh sách đề xuất thành công.`);
+      showToast(res.message || (isVi ? 'Đã quét và tạo danh sách đề xuất thành công.' : 'Recommendations generated successfully.'));
       await loadRecommendations(selectedStore);
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Không thể tạo đề xuất tự động', 'error');
+      showToast(err.response?.data?.detail || (isVi ? 'Không thể tạo đề xuất tự động' : 'Failed to generate recommendations'), 'error');
     } finally {
       setIsGenerating(false);
     }
@@ -219,9 +240,9 @@ export const Replenishment: React.FC = () => {
     setIsExporting(true);
     try {
       await api.replenishment.downloadCsv(selectedStore, recStatusFilter !== 'ALL' ? recStatusFilter : undefined);
-      showToast('Xuất tệp CSV đề xuất thành công.');
+      showToast(isVi ? 'Xuất tệp CSV đề xuất thành công.' : 'Exported recommendations to CSV successfully.');
     } catch (err) {
-      showToast('Lỗi khi xuất tệp CSV', 'error');
+      showToast(isVi ? 'Lỗi khi xuất tệp CSV' : 'Failed to export CSV', 'error');
     } finally {
       setIsExporting(false);
     }
@@ -230,20 +251,20 @@ export const Replenishment: React.FC = () => {
   const handleApprove = async (rec: any) => {
     try {
       await api.replenishment.approve(rec.id);
-      showToast(`Đã phê duyệt đơn đặt hàng cho ${rec.item_id}! Tồn kho vận chuyển đã cập nhật.`);
+      showToast(isVi ? `Đã phê duyệt đơn đặt hàng cho ${rec.item_id}! Tồn kho vận chuyển đã cập nhật.` : `Approved purchase order for ${rec.item_id}! On-order stock updated.`);
       await loadRecommendations(selectedStore);
       if (selectedItem?.id === rec.id) {
         setSelectedItem({ ...selectedItem, status: 'APPROVED' });
       }
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Phê duyệt thất bại', 'error');
+      showToast(err.response?.data?.detail || (isVi ? 'Phê duyệt thất bại' : 'Approval failed'), 'error');
     }
   };
 
   const handleOpenAdjust = (rec: any) => {
     setTargetRec(rec);
     setAdjustQtyInput(Math.round(rec.final_qty ?? rec.recommended_qty));
-    setActionReasonInput(rec.reason || 'Điều chỉnh theo hạn mức vận chuyển và sức chứa kho');
+    setActionReasonInput(rec.reason || (isVi ? 'Điều chỉnh theo hạn mức vận chuyển và sức chứa kho' : 'Adjusted for logistics capacity and warehouse holding threshold'));
     setShowAdjustModal(true);
   };
 
@@ -256,14 +277,14 @@ export const Replenishment: React.FC = () => {
         final_qty: Number(adjustQtyInput),
         reason: actionReasonInput.trim(),
       });
-      showToast(`Đã điều chỉnh số lượng đặt hàng cho ${targetRec.item_id}.`);
+      showToast(isVi ? `Đã điều chỉnh số lượng đặt hàng cho ${targetRec.item_id}.` : `Adjusted order quantity for ${targetRec.item_id}.`);
       setShowAdjustModal(false);
       await loadRecommendations(selectedStore);
       if (selectedItem?.id === targetRec.id) {
         setSelectedItem({ ...selectedItem, final_qty: Number(adjustQtyInput), reason: actionReasonInput.trim() });
       }
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Không thể điều chỉnh số lượng', 'error');
+      showToast(err.response?.data?.detail || (isVi ? 'Không thể điều chỉnh số lượng' : 'Failed to adjust quantity'), 'error');
     } finally {
       setIsSubmittingAction(false);
     }
@@ -280,15 +301,15 @@ export const Replenishment: React.FC = () => {
     if (!targetRec) return;
     setIsSubmittingAction(true);
     try {
-      await api.replenishment.reject(targetRec.id, { reason: actionReasonInput.trim() || 'Từ chối bởi Quản lý kho' });
-      showToast(`Đã từ chối đề xuất đặt hàng cho ${targetRec.item_id}.`);
+      await api.replenishment.reject(targetRec.id, { reason: actionReasonInput.trim() || (isVi ? 'Từ chối bởi Quản lý kho' : 'Rejected by Warehouse Manager') });
+      showToast(isVi ? `Đã từ chối đề xuất đặt hàng cho ${targetRec.item_id}.` : `Rejected recommendation for ${targetRec.item_id}.`);
       setShowRejectModal(false);
       await loadRecommendations(selectedStore);
       if (selectedItem?.id === targetRec.id) {
         setSelectedItem({ ...selectedItem, status: 'REJECTED' });
       }
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Không thể từ chối đề xuất', 'error');
+      showToast(err.response?.data?.detail || (isVi ? 'Không thể từ chối đề xuất' : 'Failed to reject recommendation'), 'error');
     } finally {
       setIsSubmittingAction(false);
     }
@@ -305,15 +326,15 @@ export const Replenishment: React.FC = () => {
     if (!targetRec) return;
     setIsSubmittingAction(true);
     try {
-      await api.replenishment.cancel(targetRec.id, { reason: actionReasonInput.trim() || 'Hủy đơn theo yêu cầu nhà cung cấp / điều phối' });
-      showToast(`Đã hủy đơn hàng cho ${targetRec.item_id} và hoàn lại tồn kho chờ về.`);
+      await api.replenishment.cancel(targetRec.id, { reason: actionReasonInput.trim() || (isVi ? 'Hủy đơn theo yêu cầu nhà cung cấp / điều phối' : 'Cancelled order per supplier schedule or dispatch update') });
+      showToast(isVi ? `Đã hủy đơn hàng cho ${targetRec.item_id} và hoàn lại tồn kho chờ về.` : `Cancelled order for ${targetRec.item_id} and reverted on-order stock.`);
       setShowCancelModal(false);
       await loadRecommendations(selectedStore);
       if (selectedItem?.id === targetRec.id) {
         setSelectedItem({ ...selectedItem, status: 'CANCELLED' });
       }
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Không thể hủy đơn hàng', 'error');
+      showToast(err.response?.data?.detail || (isVi ? 'Không thể hủy đơn hàng' : 'Failed to cancel order'), 'error');
     } finally {
       setIsSubmittingAction(false);
     }
@@ -323,10 +344,10 @@ export const Replenishment: React.FC = () => {
     setIsRecomputing(true);
     try {
       const res = await api.optimization.recompute({ store_id: selectedStore });
-      showToast(res.message || 'Đã tính toán lại thông số tồn kho tối ưu thành công!');
+      showToast(res.message || (isVi ? 'Đã tính toán lại thông số tồn kho tối ưu thành công!' : 'Recomputed optimal inventory parameters successfully!'));
       await loadAll(selectedStore);
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Không thể tính toán lại thông số', 'error');
+      showToast(err.response?.data?.detail || (isVi ? 'Không thể tính toán lại thông số' : 'Failed to recompute parameters'), 'error');
     } finally {
       setIsRecomputing(false);
     }
@@ -360,9 +381,9 @@ export const Replenishment: React.FC = () => {
       {/* Header with Title & Action Controls */}
       <div className="rep-header-section">
         <div className="rep-header-left">
-          <h1 className="rep-page-title">Replenishment & Order Management</h1>
+          <h1 className="rep-page-title">{t('replenishment.title', 'Replenishment & Order Management')}</h1>
           <p className="rep-page-desc">
-            Quản lý đề xuất bổ sung hàng hóa, phê duyệt đơn đặt hàng tự động và kiểm soát tồn kho tối ưu
+            {t('replenishment.subtitle', 'Automated replenishment recommendations, purchase order approvals, and multi-echelon safety stock control.')}
           </p>
         </div>
 
@@ -370,7 +391,7 @@ export const Replenishment: React.FC = () => {
           {/* Store Selector */}
           <div className="rep-store-select-group">
             <StoreIcon size={14} className="text-slate-400" />
-            <span className="rep-store-label">ĐIỂM BÁN:</span>
+            <span className="rep-store-label">{t('replenishment.store_label', 'STORE LOCATION:')}</span>
             <select
               className="rep-store-select"
               value={selectedStore}
@@ -389,30 +410,30 @@ export const Replenishment: React.FC = () => {
                 className="rep-btn rep-btn-primary"
                 onClick={handleAutoGenerate}
                 disabled={isGenerating}
-                title="Quét mức tồn kho thực tế so với ROP để tạo các đề xuất tái bổ sung"
+                title={isVi ? 'Quét mức tồn kho thực tế so với ROP để tạo các đề xuất tái bổ sung' : 'Scan live stock vs ROP to generate replenishment purchase orders'}
               >
                 <RefreshCw size={13} className={isGenerating ? 'animate-spin' : ''} />
-                <span>{isGenerating ? 'Đang tạo...' : 'Tạo đề xuất mới'}</span>
+                <span>{isGenerating ? t('replenishment.generating', 'Generating...') : t('replenishment.generate_recommendations', 'Generate PO Recommendations')}</span>
               </button>
 
               <button
                 className="rep-btn rep-btn-outline"
                 onClick={handleRecompute}
                 disabled={isRecomputing}
-                title="Tính toán lại Safety Stock, Reorder Point và EOQ qua động cơ tối ưu"
+                title={isVi ? 'Tính toán lại Safety Stock, Reorder Point và EOQ qua động cơ tối ưu' : 'Recompute Safety Stock, Reorder Point, and EOQ via optimization engine'}
               >
                 <Calculator size={13} className={isRecomputing ? 'animate-spin' : ''} />
-                <span>{isRecomputing ? 'Đang tính...' : 'Tính lại ROP / SS'}</span>
+                <span>{isRecomputing ? t('replenishment.recomputing', 'Recomputing...') : t('replenishment.recompute_rop_ss', 'Recompute ROP / SS')}</span>
               </button>
 
               <button
                 className="rep-btn rep-btn-outline"
                 onClick={handleExportCsv}
                 disabled={isExporting}
-                title="Xuất bảng dữ liệu đề xuất đặt hàng ra tệp CSV"
+                title={isVi ? 'Xuất bảng dữ liệu đề xuất đặt hàng ra tệp CSV' : 'Export purchase recommendations to CSV'}
               >
                 <Download size={13} />
-                <span>{isExporting ? 'Đang xuất...' : 'Xuất CSV'}</span>
+                <span>{isExporting ? t('replenishment.exporting', 'Exporting...') : t('replenishment.export_csv', 'Export CSV')}</span>
               </button>
             </>
           )}
@@ -420,10 +441,10 @@ export const Replenishment: React.FC = () => {
           <button
             className="rep-btn rep-btn-outline"
             onClick={() => loadAll(selectedStore)}
-            title="Tải lại toàn bộ dữ liệu"
+            title={isVi ? 'Tải lại toàn bộ dữ liệu' : 'Reload all data'}
           >
             <RefreshCw size={13} />
-            <span>Làm mới</span>
+            <span>{t('replenishment.refresh', 'Refresh')}</span>
           </button>
         </div>
       </div>
@@ -432,45 +453,45 @@ export const Replenishment: React.FC = () => {
       <div className="rep-kpi-row">
         <div className="rep-kpi-card">
           <div className="rep-kpi-header">
-            <span className="rep-kpi-title">CHỜ PHÊ DUYỆT</span>
-            <span className="rep-kpi-badge badge-warning">Cần xử lý</span>
+            <span className="rep-kpi-title">{t('replenishment.kpi_pending', 'PENDING APPROVAL')}</span>
+            <span className="rep-kpi-badge badge-warning">{t('replenishment.kpi_pending_sub', 'Needs Attention')}</span>
           </div>
           <div className="rep-kpi-content">
             <span className="rep-kpi-num">{pendingCount}</span>
-            <span className="rep-kpi-sub">Đề xuất bổ sung tồn kho</span>
+            <span className="rep-kpi-sub">{isVi ? 'Đề xuất bổ sung tồn kho' : 'Stock replenishment orders'}</span>
           </div>
         </div>
 
         <div className="rep-kpi-card">
           <div className="rep-kpi-header">
-            <span className="rep-kpi-title">ĐƠN ĐÃ DUYỆT</span>
-            <span className="rep-kpi-badge badge-success">Đang vận chuyển</span>
+            <span className="rep-kpi-title">{t('replenishment.kpi_approved', 'APPROVED ORDERS')}</span>
+            <span className="rep-kpi-badge badge-success">{t('replenishment.kpi_approved_sub', 'In Transit')}</span>
           </div>
           <div className="rep-kpi-content">
             <span className="rep-kpi-num">{approvedCount}</span>
-            <span className="rep-kpi-sub">Đã chuyển sang On-Order</span>
+            <span className="rep-kpi-sub">{isVi ? 'Đã chuyển sang On-Order' : 'Converted to On-Order'}</span>
           </div>
         </div>
 
         <div className="rep-kpi-card">
           <div className="rep-kpi-header">
-            <span className="rep-kpi-title">TỔNG ĐỀ XUẤT</span>
-            <span className="rep-kpi-badge badge-neutral">Kho: {selectedStore}</span>
+            <span className="rep-kpi-title">{t('replenishment.kpi_total', 'TOTAL RECOMMENDATIONS')}</span>
+            <span className="rep-kpi-badge badge-neutral">{isVi ? `Kho: ${selectedStore}` : `Store: ${selectedStore}`}</span>
           </div>
           <div className="rep-kpi-content">
             <span className="rep-kpi-num">{recTotal}</span>
-            <span className="rep-kpi-sub">Được hệ thống tính toán</span>
+            <span className="rep-kpi-sub">{t('replenishment.kpi_total_sub', 'System Computed')}</span>
           </div>
         </div>
 
         <div className="rep-kpi-card">
           <div className="rep-kpi-header">
-            <span className="rep-kpi-title">MẶT HÀNG THEO DÕI</span>
-            <span className="rep-kpi-badge badge-teal">Đã chuẩn hóa</span>
+            <span className="rep-kpi-title">{t('replenishment.kpi_monitored', 'MONITORED ITEMS')}</span>
+            <span className="rep-kpi-badge badge-teal">{isVi ? 'Đã chuẩn hóa' : 'Standardized'}</span>
           </div>
           <div className="rep-kpi-content">
-            <span className="rep-kpi-num">{inventory.length.toLocaleString('vi-VN')}</span>
-            <span className="rep-kpi-sub">SKU tại điểm bán {selectedStore}</span>
+            <span className="rep-kpi-num">{inventory.length.toLocaleString(localeStr)}</span>
+            <span className="rep-kpi-sub">{isVi ? `SKU tại điểm bán ${selectedStore}` : `SKUs at location ${selectedStore}`}</span>
           </div>
         </div>
       </div>
@@ -482,7 +503,7 @@ export const Replenishment: React.FC = () => {
           onClick={() => setViewTab('RECOMMENDATIONS')}
         >
           <PackageCheck size={16} />
-          <span>Đề xuất đặt hàng</span>
+          <span>{t('replenishment.tab_orders', 'Purchase Recommendations')}</span>
         </button>
 
         <button
@@ -490,7 +511,7 @@ export const Replenishment: React.FC = () => {
           onClick={() => setViewTab('INVENTORY')}
         >
           <Layers size={16} />
-          <span>Mức tồn kho kho bãi</span>
+          <span>{t('replenishment.tab_inventory', 'Warehouse Stock Levels')}</span>
         </button>
 
         <button
@@ -498,7 +519,7 @@ export const Replenishment: React.FC = () => {
           onClick={() => setViewTab('HISTORY')}
         >
           <HistoryIcon size={16} />
-          <span>Lịch sử duyệt & Kiểm toán</span>
+          <span>{t('replenishment.tab_audit', 'Approval History & Audit')}</span>
         </button>
       </div>
 
@@ -508,14 +529,14 @@ export const Replenishment: React.FC = () => {
           {/* Filter Toolbar */}
           <div className="rep-filter-toolbar">
             <div className="rep-filter-left">
-              <span className="rep-filter-lbl">TRẠNG THÁI:</span>
+              <span className="rep-filter-lbl">{t('replenishment.filter_status', 'STATUS:')}</span>
               <div className="rep-filter-pills">
                 {[
-                  { val: 'ALL', label: 'Tất cả' },
-                  { val: 'PENDING', label: 'Chờ duyệt' },
-                  { val: 'APPROVED', label: 'Đã duyệt' },
-                  { val: 'REJECTED', label: 'Từ chối' },
-                  { val: 'CANCELLED', label: 'Đã hủy' }
+                  { val: 'ALL', label: t('replenishment.all', 'All') },
+                  { val: 'PENDING', label: t('replenishment.pending', 'Pending') },
+                  { val: 'APPROVED', label: t('replenishment.approved', 'Approved') },
+                  { val: 'REJECTED', label: t('replenishment.rejected', 'Rejected') },
+                  { val: 'CANCELLED', label: t('replenishment.cancelled', 'Cancelled') }
                 ].map(({ val, label }) => (
                   <button
                     key={val}
@@ -532,14 +553,14 @@ export const Replenishment: React.FC = () => {
 
               <div className="rep-filter-divider" />
 
-              <span className="rep-filter-lbl">MỨC ƯU TIÊN:</span>
+              <span className="rep-filter-lbl">{t('replenishment.filter_priority', 'PRIORITY:')}</span>
               <div className="rep-filter-pills">
                 {[
-                  { val: 'ALL', label: 'Tất cả' },
-                  { val: 'CRITICAL', label: 'Khẩn cấp' },
-                  { val: 'HIGH', label: 'Cao' },
-                  { val: 'MEDIUM', label: 'Trung bình' },
-                  { val: 'LOW', label: 'Thấp' }
+                  { val: 'ALL', label: t('replenishment.all', 'All') },
+                  { val: 'CRITICAL', label: t('replenishment.critical', 'Critical') },
+                  { val: 'HIGH', label: t('replenishment.high', 'High') },
+                  { val: 'MEDIUM', label: t('replenishment.medium', 'Medium') },
+                  { val: 'LOW', label: t('replenishment.low', 'Low') }
                 ].map(({ val, label }) => (
                   <button
                     key={val}
@@ -560,7 +581,7 @@ export const Replenishment: React.FC = () => {
               <input
                 type="text"
                 className="rep-search-input"
-                placeholder="Tìm mã SKU, tên SP..."
+                placeholder={isVi ? "Tìm mã SKU, tên SP..." : "Search SKU, product name..."}
                 value={recSearch}
                 onChange={(e) => {
                   setRecSearch(e.target.value);
@@ -571,7 +592,7 @@ export const Replenishment: React.FC = () => {
                 <button
                   onClick={() => { setRecSearch(''); setRecPage(1); }}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}
-                  title="Xóa tìm kiếm"
+                  title={isVi ? "Xóa tìm kiếm" : "Clear search"}
                 >
                   <X size={13} />
                 </button>
@@ -585,16 +606,16 @@ export const Replenishment: React.FC = () => {
               <table className="rep-table">
                 <thead>
                   <tr>
-                    <th style={{ width: '90px' }}>Ưu tiên</th>
-                    <th>Mã SKU & Sản phẩm</th>
-                    <th style={{ width: '80px' }}>Điểm bán</th>
-                    <th className="text-right" style={{ width: '100px' }}>Tồn kho</th>
-                    <th className="text-right" style={{ width: '100px' }}>Đang về</th>
-                    <th className="text-right" style={{ width: '100px' }}>Điểm ROP</th>
-                    <th className="text-right" style={{ width: '110px' }}>Gợi ý (EOQ)</th>
-                    <th className="text-right" style={{ width: '120px' }}>SL đặt chốt</th>
-                    <th style={{ width: '110px' }}>Trạng thái</th>
-                    <th className="text-center" style={{ width: '110px' }}>Thao tác</th>
+                    <th style={{ width: '90px' }}>{isVi ? 'Ưu tiên' : 'Priority'}</th>
+                    <th>{t('replenishment.col_item', 'Product / SKU')}</th>
+                    <th style={{ width: '80px' }}>{t('replenishment.col_store', 'Store')}</th>
+                    <th className="text-right" style={{ width: '100px' }}>{t('replenishment.col_on_hand', 'On Hand')}</th>
+                    <th className="text-right" style={{ width: '100px' }}>{t('replenishment.col_on_order', 'On Order')}</th>
+                    <th className="text-right" style={{ width: '100px' }}>{t('replenishment.col_rop', 'Reorder Point')}</th>
+                    <th className="text-right" style={{ width: '110px' }}>{t('replenishment.col_eoq', 'Order Qty (EOQ)')}</th>
+                    <th className="text-right" style={{ width: '120px' }}>{isVi ? 'SL đặt chốt' : 'Final Qty'}</th>
+                    <th style={{ width: '110px' }}>{t('common.status', 'Status')}</th>
+                    <th className="text-center" style={{ width: '110px' }}>{t('replenishment.col_actions', 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -602,15 +623,15 @@ export const Replenishment: React.FC = () => {
                     <tr>
                       <td colSpan={10} style={{ textAlign: 'center', padding: '3rem', color: '#0f766e' }}>
                         <RefreshCw size={22} className="animate-spin" style={{ margin: '0 auto 10px', display: 'block' }} />
-                        <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>Đang tải danh sách đề xuất bổ sung...</span>
+                        <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{isVi ? 'Đang tải danh sách đề xuất bổ sung...' : 'Loading replenishment recommendations...'}</span>
                       </td>
                     </tr>
                   ) : recommendations.length === 0 ? (
                     <tr>
                       <td colSpan={10} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
-                        <p style={{ margin: 0, fontWeight: 500, fontSize: '0.875rem' }}>Không tìm thấy đề xuất nào phù hợp với bộ lọc.</p>
+                        <p style={{ margin: 0, fontWeight: 500, fontSize: '0.875rem' }}>{t('replenishment.no_records', 'No replenishment records found matching the current filters.')}</p>
                         <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.75rem', color: '#64748b' }}>
-                          Nhấp vào nút "Tạo đề xuất mới" để quét lại mức tồn kho và tính toán nhu cầu đặt hàng.
+                          {isVi ? 'Nhấp vào nút "Tạo đề xuất mới" để quét lại mức tồn kho và tính toán nhu cầu đặt hàng.' : 'Click "Generate PO Recommendations" to evaluate inventory vs ROP.'}
                         </p>
                       </td>
                     </tr>
@@ -633,35 +654,35 @@ export const Replenishment: React.FC = () => {
                           <td>
                             <span className={`rep-priority-badge pri-${priClass}`}>
                               <span className="rep-priority-dot" />
-                              {PRIORITY_LABELS[rec.priority] || rec.priority}
+                              {priorityLabels[rec.priority] || rec.priority}
                             </span>
                           </td>
                           <td>
                             <div className="rep-sku-code">{rec.item_id}</div>
-                            <div className="rep-sku-name">{rec.product_name || rec.category || 'Mặt hàng bách hóa'}</div>
+                            <div className="rep-sku-name">{rec.product_name || rec.category || (isVi ? 'Mặt hàng bách hóa' : 'General Merchandise')}</div>
                           </td>
                           <td>
                             <span className="rep-store-tag">{rec.store_id}</span>
                           </td>
                           <td className={`text-right rep-mono-num ${onHandNum <= 0 ? 'num-danger' : 'num-default'}`}>
-                            {formatQty(rec.on_hand)}
+                            {formatQty(rec.on_hand, localeStr)}
                           </td>
                           <td className="text-right rep-mono-num num-muted">
-                            {formatQty(rec.on_order)}
+                            {formatQty(rec.on_order, localeStr)}
                           </td>
                           <td className="text-right rep-mono-num num-muted">
-                            {formatDecimal(rec.rop, 1)}
+                            {formatDecimal(rec.rop, 1, localeStr)}
                           </td>
                           <td className="text-right rep-mono-num num-muted">
-                            {formatQty(rec.recommended_qty)}
+                            {formatQty(rec.recommended_qty, localeStr)}
                           </td>
                           <td className="text-right rep-mono-num num-highlight">
-                            {formatQty(rec.final_qty)}
+                            {formatQty(rec.final_qty, localeStr)}
                           </td>
                           <td>
                             <span className={`rep-status-pill status-${statusClass}`}>
                               <span className="rep-status-dot" />
-                              {STATUS_LABELS[rec.status] || rec.status}
+                              {statusLabels[rec.status] || rec.status}
                             </span>
                           </td>
                           <td className="text-center" onClick={(e) => e.stopPropagation()}>
@@ -671,21 +692,21 @@ export const Replenishment: React.FC = () => {
                                   <button
                                     className="rep-action-btn-icon btn-approve"
                                     onClick={() => handleApprove(rec)}
-                                    title="Phê duyệt đơn hàng"
+                                    title={t('replenishment.approve', 'Approve')}
                                   >
                                     <Check size={14} />
                                   </button>
                                   <button
                                     className="rep-action-btn-icon btn-adjust"
                                     onClick={() => handleOpenAdjust(rec)}
-                                    title="Điều chỉnh số lượng"
+                                    title={t('replenishment.adjust', 'Adjust Qty')}
                                   >
                                     <Pencil size={13} />
                                   </button>
                                   <button
                                     className="rep-action-btn-icon btn-reject"
                                     onClick={() => handleOpenReject(rec)}
-                                    title="Từ chối đề xuất"
+                                    title={t('replenishment.reject', 'Reject')}
                                   >
                                     <Ban size={13} />
                                   </button>
@@ -696,9 +717,9 @@ export const Replenishment: React.FC = () => {
                                 <button
                                   className="rep-action-btn-ghost btn-cancel"
                                   onClick={() => handleOpenCancel(rec)}
-                                  title="Hủy đơn hàng đã duyệt"
+                                  title={t('replenishment.cancel', 'Cancel')}
                                 >
-                                  Hủy đơn
+                                  {t('replenishment.cancel', 'Cancel')}
                                 </button>
                               )}
 
@@ -741,14 +762,14 @@ export const Replenishment: React.FC = () => {
             <table className="rep-table">
               <thead>
                 <tr>
-                  <th>Mã SKU & Tên sản phẩm</th>
-                  <th style={{ width: '90px' }}>Điểm bán</th>
-                  <th className="text-right" style={{ width: '120px' }}>Tồn kho thực tế</th>
-                  <th className="text-right" style={{ width: '120px' }}>Đang vận chuyển</th>
-                  <th className="text-right" style={{ width: '130px' }}>Tồn an toàn (SS)</th>
-                  <th className="text-right" style={{ width: '130px' }}>Điểm đặt lại (ROP)</th>
-                  <th className="text-right" style={{ width: '130px' }}>Lô kinh tế (EOQ)</th>
-                  <th style={{ width: '120px' }}>Tình trạng</th>
+                  <th>{t('replenishment.col_item', 'Product / SKU')}</th>
+                  <th style={{ width: '90px' }}>{t('replenishment.col_store', 'Store')}</th>
+                  <th className="text-right" style={{ width: '120px' }}>{t('replenishment.col_on_hand', 'On Hand')}</th>
+                  <th className="text-right" style={{ width: '120px' }}>{t('replenishment.col_on_order', 'On Order')}</th>
+                  <th className="text-right" style={{ width: '130px' }}>{isVi ? 'Tồn an toàn (SS)' : 'Safety Stock (SS)'}</th>
+                  <th className="text-right" style={{ width: '130px' }}>{t('replenishment.col_rop', 'Reorder Point (ROP)')}</th>
+                  <th className="text-right" style={{ width: '130px' }}>{t('replenishment.col_eoq', 'Order Qty (EOQ)')}</th>
+                  <th style={{ width: '120px' }}>{t('common.status', 'Status')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -759,7 +780,11 @@ export const Replenishment: React.FC = () => {
                   const isCrit = ss != null ? onHand <= ss : false;
                   const isBelowRop = ss != null && rop != null ? (onHand > ss && onHand <= rop) : false;
                   const statusKey = isCrit ? 'critical' : isBelowRop ? 'warning' : (ss == null ? 'neutral' : 'healthy');
-                  const statusText = isCrit ? 'Nguy cấp' : isBelowRop ? 'Dưới ROP' : (ss == null ? 'Chưa cấu hình' : 'An toàn');
+                  const statusText = isCrit 
+                    ? (isVi ? 'Nguy cấp' : 'Critical') 
+                    : isBelowRop 
+                      ? (isVi ? 'Dưới ROP' : 'Below ROP') 
+                      : (ss == null ? (isVi ? 'Chưa cấu hình' : 'Unconfigured') : (isVi ? 'An toàn' : 'Healthy'));
 
                   return (
                     <tr key={item.item_id}>
@@ -771,19 +796,19 @@ export const Replenishment: React.FC = () => {
                         <span className="rep-store-tag">{item.store_id || selectedStore}</span>
                       </td>
                       <td className={`text-right rep-mono-num ${isCrit ? 'num-danger' : 'num-default'}`}>
-                        {formatQty(item.on_hand)}
+                        {formatQty(item.on_hand, localeStr)}
                       </td>
                       <td className="text-right rep-mono-num num-muted">
-                        {formatQty(item.on_order)}
+                        {formatQty(item.on_order, localeStr)}
                       </td>
                       <td className="text-right rep-mono-num num-muted">
-                        {item.safety_stock != null ? formatDecimal(item.safety_stock, 1) : '-'}
+                        {item.safety_stock != null ? formatDecimal(item.safety_stock, 1, localeStr) : '-'}
                       </td>
                       <td className="text-right rep-mono-num num-muted">
-                        {item.reorder_point != null ? formatDecimal(item.reorder_point, 1) : '-'}
+                        {item.reorder_point != null ? formatDecimal(item.reorder_point, 1, localeStr) : '-'}
                       </td>
                       <td className="text-right rep-mono-num num-highlight">
-                        {item.eoq != null ? formatQty(item.eoq) : '-'}
+                        {item.eoq != null ? formatQty(item.eoq, localeStr) : '-'}
                       </td>
                       <td>
                         <span className={`rep-status-pill status-${statusKey}`}>
@@ -819,13 +844,13 @@ export const Replenishment: React.FC = () => {
         <div className="rep-table-panel">
           <div className="rep-filter-toolbar">
             <div className="rep-filter-left">
-              <span className="rep-filter-lbl">LỌC TRẠNG THÁI:</span>
+              <span className="rep-filter-lbl">{t('replenishment.filter_status', 'STATUS:')}</span>
               <div className="rep-filter-pills">
                 {[
-                  { val: 'ALL', label: 'Tất cả' },
-                  { val: 'APPROVED', label: 'Đã duyệt' },
-                  { val: 'REJECTED', label: 'Từ chối' },
-                  { val: 'CANCELLED', label: 'Đã hủy' }
+                  { val: 'ALL', label: t('replenishment.all', 'All') },
+                  { val: 'APPROVED', label: t('replenishment.approved', 'Approved') },
+                  { val: 'REJECTED', label: t('replenishment.rejected', 'Rejected') },
+                  { val: 'CANCELLED', label: t('replenishment.cancelled', 'Cancelled') }
                 ].map(({ val, label }) => (
                   <button
                     key={val}
@@ -841,7 +866,7 @@ export const Replenishment: React.FC = () => {
               </div>
             </div>
             <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-              Nhật ký kiểm toán quyết định tại <strong>{selectedStore}</strong>
+              {isVi ? `Nhật ký kiểm toán quyết định tại ` : `Audit trail records for `}<strong>{selectedStore}</strong>
             </span>
           </div>
 
@@ -849,21 +874,21 @@ export const Replenishment: React.FC = () => {
             <table className="rep-table">
               <thead>
                 <tr>
-                  <th>Mã SKU</th>
-                  <th style={{ width: '80px' }}>Điểm bán</th>
-                  <th className="text-right" style={{ width: '120px' }}>Gợi ý ban đầu</th>
-                  <th className="text-right" style={{ width: '120px' }}>SL duyệt chốt</th>
-                  <th style={{ width: '110px' }}>Trạng thái</th>
-                  <th>Lý do / Ghi chú</th>
-                  <th style={{ width: '130px' }}>Người quyết định</th>
-                  <th style={{ width: '160px' }}>Thời gian</th>
+                  <th>{isVi ? 'Mã SKU' : 'SKU Code'}</th>
+                  <th style={{ width: '80px' }}>{t('replenishment.col_store', 'Store')}</th>
+                  <th className="text-right" style={{ width: '120px' }}>{isVi ? 'Gợi ý ban đầu' : 'Initial EOQ'}</th>
+                  <th className="text-right" style={{ width: '120px' }}>{isVi ? 'SL duyệt chốt' : 'Final Qty'}</th>
+                  <th style={{ width: '110px' }}>{t('common.status', 'Status')}</th>
+                  <th>{t('replenishment.reason_label', 'Reason / Justification')}</th>
+                  <th style={{ width: '130px' }}>{isVi ? 'Người quyết định' : 'Decided By'}</th>
+                  <th style={{ width: '160px' }}>{isVi ? 'Thời gian' : 'Timestamp'}</th>
                 </tr>
               </thead>
               <tbody>
                 {historyList.length === 0 ? (
                   <tr>
                     <td colSpan={8} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
-                      Chưa có quyết định bổ sung nào được ghi nhận trong lịch sử.
+                      {isVi ? 'Chưa có quyết định bổ sung nào được ghi nhận trong lịch sử.' : 'No replenishment decisions recorded in history yet.'}
                     </td>
                   </tr>
                 ) : (
@@ -877,24 +902,24 @@ export const Replenishment: React.FC = () => {
                         <td>
                           <span className="rep-store-tag">{h.store_id}</span>
                         </td>
-                        <td className="text-right rep-mono-num num-muted">{formatQty(h.recommended_qty)}</td>
-                        <td className="text-right rep-mono-num num-highlight">{formatQty(h.final_qty)}</td>
+                        <td className="text-right rep-mono-num num-muted">{formatQty(h.recommended_qty, localeStr)}</td>
+                        <td className="text-right rep-mono-num num-highlight">{formatQty(h.final_qty, localeStr)}</td>
                         <td>
                           <span className={`rep-status-pill status-${statusClass}`}>
                             <span className="rep-status-dot" />
-                            {STATUS_LABELS[h.status] || h.status}
+                            {statusLabels[h.status] || h.status}
                           </span>
                         </td>
                         <td style={{ fontSize: '0.8125rem', color: '#475569', maxWidth: '280px' }}>
                           {h.reason || '-'}
                         </td>
                         <td style={{ fontSize: '0.8125rem', color: '#334155', fontWeight: 500 }}>
-                          {h.decided_by || 'Hệ thống'}
+                          {h.decided_by || (isVi ? 'Hệ thống' : 'System Engine')}
                         </td>
                         <td className="rep-mono-num num-muted" style={{ fontSize: '0.75rem' }}>
                           {h.decided_at 
-                            ? new Date(h.decided_at).toLocaleString('vi-VN') 
-                            : new Date(h.created_at).toLocaleString('vi-VN')}
+                            ? new Date(h.decided_at).toLocaleString(localeStr) 
+                            : new Date(h.created_at).toLocaleString(localeStr)}
                         </td>
                       </tr>
                     );
@@ -928,13 +953,13 @@ export const Replenishment: React.FC = () => {
           <div className="rep-drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-header">
               <div>
-                <span className="drawer-badge">Chi tiết đề xuất đặt hàng</span>
+                <span className="drawer-badge">{isVi ? 'Chi tiết đề xuất đặt hàng' : 'Order Recommendation Details'}</span>
                 <h3 className="drawer-title">{selectedItem.item_id}</h3>
                 <p className="drawer-sku-info">
-                  {selectedItem.product_name || selectedItem.category || 'Mặt hàng bách hóa'} &bull; Cửa hàng: <strong>{selectedItem.store_id}</strong>
+                  {selectedItem.product_name || selectedItem.category || (isVi ? 'Mặt hàng bách hóa' : 'General Merchandise')} &bull; {isVi ? 'Cửa hàng:' : 'Store:'} <strong>{selectedItem.store_id}</strong>
                 </p>
               </div>
-              <button className="drawer-close-btn" onClick={() => setSelectedItem(null)} title="Đóng bảng chi tiết">
+              <button className="drawer-close-btn" onClick={() => setSelectedItem(null)} title={t('common.close', 'Close')}>
                 <X size={16} />
               </button>
             </div>
@@ -943,27 +968,27 @@ export const Replenishment: React.FC = () => {
               {/* 2x2 KPIs Grid */}
               <div className="drawer-kpi-grid">
                 <div className="drawer-kpi-card">
-                  <span className="drawer-kpi-lbl">Tồn kho hiện có (On-Hand)</span>
+                  <span className="drawer-kpi-lbl">{isVi ? 'Tồn kho hiện có (On-Hand)' : 'On-Hand Inventory'}</span>
                   <span className={`drawer-kpi-val ${Number(selectedItem.on_hand) <= 0 ? 'text-red' : 'text-slate'}`}>
-                    {formatQty(selectedItem.on_hand)} <small>sp</small>
+                    {formatQty(selectedItem.on_hand, localeStr)} <small>{isVi ? 'sp' : 'units'}</small>
                   </span>
                 </div>
                 <div className="drawer-kpi-card">
-                  <span className="drawer-kpi-lbl">Đang vận chuyển (On-Order)</span>
+                  <span className="drawer-kpi-lbl">{isVi ? 'Đang vận chuyển (On-Order)' : 'In-Transit (On-Order)'}</span>
                   <span className="drawer-kpi-val text-slate">
-                    {formatQty(selectedItem.on_order)} <small>sp</small>
+                    {formatQty(selectedItem.on_order, localeStr)} <small>{isVi ? 'sp' : 'units'}</small>
                   </span>
                 </div>
                 <div className="drawer-kpi-card">
-                  <span className="drawer-kpi-lbl">Điểm đặt hàng lại (ROP)</span>
+                  <span className="drawer-kpi-lbl">{isVi ? 'Điểm đặt hàng lại (ROP)' : 'Reorder Point (ROP)'}</span>
                   <span className="drawer-kpi-val text-slate">
-                    {formatDecimal(selectedItem.rop, 1)} <small>sp</small>
+                    {formatDecimal(selectedItem.rop, 1, localeStr)} <small>{isVi ? 'sp' : 'units'}</small>
                   </span>
                 </div>
                 <div className="drawer-kpi-card">
-                  <span className="drawer-kpi-lbl">Tồn kho an toàn (SS)</span>
+                  <span className="drawer-kpi-lbl">{isVi ? 'Tồn kho an toàn (SS)' : 'Safety Stock (SS)'}</span>
                   <span className="drawer-kpi-val text-slate">
-                    {formatDecimal(selectedItem.safety_stock, 1)} <small>sp</small>
+                    {formatDecimal(selectedItem.safety_stock, 1, localeStr)} <small>{isVi ? 'sp' : 'units'}</small>
                   </span>
                 </div>
               </div>
@@ -971,21 +996,21 @@ export const Replenishment: React.FC = () => {
               {/* Order Recommendation Box */}
               <div className="drawer-rec-box">
                 <div className="drawer-rec-row-primary">
-                  <span className="drawer-rec-label">Số lượng đặt hàng chính thức</span>
+                  <span className="drawer-rec-label">{isVi ? 'Số lượng đặt hàng chính thức' : 'Final Order Quantity'}</span>
                   <span className="drawer-rec-value-highlight">
-                    {formatQty(selectedItem.final_qty)} sp
+                    {formatQty(selectedItem.final_qty, localeStr)} {isVi ? 'sp' : 'units'}
                   </span>
                 </div>
                 <div className="drawer-rec-row-sub">
-                  <span>Thuật toán đề xuất (EOQ):</span>
-                  <span className="rep-mono-num">{formatQty(selectedItem.recommended_qty)} sp</span>
+                  <span>{isVi ? 'Thuật toán đề xuất (EOQ):' : 'Engine Recommendation (EOQ):'}</span>
+                  <span className="rep-mono-num">{formatQty(selectedItem.recommended_qty, localeStr)} {isVi ? 'sp' : 'units'}</span>
                 </div>
                 {Number(selectedItem.final_qty) !== Number(selectedItem.recommended_qty) && (
                   <div className="drawer-rec-row-delta">
-                    <span>Chênh lệch điều chỉnh thủ công:</span>
+                    <span>{isVi ? 'Chênh lệch điều chỉnh thủ công:' : 'Planner Override Variance:'}</span>
                     <span>
                       {Number(selectedItem.final_qty) - Number(selectedItem.recommended_qty) > 0 ? '+' : ''}
-                      {formatQty(Number(selectedItem.final_qty) - Number(selectedItem.recommended_qty))} sp
+                      {formatQty(Number(selectedItem.final_qty) - Number(selectedItem.recommended_qty), localeStr)} {isVi ? 'sp' : 'units'}
                     </span>
                   </div>
                 )}
@@ -994,7 +1019,7 @@ export const Replenishment: React.FC = () => {
               {/* Reason / Notes */}
               {selectedItem.reason && (
                 <div className="drawer-section">
-                  <span className="drawer-section-title">Lý do & Ghi chú nghiệp vụ</span>
+                  <span className="drawer-section-title">{isVi ? 'Lý do & Ghi chú nghiệp vụ' : 'Operational Notes & Justification'}</span>
                   <p className="drawer-reason-text">{selectedItem.reason}</p>
                 </div>
               )}
@@ -1002,8 +1027,8 @@ export const Replenishment: React.FC = () => {
               {/* Audit trail */}
               {selectedItem.decided_by && (
                 <div className="drawer-audit-info">
-                  Phê duyệt bởi: <strong>{selectedItem.decided_by}</strong>
-                  {selectedItem.decided_at && ` vào lúc ${new Date(selectedItem.decided_at).toLocaleString('vi-VN')}`}
+                  {isVi ? 'Phê duyệt bởi:' : 'Approved by:'} <strong>{selectedItem.decided_by}</strong>
+                  {selectedItem.decided_at && ` ${isVi ? 'vào lúc' : 'at'} ${new Date(selectedItem.decided_at).toLocaleString(localeStr)}`}
                 </div>
               )}
             </div>
@@ -1016,13 +1041,13 @@ export const Replenishment: React.FC = () => {
                     className="drawer-btn-approve"
                     onClick={() => handleApprove(selectedItem)}
                   >
-                    <Check size={15} /> Phê duyệt đơn hàng
+                    <Check size={15} /> {t('replenishment.approve', 'Approve')}
                   </button>
                   <button
                     className="drawer-btn-adjust"
                     onClick={() => handleOpenAdjust(selectedItem)}
                   >
-                    <Pencil size={14} /> Điều chỉnh
+                    <Pencil size={14} /> {t('replenishment.adjust', 'Adjust Qty')}
                   </button>
                 </>
               )}
@@ -1033,7 +1058,7 @@ export const Replenishment: React.FC = () => {
                   style={{ color: '#dc2626', borderColor: '#fecaca', padding: '0.625rem' }}
                   onClick={() => handleOpenCancel(selectedItem)}
                 >
-                  <Ban size={15} /> Hủy đơn hàng đã duyệt
+                  <Ban size={15} /> {isVi ? 'Hủy đơn hàng đã duyệt' : 'Cancel Approved Order'}
                 </button>
               )}
 
@@ -1042,7 +1067,7 @@ export const Replenishment: React.FC = () => {
                   className="drawer-btn-close"
                   onClick={() => setSelectedItem(null)}
                 >
-                  Đóng
+                  {t('common.close', 'Close')}
                 </button>
               )}
             </div>
@@ -1056,25 +1081,27 @@ export const Replenishment: React.FC = () => {
         <div className="modal-overlay" onClick={() => setShowAdjustModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setShowAdjustModal(false)}><X size={16} /></button>
-            <h2 className="modal-title">Điều chỉnh số lượng đặt hàng</h2>
+            <h2 className="modal-title">{isVi ? 'Điều chỉnh số lượng đặt hàng' : 'Adjust Order Quantity'}</h2>
             <p className="modal-subtitle">
-              Ghi đè số lượng đề xuất cho mặt hàng <strong>{targetRec.item_id}</strong> tại kho <strong>{targetRec.store_id}</strong>.
+              {isVi 
+                ? <>Ghi đè số lượng đề xuất cho mặt hàng <strong>{targetRec.item_id}</strong> tại kho <strong>{targetRec.store_id}</strong>.</>
+                : <>Override recommended order quantity for SKU <strong>{targetRec.item_id}</strong> at store <strong>{targetRec.store_id}</strong>.</>}
             </p>
 
             <form onSubmit={handleSubmitAdjust}>
               <div className="modal-form-group">
-                <label>Số lượng thuật toán gợi ý (EOQ)</label>
+                <label>{isVi ? 'Số lượng thuật toán gợi ý (EOQ)' : 'Engine Recommendation (EOQ)'}</label>
                 <input
                   type="text"
                   disabled
-                  value={`${formatQty(targetRec.recommended_qty)} sp (ROP: ${formatDecimal(targetRec.rop, 1)}, Tồn kho: ${formatQty(targetRec.on_hand)})`}
+                  value={`${formatQty(targetRec.recommended_qty, localeStr)} ${isVi ? 'sp' : 'units'} (ROP: ${formatDecimal(targetRec.rop, 1, localeStr)}, ${isVi ? 'Tồn kho:' : 'Stock:'} ${formatQty(targetRec.on_hand, localeStr)})`}
                   className="modal-input"
                   style={{ background: '#f1f5f9', color: '#64748b' }}
                 />
               </div>
 
               <div className="modal-form-group">
-                <label>Số lượng đặt hàng chính thức (Final Qty) *</label>
+                <label>{isVi ? 'Số lượng đặt hàng chính thức (Final Qty) *' : 'Final Order Quantity *'}</label>
                 <input
                   type="number"
                   min="1"
@@ -1087,13 +1114,13 @@ export const Replenishment: React.FC = () => {
               </div>
 
               <div className="modal-form-group">
-                <label>Lý do điều chỉnh (Bắt buộc theo chuẩn ERP) *</label>
+                <label>{isVi ? 'Lý do điều chỉnh (Bắt buộc theo chuẩn ERP) *' : 'Adjustment Justification (ERP Standard) *'}</label>
                 <textarea
                   required
                   rows={3}
                   value={actionReasonInput}
                   onChange={(e) => setActionReasonInput(e.target.value)}
-                  placeholder="Ví dụ: Giới hạn dung tích xe vận chuyển, chính sách ưu đãi giá sỉ từ nhà cung cấp..."
+                  placeholder={isVi ? "Ví dụ: Giới hạn dung tích xe vận chuyển, chính sách ưu đãi giá sỉ từ nhà cung cấp..." : "e.g. Truckload batch constraint, upcoming supplier price tier..."}
                   className="modal-input"
                   style={{ resize: 'vertical' }}
                 />
@@ -1106,14 +1133,14 @@ export const Replenishment: React.FC = () => {
                   onClick={() => setShowAdjustModal(false)}
                   disabled={isSubmittingAction}
                 >
-                  Hủy bỏ
+                  {t('common.cancel', 'Cancel')}
                 </button>
                 <button
                   type="submit"
                   className="modal-btn-apply"
                   disabled={isSubmittingAction || adjustQtyInput <= 0 || !actionReasonInput.trim()}
                 >
-                  {isSubmittingAction ? 'Đang lưu...' : 'Xác nhận điều chỉnh'}
+                  {isSubmittingAction ? (isVi ? 'Đang lưu...' : 'Saving...') : (isVi ? 'Xác nhận điều chỉnh' : 'Confirm Adjustment')}
                 </button>
               </div>
             </form>
@@ -1127,20 +1154,22 @@ export const Replenishment: React.FC = () => {
         <div className="modal-overlay" onClick={() => setShowRejectModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setShowRejectModal(false)}><X size={16} /></button>
-            <h2 className="modal-title" style={{ color: '#dc2626' }}>Từ chối đề xuất đặt hàng</h2>
+            <h2 className="modal-title" style={{ color: '#dc2626' }}>{isVi ? 'Từ chối đề xuất đặt hàng' : 'Reject Order Recommendation'}</h2>
             <p className="modal-subtitle">
-              Mặt hàng <strong>{targetRec.item_id}</strong> sẽ không được tạo đơn bổ sung trong chu kỳ này.
+              {isVi 
+                ? <>Mặt hàng <strong>{targetRec.item_id}</strong> sẽ không được tạo đơn bổ sung trong chu kỳ này.</>
+                : <>SKU <strong>{targetRec.item_id}</strong> will be excluded from this replenishment cycle.</>}
             </p>
 
             <form onSubmit={handleSubmitReject}>
               <div className="modal-form-group">
-                <label>Lý do từ chối (Bắt buộc) *</label>
+                <label>{isVi ? 'Lý do từ chối (Bắt buộc) *' : 'Rejection Reason (Required) *'}</label>
                 <textarea
                   required
                   rows={3}
                   value={actionReasonInput}
                   onChange={(e) => setActionReasonInput(e.target.value)}
-                  placeholder="Ví dụ: Sản phẩm sắp ngừng kinh doanh, đã có hàng điều chuyển từ chi nhánh lân cận..."
+                  placeholder={isVi ? "Ví dụ: Sản phẩm sắp ngừng kinh doanh, đã có hàng điều chuyển từ chi nhánh lân cận..." : "e.g. Discontinued item, pending cross-dock transfer..."}
                   className="modal-input"
                   style={{ resize: 'vertical' }}
                   autoFocus
@@ -1154,14 +1183,14 @@ export const Replenishment: React.FC = () => {
                   onClick={() => setShowRejectModal(false)}
                   disabled={isSubmittingAction}
                 >
-                  Hủy bỏ
+                  {t('common.cancel', 'Cancel')}
                 </button>
                 <button
                   type="submit"
                   style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '0.375rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.8125rem' }}
                   disabled={isSubmittingAction || !actionReasonInput.trim()}
                 >
-                  {isSubmittingAction ? 'Đang từ chối...' : 'Xác nhận từ chối'}
+                  {isSubmittingAction ? (isVi ? 'Đang từ chối...' : 'Rejecting...') : (isVi ? 'Xác nhận từ chối' : 'Confirm Rejection')}
                 </button>
               </div>
             </form>
@@ -1175,20 +1204,22 @@ export const Replenishment: React.FC = () => {
         <div className="modal-overlay" onClick={() => setShowCancelModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setShowCancelModal(false)}><X size={16} /></button>
-            <h2 className="modal-title" style={{ color: '#dc2626' }}>Hủy đơn hàng đã duyệt</h2>
+            <h2 className="modal-title" style={{ color: '#dc2626' }}>{isVi ? 'Hủy đơn hàng đã duyệt' : 'Cancel Approved Order'}</h2>
             <p className="modal-subtitle">
-              Hủy đơn sẽ tự động hoàn trừ <strong>{formatQty(targetRec.final_qty)} sản phẩm</strong> khỏi lượng hàng On-Order đang vận chuyển.
+              {isVi 
+                ? <>Hủy đơn sẽ tự động hoàn trừ <strong>{formatQty(targetRec.final_qty, localeStr)} sản phẩm</strong> khỏi lượng hàng On-Order đang vận chuyển.</>
+                : <>Cancelling will automatically deduct <strong>{formatQty(targetRec.final_qty, localeStr)} units</strong> from in-transit On-Order inventory.</>}
             </p>
 
             <form onSubmit={handleSubmitCancel}>
               <div className="modal-form-group">
-                <label>Lý do hủy đơn *</label>
+                <label>{isVi ? 'Lý do hủy đơn *' : 'Cancellation Reason *'}</label>
                 <textarea
                   required
                   rows={3}
                   value={actionReasonInput}
                   onChange={(e) => setActionReasonInput(e.target.value)}
-                  placeholder="Ví dụ: Nhà cung cấp báo đứt hàng đột xuất, hủy bỏ chương trình khuyến mại..."
+                  placeholder={isVi ? "Ví dụ: Nhà cung cấp báo đứt hàng đột xuất, hủy bỏ chương trình khuyến mại..." : "e.g. Supplier inventory stockout, cancelled sales event..."}
                   className="modal-input"
                   style={{ resize: 'vertical' }}
                   autoFocus
@@ -1202,14 +1233,14 @@ export const Replenishment: React.FC = () => {
                   onClick={() => setShowCancelModal(false)}
                   disabled={isSubmittingAction}
                 >
-                  Đóng
+                  {t('common.close', 'Close')}
                 </button>
                 <button
                   type="submit"
                   style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '0.375rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.8125rem' }}
                   disabled={isSubmittingAction || !actionReasonInput.trim()}
                 >
-                  {isSubmittingAction ? 'Đang xử lý...' : 'Xác nhận hủy đơn'}
+                  {isSubmittingAction ? (isVi ? 'Đang xử lý...' : 'Processing...') : (isVi ? 'Xác nhận hủy đơn' : 'Confirm Cancellation')}
                 </button>
               </div>
             </form>

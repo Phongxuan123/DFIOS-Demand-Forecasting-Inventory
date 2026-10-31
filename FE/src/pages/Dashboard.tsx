@@ -4,10 +4,13 @@ import { Card } from '../components/ui/Card.tsx';
 import { api } from '../services/api.ts';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { RefreshCw, ArrowRight, CheckCircle2, Activity, ShieldAlert, Store } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import './Dashboard.css';
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { t, language } = useLanguage();
+
   const [data, setData] = useState<any>(() => {
     try {
       const cached = sessionStorage.getItem('dfios_dashboard_overview');
@@ -54,12 +57,16 @@ export const Dashboard: React.FC = () => {
     setScanResult(null);
     try {
       const res = await api.dashboard.triggerRealtimeAlerts(selectedStore);
-      setScanResult(`Scanned: ${res.alerts_generated || 0} stockout alerts detected & broadcasted via SSE!`);
+      setScanResult(
+        language === 'vi' 
+          ? `Đã quét: phát hiện ${res.alerts_generated || 0} cảnh báo thiếu hàng & phát qua SSE!` 
+          : `Scanned: ${res.alerts_generated || 0} stockout alerts detected & broadcasted via SSE!`
+      );
       fetchDashboardData(selectedStore);
       setTimeout(() => setScanResult(null), 4500);
     } catch (err) {
       console.error("Failed to trigger realtime alerts", err);
-      setScanResult("Scan completed. All inventory thresholds evaluated.");
+      setScanResult(t('dashboard.scan_success', 'Scan completed. All inventory thresholds evaluated.'));
       setTimeout(() => setScanResult(null), 3000);
     } finally {
       setIsScanningAlerts(false);
@@ -87,15 +94,17 @@ export const Dashboard: React.FC = () => {
           </div>
           <div>
             <div className="cockpit-title-row">
-              <h1 className="cockpit-title">Executive Inventory Operations & Control</h1>
+              <h1 className="cockpit-title">{t('dashboard.hero_title', 'Executive Inventory Operations & Control')}</h1>
               <div className={`cockpit-status-tag ${isLoading ? 'syncing' : 'active'}`}>
                 <span className="cockpit-status-dot"></span>
-                <span>{isLoading ? 'Đang đồng bộ...' : 'Hệ Thống Tự Động (Live Sync)'}</span>
+                <span>{isLoading ? t('common.loading', 'Syncing...') : (language === 'vi' ? 'Hệ Thống Tự Động (Live Sync)' : 'Automated System (Live Sync)')}</span>
               </div>
               <span className="cockpit-version-tag">Multi-Echelon Optimization</span>
             </div>
             <p className="cockpit-subtitle">
-              Giám sát tồn kho đa điểm bán, tối ưu hóa mức dự trữ an toàn (Safety Stock) và tự động nhận diện rủi ro đứt gãy cung ứng theo thời gian thực.
+              {language === 'vi' 
+                ? 'Giám sát tồn kho đa điểm bán, tối ưu hóa mức dự trữ an toàn (Safety Stock) và tự động nhận diện rủi ro đứt gãy cung ứng theo thời gian thực.'
+                : 'Multi-echelon inventory monitoring, safety stock optimization, and realtime automated supply disruption detection.'}
             </p>
           </div>
         </div>
@@ -103,17 +112,17 @@ export const Dashboard: React.FC = () => {
         {/* Telemetry vitals quick readout */}
         <div className="cockpit-vitals">
           <div className="vital-item">
-            <span className="vital-label">MÔ HÌNH NHU CẦU</span>
+            <span className="vital-label">{language === 'vi' ? 'MÔ HÌNH NHU CẦU' : 'DEMAND MODEL'}</span>
             <span className="vital-value text-teal">LightGBM Multi-Horizon</span>
           </div>
           <div className="vital-divider" />
           <div className="vital-item">
-            <span className="vital-label">MỤC TIÊU DỊCH VỤ (SLA)</span>
+            <span className="vital-label">{language === 'vi' ? 'MỤC TIÊU DỊCH VỤ (SLA)' : 'TARGET SLA'}</span>
             <span className="vital-value text-emerald">95.0% Cycle</span>
           </div>
           <div className="vital-divider" />
           <div className="vital-item">
-            <span className="vital-label">CHU KỲ CẬP NHẬT</span>
+            <span className="vital-label">{language === 'vi' ? 'CHU KỲ CẬP NHẬT' : 'UPDATE CADENCE'}</span>
             <span className="vital-value">Real-Time Sync</span>
           </div>
         </div>
@@ -123,7 +132,7 @@ export const Dashboard: React.FC = () => {
           <div className="store-segmented-control">
             <span className="store-control-label">
               <Store size={13} />
-              <span>ĐIỂM BÁN:</span>
+              <span>{t('dashboard.store_label', 'STORE:')}</span>
             </span>
             <div className="store-pill-group">
               {[
@@ -149,14 +158,14 @@ export const Dashboard: React.FC = () => {
             onClick={handleTriggerRealtimeAlerts}
             disabled={isScanningAlerts}
             className="cockpit-scan-btn"
-            title="Quét ngưỡng tồn kho toàn chuỗi và kích hoạt cảnh báo nguy cơ đứt hàng theo thời gian thực"
+            title={language === 'vi' ? 'Quét ngưỡng tồn kho toàn chuỗi và kích hoạt cảnh báo nguy cơ đứt hàng' : 'Scan inventory thresholds and broadcast stockout alerts'}
           >
             {isScanningAlerts ? (
               <RefreshCw size={14} className="animate-spin" />
             ) : (
               <ShieldAlert size={14} className="cockpit-scan-icon" />
             )}
-            <span>{isScanningAlerts ? 'Đang quét...' : 'Quét Rủi Ro Tồn Kho (Auto-Scan)'}</span>
+            <span>{isScanningAlerts ? t('dashboard.scanning', 'Scanning...') : t('dashboard.scan_alerts', 'Scan Realtime Alerts')}</span>
           </button>
         </div>
       </div>
@@ -171,40 +180,40 @@ export const Dashboard: React.FC = () => {
       {/* Row 1: Executive KPIs */}
       <div className="grid-cols-4 mb-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
         <Card className="kpi-card">
-          <p className="kpi-label">Total Monitored SKUs</p>
+          <p className="kpi-label">{t('dashboard.kpi_total_skus', 'Total Monitored SKUs')}</p>
           <div className="kpi-value-row">
-            <h2 className="kpi-value">{data?.kpis?.totalSkus != null ? data?.kpis?.totalSkus.toLocaleString() : '-'}</h2>
-            <span className="kpi-badge success">Active</span>
+            <h2 className="kpi-value">{data?.kpis?.totalSkus != null ? data.kpis.totalSkus.toLocaleString() : '-'}</h2>
+            <span className="kpi-badge success">{t('dashboard.badge_active', 'Active')}</span>
           </div>
         </Card>
 
         <Card className="kpi-card">
-          <p className="kpi-label">Total Inventory Valuation</p>
+          <p className="kpi-label">{t('dashboard.kpi_inventory_value', 'Total Inventory Valuation')}</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value">
-              {data?.kpis?.totalInventoryValue != null ? `$${Number(data?.kpis?.totalInventoryValue).toLocaleString()}` : '-'}
+              {data?.kpis?.totalInventoryValue != null ? `$${Number(data.kpis.totalInventoryValue).toLocaleString()}` : '-'}
             </h2>
-            <span className="kpi-badge neutral">Valuation</span>
+            <span className="kpi-badge neutral">{t('dashboard.badge_valuation', 'Valuation')}</span>
           </div>
         </Card>
 
         <Card className="kpi-card">
-          <p className="kpi-label">Stockout Rate</p>
+          <p className="kpi-label">{t('dashboard.kpi_stockout_rate', 'Stockout Rate')}</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value" style={{ color: Number(String(data?.kpis?.stockoutRate || '0').replace('%', '')) > 3 ? '#ef4444' : '#0d9488' }}>
               {data?.kpis?.stockoutRate ?? '0.0%'}
             </h2>
             <span className={`kpi-badge ${Number(String(data?.kpis?.stockoutRate || '0').replace('%', '')) > 3 ? 'danger' : 'success'}`}>
-              {Number(String(data?.kpis?.stockoutRate || '0').replace('%', '')) > 3 ? 'High Risk' : 'Optimal'}
+              {Number(String(data?.kpis?.stockoutRate || '0').replace('%', '')) > 3 ? t('dashboard.badge_high_risk', 'High Risk') : t('dashboard.badge_optimal', 'Optimal')}
             </span>
           </div>
         </Card>
 
         <Card className="kpi-card">
-          <p className="kpi-label">Forecast Accuracy</p>
+          <p className="kpi-label">{t('dashboard.kpi_forecast_accuracy', 'Forecast Accuracy')}</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value">{data?.kpis?.avgForecastAccuracy || '-'}</h2>
-            <span className="kpi-badge success">Ensemble</span>
+            <span className="kpi-badge success">{t('dashboard.badge_ensemble', 'Ensemble')}</span>
           </div>
         </Card>
       </div>
@@ -212,13 +221,13 @@ export const Dashboard: React.FC = () => {
       {/* Row 2: Secondary Action KPIs */}
       <div className="grid-cols-3 mb-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
         <Card className="kpi-card">
-          <p className="kpi-label">Reorder Stock Alerts (&le; ROP)</p>
+          <p className="kpi-label">{t('dashboard.kpi_reorder_alerts', 'Reorder Stock Alerts (≤ ROP)')}</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value" style={{ color: (data?.kpis?.reorderAlerts ?? 0) > 0 ? '#f59e0b' : '#0d9488' }}>
               {data?.kpis?.reorderAlerts ?? 0}
             </h2>
             <span className={`kpi-badge ${(data?.kpis?.reorderAlerts ?? 0) > 0 ? 'warning' : 'success'}`}>
-              {(data?.kpis?.reorderAlerts ?? 0) > 0 ? 'Action Needed' : 'Normal'}
+              {(data?.kpis?.reorderAlerts ?? 0) > 0 ? t('dashboard.badge_action_needed', 'Action Needed') : t('dashboard.badge_normal', 'Normal')}
             </span>
           </div>
         </Card>
@@ -228,23 +237,23 @@ export const Dashboard: React.FC = () => {
           style={{ cursor: 'pointer', transition: 'transform 0.2s' }}
           onClick={() => navigate('/replenishment')}
         >
-          <p className="kpi-label">Pending Replenishments</p>
+          <p className="kpi-label">{t('dashboard.kpi_pending_replenishments', 'Pending Replenishments')}</p>
           <div className="kpi-value-row">
             <h2 className="kpi-value" style={{ color: '#0d9488' }}>
-              {data?.kpis?.pendingReplenishments != null ? data?.kpis?.pendingReplenishments : '-'}
+              {data?.kpis?.pendingReplenishments != null ? data.kpis.pendingReplenishments : '-'}
             </h2>
             <div className="flex items-center gap-1 text-teal" style={{ fontSize: '0.8rem', fontWeight: 600 }}>
-              <span>Review POs</span>
+              <span>{t('dashboard.review_pos', 'Review POs')}</span>
               <ArrowRight size={14} />
             </div>
           </div>
         </Card>
 
         <Card className="kpi-card">
-          <p className="kpi-label">Active Suppliers</p>
+          <p className="kpi-label">{t('dashboard.kpi_active_suppliers', 'Active Suppliers')}</p>
           <div className="kpi-value-row">
-            <h2 className="kpi-value">{data?.kpis?.totalSuppliers != null ? data?.kpis?.totalSuppliers : '-'}</h2>
-            <span className="kpi-badge neutral">Lead Time Sync</span>
+            <h2 className="kpi-value">{data?.kpis?.totalSuppliers != null ? data.kpis.totalSuppliers : '-'}</h2>
+            <span className="kpi-badge neutral">{t('dashboard.badge_lead_time', 'Lead Time Sync')}</span>
           </div>
         </Card>
       </div>
@@ -253,13 +262,13 @@ export const Dashboard: React.FC = () => {
       <Card className="mb-6 p-6">
         <div className="chart-header flex justify-between items-center flex-wrap gap-3">
           <div className="chart-title-area">
-            <h3>Demand Trend Analysis (UC08)</h3>
-            <p>Historical demand distribution vs. 28-day predictive horizon for {selectedStore}</p>
+            <h3>{t('dashboard.demand_trend_title', 'Demand Trend Analysis (UC08)')}</h3>
+            <p>{t('dashboard.demand_trend_subtitle', 'Historical demand distribution vs. 28-day predictive horizon for')} {selectedStore}</p>
           </div>
           <div className="chart-legend">
-            <div className="legend-item"><div className="legend-line-actual"></div> Actual Demand</div>
-            <div className="legend-item"><div className="legend-line-predicted"></div> Predicted Demand</div>
-            <div className="legend-item"><div className="legend-box-horizon"></div> Forecast Horizon (28d)</div>
+            <div className="legend-item"><div className="legend-line-actual"></div> {t('dashboard.actual_demand', 'Actual Demand')}</div>
+            <div className="legend-item"><div className="legend-line-predicted"></div> {t('dashboard.predicted_demand', 'Predicted Demand')}</div>
+            <div className="legend-item"><div className="legend-box-horizon"></div> {t('dashboard.forecast_horizon', 'Forecast Horizon (28d)')}</div>
           </div>
         </div>
         <div className="chart-area" style={{ height: '280px' }}>
@@ -283,7 +292,7 @@ export const Dashboard: React.FC = () => {
       <div className="grid-cols-2 mb-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
         <Card className="p-6">
           <h3 className="chart-title-area" style={{ marginBottom: '1.5rem', fontSize: '1.125rem', fontWeight: 700, fontFamily: 'Outfit' }}>
-            Live Inventory Distribution
+            {t('dashboard.inventory_distribution', 'Live Inventory Distribution')}
           </h3>
           <div className="donut-area">
             <div className="donut-chart-container">
@@ -307,8 +316,8 @@ export const Dashboard: React.FC = () => {
                 </PieChart>
               </ResponsiveContainer>
               <div className="donut-center-text">
-                <strong>Inventory</strong>
-                <span>Health</span>
+                <strong>{t('dashboard.inventory_health_title', 'Inventory')}</strong>
+                <span>{t('dashboard.inventory_health_sub', 'Health')}</span>
               </div>
             </div>
             <div className="donut-legend">
@@ -327,11 +336,11 @@ export const Dashboard: React.FC = () => {
 
         <Card className="p-6">
           <h3 className="chart-title-area" style={{ marginBottom: '1.5rem', fontSize: '1.125rem', fontWeight: 700, fontFamily: 'Outfit' }}>
-            SKUs by Reorder Urgency
+            {t('dashboard.reorder_urgency', 'SKUs by Reorder Urgency')}
           </h3>
           <div className="urgency-list">
             {urgencyList.length === 0 ? (
-              <p style={{ padding: '1rem', color: '#94a3b8', textAlign: 'center' }}>All SKUs are operating within normal stock levels.</p>
+              <p style={{ padding: '1rem', color: '#94a3b8', textAlign: 'center' }}>{t('dashboard.all_normal', 'All SKUs are operating within normal stock levels.')}</p>
             ) : (
               urgencyList.map((item: any) => (
                 <div key={item.sku} className="urgency-item">
@@ -355,8 +364,8 @@ export const Dashboard: React.FC = () => {
 
       {/* Bottom Panel: Traffic-Light Stock Alerts (UC09) vs Live Adjustments */}
       <Card noPadding>
-        <div className="alerts-header flex justify-between items-center p-4 border-b border-slate-700">
-          <div className="flex gap-2">
+        <div className="alerts-header flex justify-between items-center p-4 border-b border-slate-700 flex-wrap gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => setBottomTab('ALERTS')}
               style={{
@@ -370,7 +379,7 @@ export const Dashboard: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Traffic-Light Stock Alerts (UC09)
+              {t('dashboard.tab_traffic_alerts', 'Traffic-Light Stock Alerts (UC09)')}
             </button>
             <button
               onClick={() => setBottomTab('ADJUSTMENTS')}
@@ -385,17 +394,17 @@ export const Dashboard: React.FC = () => {
                 cursor: 'pointer',
               }}
             >
-              Recent Inventory Activity
+              {t('dashboard.tab_recent_activity', 'Recent Inventory Activity')}
             </button>
           </div>
-          <span className="kpi-badge neutral">Store: {selectedStore}</span>
+          <span className="kpi-badge neutral">{t('dashboard.store_label', 'Store:')} {selectedStore}</span>
         </div>
 
         {bottomTab === 'ALERTS' ? (
           <div className="alerts-list">
             {trafficAlerts.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
-                No active stock alerts found for {selectedStore}. All items are within safety stock limits.
+                {t('dashboard.no_traffic_alerts', `No active stock alerts found for ${selectedStore}. All items are within safety stock limits.`)}
               </div>
             ) : (
               trafficAlerts.map((alert: any, idx: number) => {
@@ -412,14 +421,14 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <div className="alert-location">{alert.store_id}</div>
                     <div className="alert-details">
-                      On-Hand: <strong>{alert.on_hand}</strong> | ROP: {alert.reorder_point} | SS: {alert.safety_stock}
+                      {t('dashboard.on_hand', 'On-Hand')}: <strong>{alert.on_hand}</strong> | {t('dashboard.rop', 'ROP')}: {alert.reorder_point} | {t('dashboard.ss', 'SS')}: {alert.safety_stock}
                     </div>
                     <div className="alert-action">
                       <button
                         className="alert-action-btn"
                         onClick={() => navigate('/replenishment')}
                       >
-                        {alert.suggested_action || 'Order Stock'}
+                        {alert.suggested_action || t('dashboard.order_stock', 'Order Stock')}
                       </button>
                     </div>
                   </div>
@@ -431,7 +440,7 @@ export const Dashboard: React.FC = () => {
           <div className="alerts-list">
             {recentAlerts.length === 0 ? (
               <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
-                No inventory adjustment alerts logged yet.
+                {t('dashboard.no_recent_activity', 'No inventory adjustment alerts logged yet.')}
               </div>
             ) : (
               recentAlerts.map((alert: any, idx: number) => (

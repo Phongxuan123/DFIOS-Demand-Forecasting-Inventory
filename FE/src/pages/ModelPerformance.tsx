@@ -11,12 +11,15 @@ import {
 } from 'lucide-react';
 import { ScatterChart, Scatter, LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine, Tooltip } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './ModelPerformance.css';
 
 export const ModelPerformance: React.FC = () => {
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
   const isAdmin = user?.role?.toUpperCase() === 'ADMIN';
 
   const [activeTab, setActiveTab] = useState('Performance Metrics');
@@ -189,7 +192,7 @@ export const ModelPerformance: React.FC = () => {
         store_id: selectedStore || 'CA_1',
         force_static: forceStatic,
       });
-      setRecomputeMsg(res.message || 'Đã tính toán lại tham số tối ưu thành công!');
+      setRecomputeMsg(res.message || (isVi ? 'Đã tính toán lại tham số tối ưu thành công!' : 'Optimal parameters recomputed successfully!'));
       const [cmpRes, sensRes] = await Promise.all([
         api.optimization.compareStatic(selectedStore || 'CA_1').catch(() => null),
         api.optimization.runSensitivityAnalysis({ store_id: selectedStore || 'CA_1' }).catch(() => null),
@@ -198,7 +201,7 @@ export const ModelPerformance: React.FC = () => {
       if (sensRes) setSensitivityData(sensRes);
       setTimeout(() => setRecomputeMsg(''), 4500);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Lỗi khi tính toán lại tham số tối ưu');
+      alert(err.response?.data?.detail || (isVi ? 'Lỗi khi tính toán lại tham số tối ưu' : 'Failed to recompute optimal parameters'));
     } finally {
       setIsRecomputing(false);
     }
@@ -214,12 +217,12 @@ export const ModelPerformance: React.FC = () => {
       });
       setServiceLevelConfig(res);
       setIsServiceLevelModalOpen(false);
-      setRecomputeMsg(`Đã cập nhật mức phục vụ mục tiêu ${(targetVal * 100).toFixed(1)}%! Hệ thống đã tự động tính lại SS và ROP.`);
+      setRecomputeMsg(isVi ? `Đã cập nhật mức phục vụ mục tiêu ${(targetVal * 100).toFixed(1)}%! Hệ thống đã tự động tính lại SS và ROP.` : `Updated target service level to ${(targetVal * 100).toFixed(1)}%! Safety Stock and ROP recomputed automatically.`);
       const cmpRes = await api.optimization.compareStatic(selectedStore || 'CA_1').catch(() => null);
       if (cmpRes) setCompareStaticData(cmpRes);
       setTimeout(() => setRecomputeMsg(''), 4500);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Lỗi cập nhật mức phục vụ');
+      alert(err.response?.data?.detail || (isVi ? 'Lỗi cập nhật mức phục vụ' : 'Failed to update service level'));
     } finally {
       setIsSavingServiceLevel(false);
     }
@@ -582,7 +585,7 @@ export const ModelPerformance: React.FC = () => {
                     );
                   })
                 ) : (
-                  <div className="text-xs text-slate-400 py-3">Chưa có mô hình trong Model Registry</div>
+                  <div className="text-xs text-slate-400 py-3">{isVi ? "Chưa có mô hình trong Model Registry" : "No models currently registered in Model Registry"}</div>
                 )}
               </div>
             </div>
@@ -611,7 +614,7 @@ export const ModelPerformance: React.FC = () => {
                     );
                   })
                 ) : (
-                  <div className="text-xs text-slate-400 py-3">Chưa có mô hình trong Model Registry</div>
+                  <div className="text-xs text-slate-400 py-3">{isVi ? "Chưa có mô hình trong Model Registry" : "No models currently registered in Model Registry"}</div>
                 )}
               </div>
             </div>
@@ -633,7 +636,7 @@ export const ModelPerformance: React.FC = () => {
               </ResponsiveContainer>
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
-                <span>Chưa có dữ liệu kiểm định phần dư (Residuals) từ các dự báo thực tế.</span>
+                <span>{isVi ? "Chưa có dữ liệu kiểm định phần dư (Residuals) từ các dự báo thực tế." : "No forecast residual diagnostics data available."}</span>
               </div>
             )}
           </div>
@@ -647,14 +650,14 @@ export const ModelPerformance: React.FC = () => {
       {/* Top Action Bar */}
       <div className="cost-sim-topbar">
         <div className="flex items-center gap-3">
-          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">CỬA HÀNG / KHO MỤC TIÊU:</label>
+          <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">{isVi ? "CỬA HÀNG / KHO MỤC TIÊU:" : "TARGET STORE / LOCATION:"}</label>
           <select
             value={selectedStore}
             onChange={(e) => handleStoreChange(e.target.value)}
             className="sim-store-select"
           >
             {storesList.map((st) => (
-              <option key={st} value={st}>Cửa hàng {st}</option>
+              <option key={st} value={st}>{isVi ? `Cửa hàng ${st}` : `Store ${st}`}</option>
             ))}
           </select>
         </div>
@@ -667,7 +670,7 @@ export const ModelPerformance: React.FC = () => {
             disabled={isRecomputing}
           >
             <RefreshCw size={14} className={isRecomputing ? 'animate-spin' : ''} />
-            <span>{isRecomputing ? 'Đang tính toán lại tham số...' : 'Tính toán lại tối ưu ML'}</span>
+            <span>{isRecomputing ? (isVi ? 'Đang tính toán lại tham số...' : 'Recomputing Parameters...') : (isVi ? 'Tính toán lại tối ưu ML' : 'Recompute ML Optimization')}</span>
           </button>
         </div>
       </div>
@@ -684,22 +687,22 @@ export const ModelPerformance: React.FC = () => {
         {/* Card 1: Static Policy */}
         <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">CHÍNH SÁCH CƠ SỞ (STATIC)</span>
+            <span className="policy-stat-title">{isVi ? "CHÍNH SÁCH CƠ SỞ (STATIC)" : "BASELINE POLICY (STATIC)"}</span>
             <span className="policy-stat-badge">Moving Average</span>
           </div>
           <div className="policy-stat-main">
             <div className="policy-stat-val text-slate-900">
               ${portfolioStats.totalStaticHolding.toLocaleString()}
             </div>
-            <div className="policy-stat-sub">Chi phí lưu kho hàng năm (Công thức thống kê truyền thống)</div>
+            <div className="policy-stat-sub">{isVi ? "Chi phí lưu kho hàng năm (Công thức thống kê truyền thống)" : "Annual holding cost (Traditional statistical formula)"}</div>
           </div>
           <div className="policy-stat-grid">
             <div className="policy-stat-row">
-              <span className="text-slate-500">Phương pháp luận:</span>
+              <span className="text-slate-500">{isVi ? "Phương pháp luận:" : "Methodology:"}</span>
               <span className="font-semibold text-slate-700">Moving Avg Sigma</span>
             </div>
             <div className="policy-stat-row">
-              <span className="text-slate-500">Cơ chế an toàn:</span>
+              <span className="text-slate-500">{isVi ? "Cơ chế an toàn:" : "Safety Mechanism:"}</span>
               <span className="font-semibold text-slate-700">Static Buffer</span>
             </div>
           </div>
@@ -708,22 +711,22 @@ export const ModelPerformance: React.FC = () => {
         {/* Card 2: ML Optimal Policy */}
         <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">CHÍNH SÁCH TỐI ƯU ML</span>
+            <span className="policy-stat-title">{isVi ? "CHÍNH SÁCH TỐI ƯU ML" : "ML OPTIMIZED POLICY"}</span>
             <span className="policy-stat-badge highlight">PRODUCTION ML</span>
           </div>
           <div className="policy-stat-main">
             <div className="policy-stat-val text-slate-900">
               ${portfolioStats.totalMlHolding.toLocaleString()}
             </div>
-            <div className="policy-stat-sub">Chi phí lưu kho hàng năm (Dự báo nhu cầu ML)</div>
+            <div className="policy-stat-sub">{isVi ? "Chi phí lưu kho hàng năm (Dự báo nhu cầu ML)" : "Annual holding cost (ML demand forecast)"}</div>
           </div>
           <div className="policy-stat-grid">
             <div className="policy-stat-row">
-              <span className="text-slate-500">Quy mô đánh giá:</span>
+              <span className="text-slate-500">{isVi ? "Quy mô đánh giá:" : "Evaluation Scope:"}</span>
               <span className="font-semibold text-slate-700">{portfolioStats.totalSkus} SKUs</span>
             </div>
             <div className="policy-stat-row">
-              <span className="text-slate-500">Độ lệch chuẩn LT:</span>
+              <span className="text-slate-500">{isVi ? "Độ lệch chuẩn LT:" : "LT Std Deviation:"}</span>
               <span className="font-semibold text-slate-700">Dynamic Conformal</span>
             </div>
           </div>
@@ -732,7 +735,7 @@ export const ModelPerformance: React.FC = () => {
         {/* Card 3: Net Annual Holding Savings */}
         <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">TIẾT KIỆM LƯU KHO RÒNG</span>
+            <span className="policy-stat-title">{isVi ? "TIẾT KIỆM LƯU KHO RÒNG" : "NET HOLDING SAVINGS"}</span>
             <span className="policy-stat-badge savings">PROVEN SAVINGS</span>
           </div>
           <div className="policy-stat-main">
@@ -740,17 +743,17 @@ export const ModelPerformance: React.FC = () => {
               +${portfolioStats.totalSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </div>
             <div className="policy-stat-sub">
-              {portfolioStats.avgReductionPct.toFixed(1)}% Giảm tồn kho an toàn trung bình
+              {portfolioStats.avgReductionPct.toFixed(1)}% {isVi ? "Giảm tồn kho an toàn trung bình" : "Average Safety Stock Reduction"}
             </div>
           </div>
           <div className="policy-stat-grid">
             <div className="policy-stat-row">
-              <span className="text-slate-500">Giảm lượng đệm kho:</span>
+              <span className="text-slate-500">{isVi ? "Giảm lượng đệm kho:" : "Buffer Reduction:"}</span>
               <span className="font-semibold text-emerald-700">-{portfolioStats.avgReductionPct.toFixed(1)}%</span>
             </div>
             <div className="policy-stat-row">
-              <span className="text-slate-500">Vốn lưu động:</span>
-              <span className="font-semibold text-emerald-700">Giải phóng cho kinh doanh</span>
+              <span className="text-slate-500">{isVi ? "Vốn lưu động:" : "Working Capital:"}</span>
+              <span className="font-semibold text-emerald-700">{isVi ? "Giải phóng cho kinh doanh" : "Freed for Core Operations"}</span>
             </div>
           </div>
         </div>
@@ -758,17 +761,17 @@ export const ModelPerformance: React.FC = () => {
         {/* Card 4: Target Service Level */}
         <div className="policy-stat-card">
           <div className="policy-stat-header">
-            <span className="policy-stat-title">MỨC PHỤC VỤ MỤC TIÊU</span>
-            <span className="policy-stat-badge">TOÀN HỆ THỐNG</span>
+            <span className="policy-stat-title">{isVi ? "MỨC PHỤC VỤ MỤC TIÊU" : "TARGET SERVICE LEVEL"}</span>
+            <span className="policy-stat-badge">{isVi ? "TOÀN HỆ THỐNG" : "SYSTEM-WIDE"}</span>
           </div>
           <div className="policy-stat-main">
             <div className="policy-stat-val text-slate-900">
               {((serviceLevelConfig?.default_service_level ?? 0.95) * 100).toFixed(1)}%
             </div>
-            <div className="policy-stat-sub">Hệ số đáp ứng đơn hàng toàn hệ thống (tau)</div>
+            <div className="policy-stat-sub">{isVi ? "Hệ số đáp ứng đơn hàng toàn hệ thống (tau)" : "System-wide order fill target (tau)"}</div>
           </div>
           <div className="mt-2 pt-2 border-t border-slate-100 flex justify-between items-center">
-            <span className="text-xs text-slate-500">Cấu hình quản trị</span>
+            <span className="text-xs text-slate-500">{isVi ? "Cấu hình quản trị" : "Governance Config"}</span>
             <button
               type="button"
               className="text-xs text-slate-800 hover:text-slate-900 font-semibold px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50 transition-colors"
@@ -777,7 +780,7 @@ export const ModelPerformance: React.FC = () => {
                 setIsServiceLevelModalOpen(true);
               }}
             >
-              Thiết lập tham số
+              {isVi ? "Thiết lập tham số" : "Configure Parameters"}
             </button>
           </div>
         </div>
@@ -789,26 +792,26 @@ export const ModelPerformance: React.FC = () => {
         <div className="cost-sim-controls">
           <div className="flex items-center gap-2 mb-4">
             <Sliders size={16} className="text-slate-700" />
-            <h3 className="mp-panel-title">Tham Số Phân Tích Độ Nhạy</h3>
+            <h3 className="mp-panel-title">{isVi ? "Tham Số Phân Tích Độ Nhạy" : "Sensitivity Analysis Parameters"}</h3>
           </div>
 
           <div className="sim-input-group">
-            <label className="sim-label">Phân khúc sản phẩm mục tiêu</label>
+            <label className="sim-label">{isVi ? "Phân khúc sản phẩm mục tiêu" : "Target Product Segment"}</label>
             <select
               className="sim-input-field"
               value={simSegment}
               onChange={(e) => setSimSegment(e.target.value)}
             >
-              <option value="All SKUs (Global)">Tất cả SKUs (Toàn bộ danh mục)</option>
-              <option value="Segment AX (High Value Stable)">Nhóm AX (Giá trị cao, nhu cầu ổn định)</option>
-              <option value="Segment AY (High Value Variable)">Nhóm AY (Giá trị cao, nhu cầu biến động)</option>
-              <option value="Segment BX (Medium Value Stable)">Nhóm BX (Giá trị TB, nhu cầu ổn định)</option>
+              <option value="All SKUs (Global)">{isVi ? "Tất cả SKUs (Toàn bộ danh mục)" : "All SKUs (Global Catalog)"}</option>
+              <option value="Segment AX (High Value Stable)">{isVi ? "Nhóm AX (Giá trị cao, nhu cầu ổn định)" : "Class AX (High Value, Stable Demand)"}</option>
+              <option value="Segment AY (High Value Variable)">{isVi ? "Nhóm AY (Giá trị cao, nhu cầu biến động)" : "Class AY (High Value, Variable Demand)"}</option>
+              <option value="Segment BX (Medium Value Stable)">{isVi ? "Nhóm BX (Giá trị TB, nhu cầu ổn định)" : "Class BX (Mid Value, Stable Demand)"}</option>
             </select>
           </div>
 
           <div className="sim-input-group">
             <div className="sim-input-row">
-              <label className="sim-label">Mức phục vụ mục tiêu (Service Level)</label>
+              <label className="sim-label">{isVi ? "Mức phục vụ mục tiêu (Service Level)" : "Target Service Level (Cycle SLA)"}</label>
               <span className="sim-value-badge">{simServiceLevel.toFixed(1)}%</span>
             </div>
             <input
@@ -825,16 +828,16 @@ export const ModelPerformance: React.FC = () => {
               className="sim-range-input"
             />
             <div className="sim-range-labels">
-              <span>85.0% (Tiết kiệm vốn)</span>
-              <span>95.0% (Chuẩn FMCG)</span>
-              <span>99.0% (Hàng trọng yếu)</span>
+              <span>{isVi ? "85.0% (Tiết kiệm vốn)" : "85.0% (Lean Capital)"}</span>
+              <span>{isVi ? "95.0% (Chuẩn FMCG)" : "95.0% (FMCG Standard)"}</span>
+              <span>{isVi ? "99.0% (Hàng trọng yếu)" : "99.0% (Critical Items)"}</span>
             </div>
           </div>
 
           <div className="sim-input-group">
             <div className="sim-input-row">
-              <label className="sim-label">Thời gian cung ứng kỳ vọng (Lead Time)</label>
-              <span className="sim-value-badge">{simLeadTime} Ngày</span>
+              <label className="sim-label">{isVi ? "Thời gian cung ứng kỳ vọng (Lead Time)" : "Expected Lead Time (Days)"}</label>
+              <span className="sim-value-badge">{simLeadTime} {isVi ? "Ngày" : "Days"}</span>
             </div>
             <input
               type="range"
@@ -851,13 +854,13 @@ export const ModelPerformance: React.FC = () => {
             />
             <div className="sim-range-labels">
               <span>1d Giao nhanh</span>
-              <span>7d Tiêu chuẩn</span>
-              <span>28d Đường biển</span>
+              <span>{isVi ? "7d Tiêu chuẩn" : "7d Standard"}</span>
+              <span>{isVi ? "28d Đường biển" : "28d Ocean Freight"}</span>
             </div>
           </div>
 
           <div className="sim-input-group">
-            <label className="sim-label">Tỷ suất chi phí giữ hàng năm (%)</label>
+            <label className="sim-label">{isVi ? "Tỷ suất chi phí giữ hàng năm (%)" : "Annual Holding Cost Rate (%)"}</label>
             <input
               type="number"
               className="sim-input-field"
@@ -868,11 +871,11 @@ export const ModelPerformance: React.FC = () => {
                 handleSensitivityUpdate(simServiceLevel, simLeadTime, val, simOrderCost);
               }}
             />
-            <span className="sim-input-desc">Bao gồm chi phí vốn, kho bãi, hao hụt & bảo hiểm</span>
+            <span className="sim-input-desc">{isVi ? "Bao gồm chi phí vốn, kho bãi, hao hụt & bảo hiểm" : "Includes cost of capital, warehousing, shrinkage & insurance"}</span>
           </div>
 
           <div className="sim-input-group">
-            <label className="sim-label">Chi phí đặt hàng cố định ($/đơn)</label>
+            <label className="sim-label">{isVi ? "Chi phí đặt hàng cố định ($/đơn)" : "Fixed Order Placement Cost ($/order)"}</label>
             <input
               type="number"
               className="sim-input-field"
@@ -883,15 +886,15 @@ export const ModelPerformance: React.FC = () => {
                 handleSensitivityUpdate(simServiceLevel, simLeadTime, simHoldingRate, val);
               }}
             />
-            <span className="sim-input-desc">Chi phí xử lý chứng từ, tiếp nhận hàng & logistics</span>
+            <span className="sim-input-desc">{isVi ? "Chi phí xử lý chứng từ, tiếp nhận hàng & logistics" : "Includes purchase order processing, receiving dock & handling"}</span>
           </div>
 
           <div className="sim-notice-card">
             <div className="sim-notice-title">
               <ShieldCheck size={14} className="text-slate-700" />
-              <span>Mô Phỏng Tức Thời Trong Bộ Nhớ</span>
+              <span>{isVi ? "Mô Phỏng Tức Thời Trong Bộ Nhớ" : "In-Memory Simulation Sandbox"}</span>
             </div>
-            Tính toán trực tiếp theo mô hình đàn hồi tồn kho vi mô, không ghi đè dữ liệu cấu hình vận hành thực tế của cửa hàng.
+            {isVi ? "Tính toán trực tiếp theo mô hình đàn hồi tồn kho vi mô, không ghi đè dữ liệu cấu hình vận hành thực tế của cửa hàng." : "Simulated instantly via multi-echelon elasticity formulas without altering live production configurations."}
           </div>
         </div>
 
@@ -900,29 +903,29 @@ export const ModelPerformance: React.FC = () => {
           {/* Visual Cost Composition Progress Bar */}
           <div className="cost-breakdown-section">
             <div className="cost-breakdown-header">
-              <span>CƠ CẤU CHI PHÍ DỰ KIẾN KHI ĐIỀU CHỈNH THAM SỐ</span>
-              <span>Lưu giữ kho: {simMetrics.holdingShare}% | Rủi ro thiếu hàng: {simMetrics.stockoutShare}%</span>
+              <span>{isVi ? "CƠ CẤU CHI PHÍ DỰ KIẾN KHI ĐIỀU CHỈNH THAM SỐ" : "PROJECTED COST STRUCTURE UNDER SENSITIVITY PARAMETERS"}</span>
+              <span>{isVi ? `Lưu giữ kho: ${simMetrics.holdingShare}% | Rủi ro thiếu hàng: ${simMetrics.stockoutShare}%` : `Holding Cost: ${simMetrics.holdingShare}% | Stockout Risk: ${simMetrics.stockoutShare}%`}</span>
             </div>
             <div className="cost-breakdown-bar">
               <div
                 className="cost-breakdown-segment holding"
                 style={{ width: `${simMetrics.holdingShare}%` }}
-                title={`Chi phí lưu kho: $${simMetrics.simHolding.toLocaleString()}`}
+                title={isVi ? `Chi phí lưu kho: $${simMetrics.simHolding.toLocaleString()}` : `Holding Cost: $${simMetrics.simHolding.toLocaleString()}`}
               />
               <div
                 className="cost-breakdown-segment stockout"
                 style={{ width: `${simMetrics.stockoutShare}%` }}
-                title={`Rủi ro thiếu hàng: $${simMetrics.simStockout.toLocaleString()}`}
+                title={isVi ? `Rủi ro thiếu hàng: $${simMetrics.simStockout.toLocaleString()}` : `Stockout Penalty: $${simMetrics.simStockout.toLocaleString()}`}
               />
             </div>
             <div className="cost-breakdown-legend">
               <div className="legend-item">
                 <span className="legend-dot holding"></span>
-                <span>Chi phí giữ hàng dự kiến (${simMetrics.simHolding.toLocaleString()})</span>
+                <span>{isVi ? `Chi phí giữ hàng dự kiến ($${simMetrics.simHolding.toLocaleString()})` : `Holding Cost ($${simMetrics.simHolding.toLocaleString()})`}</span>
               </div>
               <div className="legend-item">
                 <span className="legend-dot stockout"></span>
-                <span>Tổn thất thiếu hàng dự kiến (${simMetrics.simStockout.toLocaleString()})</span>
+                <span>{isVi ? `Tổn thất thiếu hàng dự kiến ($${simMetrics.simStockout.toLocaleString()})` : `Stockout Penalty ($${simMetrics.simStockout.toLocaleString()})`}</span>
               </div>
             </div>
           </div>
@@ -931,21 +934,21 @@ export const ModelPerformance: React.FC = () => {
           <div className="cost-sim-chart-panel">
             <div className="cost-chart-header">
               <div>
-                <h3 className="cost-chart-title">Đường Biên Chi Phí Tổng Thể Kỳ Vọng Theo Mức Phục Vụ</h3>
-                <span className="cost-chart-sub">Đồ thị tương quan Trade-off Frontier (Thời gian cung ứng: {simLeadTime} ngày, Tỷ suất giữ hàng: {simHoldingRate}%)</span>
+                <h3 className="cost-chart-title">{isVi ? "Đường Biên Chi Phí Tổng Thể Kỳ Vọng Theo Mức Phục Vụ" : "Total Expected Cost Frontier vs Service Level"}</h3>
+                <span className="cost-chart-sub">{isVi ? `Đồ thị tương quan Trade-off Frontier (Thời gian cung ứng: ${simLeadTime} ngày, Tỷ suất giữ hàng: ${simHoldingRate}%)` : `Trade-off Frontier Analysis (Lead Time: ${simLeadTime}d, Holding Rate: ${simHoldingRate}%)`}</span>
               </div>
               <div className="flex items-center gap-4 text-xs">
                 <div className="flex items-center gap-1.5">
                   <span className="w-3 h-0.5 bg-slate-900 inline-block"></span>
-                  <span className="font-semibold text-slate-700">Tổng chi phí</span>
+                  <span className="font-semibold text-slate-700">{isVi ? "Tổng chi phí" : "Total Cost"}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-3 h-0.5 border-t border-dashed border-slate-500 inline-block"></span>
-                  <span className="text-slate-500">Giữ hàng</span>
+                  <span className="text-slate-500">{isVi ? "Giữ hàng" : "Carrying"}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-3 h-0.5 border-t border-dashed border-amber-600 inline-block"></span>
-                  <span className="text-amber-700">Thiếu hàng</span>
+                  <span className="text-amber-700">{isVi ? "Thiếu hàng" : "Stockout"}</span>
                 </div>
               </div>
             </div>
@@ -958,7 +961,7 @@ export const ModelPerformance: React.FC = () => {
                     contentStyle={{ backgroundColor: '#0f172a', borderRadius: '6px', border: 'none', color: '#fff', fontSize: '12px' }}
                     formatter={(val: any, name: any) => [
                       `$${Number(val).toLocaleString()}`,
-                      name === 'cost' ? 'Tổng chi phí' : name === 'holding' ? 'Chi phí lưu kho' : 'Rủi ro thiếu hàng'
+                      name === 'cost' ? (isVi ? 'Tổng chi phí' : 'Total Cost') : name === 'holding' ? (isVi ? 'Chi phí lưu kho' : 'Holding Cost') : (isVi ? 'Rủi ro thiếu hàng' : 'Stockout Risk')
                     ]}
                   />
                   <ReferenceLine x={`${Math.round(simServiceLevel)}%`} stroke="#0f172a" strokeDasharray="3 3" />
@@ -974,7 +977,7 @@ export const ModelPerformance: React.FC = () => {
           <div className="sim-insights-card">
             <div className="sim-insights-header">
               <Lightbulb size={16} className="text-slate-700" />
-              <h4 className="sim-insights-title">Thông Tin Tối Ưu Hóa Chiến Lược</h4>
+              <h4 className="sim-insights-title">{isVi ? "Thông Tin Tối Ưu Hóa Chiến Lược" : "Strategic Optimization Insights"}</h4>
             </div>
             <ul className="sim-insights-list">
               {sensitivityData?.insights && sensitivityData.insights.length > 0 ? (
@@ -986,7 +989,7 @@ export const ModelPerformance: React.FC = () => {
                 ))
               ) : (
                 <li className="sim-insights-item text-slate-400 italic">
-                  Đang tổng hợp thông tin tối ưu hóa chiến lược từ mô hình phân tích Backend...
+                  {isVi ? "Đang tổng hợp thông tin tối ưu hóa chiến lược từ mô hình phân tích Backend..." : "Synthesizing strategic inventory insights from analytics engine..."}
                 </li>
               )}
             </ul>
@@ -998,15 +1001,15 @@ export const ModelPerformance: React.FC = () => {
       <div className="cost-sim-table-panel mt-6">
         <div className="sim-table-header-row">
           <div>
-            <h3 className="sim-table-title">Bảng Đối So Sánh Chi Tiết: Mô Hình ML vs. Thống Kê Truyền Thống</h3>
+            <h3 className="sim-table-title">{isVi ? "Bảng Đối So Sánh Chi Tiết: Mô Hình ML vs. Thống Kê Truyền Thống" : "Inventory Policy Benchmark: ML vs. Classical Statistical Inventory"}</h3>
             <div className="sim-table-sub">
-              So sánh chi tiết tồn kho an toàn, điểm đặt hàng và chi phí lưu kho theo từng mã sản phẩm tại Cửa hàng {selectedStore}
+              {isVi ? `So sánh chi tiết tồn kho an toàn, điểm đặt hàng và chi phí lưu kho theo từng mã sản phẩm tại Cửa hàng ${selectedStore}` : `Granular SKU-level comparison of safety stock, reorder point, and carrying costs for Store ${selectedStore}`}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <input
               type="text"
-              placeholder="Tìm kiếm mã SKU, tên sản phẩm..."
+              placeholder={isVi ? "Tìm kiếm mã SKU, tên sản phẩm..." : "Search SKU code, product name..."}
               value={compareSearch}
               onChange={(e) => {
                 setCompareSearch(e.target.value);
@@ -1023,7 +1026,7 @@ export const ModelPerformance: React.FC = () => {
               className="sim-cat-select"
             >
               {compareCategories.map((c) => (
-                <option key={c} value={c}>Ngành hàng: {c === 'All' ? 'Tất cả' : c}</option>
+                <option key={c} value={c}>{isVi ? `Ngành hàng: ${c === 'All' ? 'Tất cả' : c}` : `Category: ${c === 'All' ? 'All' : c}`}</option>
               ))}
             </select>
           </div>
@@ -1033,26 +1036,26 @@ export const ModelPerformance: React.FC = () => {
           <table className="sim-table-elevated">
             <thead>
               <tr>
-                <th>MÃ SKU / TÊN SẢN PHẨM</th>
-                <th>NGÀNH HÀNG</th>
-                <th>MỨC PHỤC VỤ / LT</th>
-                <th className="text-right">TỒN KHO AN TOÀN (ML vs STATIC)</th>
-                <th className="text-right">ĐIỂM ĐẶT HÀNG (ROP)</th>
+                <th>{isVi ? "MÃ SKU / TÊN SẢN PHẨM" : "SKU / PRODUCT NAME"}</th>
+                <th>{isVi ? "NGÀNH HÀNG" : "CATEGORY"}</th>
+                <th>{isVi ? "MỨC PHỤC VỤ / LT" : "SERVICE LEVEL / LT"}</th>
+                <th className="text-right">{isVi ? "TỒN KHO AN TOÀN (ML vs STATIC)" : "SAFETY STOCK (ML vs STATIC)"}</th>
+                <th className="text-right">{isVi ? "ĐIỂM ĐẶT HÀNG (ROP)" : "REORDER POINT (ROP)"}</th>
                 <th className="text-right">EOQ</th>
-                <th className="text-right">TIẾT KIỆM LƯU KHO/NĂM</th>
+                <th className="text-right">{isVi ? "TIẾT KIỆM LƯU KHO/NĂM" : "ANNUAL CARRYING SAVINGS"}</th>
               </tr>
             </thead>
             <tbody>
               {effectiveCompareItems.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-8 text-slate-400">
-                    Chưa có dữ liệu so sánh chính sách ML vs Static cho cửa hàng này. Vui lòng bấm &quot;Tính toán lại tối ưu ML&quot; để hệ thống cập nhật.
+                    {isVi ? "Chưa có dữ liệu so sánh chính sách ML vs Static cho cửa hàng này. Vui lòng bấm \"Tính toán lại tối ưu ML\" để hệ thống cập nhật." : "No policy benchmark data available for this store. Please click \"Recompute ML Optimization\" to update."}
                   </td>
                 </tr>
               ) : filteredCompareItems.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-8 text-slate-400">
-                    Không tìm thấy sản phẩm phù hợp với bộ lọc tìm kiếm.
+                    {isVi ? "Không tìm thấy sản phẩm phù hợp với bộ lọc tìm kiếm." : "No products matching your search filter."}
                   </td>
                 </tr>
               ) : (
@@ -1084,7 +1087,7 @@ export const ModelPerformance: React.FC = () => {
                         </div>
                         {ssDiff > 0 && (
                           <span className="mp-delta-pill success text-[10px] mt-0.5">
-                            -{ssDiff.toFixed(1)} đệm kho
+                            -{ssDiff.toFixed(1)} {isVi ? "đệm kho" : "buffer"}
                           </span>
                         )}
                       </td>
