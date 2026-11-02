@@ -1069,3 +1069,67 @@
   align-items: center;
   padding-top: 1.5rem;
 }
+
+/* ==========================================================================
+   Responsive Adaptations (Tablet & Mobile)
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .prod-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+
+  .prod-filter-group {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .prod-filter-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .prod-detail-panel {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .prod-tabs-container {
+    overflow-x: auto;
+    padding: 0.35rem;
+    scrollbar-width: thin;
+  }
+
+  .prod-tab-btn {
+    white-space: nowrap;
+    padding: 0.4rem 0.75rem;
+  }
+
+  .prod-table-container,
+  .adj-table-container,
+  .sales-table-container {
+    overflow-x: auto;
+  }
+
+  .prod-table,
+  .adj-table {
+    min-width: 650px;
+  }
+}
+
+@media (max-width: 480px) {
+  .prod-filter-item {
+    width: 100%;
+  }
+
+  .prod-filter-input,
+  .prod-filter-select,
+  .prod-btn-outline,
+  .prod-btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+}
+

@@ -89,6 +89,7 @@ a:hover {
   display: flex;
   min-height: 100vh;
   width: 100vw;
+  overflow: hidden;
 }
 
 .main-content {
@@ -96,12 +97,28 @@ a:hover {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
+  width: 100%;
 }
 
 .page-container {
   padding: 2rem;
   overflow-y: auto;
   height: calc(100vh - 70px);
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .page-container {
+    padding: 1rem 0.75rem;
+    height: calc(100vh - 62px);
+  }
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Scrollbar */

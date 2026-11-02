@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Search, Upload, Plus, Calendar as CalendarIcon, ChevronRight, Trash2, Edit, Check, AlertCircle, X } from 'lucide-react';
 import { BarChart, Bar, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './Products.css';
 
 export const Products: React.FC = () => {
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
   const role = user?.role?.toUpperCase() || 'VIEWER';
   const canEdit = role === 'ADMIN' || role === 'WAREHOUSE MANAGER';
   const isAdmin = role === 'ADMIN';
@@ -380,15 +383,15 @@ export const Products: React.FC = () => {
     e.preventDefault();
     setSupplierModalError('');
     if (!supplierFormData.name.trim()) {
-      setSupplierModalError('Tên nhà cung cấp là bắt buộc.');
+      setSupplierModalError(isVi ? 'Tên nhà cung cấp là bắt buộc.' : 'Supplier name is required.');
       return;
     }
     if (supplierFormData.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supplierFormData.email.trim())) {
-      setSupplierModalError('Địa chỉ email liên hệ không đúng định dạng (ví dụ: contact@supplier.com).');
+      setSupplierModalError(isVi ? 'Địa chỉ email liên hệ không đúng định dạng (ví dụ: contact@supplier.com).' : 'Invalid contact email address (e.g. contact@supplier.com).');
       return;
     }
     if (supplierFormData.phone?.trim() && !/^[+0-9\s\-()]{6,20}$/.test(supplierFormData.phone.trim())) {
-      setSupplierModalError('Số điện thoại liên hệ phải chứa từ 6-20 ký tự số.');
+      setSupplierModalError(isVi ? 'Số điện thoại liên hệ phải chứa từ 6-20 ký tự số.' : 'Contact phone number must contain 6-20 numeric digits.');
       return;
     }
 
@@ -405,10 +408,10 @@ export const Products: React.FC = () => {
 
       if (selectedSupplier && selectedSupplier.id) {
         await api.products.updateSupplier(selectedSupplier.id, payload);
-        showNotification(`Cập nhật thông tin nhà cung cấp "${payload.name}" thành công!`);
+        showNotification(isVi ? `Cập nhật thông tin nhà cung cấp "${payload.name}" thành công!` : `Updated supplier "${payload.name}" successfully!`);
       } else {
         await api.products.createSupplier(payload);
-        showNotification(`Thêm mới nhà cung cấp "${payload.name}" thành công!`);
+        showNotification(isVi ? `Thêm mới nhà cung cấp "${payload.name}" thành công!` : `Created supplier "${payload.name}" successfully!`);
       }
 
       setShowSupplierModal(false);
@@ -420,7 +423,7 @@ export const Products: React.FC = () => {
         ? detail
         : Array.isArray(detail)
           ? detail.map((d: any) => d.msg).join(', ')
-          : 'Lỗi khi lưu thông tin nhà cung cấp';
+          : (isVi ? 'Lỗi khi lưu thông tin nhà cung cấp' : 'Failed to save supplier details');
       setSupplierModalError(msg);
     } finally {
       setIsSavingSupplier(false);
@@ -428,15 +431,15 @@ export const Products: React.FC = () => {
   };
 
   const handleDeleteSupplier = async () => {
-    if (!selectedSupplier || !window.confirm(`Bạn có chắc chắn muốn xóa nhà cung cấp "${selectedSupplier.name}"?`)) return;
+    if (!selectedSupplier || !window.confirm(isVi ? `Bạn có chắc chắn muốn xóa nhà cung cấp "${selectedSupplier.name}"?` : `Are you sure you want to delete supplier "${selectedSupplier.name}"?`)) return;
     try {
       await api.products.deleteSupplier(selectedSupplier.id);
-      showNotification(`Đã xóa nhà cung cấp "${selectedSupplier.name}" thành công!`);
+      showNotification(isVi ? `Đã xóa nhà cung cấp "${selectedSupplier.name}" thành công!` : `Deleted supplier "${selectedSupplier.name}" successfully!`);
       await loadSuppliers();
       setSelectedSupplier(null);
     } catch (e: any) {
       console.error(e);
-      showNotification(e.response?.data?.detail || 'Không thể xóa nhà cung cấp', 'error');
+      showNotification(e.response?.data?.detail || (isVi ? 'Không thể xóa nhà cung cấp' : 'Failed to delete supplier'), 'error');
     }
   };
 
@@ -502,11 +505,11 @@ export const Products: React.FC = () => {
   const handleCreateCalendarEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!calendarEventForm.event_name.trim()) {
-      setCalendarEventMsg('Tên sự kiện là bắt buộc.');
+      setCalendarEventMsg(isVi ? 'Tên sự kiện là bắt buộc.' : 'Event name is required.');
       return;
     }
     if (!calendarEventForm.start_date) {
-      setCalendarEventMsg('Ngày diễn ra sự kiện là bắt buộc.');
+      setCalendarEventMsg(isVi ? 'Ngày diễn ra sự kiện là bắt buộc.' : 'Event start date is required.');
       return;
     }
     setIsCreatingCalendarEvent(true);
@@ -528,7 +531,7 @@ export const Products: React.FC = () => {
       }
 
       setShowAddEventModal(false);
-      showNotification(`Thêm sự kiện "${calendarEventForm.event_name.trim()}" thành công!`);
+      showNotification(isVi ? `Thêm sự kiện "${calendarEventForm.event_name.trim()}" thành công!` : `Event "${calendarEventForm.event_name.trim()}" created successfully!`);
       setCalendarEventForm({
         event_name: '',
         event_type: eventTypes[0] || 'Promotion',
@@ -543,7 +546,7 @@ export const Products: React.FC = () => {
         ? detail
         : Array.isArray(detail)
           ? detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
-          : (detail && typeof detail === 'object' ? JSON.stringify(detail) : 'Không thể tạo sự kiện lịch trình.');
+          : (detail && typeof detail === 'object' ? JSON.stringify(detail) : (isVi ? 'Không thể tạo sự kiện lịch trình.' : 'Failed to create calendar event.'));
       setCalendarEventMsg(msg);
     } finally {
       setIsCreatingCalendarEvent(false);
@@ -1732,7 +1735,7 @@ export const Products: React.FC = () => {
               <button
                 className="prod-btn-outline"
                 onClick={loadEventsData}
-                title="Áp dụng lọc theo loại sự kiện đã chọn"
+                title={isVi ? "Áp dụng lọc theo loại sự kiện đã chọn" : "Apply selected event filter"}
                 style={{ height: '36px', whiteSpace: 'nowrap' }}
               >
                 Apply Filter
@@ -1740,12 +1743,12 @@ export const Products: React.FC = () => {
             </div>
           </div>
           <div className="prod-filter-item" style={{ flex: 1, minWidth: '240px' }}>
-            <span className="prod-filter-label">SEARCH EVENT (TÌM KIẾM TỨC THÌ)</span>
+            <span className="prod-filter-label">{isVi ? "SEARCH EVENT (TÌM KIẾM TỨC THÌ)" : "SEARCH EVENTS"}</span>
             <div style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
               <input
                 type="text"
-                placeholder="Nhập tên sự kiện, loại, chi tiết hoặc ngày để lọc..."
+                placeholder={isVi ? "Nhập tên sự kiện, loại, chi tiết hoặc ngày để lọc..." : "Enter event name, type, details or date to filter..."}
                 className="prod-filter-input"
                 style={{ paddingLeft: '32px', width: '100%', height: '36px' }}
                 value={eventSearch}

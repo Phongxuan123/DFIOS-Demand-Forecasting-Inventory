@@ -4,11 +4,50 @@ import { Card } from '../components/ui/Card.tsx';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Line } from 'recharts';
 import { X, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, SlidersHorizontal, Layers, Plus, Calendar, RotateCcw, TrendingUp, TrendingDown, ShieldCheck, BrainCircuit, ArrowUpRight, ArrowDownRight, Info } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './ForecastExplorer.css';
 
-const FEATURE_METADATA: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {
+const FEATURE_METADATA_EN: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {
+  sell_price: {
+    label: 'Unit Selling Price',
+    desc: 'List price exhibits an inverse elasticity impact on consumer purchasing velocity',
+    defaultDir: 'negative',
+  },
+  event_promotion: {
+    label: 'Promotional Campaign',
+    desc: 'Discount campaigns and promotions stimulate spikes in foot traffic and sales volume',
+    defaultDir: 'positive',
+  },
+  day_of_week: {
+    label: 'Day of Week Cycle',
+    desc: 'Consumer demand patterns surge during weekends compared to mid-week baselines',
+    defaultDir: 'positive',
+  },
+  lag_7: {
+    label: 'Prior Week Sales (Lag 7)',
+    desc: 'Consumption 7 days prior drives strong autoregressive demand inertia',
+    defaultDir: 'positive',
+  },
+  rolling_mean_28: {
+    label: '28-Day Rolling Average',
+    desc: '1-month moving average stabilizes baseline demand trends',
+    defaultDir: 'positive',
+  },
+  event_name_1: {
+    label: 'Special Event / Holiday',
+    desc: 'Impact from national holidays, festivals, or major sporting events',
+    defaultDir: 'positive',
+  },
+  snap_ca: {
+    label: 'SNAP CA Subsidy Calendar',
+    desc: 'Food stamp disbursement days stimulate grocery purchase spikes in California',
+    defaultDir: 'positive',
+  },
+};
+
+const FEATURE_METADATA_VI: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {
   sell_price: {
     label: 'Giá Bán Đơn Vị',
     desc: 'Giá niêm yết tác động nghịch đảo lên độ nhạy giá và sức mua của khách hàng',
@@ -48,6 +87,9 @@ const FEATURE_METADATA: Record<string, { label: string; desc: string; defaultDir
 
 export const ForecastExplorer: React.FC = () => {
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
+  const FEATURE_METADATA = isVi ? FEATURE_METADATA_VI : FEATURE_METADATA_EN;
   const canEdit = user?.role?.toUpperCase() !== 'VIEWER';
 
   const [data, setData] = useState<any>(null);
@@ -142,7 +184,7 @@ export const ForecastExplorer: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load forecast explorer data', error);
-      setToast({ type: 'error', message: 'Không thể tải dữ liệu dự báo từ máy chủ. Vui lòng thử lại.' });
+      setToast({ type: 'error', message: isVi ? 'Không thể tải dữ liệu dự báo từ máy chủ. Vui lòng thử lại.' : 'Failed to load forecast data from server. Please retry.' });
     } finally {
       setIsLoading(false);
     }
@@ -218,7 +260,7 @@ export const ForecastExplorer: React.FC = () => {
 
   const handleExportForecastCsv = () => {
     if (!data?.chartData || data.chartData.length === 0) {
-      setToast({ type: 'warning', message: 'Không có dữ liệu dự báo để xuất CSV!' });
+      setToast({ type: 'warning', message: isVi ? 'Không có dữ liệu dự báo để xuất CSV!' : 'No forecast data available to export!' });
       return;
     }
     const headers = ['SKU', 'Store', 'Date', 'Historical Sales', 'Point Forecast (p50)', 'CI Lower (p10)', 'CI Upper (p90)', 'Horizon', 'Engine'];
@@ -235,12 +277,12 @@ export const ForecastExplorer: React.FC = () => {
     ]);
     const filename = `forecast_${skuSearch || 'all'}_${selectedStore || 'global'}_${horizon}d.csv`;
     downloadCsv(filename, headers, rows);
-    setToast({ type: 'success', message: `Đã xuất ${rows.length} dòng dự báo ra file ${filename} thành công!` });
+    setToast({ type: 'success', message: isVi ? `Đã xuất ${rows.length} dòng dự báo ra file ${filename} thành công!` : `Exported ${rows.length} forecast rows to ${filename} successfully!` });
   };
 
   const handleExportMatrixCsv = () => {
     if (!data?.scheduleMatrix || data.scheduleMatrix.length === 0) {
-      setToast({ type: 'warning', message: 'Không có dữ liệu ma trận lịch trình để xuất CSV!' });
+      setToast({ type: 'warning', message: isVi ? 'Không có dữ liệu ma trận lịch trình để xuất CSV!' : 'No schedule matrix data available to export!' });
       return;
     }
     const headers = ['Date', 'SKU', 'Store', 'Predicted Demand (Units)', 'Lower (p10)', 'Upper (p90)', 'Spike Risk'];
@@ -255,7 +297,7 @@ export const ForecastExplorer: React.FC = () => {
     ]);
     const filename = `matrix_schedule_${skuSearch || 'sku'}_${horizon}d.csv`;
     downloadCsv(filename, headers, rows);
-    setToast({ type: 'success', message: `Đã xuất ma trận dự báo ${rows.length} ngày ra file ${filename} thành công!` });
+    setToast({ type: 'success', message: isVi ? `Đã xuất ma trận dự báo ${rows.length} ngày ra file ${filename} thành công!` : `Exported ${rows.length}-day schedule matrix to ${filename} successfully!` });
   };
 
   const handleOpenOverride = () => {
@@ -289,7 +331,7 @@ export const ForecastExplorer: React.FC = () => {
       });
       setIsOverrideModalOpen(false);
       setOverrideNotes('');
-      setToast({ type: 'success', message: `Đã áp dụng điều chỉnh dự báo cho ngày ${overrideDate} thành công!` });
+      setToast({ type: 'success', message: isVi ? `Đã áp dụng điều chỉnh dự báo cho ngày ${overrideDate} thành công!` : `Applied forecast override for ${overrideDate} successfully!` });
       await fetchForecast(skuSearch, horizon, selectedStore);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
@@ -310,16 +352,16 @@ export const ForecastExplorer: React.FC = () => {
   };
 
   const handleRevertOverride = async (overrideId: string) => {
-    if (!window.confirm('Bạn có chắc chắn muốn hoàn tác điều chỉnh này và quay về baseline của mô hình ML không?')) return;
+    if (!window.confirm(isVi ? 'Bạn có chắc chắn muốn hoàn tác điều chỉnh này và quay về baseline của mô hình ML không?' : 'Are you sure you want to revert this override back to the ML model baseline?')) return;
     try {
       await api.forecasting.revertOverride(skuSearch, overrideId);
-      setToast({ type: 'success', message: 'Đã hoàn tác điều chỉnh dự báo về ML baseline thành công!' });
+      setToast({ type: 'success', message: isVi ? 'Đã hoàn tác điều chỉnh dự báo về ML baseline thành công!' : 'Reverted forecast override back to ML baseline successfully!' });
       await fetchForecast(skuSearch, horizon, selectedStore);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       const msg = typeof detail === 'string'
         ? detail
-        : (Array.isArray(detail) ? detail.map((x: any) => x.msg).join(', ') : err.message || 'Lỗi hoàn tác điều chỉnh');
+        : (Array.isArray(detail) ? detail.map((x: any) => x.msg).join(', ') : err.message || (isVi ? 'Lỗi hoàn tác điều chỉnh' : 'Failed to revert override'));
       setToast({ type: 'error', message: msg });
     }
   };
@@ -370,7 +412,7 @@ export const ForecastExplorer: React.FC = () => {
   const handleApplyBulkOverride = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!skuSearch || bulkPreviewRows.length === 0) {
-      setBulkError('Vui lòng chọn khoảng thời gian hợp lệ có chứa ngày dự báo.');
+      setBulkError(isVi ? 'Vui lòng chọn khoảng thời gian hợp lệ có chứa ngày dự báo.' : 'Please select a valid date range containing forecast dates.');
       return;
     }
     setIsSubmittingBulk(true);
@@ -388,12 +430,12 @@ export const ForecastExplorer: React.FC = () => {
       setIsBulkOverrideOpen(false);
       setToast({
         type: 'success',
-        message: `Đã áp dụng điều chỉnh hàng loạt thành công cho ${res.created_count ?? items.length} ngày!`,
+        message: isVi ? `Đã áp dụng điều chỉnh hàng loạt thành công cho ${res.created_count ?? items.length} ngày!` : `Applied bulk override successfully for ${res.created_count ?? items.length} days!`, 
       });
       await fetchForecast(skuSearch, horizon, selectedStore);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      let errMsg = 'Không thể áp dụng điều chỉnh hàng loạt';
+      let errMsg = isVi ? 'Không thể áp dụng điều chỉnh hàng loạt' : 'Failed to apply bulk overrides';
       if (typeof detail === 'string') {
         errMsg = detail;
       } else if (Array.isArray(detail)) {
@@ -612,7 +654,7 @@ export const ForecastExplorer: React.FC = () => {
                 value={selectedEngine}
                 onChange={(e) => {
                   setSelectedEngine(e.target.value);
-                  setToast({ type: 'success', message: `Đã chọn mô hình ${e.target.value}` });
+                  setToast({ type: 'success', message: isVi ? `Đã chọn mô hình ${e.target.value}` : `Selected model ${e.target.value}` });
                 }}
               >
                 <option value="LightGBM">LightGBM (Champion)</option>
@@ -627,7 +669,7 @@ export const ForecastExplorer: React.FC = () => {
                 type="button"
                 className="export-csv-btn"
                 onClick={handleExportForecastCsv}
-                title="Xuất file CSV dự báo thời gian thực"
+                title={isVi ? "Xuất file CSV dự báo thời gian thực" : "Export real-time forecast CSV"}
               >
                 <FileSpreadsheet size={15} />
                 <span>Export CSV</span>
@@ -696,7 +738,7 @@ export const ForecastExplorer: React.FC = () => {
                   {overrides.length > 0 ? (
                     <span className="override-status-badge active">
                       <span className="status-dot" />
-                      {overrides.length} Điều chỉnh đang kích hoạt
+                      {overrides.length} {isVi ? "Điều chỉnh đang kích hoạt" : "Active Overrides"}
                     </span>
                   ) : (
                     <span className="override-status-badge idle">
@@ -706,7 +748,7 @@ export const ForecastExplorer: React.FC = () => {
                   )}
                 </div>
                 <p className="override-panel-desc">
-                  Can thiệp thủ công chỉ số dự báo khi có biến động thị trường hoặc chương trình đột xuất. Mọi thay đổi đều được lưu vết kiểm toán tự động.
+                  {isVi ? 'Can thiệp thủ công chỉ số dự báo khi có biến động thị trường hoặc chương trình đột xuất. Mọi thay đổi đều được lưu vết kiểm toán tự động.' : 'Manually adjust forecast quantities for promotional spikes or market changes. All revisions are automatically logged for audit compliance.'}
                 </p>
               </div>
             </div>
@@ -718,7 +760,7 @@ export const ForecastExplorer: React.FC = () => {
                     type="button"
                     className="override-btn-secondary"
                     onClick={handleOpenBulkOverride}
-                    title="Điều chỉnh dự báo hàng loạt theo % hoặc số lượng cố định"
+                    title={isVi ? "Điều chỉnh dự báo hàng loạt theo % hoặc số lượng cố định" : "Bulk adjust forecasts by percentage or fixed quantity"}
                   >
                     <Layers size={14} className="override-btn-icon" />
                     <span>Bulk Adjust</span>
@@ -727,7 +769,7 @@ export const ForecastExplorer: React.FC = () => {
                     type="button"
                     className="override-btn-primary"
                     onClick={handleOpenOverride}
-                    title="Thêm can thiệp dự báo cho một ngày cụ thể"
+                    title={isVi ? "Thêm can thiệp dự báo cho một ngày cụ thể" : "Add manual override for a specific date"}
                   >
                     <Plus size={15} className="override-btn-icon" />
                     <span>Single Override</span>
@@ -740,17 +782,17 @@ export const ForecastExplorer: React.FC = () => {
           {/* Executive Governance Summary Bar (sleek, single-row, no bulky boxes) */}
           <div className="override-summary-bar">
             <div className="override-summary-item">
-              <span className="override-summary-label">Can thiệp kích hoạt</span>
+              <span className="override-summary-label">{isVi ? "Can thiệp kích hoạt" : "Active Overrides"}</span>
               <div className="override-summary-val">
                 <span className="override-summary-val-main">{overrides.length}</span>
-                <span className="override-summary-val-sub">ngày / {horizon}d</span>
+                <span className="override-summary-val-sub">{isVi ? `ngày / ${horizon}d` : `days / ${horizon}d`}</span>
               </div>
             </div>
 
             <div className="override-summary-divider" />
 
             <div className="override-summary-item">
-              <span className="override-summary-label">Tác động ròng (Net Δ)</span>
+              <span className="override-summary-label">{isVi ? "Tác động ròng (Net Δ)" : "Net Impact (Net Δ)"}</span>
               <div className="override-summary-val">
                 <span
                   className={`override-summary-delta ${
@@ -785,7 +827,7 @@ export const ForecastExplorer: React.FC = () => {
             <div className="override-summary-divider" />
 
             <div className="override-summary-item">
-              <span className="override-summary-label">Dự báo sau điều chỉnh</span>
+              <span className="override-summary-label">{isVi ? "Dự báo sau điều chỉnh" : "Adjusted Horizon"}</span>
               <div className="override-summary-val">
                 <span className="override-summary-val-main">
                   {data?.stats?.predictedDemand != null
@@ -799,11 +841,11 @@ export const ForecastExplorer: React.FC = () => {
             <div className="override-summary-divider" />
 
             <div className="override-summary-item">
-              <span className="override-summary-label">Kiểm soát kiểm toán</span>
+              <span className="override-summary-label">{isVi ? "Kiểm soát kiểm toán" : "Audit Compliance"}</span>
               <div className="override-summary-val">
                 <span className="override-summary-audit-chip">
                   <ShieldCheck size={13} />
-                  <span>100% Ghi vết (Audit Logged)</span>
+                  <span>{isVi ? "100% Ghi vết (Audit Logged)" : "100% Audit Logged"}</span>
                 </span>
               </div>
             </div>
@@ -898,7 +940,7 @@ export const ForecastExplorer: React.FC = () => {
                               type="button"
                               className="override-revert-btn"
                               onClick={() => handleRevertOverride(ov.id)}
-                              title="Khôi phục về giá trị dự báo gốc của ML"
+                              title={isVi ? "Khôi phục về giá trị dự báo gốc của ML" : "Revert back to ML baseline"}
                             >
                               <RotateCcw size={12} />
                               <span>Revert</span>
@@ -916,9 +958,9 @@ export const ForecastExplorer: React.FC = () => {
               <div className="override-empty-icon">
                 <ShieldCheck size={26} />
               </div>
-              <h5 className="override-empty-title">Chưa Có Can Thiệp Thủ Công Cho SKU Này</h5>
+              <h5 className="override-empty-title">{isVi ? "Chưa Có Can Thiệp Thủ Công Cho SKU Này" : "No Manual Overrides for this SKU"}</h5>
               <p className="override-empty-desc">
-                Dự báo nhu cầu cho chu kỳ {horizon} ngày đang tuân thủ 100% thuật toán Machine Learning ({selectedEngine}) mà không bị điều chỉnh. Bạn có thể can thiệp số lượng khi có chương trình khuyến mãi hoặc sự kiện đột xuất.
+                {isVi ? `Dự báo nhu cầu cho chu kỳ ${horizon} ngày đang tuân thủ 100% thuật toán Machine Learning (${selectedEngine}) mà không bị điều chỉnh. Bạn có thể can thiệp số lượng khi có chương trình khuyến mãi hoặc sự kiện đột xuất.` : `The ${horizon}-day demand forecast is 100% governed by the ${selectedEngine} Machine Learning algorithm without planner interventions. You can intervene when promotional campaigns or supply disruptions occur.`}
               </p>
               {canEdit && (
                 <div style={{ display: 'flex', gap: '0.625rem' }}>
@@ -928,7 +970,7 @@ export const ForecastExplorer: React.FC = () => {
                     onClick={handleOpenOverride}
                   >
                     <Plus size={15} />
-                    <span>Thêm Điều Chỉnh Đơn Lẻ</span>
+                    <span>{isVi ? "Thêm Điều Chỉnh Đơn Lẻ" : "Add Single Override"}</span>
                   </button>
                   <button
                     type="button"
@@ -936,7 +978,7 @@ export const ForecastExplorer: React.FC = () => {
                     onClick={handleOpenBulkOverride}
                   >
                     <Layers size={14} />
-                    <span>Điều Chỉnh Hàng Loạt</span>
+                    <span>{isVi ? "Điều Chỉnh Hàng Loạt" : "Bulk Adjustment"}</span>
                   </button>
                 </div>
               )}
@@ -967,19 +1009,19 @@ export const ForecastExplorer: React.FC = () => {
               <div className="perf-kpi-item">
                 <div className="perf-kpi-label">Predicted {horizon}d Demand</div>
                 <div className="perf-kpi-val">{data?.stats?.predictedDemand || '-'}</div>
-                <div className="perf-kpi-sub">Tổng nhu cầu dự báo chu kỳ</div>
+                <div className="perf-kpi-sub">{isVi ? "Tổng nhu cầu dự báo chu kỳ" : "Total horizon predicted demand"}</div>
               </div>
 
               <div className="perf-kpi-item">
                 <div className="perf-kpi-label">Uncertainty Spread</div>
                 <div className="perf-kpi-val">{data?.stats?.ci || '-'}</div>
-                <div className="perf-kpi-sub">Dải khoảng tin cậy p10 - p90</div>
+                <div className="perf-kpi-sub">{isVi ? "Dải khoảng tin cậy p10 - p90" : "p10 - p90 uncertainty spread"}</div>
               </div>
 
               <div className="perf-kpi-item">
                 <div className="perf-kpi-label">Safety Stock Cushion</div>
                 <div className="perf-kpi-val">{data?.stats?.safetyStock || '-'}</div>
-                <div className="perf-kpi-sub">Điểm tái đặt hàng ROP: {data?.stats?.reorderPoint || '-'}</div>
+                <div className="perf-kpi-sub">{isVi ? `Điểm tái đặt hàng ROP: ${data?.stats?.reorderPoint || '-'}` : `Reorder Point (ROP): ${data?.stats?.reorderPoint || '-'}`}</div>
               </div>
 
               <div className="perf-kpi-item">
@@ -1007,12 +1049,12 @@ export const ForecastExplorer: React.FC = () => {
                       <span className="shap-tag-tech">TreeSHAP</span>
                     </div>
                     <p className="shap-desc">
-                      Mức độ tác động của từng đặc trưng lên sản lượng dự báo (SHAP Attribution)
+                      {isVi ? "Mức độ tác động của từng đặc trưng lên sản lượng dự báo (SHAP Attribution)" : "Feature impact on predicted sales volume (SHAP Attribution)"}
                     </p>
                   </div>
                 </div>
                 {explanation?.base_value != null && (
-                  <div className="shap-base-val-chip" title="Giá trị kỳ vọng cơ sở của mô hình khi chưa xét tác động đặc trưng">
+                  <div className="shap-base-val-chip" title={isVi ? "Giá trị kỳ vọng cơ sở của mô hình khi chưa xét tác động đặc trưng" : "Baseline expected model output before feature contributions"}>
                     <span className="shap-base-label">Base E[f(x)]:</span>
                     <span className="shap-base-num">{explanation.base_value} units</span>
                   </div>
@@ -1026,8 +1068,8 @@ export const ForecastExplorer: React.FC = () => {
                       ? f.importance_score
                       : (typeof f.importance === 'number' ? f.importance : 0);
                     const meta = FEATURE_METADATA[f.feature_name] || {
-                      label: f.feature_name ? f.feature_name.replace(/_/g, ' ') : `Đặc trưng ${idx + 1}`,
-                      desc: f.description || 'Đặc trưng hồi quy trong mô hình Machine Learning',
+                      label: f.feature_name ? f.feature_name.replace(/_/g, ' ') : (isVi ? `Đặc trưng ${idx + 1}` : `Feature ${idx + 1}`),
+                      desc: f.description || (isVi ? 'Đặc trưng hồi quy trong mô hình Machine Learning' : 'Regression feature in Machine Learning model'),
                       defaultDir: rawScore >= 0 ? 'positive' : 'negative',
                     };
                     const isNeg = f.direction === 'negative' || (f.direction == null && (rawScore < 0 || meta.defaultDir === 'negative'));
@@ -1078,7 +1120,7 @@ export const ForecastExplorer: React.FC = () => {
               ) : (
                 <div className="shap-empty-state">
                   <Info size={16} />
-                  <span>Chưa có dữ liệu phân tích SHAP giải thích cho mô hình hiện tại</span>
+                  <span>{isVi ? "Chưa có dữ liệu phân tích SHAP giải thích cho mô hình hiện tại" : "No SHAP explainability data available for the current model"}</span>
                 </div>
               )}
 
@@ -1086,14 +1128,14 @@ export const ForecastExplorer: React.FC = () => {
               <div className="shap-footer-legend">
                 <div className="shap-legend-item">
                   <span className="shap-legend-dot pos" />
-                  <span>Dương (+): Kích thích tăng sản lượng</span>
+                  <span>{isVi ? "Dương (+): Kích thích tăng sản lượng" : "Positive (+): Stimulates demand"}</span>
                 </div>
                 <div className="shap-legend-item">
                   <span className="shap-legend-dot neg" />
-                  <span>Âm (-): Độ co giãn kìm hãm nhu cầu</span>
+                  <span>{isVi ? "Âm (-): Độ co giãn kìm hãm nhu cầu" : "Negative (-): Dampens demand"}</span>
                 </div>
                 <div className="shap-legend-item ml-auto">
-                  <span className="shap-legend-text">Mô hình {selectedEngine} (TreeSHAP)</span>
+                  <span className="shap-legend-text">{isVi ? `Mô hình ${selectedEngine} (TreeSHAP)` : `${selectedEngine} Model (TreeSHAP)`}</span>
                 </div>
               </div>
             </div>
@@ -1114,7 +1156,7 @@ export const ForecastExplorer: React.FC = () => {
                 type="button"
                 className="export-matrix-btn"
                 onClick={handleExportMatrixCsv}
-                title="Xuất bảng ma trận lịch trình dự báo thành file CSV"
+                title={isVi ? "Xuất bảng ma trận lịch trình dự báo thành file CSV" : "Export schedule matrix to CSV"}
               >
                 <Download size={14} />
                 <span>Export Schedule CSV</span>
@@ -1170,10 +1212,10 @@ export const ForecastExplorer: React.FC = () => {
                 <div className="modal-badge-group">
                   <span className="modal-badge highlight">SKU: {skuSearch || 'FOODS_1_001'}</span>
                   <span className="modal-badge">Store: {selectedStore || 'CA_1'}</span>
-                  <span className="modal-badge">Chu kỳ: {horizon}d</span>
+                  <span className="modal-badge">{isVi ? `Chu kỳ: ${horizon}d` : `Horizon: ${horizon}d`}</span>
                 </div>
               </div>
-              <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)} title="Đóng">
+              <button className="modal-close" onClick={() => setIsOverrideModalOpen(false)} title={isVi ? "Đóng" : "Close"}>
                 <X size={15} />
               </button>
             </div>
@@ -1187,7 +1229,7 @@ export const ForecastExplorer: React.FC = () => {
                 ) : null}
 
                 <div className="modal-form-group">
-                  <label>Ngày Can Thiệp (Target Forecast Date)</label>
+                  <label>{isVi ? "Ngày Can Thiệp (Target Forecast Date)" : "Target Forecast Date"}</label>
                   <input
                     type="date"
                     required
@@ -1198,7 +1240,7 @@ export const ForecastExplorer: React.FC = () => {
                 </div>
 
                 <div className="modal-form-group">
-                  <label>Số Lượng Dự Báo Điều Chỉnh (Adjusted Quantity)</label>
+                  <label>{isVi ? "Số Lượng Dự Báo Điều Chỉnh (Adjusted Quantity)" : "Adjusted Quantity"}</label>
                   <div className="modal-input-wrapper">
                     <input
                       type="number"
@@ -1214,26 +1256,26 @@ export const ForecastExplorer: React.FC = () => {
                 </div>
 
                 <div className="modal-form-group">
-                  <label>Danh Mục Lý Do (Reason Category)</label>
+                  <label>{isVi ? "Danh Mục Lý Do (Reason Category)" : "Reason Category"}</label>
                   <select
                     className="modal-select"
                     value={overrideReason}
                     onChange={(e) => setOverrideReason(e.target.value)}
                   >
-                    <option value="Promotional Spike Override">Chiến Dịch Khuyến Mãi (Promotional Spike)</option>
-                    <option value="Seasonal Demand Surge">Biến Động Nhu Cầu Mùa Vụ (Seasonal Surge)</option>
-                    <option value="Supply Chain Disruption">Đứt Gãy Cung Ứng / Thiếu Hụt (Supply Shortage)</option>
-                    <option value="Market Competitor Action">Biến Động Đối Thủ Cạnh Tranh (Market Action)</option>
-                    <option value="Unplanned Event">Sự Kiện Đột Xuất (Unplanned Event)</option>
+                    <option value="Promotional Spike Override">{isVi ? "Chiến Dịch Khuyến Mãi (Promotional Spike)" : "Promotional Spike Override"}</option>
+                    <option value="Seasonal Demand Surge">{isVi ? "Biến Động Nhu Cầu Mùa Vụ (Seasonal Surge)" : "Seasonal Demand Surge"}</option>
+                    <option value="Supply Chain Disruption">{isVi ? "Đứt Gãy Cung Ứng / Thiếu Hụt (Supply Shortage)" : "Supply Chain Disruption"}</option>
+                    <option value="Market Competitor Action">{isVi ? "Biến Động Đối Thủ Cạnh Tranh (Market Action)" : "Market Competitor Action"}</option>
+                    <option value="Unplanned Event">{isVi ? "Sự Kiện Đột Xuất (Unplanned Event)" : "Unplanned Event"}</option>
                   </select>
                 </div>
 
                 <div className="modal-form-group" style={{ marginBottom: 0 }}>
-                  <label>Giải Trình Nghiệp Vụ Chi Tiết (Bắt buộc cho kiểm toán)</label>
+                  <label>{isVi ? "Giải Trình Nghiệp Vụ Chi Tiết (Bắt buộc cho kiểm toán)" : "Operational Justification (Audit Required)"}</label>
                   <textarea
                     required
                     className="modal-textarea"
-                    placeholder="Nhập lý do chi tiết cho việc can thiệp thủ công (sẽ ghi nhận vào nhật ký kiểm toán)..."
+                    placeholder={isVi ? "Nhập lý do chi tiết cho việc can thiệp thủ công (sẽ ghi nhận vào nhật ký kiểm toán)..." : "Enter detailed rationale for manual intervention (recorded in audit logs)..."}
                     value={overrideNotes}
                     onChange={(e) => setOverrideNotes(e.target.value)}
                     rows={3}
@@ -1244,7 +1286,7 @@ export const ForecastExplorer: React.FC = () => {
               <div className="modal-footer">
                 <div className="modal-footer-notice">
                   <ShieldCheck size={14} className="text-teal" />
-                  <span>Lưu vết kiểm toán tự động</span>
+                  <span>{isVi ? "Lưu vết kiểm toán tự động" : "Automatic audit logging active"}</span>
                 </div>
                 <div className="modal-footer-actions">
                   <button
@@ -1253,14 +1295,14 @@ export const ForecastExplorer: React.FC = () => {
                     onClick={() => setIsOverrideModalOpen(false)}
                     disabled={isSubmittingOverride}
                   >
-                    Hủy Bỏ
+                    {isVi ? "Hủy Bỏ" : "Cancel"}
                   </button>
                   <button
                     type="submit"
                     className="modal-btn-apply"
                     disabled={isSubmittingOverride}
                   >
-                    {isSubmittingOverride ? 'Đang Lưu...' : 'Áp Dụng Điều Chỉnh'}
+                    {isVi ? (isSubmittingOverride ? 'Đang Lưu...' : 'Áp Dụng Điều Chỉnh') : (isSubmittingOverride ? 'Saving...' : 'Apply Override')}
                   </button>
                 </div>
               </div>
@@ -1282,10 +1324,10 @@ export const ForecastExplorer: React.FC = () => {
                 <div className="modal-badge-group">
                   <span className="modal-badge highlight">SKU: {skuSearch || 'FOODS_1_001'}</span>
                   <span className="modal-badge">Store: {selectedStore || 'CA_1'}</span>
-                  <span className="modal-badge">{bulkPreviewRows.length} ngày dự báo trong khoảng</span>
+                  <span className="modal-badge">{isVi ? `${bulkPreviewRows.length} ngày dự báo trong khoảng` : `${bulkPreviewRows.length} forecast days in range`}</span>
                 </div>
               </div>
-              <button className="modal-close" onClick={() => setIsBulkOverrideOpen(false)} title="Đóng">
+              <button className="modal-close" onClick={() => setIsBulkOverrideOpen(false)} title={isVi ? "Đóng" : "Close"}>
                 <X size={15} />
               </button>
             </div>
@@ -1302,28 +1344,28 @@ export const ForecastExplorer: React.FC = () => {
                   {/* Left Column: Adjustment Parameters */}
                   <div className="bulk-grid-col">
                     <div className="modal-form-group">
-                      <label>Chế Độ Điều Chỉnh (Adjustment Mode)</label>
+                      <label>{isVi ? "Chế Độ Điều Chỉnh (Adjustment Mode)" : "Adjustment Mode"}</label>
                       <div className="bulk-mode-toggle">
                         <button
                           type="button"
                           className={`bulk-mode-btn ${bulkMode === 'percent' ? 'active' : ''}`}
                           onClick={() => setBulkMode('percent')}
                         >
-                          Tỷ Lệ % (+/- %)
+                          {isVi ? "Tỷ Lệ % (+/- %)" : "Percentage (+/- %)"}
                         </button>
                         <button
                           type="button"
                           className={`bulk-mode-btn ${bulkMode === 'fixed' ? 'active' : ''}`}
                           onClick={() => setBulkMode('fixed')}
                         >
-                          Số Lượng Cố Định
+                          {isVi ? "Số Lượng Cố Định" : "Fixed Quantity"}
                         </button>
                       </div>
                     </div>
 
                     <div className="bulk-date-row">
                       <div className="modal-form-group" style={{ flex: 1 }}>
-                        <label>Từ Ngày (Start Date)</label>
+                        <label>{isVi ? "Từ Ngày (Start Date)" : "Start Date"}</label>
                         <input
                           type="date"
                           required
@@ -1333,7 +1375,7 @@ export const ForecastExplorer: React.FC = () => {
                         />
                       </div>
                       <div className="modal-form-group" style={{ flex: 1 }}>
-                        <label>Đến Ngày (End Date)</label>
+                        <label>{isVi ? "Đến Ngày (End Date)" : "End Date"}</label>
                         <input
                           type="date"
                           required
@@ -1347,7 +1389,7 @@ export const ForecastExplorer: React.FC = () => {
                     {bulkMode === 'percent' ? (
                       <div className="modal-form-group">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
-                          <label style={{ margin: 0 }}>Tỷ Lệ Điều Chỉnh (%)</label>
+                          <label style={{ margin: 0 }}>{isVi ? "Tỷ Lệ Điều Chỉnh (%)" : "Adjustment Percentage (%)"}</label>
                           <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0f766e', fontFamily: 'monospace' }}>
                             {Number(bulkPercent) > 0 ? `+${bulkPercent}%` : `${bulkPercent}%`}
                           </span>
@@ -1360,17 +1402,17 @@ export const ForecastExplorer: React.FC = () => {
                             value={bulkPercent}
                             onChange={(e) => setBulkPercent(e.target.value)}
                             className="modal-input"
-                            placeholder="e.g. 15 cho +15%, -10 cho -10%"
+                            placeholder={isVi ? "e.g. 15 cho +15%, -10 cho -10%" : "e.g. 15 for +15%, -10 for -10%"}
                           />
                           <span className="modal-input-suffix">%</span>
                         </div>
                         <span style={{ fontSize: '0.6875rem', color: '#64748b', marginTop: '0.35rem', display: 'block', lineHeight: 1.35 }}>
-                          Giá trị dương để tăng dự báo (chiến dịch khuyến mãi, sự kiện), giá trị âm để giảm bớt.
+                          {isVi ? "Giá trị dương để tăng dự báo (chiến dịch khuyến mãi, sự kiện), giá trị âm để giảm bớt." : "Positive values increase forecast (promotions, events); negative values decrease it."}
                         </span>
                       </div>
                     ) : (
                       <div className="modal-form-group">
-                        <label>Số Lượng Cố Định Mỗi Ngày</label>
+                        <label>{isVi ? "Số Lượng Cố Định Mỗi Ngày" : "Fixed Daily Quantity"}</label>
                         <div className="modal-input-wrapper">
                           <input
                             type="number"
@@ -1381,10 +1423,10 @@ export const ForecastExplorer: React.FC = () => {
                             className="modal-input"
                             placeholder="e.g. 80"
                           />
-                          <span className="modal-input-suffix">units / ngày</span>
+                          <span className="modal-input-suffix">{isVi ? "units / ngày" : "units / day"}</span>
                         </div>
                         <span style={{ fontSize: '0.6875rem', color: '#64748b', marginTop: '0.35rem', display: 'block', lineHeight: 1.35 }}>
-                          Áp dụng đồng đều cùng một mức sản lượng cho tất cả các ngày trong khoảng thời gian đã chọn.
+                          {isVi ? "Áp dụng đồng đều cùng một mức sản lượng cho tất cả các ngày trong khoảng thời gian đã chọn." : "Applies the same fixed quantity across all days in the selected range."}
                         </span>
                       </div>
                     )}
@@ -1396,7 +1438,7 @@ export const ForecastExplorer: React.FC = () => {
                       <div className="bulk-preview-box">
                         <div className="bulk-preview-header">
                           <span style={{ fontWeight: 700, color: '#1e293b' }}>
-                            Xem Trước: {bulkPreviewRows.length} Ngày Bị Ảnh Hưởng
+                            {isVi ? `Xem Trước: ${bulkPreviewRows.length} Ngày Bị Ảnh Hưởng` : `Preview: ${bulkPreviewRows.length} Affected Days`}
                           </span>
                           <span style={{ fontSize: '0.6875rem', color: '#64748b', fontFamily: 'monospace' }}>
                             {bulkStartDate} → {bulkEndDate}
@@ -1422,26 +1464,26 @@ export const ForecastExplorer: React.FC = () => {
                     )}
 
                     <div className="modal-form-group">
-                      <label>Danh Mục Lý Do (Reason Category)</label>
+                      <label>{isVi ? "Danh Mục Lý Do (Reason Category)" : "Reason Category"}</label>
                       <select
                         className="modal-select"
                         value={bulkReason}
                         onChange={(e) => setBulkReason(e.target.value)}
                       >
-                        <option value="Promotional Spike Override">Chiến Dịch Khuyến Mãi (Promotional Campaign)</option>
-                        <option value="Seasonal Demand Surge">Nhu Cầu Mùa Vụ Tăng Vọt (Seasonal Surge)</option>
-                        <option value="Supply Chain Disruption">Đứt Gãy Chuỗi Cung Ứng (Supply Disruption)</option>
-                        <option value="Market Competitor Action">Biến Động Thị Trường / Đối Thủ (Market Action)</option>
-                        <option value="Unplanned Event">Sự Kiện Đột Xuất (Unplanned Event)</option>
+                        <option value="Promotional Spike Override">{isVi ? "Chiến Dịch Khuyến Mãi (Promotional Campaign)" : "Promotional Campaign Override"}</option>
+                        <option value="Seasonal Demand Surge">{isVi ? "Nhu Cầu Mùa Vụ Tăng Vọt (Seasonal Surge)" : "Seasonal Demand Surge"}</option>
+                        <option value="Supply Chain Disruption">{isVi ? "Đứt Gãy Chuỗi Cung Ứng (Supply Disruption)" : "Supply Disruption"}</option>
+                        <option value="Market Competitor Action">{isVi ? "Biến Động Thị Trường / Đối Thủ (Market Action)" : "Market Action / Competitor"}</option>
+                        <option value="Unplanned Event">{isVi ? "Sự Kiện Đột Xuất (Unplanned Event)" : "Unplanned Event"}</option>
                       </select>
                     </div>
 
                     <div className="modal-form-group" style={{ marginBottom: 0 }}>
-                      <label>Giải Trình Nghiệp Vụ Bắt Buộc (Audit Trail)</label>
+                      <label>{isVi ? "Giải Trình Nghiệp Vụ Bắt Buộc (Audit Trail)" : "Mandatory Operational Justification (Audit Trail)"}</label>
                       <textarea
                         required
                         className="modal-textarea"
-                        placeholder="Nêu rõ lý do điều chỉnh hàng loạt (ví dụ: Khuyến mãi Black Friday 4 ngày tại chuỗi siêu thị CA)..."
+                        placeholder={isVi ? "Nêu rõ lý do điều chỉnh hàng loạt (ví dụ: Khuyến mãi Black Friday 4 ngày tại chuỗi siêu thị CA)..." : "Specify reason for bulk override (e.g. Black Friday 4-day promotion across CA stores)..."}
                         value={bulkNotes}
                         onChange={(e) => setBulkNotes(e.target.value)}
                         rows={3}
@@ -1454,7 +1496,7 @@ export const ForecastExplorer: React.FC = () => {
               <div className="modal-footer">
                 <div className="modal-footer-notice">
                   <ShieldCheck size={14} className="text-teal" />
-                  <span>Ghi vết kiểm toán tự động theo quy định quản trị SCM</span>
+                  <span>{isVi ? "Ghi vết kiểm toán tự động theo quy định quản trị SCM" : "Automated audit trail logged per SCM governance standards"}</span>
                 </div>
                 <div className="modal-footer-actions">
                   <button
@@ -1463,14 +1505,14 @@ export const ForecastExplorer: React.FC = () => {
                     onClick={() => setIsBulkOverrideOpen(false)}
                     disabled={isSubmittingBulk}
                   >
-                    Hủy Bỏ
+                    {isVi ? "Hủy Bỏ" : "Cancel"}
                   </button>
                   <button
                     type="submit"
                     className="modal-btn-apply"
                     disabled={isSubmittingBulk || bulkPreviewRows.length === 0}
                   >
-                    {isSubmittingBulk ? 'Đang Lưu...' : `Áp Dụng Điều Chỉnh (${bulkPreviewRows.length} Ngày)`}
+                    {isVi ? (isSubmittingBulk ? 'Đang Lưu...' : `Áp Dụng Điều Chỉnh (${bulkPreviewRows.length} Ngày)`) : (isSubmittingBulk ? 'Saving...' : `Apply Bulk Override (${bulkPreviewRows.length} Days)`)}
                   </button>
                 </div>
               </div>
