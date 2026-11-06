@@ -157,7 +157,6 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
         >
           <Search size={14} className="search-icon-svg" />
           <span className="search-placeholder">{t('topbar.search', 'Search...')}</span>
-          <kbd className="search-kbd">⌘K</kbd>
         </div>
 
         {/* Nút chuyển đổi ngôn ngữ EN / VI ngay cạnh thanh tìm kiếm */}

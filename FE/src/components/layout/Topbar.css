@@ -29,7 +29,7 @@
   color: #0f172a;
   width: 36px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: 4px;
   align-items: center;
   justify-content: center;
   cursor: pointer;
@@ -73,7 +73,7 @@
   padding: 0 12px;
   height: 36px;
   width: 220px;
-  border-radius: 9999px;
+  border-radius: 4px;
   color: #64748b;
   cursor: pointer;
   box-shadow: var(--shadow-sm);
@@ -106,18 +106,6 @@
   text-overflow: ellipsis;
 }
 
-.search-kbd {
-  background: #f1f5f9;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 10px;
-  font-family: monospace;
-  color: #475569;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
 /* Notifications Button */
 .notif-wrapper {
   position: relative;
@@ -129,7 +117,7 @@
   color: var(--text-secondary);
   width: 36px;
   height: 36px;
-  border-radius: 9999px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -242,7 +230,7 @@
   border: 1px solid var(--border-color);
   padding: 0 10px;
   height: 36px;
-  border-radius: 9999px;
+  border-radius: 4px;
   font-size: 0.75rem;
   color: #475569;
   font-weight: 600;
@@ -273,7 +261,7 @@
   width: 100%;
   max-width: 600px;
   background: white;
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   border: 1px solid #e2e8f0;
   overflow: hidden;
@@ -317,7 +305,7 @@
   color: #94a3b8;
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: 3px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -352,7 +340,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
   color: #334155;
@@ -387,7 +375,7 @@
   font-size: 11px;
   background-color: #f1f5f9;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: 3px;
   color: #475569;
 }
 
@@ -400,7 +388,7 @@
   color: #64748b;
   background-color: #f8fafc;
   padding: 2px 8px;
-  border-radius: 12px;
+  border-radius: 3px;
   border: 1px solid #e2e8f0;
 }
 
@@ -454,10 +442,6 @@
   .topbar-search-trigger {
     width: 110px;
     padding: 0 8px;
-  }
-
-  .search-kbd {
-    display: none;
   }
 
   .command-palette-modal {

@@ -2,13 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useLanguage } from '../../context/LanguageContext.tsx';
-import { LanguageToggle } from '../../components/common/LanguageToggle.tsx';
-import { Eye, EyeOff, AlertCircle, Loader2, Info } from 'lucide-react';
+import { AuthBrandShell } from './AuthBrandShell.tsx';
+import { Eye, EyeOff, AlertCircle, Loader2, Info, ArrowRight, ShieldCheck } from 'lucide-react';
 import './Login.css';
 
 export const Login: React.FC = () => {
-  const { language } = useLanguage();
-  const isVi = language === 'vi';
+  const { t } = useLanguage();
   const [email, setEmail] = useState(() => localStorage.getItem('dfios_remembered_email') || '');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('dfios_remember_me') !== 'false');
@@ -16,14 +15,14 @@ export const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [capsLockActive, setCapsLockActive] = useState(false);
   const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
-  
+
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   const { login, isLoading, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as any)?.from?.pathname || '/';
+  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
 
   // If already authenticated, redirect immediately
   useEffect(() => {
@@ -65,8 +64,9 @@ export const Login: React.FC = () => {
         localStorage.removeItem('dfios_remembered_email');
       }
       navigate(from, { replace: true });
-    } catch (err: any) {
-      setError(err.message || (isVi ? 'Đăng nhập không thành công' : 'Login failed. Please check your credentials.'));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '';
+      setError(message || t('auth.login_failed'));
     }
   };
 
@@ -87,158 +87,135 @@ export const Login: React.FC = () => {
   };
 
   return (
-    <div className="login-container">
-      {/* Left Side - Dark Theme */}
-      <div className="login-left">
-        <div className="login-left-content">
-          {/* Logo */}
-          <div className="login-logo">
-            <div className="login-logo-icon">D</div>
-            <span className="login-logo-text">DFIOS</span>
-          </div>
-
-          {/* Main Text */}
-          <div className="login-hero">
-            <h1 className="login-hero-title">
-              Intelligent Inventory Decisions, Powered by Machine Learning
-            </h1>
-            <p className="login-hero-subtitle">
-              Forecast demand spikes, reduce stockouts, and optimize safety stocks with enterprise-grade ML models scaled for growing retailers.
-            </p>
-          </div>
-
-          {/* Footer Logos */}
-          <div className="login-footer">
-            <p className="login-footer-title">
-              Enterprise Supply Chain & Demand Intelligence
-            </p>
-            <div className="login-footer-brands">
-              <span>WALMART M5 BENCHMARK</span>
-              <span>CONFORMAL ML ENGINE</span>
-              <span>MULTI-ECHELON SCM</span>
-            </div>
-          </div>
-        </div>
+    <AuthBrandShell>
+      <div className="login-form-header">
+        <h2 className="login-title">{t('auth.welcome_back')}</h2>
+        <p className="login-subtitle">{t('auth.login_subtitle')}</p>
       </div>
 
-      {/* Right Side - Form */}
-      <div className="login-right">
-        <div style={{ position: "absolute", top: 20, right: 20, zIndex: 10 }}>
-          <LanguageToggle />
+      {sessionExpiredNotice && (
+        <div className="session-expired-card" role="status">
+          <Info size={16} className="session-expired-icon" />
+          <span>{t('auth.session_expired')}</span>
         </div>
-        <div className="login-form-container">
-          <h2 className="login-title">Welcome back</h2>
-          <p className="login-subtitle">Enter your credentials to access your DFIOS cockpit.</p>
+      )}
 
-          {sessionExpiredNotice && (
-            <div className="session-expired-card">
-              <Info size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
-              <span>{isVi ? 'Phiên làm việc đã hết hạn vì lý do bảo mật. Vui lòng đăng nhập lại để tiếp tục.' : 'Your session has expired for security reasons. Please sign in again.'}</span>
-            </div>
-          )}
+      {error && (
+        <div className="login-error-card" role="alert">
+          <AlertCircle size={16} className="login-error-icon" />
+          <span>{error}</span>
+        </div>
+      )}
 
-          {error && (
-            <div className="login-error-card">
-              <AlertCircle size={16} className="login-error-icon" />
-              <span>{error}</span>
-            </div>
-          )}
+      <form onSubmit={handleSubmit} className="login-form">
+        <div className="form-group">
+          <label htmlFor="login-email" className="form-label">
+            {t('auth.email_label')}
+          </label>
+          <input
+            id="login-email"
+            ref={emailRef}
+            type="email"
+            name="email"
+            autoComplete="username"
+            className="form-input"
+            value={email}
+            disabled={isLoading}
+            onChange={(e) => handleEmailChange(e.target.value)}
+            placeholder="admin@dfios.com"
+            required
+          />
+        </div>
 
-          <form onSubmit={handleSubmit} className="login-form">
-            <div className="form-group">
-              <label className="form-label">Email Address</label>
-              <input
-                ref={emailRef}
-                type="email"
-                name="email"
-                autoComplete="username"
-                className="form-input"
-                value={email}
-                disabled={isLoading}
-                onChange={(e) => handleEmailChange(e.target.value)}
-                placeholder="admin@dfios.com"
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <div className="form-label-row">
-                <div className="flex items-center gap-2">
-                  <label className="form-label" style={{ marginBottom: 0 }}>Password</label>
-                  {capsLockActive && (
-                    <span className="caps-lock-badge">{isVi ? "Caps Lock đang bật" : "Caps Lock is ON"}</span>
-                  )}
-                </div>
-                <Link to="/forgot-password" className="forgot-password">Forgot Password?</Link>
-              </div>
-              <div className="password-input-wrapper">
-                <input
-                  ref={passwordRef}
-                  type={showPassword ? 'text' : 'password'}
-                  name="password"
-                  autoComplete="current-password"
-                  className="form-input password-input"
-                  value={password}
-                  disabled={isLoading}
-                  onChange={(e) => handlePasswordChange(e.target.value)}
-                  onKeyDown={handlePasswordKeyEvent}
-                  onKeyUp={handlePasswordKeyEvent}
-                  placeholder="••••••••••••"
-                  required
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  tabIndex={-1}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <div className="remember-me-group">
-              <input
-                type="checkbox"
-                id="remember"
-                className="remember-checkbox"
-                checked={rememberMe}
-                disabled={isLoading}
-                onChange={(e) => setRememberMe(e.target.checked)}
-              />
-              <label htmlFor="remember" className="remember-label">Remember me on this machine</label>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="btn-primary login-btn"
-            >
-              {isLoading ? (
-                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Signing In...</span>
-                </span>
-              ) : (
-                'Sign In to Dashboard'
+        <div className="form-group">
+          <div className="form-label-row">
+            <div className="form-label-inline">
+              <label htmlFor="login-password" className="form-label" style={{ marginBottom: 0 }}>
+                {t('auth.password_label')}
+              </label>
+              {capsLockActive && (
+                <span className="caps-lock-badge">{t('auth.caps_lock')}</span>
               )}
+            </div>
+            <Link to="/forgot-password" className="forgot-password">
+              {t('auth.forgot_password')}
+            </Link>
+          </div>
+          <div className="password-input-wrapper">
+            <input
+              id="login-password"
+              ref={passwordRef}
+              type={showPassword ? 'text' : 'password'}
+              name="password"
+              autoComplete="current-password"
+              className="form-input password-input"
+              value={password}
+              disabled={isLoading}
+              onChange={(e) => handlePasswordChange(e.target.value)}
+              onKeyDown={handlePasswordKeyEvent}
+              onKeyUp={handlePasswordKeyEvent}
+              placeholder="••••••••••••"
+              required
+            />
+            <button
+              type="button"
+              className="password-toggle"
+              onClick={() => setShowPassword(!showPassword)}
+              aria-label={showPassword ? t('auth.hide_password') : t('auth.show_password')}
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
             </button>
-          </form>
-
-          {/* Onboarding / Account Activation Guidance */}
-          <div className="login-onboarding-hint">
-            <span>{isVi ? "Chưa có tài khoản đăng nhập?" : "Need an account?"}</span>
-            <p>
-              {isVi ? "DFIOS là nền tảng quản trị chuỗi cung ứng doanh nghiệp nội bộ. Tài khoản mới được phân quyền bởi Quản trị viên (Admin)." : "DFIOS is an internal enterprise platform. New accounts are provisioned by your System Administrator."}
-              {isVi ? "Nếu bạn đã nhận email thư mời, hãy nhấp vào " : "If you received an invitation email, click "}
-              <Link to="/activate" className="login-activate-link">
-                {isVi ? "Kích hoạt tài khoản" : "Activate Account"}
-              </Link>.
-            </p>
           </div>
         </div>
+
+        <div className="remember-me-group">
+          <input
+            type="checkbox"
+            id="remember"
+            className="remember-checkbox"
+            checked={rememberMe}
+            disabled={isLoading}
+            onChange={(e) => setRememberMe(e.target.checked)}
+          />
+          <label htmlFor="remember" className="remember-label">
+            {t('auth.remember_me')}
+          </label>
+        </div>
+
+        <button
+          type="submit"
+          disabled={isLoading}
+          className="btn-primary login-btn"
+        >
+          {isLoading ? (
+            <span className="login-btn-inner">
+              <Loader2 size={16} className="login-spinner" />
+              <span>{t('auth.signing_in')}</span>
+            </span>
+          ) : (
+            <span className="login-btn-inner">
+              <span>{t('auth.sign_in')}</span>
+              <ArrowRight size={15} className="login-btn-arrow" />
+            </span>
+          )}
+        </button>
+      </form>
+
+      {/* Structured Enterprise Account Provisioning Notice */}
+      <div className="login-onboarding-hint">
+        <ShieldCheck size={16} className="login-onboarding-icon" />
+        <div className="login-onboarding-content">
+          <span className="login-onboarding-title">{t('auth.need_account_title')}</span>
+          <p>
+            {t('auth.provisioned_desc')}
+            <Link to="/activate" className="login-activate-link">
+              {t('auth.activate_link')}
+            </Link>
+            .
+          </p>
+        </div>
       </div>
-    </div>
+    </AuthBrandShell>
   );
 };

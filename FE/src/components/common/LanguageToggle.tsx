@@ -25,11 +25,8 @@ export const LanguageToggle: React.FC<{ className?: string }> = ({ className = '
           aria-pressed={language === 'en'}
           aria-label="Switch to English"
         >
-          <span className="lang-pill-flag">🇬🇧</span>
-          <span className="lang-pill-text">EN</span>
+          English
         </button>
-
-        <span className="lang-divider" aria-hidden="true" />
 
         <button
           type="button"
@@ -38,8 +35,7 @@ export const LanguageToggle: React.FC<{ className?: string }> = ({ className = '
           aria-pressed={language === 'vi'}
           aria-label="Chuyển sang Tiếng Việt"
         >
-          <span className="lang-pill-flag">🇻🇳</span>
-          <span className="lang-pill-text">VI</span>
+          Tiếng Việt
         </button>
       </div>
     </div>

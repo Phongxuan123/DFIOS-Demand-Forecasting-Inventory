@@ -887,7 +887,7 @@ export const Products: React.FC = () => {
                 <p className="prod-detail-subtitle">SKU: {prod.item_id}</p>
 
                 {canEdit && (
-                  <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1rem', borderRadius: '8px' }}>
+                  <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1rem', borderRadius: '4px' }}>
                     <h4 className="prod-section-title" style={{ marginBottom: '0.75rem' }}>
                       UPDATE INVENTORY
                     </h4>
@@ -1457,7 +1457,7 @@ export const Products: React.FC = () => {
 
       {/* CSV Bulk Import Section for Admin */}
       {isAdmin && (
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '1.25rem', marginBottom: '1.5rem' }}>
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1.25rem', marginBottom: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
               <h4 style={{ margin: 0, fontWeight: 700, fontSize: '0.9rem', color: '#1e293b' }}>
@@ -1836,7 +1836,7 @@ export const Products: React.FC = () => {
         </div>
 
       {/* Realtime Event Bus SSE broadcast panel */}
-      <div className="prod-detail-panel event-detail" style={{ maxWidth: '650px', background: 'white', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '1.5rem' }}>
+      <div className="prod-detail-panel event-detail" style={{ maxWidth: '650px', background: 'white', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '1.5rem' }}>
         <div className="event-detail-header" style={{ marginBottom: '1rem' }}>
           <CalendarIcon size={24} color="#0d9488" style={{ marginBottom: '0.5rem' }} />
           <h3 className="prod-detail-title" style={{ fontSize: '1.1rem', margin: '0 0 4px' }}>
@@ -1862,7 +1862,7 @@ export const Products: React.FC = () => {
         </div>
 
         {eventMessage && (
-          <div style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#f0fdfa', color: '#0d9488', fontSize: '13px' }}>
+          <div style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '4px', backgroundColor: '#f0fdfa', color: '#0d9488', fontSize: '13px' }}>
             {eventMessage}
           </div>
         )}
@@ -2020,7 +2020,7 @@ export const Products: React.FC = () => {
             backgroundColor: notification.type === 'error' ? '#ef4444' : '#0d9488',
             color: '#ffffff',
             padding: '12px 20px',
-            borderRadius: '6px',
+            borderRadius: '4px',
             boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
             display: 'flex',
             alignItems: 'center',

@@ -13,6 +13,7 @@ import { Login } from './pages/auth/Login.tsx';
 import { ForgotPassword } from './pages/auth/ForgotPassword.tsx';
 import { ActivateAccount } from './pages/auth/ActivateAccount.tsx';
 import { ConfirmEmail } from './pages/auth/ConfirmEmail.tsx';
+import { DfiosBrandMark } from './pages/auth/AuthBrandShell.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { LanguageProvider, useLanguage } from './context/LanguageContext.tsx';
 
@@ -24,9 +25,17 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return (
       <div className="auth-splash-screen">
         <div className="auth-splash-card">
-          <div className="auth-splash-logo">D</div>
-          <div className="auth-splash-spinner"></div>
-          <p className="auth-splash-text">{t('common.loading', 'Initializing DFIOS Cockpit...')}</p>
+          <div className="auth-splash-brand">
+            <div className="auth-splash-logo">
+              <DfiosBrandMark size={20} />
+            </div>
+            <span className="auth-splash-brand-name">DFIOS</span>
+            <span className="auth-splash-brand-tag">SCM · ML</span>
+          </div>
+          <div className="auth-splash-status">
+            <div className="auth-splash-spinner" />
+            <p className="auth-splash-text">{t('auth.splash_initializing')}</p>
+          </div>
         </div>
       </div>
     );
@@ -46,12 +55,15 @@ const App: React.FC = () => {
             <Route path="/reset-password" element={<ForgotPassword />} />
             <Route path="/activate" element={<ActivateAccount />} />
             <Route path="/confirm-email" element={<ConfirmEmail />} />
-            
-            <Route path="/" element={
-              <ProtectedRoute>
-                <Layout />
-              </ProtectedRoute>
-            }>
+
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Layout />
+                </ProtectedRoute>
+              }
+            >
               <Route index element={<Dashboard />} />
               <Route path="forecast-explorer" element={<ForecastExplorer />} />
               <Route path="replenishment" element={<Replenishment />} />

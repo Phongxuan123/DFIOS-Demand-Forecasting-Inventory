@@ -274,73 +274,34 @@ export const api = {
   },
 
   dashboard: {
+    clearCache: () => {
+      clearApiCache('/dashboard');
+    },
     getOverview: async (storeId?: string) => {
-      try {
-        const res = await cachedGet('/dashboard/overview', storeId ? { store_id: storeId } : {}, 60000);
-        if (res && res.kpis) {
-          return res;
-        }
-      } catch (err) {
-        console.warn('Native dashboard overview error, querying individual endpoints', err);
-      }
-
-      // Fallback query to individual BE endpoints - strictly real DB records without synthetic data
-      const [kpisRes, trendRes, alertsRes] = await Promise.all([
-        cachedGet('/dashboard/kpis', storeId ? { store_id: storeId } : {}, 60000).catch(() => null),
-        cachedGet('/dashboard/demand-trend', { store_id: storeId, days: 30 }, 60000).catch(() => null),
-        cachedGet('/dashboard/alerts', { store_id: storeId, limit: 10 }, 60000).catch(() => null),
-      ]);
-
-      return {
-        kpis: {
-          totalSkus: kpisRes?.total_skus ?? 0,
-          totalSuppliers: kpisRes?.total_suppliers ?? 0,
-          reorderAlerts: kpisRes?.reorder_alerts_count ?? 0,
-          avgForecastAccuracy: kpisRes?.avg_forecast_accuracy ?? 'N/A',
-          stockoutRate: kpisRes?.stockout_rate != null ? `${kpisRes.stockout_rate}%` : '0.0%',
-          totalInventoryValue: kpisRes?.total_inventory_value ?? 0,
-          pendingReplenishments: kpisRes?.pending_replenishments_count ?? 0,
-        },
-        charts: {
-          forecastTrend: (trendRes?.data || []).map((p: any) => ({
-            date: p.date,
-            actual: p.actual ?? null,
-            lightgbm: p.predicted != null ? p.predicted : p.actual,
-          })),
-          inventoryHealth: alertsRes?.summary ? [
-            { name: 'Healthy In Stock', value: alertsRes.summary.healthy_count || 0, color: '#0d9488' },
-            { name: 'Low Stock', value: alertsRes.summary.warning_count || 0, color: '#f59e0b' },
-            { name: 'Critical / Out', value: alertsRes.summary.critical_count || 0, color: '#ef4444' },
-          ].filter((x: any) => x.value > 0) : [],
-          urgency: (alertsRes?.items || []).slice(0, 5).map((it: any) => ({
-            sku: it.item_id,
-            name: it.product_name,
-            urgency: it.on_hand <= 0 ? 100 : Math.max(15, Math.min(95, Math.round(100 - (it.on_hand / Math.max(1, it.reorder_point) * 50)))),
-            color: it.severity === 'CRITICAL' ? '#ef4444' : it.severity === 'WARNING' ? '#f59e0b' : '#0d9488',
-          })),
-        },
-        recentAlerts: (alertsRes?.items || []).slice(0, 6).map((it: any) => ({
-          status: it.severity === 'CRITICAL' ? 'CRITICAL' : 'WARNING',
-          statusClass: it.severity === 'CRITICAL' ? 'danger' : 'warning',
-          name: it.item_id,
-          location: it.store_id || 'Warehouse',
-          details: `${it.product_name} - On-Hand: ${it.on_hand} (ROP: ${it.reorder_point})`,
-          actionText: 'Inspect',
-        })),
-      };
+      return cachedGet('/dashboard/overview', storeId ? { store_id: storeId } : undefined, 60000);
     },
     getKpis: async (storeId?: string) => {
-      return cachedGet('/dashboard/kpis', storeId ? { store_id: storeId } : {}, 60000);
+      return cachedGet('/dashboard/kpis', storeId ? { store_id: storeId } : undefined, 60000);
     },
     getDemandTrend: async (params?: { store_id?: string; category?: string; days?: number; granularity?: string }) => {
-      return cachedGet('/dashboard/demand-trend', params, 60000);
+      const cleanParams: Record<string, any> = {};
+      if (params?.store_id) cleanParams.store_id = params.store_id;
+      if (params?.category) cleanParams.category = params.category;
+      if (params?.days != null) cleanParams.days = params.days;
+      if (params?.granularity) cleanParams.granularity = params.granularity;
+      return cachedGet('/dashboard/demand-trend', cleanParams, 60000);
     },
     getAlerts: async (params?: { store_id?: string; severity?: string; limit?: number; offset?: number }) => {
-      return cachedGet('/dashboard/alerts', params, 30000);
+      const cleanParams: Record<string, any> = {};
+      if (params?.store_id) cleanParams.store_id = params.store_id;
+      if (params?.severity) cleanParams.severity = params.severity;
+      if (params?.limit != null) cleanParams.limit = params.limit;
+      if (params?.offset != null) cleanParams.offset = params.offset;
+      return cachedGet('/dashboard/alerts', cleanParams, 30000);
     },
     triggerRealtimeAlerts: async (storeId?: string) => {
       clearApiCache('/dashboard');
-      const res = await apiClient.post('/dashboard/check-alerts', null, { params: storeId ? { store_id: storeId } : {} });
+      const res = await apiClient.post('/dashboard/check-alerts', null, { params: storeId ? { store_id: storeId } : undefined });
       return res.data;
     },
   },
