@@ -2,17 +2,19 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
-  LineChart, 
-  Package, 
+  TrendingUp, 
+  Truck, 
   PieChart, 
-  Activity, 
+  Cpu, 
+  FileBarChart, 
+  Boxes, 
   Settings, 
-  FileText,
   LogOut,
   X
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useLanguage } from '../../context/LanguageContext.tsx';
+import { DfiosBrandMark } from '../common/DfiosBrandMark.tsx';
 import { prefetchRouteData } from '../../services/api.ts';
 import './Sidebar.css';
 
@@ -33,13 +35,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
   };
 
   const formatRole = (role?: string) => {
-    if (!role) return 'User';
+    if (!role) return 'USER';
     const r = role.toUpperCase();
-    if (r === 'ADMIN') return 'Administrator';
-    if (r === 'WAREHOUSE MANAGER') return 'Warehouse Manager';
-    if (r === 'VIEWER') return 'Viewer';
-    return role;
+    if (r === 'ADMIN') return 'ADMIN';
+    if (r === 'WAREHOUSE MANAGER') return 'WAREHOUSE MGR';
+    if (r === 'VIEWER') return 'VIEWER';
+    return r;
   };
+
+  const getInitials = (name?: string, email?: string) => {
+    const raw = (name || email || 'US').trim();
+    const parts = raw.split(/[\s@._-]+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return raw.substring(0, 2).toUpperCase();
+  };
+
+  const displayName = user?.display_name || user?.name || user?.email || 'User';
 
   return (
     <>
@@ -55,10 +68,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
       <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-header">
           <div className="logo-container">
-            <div className="logo-icon">DF</div>
+            <div className="logo-icon">
+              <DfiosBrandMark size={20} />
+            </div>
             <div className="logo-text">
-              <h2>DFIOS</h2>
-              <span>DEMAND FORECASTING</span>
+              <div className="logo-title-row">
+                <h2>DFIOS</h2>
+                <span className="logo-tag">SCM · ML</span>
+              </div>
+              <span className="logo-subtext">{t('nav.brand_sub', 'Inventory Intelligence')}</span>
             </div>
           </div>
           {onCloseMobile && (
@@ -68,7 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
               onClick={onCloseMobile}
               aria-label="Close menu"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           )}
         </div>
@@ -81,31 +99,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/')}
           >
-            <LayoutDashboard size={18} />
+            <LayoutDashboard size={17} className="nav-icon" />
             <span>{t('nav.dashboard', 'Dashboard')}</span>
           </NavLink>
+
           <NavLink 
             to="/forecast-explorer" 
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/forecast-explorer')}
           >
-            <LineChart size={18} />
+            <TrendingUp size={17} className="nav-icon" />
             <span>{t('nav.forecast_explorer', 'Forecast Explorer')}</span>
           </NavLink>
+
           <NavLink 
             to="/replenishment" 
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/replenishment')}
           >
-            <Package size={18} />
+            <Truck size={17} className="nav-icon" />
             <span>{t('nav.replenishment', 'Replenishment')}</span>
           </NavLink>
+
           <NavLink 
             to="/abc-xyz" 
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/abc-xyz')}
           >
-            <PieChart size={18} />
+            <PieChart size={17} className="nav-icon" />
             <span>{t('nav.abc_xyz', 'ABC/XYZ Analysis')}</span>
           </NavLink>
 
@@ -114,15 +135,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/model-performance')}
           >
-            <Activity size={18} />
+            <Cpu size={17} className="nav-icon" />
             <span>{t('nav.model_performance', 'Model Performance')}</span>
           </NavLink>
+
           <NavLink 
             to="/reports" 
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/reports')}
           >
-            <FileText size={18} />
+            <FileBarChart size={17} className="nav-icon" />
             <span>{t('nav.reports', 'Reports')}</span>
           </NavLink>
 
@@ -134,7 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/products')}
           >
-            <Package size={18} />
+            <Boxes size={17} className="nav-icon" />
             <span>{t('nav.products', 'Products')}</span>
           </NavLink>
           
@@ -143,7 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             onClick={() => handleNavClick('/settings')}
           >
-            <Settings size={18} />
+            <Settings size={17} className="nav-icon" />
             <span>{t('nav.settings', 'Settings')}</span>
           </NavLink>
         </nav>
@@ -151,14 +173,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
         <div className="sidebar-footer">
           <div className="user-profile-bottom">
             <div className="user-profile-info">
-              <img 
-                src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || user?.display_name || 'User')}&background=0d9488&color=fff`} 
-                alt="User Avatar" 
-                className="user-avatar" 
-              />
+              <div className="user-avatar-wrap">
+                <div className="user-avatar-initials">
+                  {getInitials(user?.display_name || user?.name, user?.email)}
+                </div>
+                <span className="user-status-dot" title="Session Active" />
+              </div>
               <div className="user-details">
-                <span className="user-name">{user?.name || user?.display_name || 'Admin'}</span>
-                <span className="user-role">{formatRole(user?.role)}</span>
+                <span className="user-name" title={displayName}>
+                  {displayName}
+                </span>
+                <span className="user-role-badge">
+                  {formatRole(user?.role)}
+                </span>
               </div>
             </div>
             <button 
@@ -168,7 +195,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMob
               title={t('nav.logout', 'Sign Out')}
               aria-label={t('nav.logout', 'Sign Out')}
             >
-              <LogOut size={16} />
+              <LogOut size={15} />
             </button>
           </div>
         </div>
