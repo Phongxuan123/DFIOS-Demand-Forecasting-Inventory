@@ -16,7 +16,7 @@
   color: var(--text-secondary);
   background-color: transparent;
   border: none;
-  border-radius: 0.375rem;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -89,7 +89,7 @@
   height: 2.25rem;
   padding: 0 0.75rem;
   border: 1px solid var(--border-color);
-  border-radius: 0.375rem;
+  border-radius: 4px;
   background-color: #f8fafc;
   font-size: 0.75rem;
   color: #0f172a;
@@ -115,7 +115,7 @@
   height: 2.25rem;
   padding: 0 1rem;
   border: 1px solid var(--border-color);
-  border-radius: 0.375rem;
+  border-radius: 4px;
   font-size: 0.75rem;
   font-weight: 600;
   color: #475569;
@@ -253,7 +253,7 @@
   font-size: 0.875rem;
   font-weight: 700;
   border: none;
-  border-radius: 0.375rem;
+  border-radius: 4px;
   padding: 0.75rem 1.5rem;
   cursor: pointer;
   float: right;
@@ -270,7 +270,7 @@
 .settings-checkbox {
   width: 16px;
   height: 16px;
-  border-radius: 4px;
+  border-radius: 3px;
   border: 1px solid #cbd5e1;
   display: flex;
   align-items: center;
@@ -329,7 +329,7 @@
 .dataset-box {
   background-color: #f8fafc;
   border: 1px solid var(--border-color);
-  border-radius: 0.5rem;
+  border-radius: 4px;
   padding: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -382,13 +382,13 @@
 .storage-track {
   height: 8px;
   background-color: #f1f5f9;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 .storage-fill {
   height: 100%;
   background-color: #0d9488;
-  border-radius: 4px;
+  border-radius: 3px;
   width: 74%;
 }
 
@@ -405,7 +405,7 @@
   color: #0d9488;
   font-size: 0.75rem;
   font-weight: 600;
-  border-radius: 0.375rem;
+  border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
 }
@@ -421,7 +421,7 @@
   font-size: 0.75rem;
   font-weight: 700;
   border: none;
-  border-radius: 0.375rem;
+  border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
 }
@@ -484,7 +484,7 @@
   font-size: 0.625rem;
   font-weight: 700;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: 3px;
   text-transform: uppercase;
   margin-bottom: 0.25rem;
   align-self: flex-start;
@@ -643,7 +643,7 @@
   font-weight: 700;
   text-transform: uppercase;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 .role-badge.warehouse { color: #0d9488; background-color: #ccfbf1; }
@@ -719,7 +719,7 @@
   font-size: 0.625rem;
   font-weight: 600;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 .audit-badge.red { background-color: #fee2e2; color: #dc2626; }
 .audit-badge.yellow { background-color: #fef9c3; color: #ca8a04; }
@@ -895,7 +895,7 @@
   font-size: 0.625rem;
   font-weight: 700;
   padding: 0.125rem 0.375rem;
-  border-radius: 4px;
+  border-radius: 3px;
   margin-left: 0.375rem;
 }
 
@@ -996,7 +996,7 @@
   font-size: 0.625rem;
   font-weight: 700;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: 3px;
   margin-left: 0.375rem;
   text-transform: uppercase;
 }
@@ -1070,7 +1070,7 @@
   font-size: 0.6875rem;
   font-weight: 600;
   padding: 0.25rem 0.625rem;
-  border-radius: 9999px;
+  border-radius: 3px;
 }
 
 .settings-table-container > div:last-child {
@@ -1085,7 +1085,7 @@
   -moz-appearance: none;
   background-color: white;
   border: 1px solid #cbd5e1 !important;
-  border-radius: 8px !important;
+  border-radius: 4px !important;
   padding: 0.5rem 2.25rem 0.5rem 1rem !important;
   font-size: 0.875rem;
   color: #334155 !important;
@@ -1117,7 +1117,7 @@
   justify-content: center;
   background-color: white !important;
   border: 1px solid #cbd5e1 !important;
-  border-radius: 8px !important;
+  border-radius: 4px !important;
   padding: 0.5rem 1rem !important;
   font-size: 0.875rem !important;
   font-weight: 600 !important;

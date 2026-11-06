@@ -474,10 +474,10 @@ export const Reports: React.FC = () => {
                     Simulate replenishment policy effectiveness and stockout prevention under historical demand replay.
                   </p>
 
-                  <form onSubmit={handleRunBacktest} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '1.5rem', padding: '1.25rem', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                  <form onSubmit={handleRunBacktest} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '1.5rem', padding: '1.25rem', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
                     <div>
                       <label style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Model</label>
-                      <select value={btModel} onChange={(e) => setBtModel(e.target.value)} style={{ padding: '0.45rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8125rem', background: '#ffffff', color: '#0f172a' }}>
+                      <select value={btModel} onChange={(e) => setBtModel(e.target.value)} style={{ padding: '0.45rem 0.75rem', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8125rem', background: '#ffffff', color: '#0f172a' }}>
                         <option value="lightgbm">LightGBM Production</option>
                         <option value="tft">TFT Deep Learning</option>
                         <option value="arima">Seasonal ARIMA</option>
@@ -486,12 +486,12 @@ export const Reports: React.FC = () => {
 
                     <div>
                       <label style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Backtest Horizon (Days)</label>
-                      <input type="number" min="7" max="90" value={btDays} onChange={(e) => setBtDays(Number(e.target.value))} style={{ padding: '0.45rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8125rem', width: '110px', background: '#ffffff' }} />
+                      <input type="number" min="7" max="90" value={btDays} onChange={(e) => setBtDays(Number(e.target.value))} style={{ padding: '0.45rem 0.75rem', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8125rem', width: '110px', background: '#ffffff' }} />
                     </div>
 
                     <div>
                       <label style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Target Service Level (%)</label>
-                      <input type="number" min="80" max="99" value={btServiceLevel} onChange={(e) => setBtServiceLevel(Number(e.target.value))} style={{ padding: '0.45rem 0.75rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8125rem', width: '110px', background: '#ffffff' }} />
+                      <input type="number" min="80" max="99" value={btServiceLevel} onChange={(e) => setBtServiceLevel(Number(e.target.value))} style={{ padding: '0.45rem 0.75rem', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8125rem', width: '110px', background: '#ffffff' }} />
                     </div>
 
                     <button
@@ -608,7 +608,7 @@ export const Reports: React.FC = () => {
       )}
 
       {/* Generated Reports & Audit Logs Table */}
-      <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
+      <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '1.5rem', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
         <h2 className="rep-section-heading">Export History & Generated Reports</h2>
 
         <div className="rep-table-wrapper">

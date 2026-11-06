@@ -495,7 +495,7 @@ export const ModelPerformance: React.FC = () => {
 
       {/* Training History Panel */}
       {trainingJobs.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
+        <div className="bg-white rounded-lg border border-slate-200 p-6 mb-6">
           <div className="flex justify-between items-center mb-4">
             <div>
               <h3 className="font-bold text-slate-800 text-sm">Recent ML Training Jobs</h3>
@@ -958,7 +958,7 @@ export const ModelPerformance: React.FC = () => {
                   <XAxis dataKey="sl" axisLine={{ stroke: '#e2e8f0' }} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(val) => `$${(val / 1000).toFixed(1)}k`} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderRadius: '6px', border: 'none', color: '#fff', fontSize: '12px' }}
+                    contentStyle={{ backgroundColor: '#0f172a', borderRadius: '4px', border: 'none', color: '#fff', fontSize: '12px' }}
                     formatter={(val: any, name: any) => [
                       `$${Number(val).toLocaleString()}`,
                       name === 'cost' ? (isVi ? 'Tổng chi phí' : 'Total Cost') : name === 'holding' ? (isVi ? 'Chi phí lưu kho' : 'Holding Cost') : (isVi ? 'Rủi ro thiếu hàng' : 'Stockout Risk')

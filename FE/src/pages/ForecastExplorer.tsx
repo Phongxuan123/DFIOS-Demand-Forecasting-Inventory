@@ -713,7 +713,7 @@ export const ForecastExplorer: React.FC = () => {
                   <YAxis hide />
                   <Tooltip
                     cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '5 5' }}
-                    contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '6px', boxShadow: 'var(--shadow-md)' }}
+                    contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '4px', boxShadow: 'var(--shadow-md)' }}
                   />
                   <Area type="monotone" dataKey="ci_upper" fill="#e6f6f4" stroke="none" />
                   <Area type="monotone" dataKey="ci_lower" fill="#ffffff" stroke="none" />
@@ -1223,7 +1223,7 @@ export const ForecastExplorer: React.FC = () => {
             <form onSubmit={handleApplyOverride} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
               <div className="modal-body">
                 {overrideError ? (
-                  <div className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '6px' }}>
+                  <div className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '4px' }}>
                     {String(overrideError)}
                   </div>
                 ) : null}
@@ -1335,7 +1335,7 @@ export const ForecastExplorer: React.FC = () => {
             <form onSubmit={handleApplyBulkOverride} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
               <div className="modal-body">
                 {bulkError ? (
-                  <div className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '6px' }}>
+                  <div className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded" style={{ borderRadius: '4px' }}>
                     {String(bulkError)}
                   </div>
                 ) : null}

@@ -364,7 +364,7 @@ export const Replenishment: React.FC = () => {
           backgroundColor: toastMsg.type === 'error' ? '#ef4444' : '#0f172a',
           color: '#ffffff',
           padding: '0.75rem 1.25rem',
-          borderRadius: '8px',
+          borderRadius: '4px',
           boxShadow: '0 8px 20px rgba(0,0,0,0.15)',
           zIndex: 9999,
           display: 'flex',
@@ -1187,7 +1187,7 @@ export const Replenishment: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '0.375rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.8125rem' }}
+                  style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '4px', fontWeight: 700, cursor: 'pointer', fontSize: '0.8125rem' }}
                   disabled={isSubmittingAction || !actionReasonInput.trim()}
                 >
                   {isSubmittingAction ? (isVi ? 'Đang từ chối...' : 'Rejecting...') : (isVi ? 'Xác nhận từ chối' : 'Confirm Rejection')}
@@ -1237,7 +1237,7 @@ export const Replenishment: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '0.375rem', fontWeight: 700, cursor: 'pointer', fontSize: '0.8125rem' }}
+                  style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '4px', fontWeight: 700, cursor: 'pointer', fontSize: '0.8125rem' }}
                   disabled={isSubmittingAction || !actionReasonInput.trim()}
                 >
                   {isSubmittingAction ? (isVi ? 'Đang xử lý...' : 'Processing...') : (isVi ? 'Xác nhận hủy đơn' : 'Confirm Cancellation')}

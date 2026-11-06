@@ -577,7 +577,7 @@ export const Settings: React.FC = () => {
         </div>
 
         {settingsMessage && (
-          <div className="login-success" style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#ecfdf5', color: '#047857' }}>
+          <div className="login-success" style={{ marginTop: '1rem', padding: '0.75rem', borderRadius: '4px', backgroundColor: '#ecfdf5', color: '#047857' }}>
             {settingsMessage}
           </div>
         )}
@@ -650,7 +650,7 @@ export const Settings: React.FC = () => {
               style={{
                 marginBottom: '1rem',
                 padding: '0.75rem',
-                borderRadius: '6px',
+                borderRadius: '4px',
                 backgroundColor: systemSettingMsg.includes('success') ? '#ecfdf5' : '#fef2f2',
                 color: systemSettingMsg.includes('success') ? '#047857' : '#b91c1c',
                 fontSize: '13px',
@@ -784,7 +784,7 @@ export const Settings: React.FC = () => {
                 style={{
                   marginBottom: '1rem',
                   padding: '0.625rem 0.75rem',
-                  borderRadius: '6px',
+                  borderRadius: '4px',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
@@ -841,7 +841,7 @@ export const Settings: React.FC = () => {
     <>
       {showUserModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg p-6 w-full max-w-md shadow-xl">
             <h3 className="text-xl font-bold mb-4">{editingUser ? 'Edit User Profile' : 'Add New User'}</h3>
             <form onSubmit={handleUserSubmit}>
               <div className="mb-4">
@@ -1086,7 +1086,7 @@ export const Settings: React.FC = () => {
         <div style={{
           marginTop: '1.5rem',
           padding: '1.25rem 1.5rem',
-          borderRadius: '12px',
+          borderRadius: '6px',
           background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.95))',
           border: '1px solid rgba(255, 255, 255, 0.1)',
           display: 'flex',
@@ -1115,7 +1115,7 @@ export const Settings: React.FC = () => {
               color: '#ffffff',
               border: 'none',
               padding: '0.65rem 1.25rem',
-              borderRadius: '8px',
+              borderRadius: '4px',
               fontSize: '0.875rem',
               fontWeight: 700,
               cursor: 'pointer',
@@ -1134,7 +1134,7 @@ export const Settings: React.FC = () => {
           <div style={{
             marginTop: '1rem',
             padding: '1.25rem',
-            borderRadius: '10px',
+            borderRadius: '6px',
             backgroundColor: '#f0fdf4',
             border: '1px solid #bbf7d0',
             color: '#166534',
@@ -1154,23 +1154,23 @@ export const Settings: React.FC = () => {
               </button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginTop: '0.75rem', fontSize: '0.875rem' }}>
-              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '4px', border: '1px solid #dcfce7' }}>
                 <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>EXECUTION DURATION</div>
                 <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.duration_seconds != null ? `${pipelineResult.duration_seconds}s` : 'Instant'}</div>
               </div>
-              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '4px', border: '1px solid #dcfce7' }}>
                 <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>FORECASTS GENERATED</div>
                 <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.forecasts_generated ?? '-'}</div>
               </div>
-              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '4px', border: '1px solid #dcfce7' }}>
                 <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>SS / ROP OPTIMIZED</div>
                 <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.inventory_params_updated ?? '-'} SKUs</div>
               </div>
-              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #dcfce7' }}>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '4px', border: '1px solid #dcfce7' }}>
                 <div style={{ fontSize: '11px', color: '#65a30d', fontWeight: 700 }}>ABC/XYZ UPDATED</div>
                 <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{pipelineResult.classifications_updated ?? '-'} Items</div>
               </div>
-              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '6px', border: '1px solid #0d9488' }}>
+              <div style={{ background: '#ffffff', padding: '0.75rem', borderRadius: '4px', border: '1px solid #0d9488' }}>
                 <div style={{ fontSize: '11px', color: '#0d9488', fontWeight: 700 }}>REPLENISHMENTS CREATED</div>
                 <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0d9488' }}>{pipelineResult.replenishments_generated ?? '-'}</div>
               </div>
@@ -1506,7 +1506,7 @@ export const Settings: React.FC = () => {
             style={{
               marginBottom: '1rem',
               padding: '0.75rem',
-              borderRadius: '6px',
+              borderRadius: '4px',
               backgroundColor: dqMsg.includes('FAILED') ? '#fef2f2' : '#ecfdf5',
               color: dqMsg.includes('FAILED') ? '#b91c1c' : '#047857',
               fontSize: '13px',
@@ -1707,7 +1707,7 @@ export const Settings: React.FC = () => {
           {/* Email Change Modal */}
           {showEmailChangeModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg p-6 w-full max-w-md shadow-xl">
                 <h3 className="text-xl font-bold mb-2">Change Account Email</h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
                   Per security requirements, enter your new email address and current password. A confirmation link will be sent to the new email.
@@ -1719,7 +1719,7 @@ export const Settings: React.FC = () => {
                   </div>
                 )}
                 {emailModalSuccess && (
-                  <div className="login-success mb-4" style={{ padding: '0.75rem', fontSize: '13px', backgroundColor: '#ccfbf1', color: '#0f766e', borderRadius: '6px' }}>
+                  <div className="login-success mb-4" style={{ padding: '0.75rem', fontSize: '13px', backgroundColor: '#ccfbf1', color: '#0f766e', borderRadius: '4px' }}>
                     {emailModalSuccess}
                   </div>
                 )}
@@ -1780,7 +1780,7 @@ export const Settings: React.FC = () => {
           {/* User Management Modal */}
           {showUserModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg p-6 w-full max-w-md shadow-xl">
                 <h3 className="text-xl font-bold mb-2">{editingUser ? 'Edit User Account' : 'Add New User'}</h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
                   {editingUser
@@ -1867,7 +1867,7 @@ export const Settings: React.FC = () => {
           {/* UC49: Schedule Batch Forecast Modal */}
           {showScheduleModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg p-6 w-full max-w-md shadow-xl">
                 <h3 className="text-xl font-bold mb-2">Configure Batch Forecast Schedule (UC49)</h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
                   Set up a cron expression to execute automated multi-horizon demand inference periodically.
@@ -1967,7 +1967,7 @@ export const Settings: React.FC = () => {
           {/* UC50: Pipeline Run Trigger Modal */}
           {showPipelineModal && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-xl p-6 w-full max-w-md shadow-xl">
+              <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-lg p-6 w-full max-w-md shadow-xl">
                 <h3 className="text-xl font-bold mb-2">Execute Closed-Loop Pipeline (UC50)</h3>
                 <p className="text-sm text-[var(--text-secondary)] mb-4">
                   Runs the full four-step sequence: Multi-horizon Forecast &rarr; SS/ROP/EOQ Optimization &rarr; ABC/XYZ Reclassification &rarr; Replenishment Recommendation Generation.
