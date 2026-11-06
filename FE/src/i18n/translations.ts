@@ -3,6 +3,7 @@ export type Language = 'en' | 'vi';
 export const translations = {
   en: {
     nav: {
+      brand_sub: 'Inventory Intelligence',
       dashboard: 'Dashboard',
       forecast_explorer: 'Forecast Explorer',
       replenishment: 'Replenishment',
@@ -23,6 +24,7 @@ export const translations = {
       stock_alerts: 'Stock Alerts',
       mark_all_read: 'Mark all read',
       no_alerts: 'No SKU is currently below reorder point.',
+      view_all_replenishment: 'View all in Replenishment',
       updated_now: 'Updated now',
       esc_to_close: 'ESC',
       recent_searches: 'Recent Searches',
@@ -415,6 +417,7 @@ export const translations = {
 
   vi: {
     nav: {
+      brand_sub: 'Quản Trị Dự Báo Tồn Kho',
       dashboard: 'Bảng điều khiển',
       forecast_explorer: 'Dự báo nhu cầu',
       replenishment: 'Đề xuất bổ sung',
@@ -435,6 +438,7 @@ export const translations = {
       stock_alerts: 'Cảnh báo tồn kho',
       mark_all_read: 'Đánh dấu đã đọc',
       no_alerts: 'Không có SKU nào dưới điểm đặt hàng lại.',
+      view_all_replenishment: 'Xem tất cả trong Đề xuất bổ sung',
       updated_now: 'Vừa cập nhật',
       esc_to_close: 'ESC',
       recent_searches: 'Tìm kiếm gần đây',
