@@ -1,6 +1,7 @@
 /* ==========================================================================
-   Replenishment & Order Management Stylesheet (Enterprise SCM Standard)
-   Color Palette: Deep Corporate Slate, Neutral Steel, Refined Accents
+   Replenishment & Order Management Stylesheet (Enterprise SCM & ML Standard)
+   Typography: Plus Jakarta Sans (Headings), Inter (Body), IBM Plex Mono (Metrics)
+   Color Palette: Deep Corporate Slate (#0f172a), Deep Teal (#0f766e), Crisp #e2e8f0
    ========================================================================== */
 
 .rep-container {
@@ -8,6 +9,7 @@
   flex-direction: column;
   position: relative;
   width: 100%;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 /* Header Section */
@@ -17,7 +19,7 @@
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 1.25rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
 .rep-header-left {
@@ -28,17 +30,31 @@
 .rep-page-title {
   font-size: 1.35rem;
   font-weight: 800;
-  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Plus Jakarta Sans', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
   color: #0f172a;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   margin: 0;
+}
+
+.rep-engine-tag {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: #0f766e;
+  background-color: #f0fdfa;
+  border: 1px solid #99f6e4;
+  padding: 0.15rem 0.55rem;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
 }
 
 .rep-page-desc {
   font-size: 0.8125rem;
   color: #64748b;
   margin: 0.35rem 0 0 0;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .rep-header-right {
@@ -58,6 +74,8 @@
   padding: 0.2rem 0.5rem 0.2rem 0.75rem;
   border-radius: 4px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  height: 34px;
+  box-sizing: border-box;
 }
 
 .rep-store-label {
@@ -73,9 +91,10 @@
   border: none;
   font-size: 0.8125rem;
   font-weight: 600;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
   outline: none;
   cursor: pointer;
-  padding: 0.25rem 0.25rem 0.25rem 0;
+  padding: 0.15rem 0.25rem 0.15rem 0;
 }
 
 /* Action Buttons */
@@ -111,6 +130,17 @@
   border-color: #1e293b;
 }
 
+.rep-btn-teal {
+  background-color: #0f766e;
+  color: #ffffff;
+  border: 1px solid #0f766e;
+}
+
+.rep-btn-teal:hover:not(:disabled) {
+  background-color: #115e59;
+  border-color: #115e59;
+}
+
 .rep-btn-outline {
   background-color: #ffffff;
   color: #334155;
@@ -128,7 +158,7 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
 }
 
 @media (max-width: 1024px) {
@@ -147,7 +177,7 @@
   background-color: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
-  padding: 1.125rem 1.25rem;
+  padding: 1rem 1.25rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -166,12 +196,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
   margin-bottom: 0.5rem;
 }
 
 .rep-kpi-title {
   font-size: 0.6875rem;
   font-weight: 700;
+  font-family: 'Plus Jakarta Sans', sans-serif;
   color: #64748b;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -179,10 +211,12 @@
 
 .rep-kpi-badge {
   font-size: 0.6875rem;
-  font-weight: 500;
+  font-weight: 600;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
   padding: 0.15rem 0.5rem;
   border-radius: 3px;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .rep-kpi-badge.badge-warning {
@@ -204,9 +238,9 @@
 }
 
 .rep-kpi-badge.badge-teal {
-  background-color: #f8fafc;
-  color: #475569;
-  border: 1px solid #e2e8f0;
+  background-color: #f0fdfa;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
 }
 
 .rep-kpi-content {
@@ -217,7 +251,7 @@
 .rep-kpi-num {
   font-size: 1.625rem;
   font-weight: 700;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   color: #0f172a;
   line-height: 1.15;
 }
@@ -228,6 +262,110 @@
   margin-top: 0.25rem;
 }
 
+/* Periodic Review (R, s, S) Policy Formula Callout Banner (Task FE.8) */
+.rep-policy-banner {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #0f766e;
+  border-radius: 6px;
+  padding: 0.875rem 1.125rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02);
+}
+
+.rep-policy-banner-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.rep-policy-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.rep-policy-icon {
+  color: #0f766e;
+  flex-shrink: 0;
+}
+
+.rep-policy-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.rep-formula-chip {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 4px;
+  background-color: #f8fafc;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+
+.rep-formula-chip.chip-teal {
+  background-color: #f0fdfa;
+  color: #0f766e;
+  border-color: #99f6e4;
+}
+
+.rep-formula-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+}
+
+@media (max-width: 1100px) {
+  .rep-formula-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .rep-formula-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rep-formula-item {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.rep-formula-lbl {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.rep-formula-code {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
 /* View Tabs Navigation (Clean Segmented Control) */
 .rep-tabs-bar {
   display: inline-flex;
@@ -235,7 +373,7 @@
   padding: 0.25rem;
   border-radius: 4px;
   gap: 0.25rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1rem;
   border: 1px solid #e2e8f0;
   width: fit-content;
 }
@@ -262,7 +400,7 @@
 
 .rep-tab-btn.active {
   background-color: #ffffff;
-  color: #0f172a;
+  color: #0f766e;
   border-color: #e2e8f0;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
@@ -276,7 +414,7 @@
   border: 1px solid #e2e8f0;
   border-radius: 6px;
   padding: 0.625rem 1rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1rem;
   gap: 1rem;
   flex-wrap: wrap;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02);
@@ -335,6 +473,49 @@
   background-color: #cbd5e1;
 }
 
+/* Bulk Selection Inline Pill */
+.rep-bulk-selection-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: #f0fdfa;
+  border: 1px solid #99f6e4;
+  color: #0f766e;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+}
+
+.rep-bulk-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background-color: #0f766e;
+  color: #ffffff;
+  border: none;
+  border-radius: 3px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rep-bulk-inline-btn:hover:not(:disabled) {
+  background-color: #115e59;
+}
+
+.rep-bulk-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #0f766e;
+  cursor: pointer;
+  padding: 0.1rem;
+}
+
 .rep-search-group {
   display: flex;
   align-items: center;
@@ -343,7 +524,7 @@
   border: 1px solid #cbd5e1;
   border-radius: 4px;
   padding: 0.35rem 0.75rem;
-  min-width: 240px;
+  min-width: 230px;
 }
 
 .rep-search-icon {
@@ -386,18 +567,19 @@
 
 .rep-table th {
   background-color: #f8fafc;
-  padding: 0.75rem 1rem;
-  font-size: 0.6875rem;
+  padding: 0.7rem 0.75rem;
+  font-size: 0.65rem;
   font-weight: 700;
+  font-family: 'Plus Jakarta Sans', sans-serif;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.045em;
   color: #475569;
   border-bottom: 1px solid #e2e8f0;
   white-space: nowrap;
 }
 
 .rep-table td {
-  padding: 0.75rem 1rem;
+  padding: 0.65rem 0.75rem;
   font-size: 0.8125rem;
   border-bottom: 1px solid #f1f5f9;
   vertical-align: middle;
@@ -416,7 +598,27 @@
   background-color: #f1f5f9;
 }
 
-/* Priority Badges - Refined, subtle, no garish wall of orange */
+.rep-table tr.row-checked td {
+  background-color: #f0fdfa;
+}
+
+.rep-checkbox-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.15rem;
+  border-radius: 3px;
+}
+
+.rep-checkbox-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Priority Badges */
 .rep-priority-badge {
   display: inline-flex;
   align-items: center;
@@ -446,9 +648,9 @@
 }
 
 .rep-priority-badge.pri-high {
-  background-color: #f8fafc;
-  color: #334155;
-  border: 1px solid #e2e8f0;
+  background-color: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fef3c7;
 }
 .rep-priority-badge.pri-high .rep-priority-dot {
   background-color: #d97706;
@@ -456,20 +658,20 @@
 
 .rep-priority-badge.pri-medium {
   background-color: #f8fafc;
-  color: #64748b;
+  color: #475569;
   border: 1px solid #e2e8f0;
 }
 .rep-priority-badge.pri-medium .rep-priority-dot {
-  background-color: #94a3b8;
+  background-color: #64748b;
 }
 
 .rep-priority-badge.pri-low {
   background-color: #f8fafc;
-  color: #94a3b8;
+  color: #64748b;
   border: 1px solid #e2e8f0;
 }
 .rep-priority-badge.pri-low .rep-priority-dot {
-  background-color: #cbd5e1;
+  background-color: #94a3b8;
 }
 
 /* SKU & Text */
@@ -477,7 +679,7 @@
   font-size: 0.8125rem;
   font-weight: 700;
   color: #0f172a;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .rep-sku-name {
@@ -488,7 +690,7 @@
 
 .rep-store-tag {
   display: inline-block;
-  font-family: ui-monospace, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 0.6875rem;
   font-weight: 600;
   color: #475569;
@@ -498,9 +700,9 @@
   border: 1px solid #e2e8f0;
 }
 
-/* Monospace Numbers */
+/* Monospace Numbers & Periodic Review (R, s, S) Cells */
 .rep-mono-num {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.8125rem;
   font-weight: 600;
 }
@@ -514,10 +716,15 @@
   font-weight: 500;
 }
 
+.rep-mono-num.num-teal {
+  color: #0f766e;
+  font-weight: 700;
+}
+
 .rep-mono-num.num-highlight {
   color: #0f172a;
   font-weight: 700;
-  font-size: 0.875rem;
+  font-size: 0.85rem;
 }
 
 .rep-mono-num.num-danger {
@@ -530,7 +737,50 @@
   font-weight: 700;
 }
 
-/* Status Indicator Pill - Clean corporate styling */
+.rep-ip-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+}
+
+.rep-trigger-badge {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.rep-trigger-badge.trig-yes {
+  background-color: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.rep-trigger-badge.trig-no {
+  background-color: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.rep-dual-mono {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+}
+
+.rep-mono-sub {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.625rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* Status Indicator Pill */
 .rep-status-pill {
   display: inline-flex;
   align-items: center;
@@ -538,7 +788,7 @@
   padding: 0.15rem 0.5rem;
   border-radius: 3px;
   font-size: 0.6875rem;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   background-color: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -553,9 +803,9 @@
 }
 
 .rep-status-pill.status-pending {
-  background-color: #f8fafc;
-  color: #475569;
-  border: 1px solid #e2e8f0;
+  background-color: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
 }
 .rep-status-pill.status-pending .rep-status-dot {
   background-color: #d97706;
@@ -615,7 +865,7 @@
   background-color: #d97706;
 }
 
-/* Table Action Buttons - Discreet neutral icons at rest */
+/* Table Action Buttons */
 .rep-action-group {
   display: inline-flex;
   align-items: center;
@@ -664,7 +914,7 @@
 .rep-action-btn-ghost {
   padding: 0.2rem 0.5rem;
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 600;
   border-radius: 3px;
   cursor: pointer;
   background-color: #ffffff;
@@ -694,8 +944,8 @@
 }
 
 .rep-drawer {
-  width: 440px;
-  max-width: 90vw;
+  width: 460px;
+  max-width: 92vw;
   height: 100vh;
   background-color: #ffffff;
   box-shadow: -4px 0 24px rgba(15, 23, 42, 0.12);
@@ -722,10 +972,10 @@
 .drawer-badge {
   display: inline-block;
   font-size: 0.6875rem;
-  font-weight: 600;
-  color: #475569;
-  background-color: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  font-weight: 700;
+  color: #0f766e;
+  background-color: #f0fdfa;
+  border: 1px solid #99f6e4;
   padding: 0.15rem 0.5rem;
   border-radius: 3px;
   text-transform: uppercase;
@@ -736,7 +986,7 @@
 .drawer-title {
   font-size: 1.25rem;
   font-weight: 800;
-  font-family: ui-monospace, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
   color: #0f172a;
   margin: 0;
 }
@@ -773,7 +1023,7 @@
   flex: 1;
 }
 
-/* Drawer KPI 2x2 Grid */
+/* Drawer KPI Grid */
 .drawer-kpi-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -802,7 +1052,7 @@
 .drawer-kpi-val {
   font-size: 1.05rem;
   font-weight: 700;
-  font-family: ui-monospace, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
 }
 
 .drawer-kpi-val.text-slate { color: #0f172a; }
@@ -837,8 +1087,8 @@
 .drawer-rec-value-highlight {
   font-size: 1.15rem;
   font-weight: 800;
-  font-family: ui-monospace, monospace;
-  color: #0f172a;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  color: #0f766e;
 }
 
 .drawer-rec-row-sub, .drawer-rec-row-delta {
@@ -847,7 +1097,7 @@
   align-items: center;
   font-size: 0.75rem;
   color: #64748b;
-  margin-top: 0.25rem;
+  margin-top: 0.3rem;
 }
 
 .drawer-rec-row-delta {
@@ -901,9 +1151,9 @@
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  background-color: #0f172a;
+  background-color: #0f766e;
   color: #ffffff;
-  border: 1px solid #0f172a;
+  border: 1px solid #0f766e;
   padding: 0.625rem 1rem;
   border-radius: 4px;
   font-size: 0.8125rem;
@@ -913,8 +1163,8 @@
 }
 
 .drawer-btn-approve:hover {
-  background-color: #1e293b;
-  border-color: #1e293b;
+  background-color: #115e59;
+  border-color: #115e59;
 }
 
 .drawer-btn-adjust {
@@ -1021,7 +1271,7 @@
   font-weight: 700;
   color: #0f172a;
   margin: 0 0 0.25rem 0;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Plus Jakarta Sans', 'Outfit', sans-serif;
 }
 
 .modal-subtitle {
@@ -1056,8 +1306,8 @@
 }
 
 .modal-input:focus {
-  border-color: #0f172a;
-  box-shadow: 0 0 0 1px #0f172a;
+  border-color: #0f766e;
+  box-shadow: 0 0 0 1px #0f766e;
 }
 
 .modal-actions {
@@ -1092,15 +1342,15 @@
   font-size: 0.8125rem;
   font-weight: 700;
   cursor: pointer;
-  background-color: #0f172a;
-  border: 1px solid #0f172a;
+  background-color: #0f766e;
+  border: 1px solid #0f766e;
   color: #ffffff;
   transition: all 0.15s ease;
 }
 
 .modal-btn-apply:hover:not(:disabled) {
-  background-color: #1e293b;
-  border-color: #1e293b;
+  background-color: #115e59;
+  border-color: #115e59;
 }
 
 .modal-btn-apply:disabled {
@@ -1195,4 +1445,3 @@
     margin: 0.5rem;
   }
 }
-

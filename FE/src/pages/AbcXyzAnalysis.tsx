@@ -1,37 +1,347 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Settings, RefreshCw, Info, X, AlertCircle, Check, Search } from 'lucide-react';
+import {
+  Settings,
+  RefreshCw,
+  X,
+  AlertCircle,
+  Check,
+  Search,
+  ShieldCheck,
+  Activity,
+  Zap,
+  Layers,
+  LayoutGrid,
+  Table,
+} from 'lucide-react';
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Line,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+  Legend,
+} from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './AbcXyzAnalysis.css';
 
+// Segment-Level C³-OUT & REFIT-RSS-EOQ-G Parameters from research.md
+interface SegmentC3Profile {
+  segment: string;
+  labelEn: string;
+  labelVi: string;
+  priorityEn: string;
+  priorityVi: string;
+  defaultTau: number; // Target service level % (e.g. 98.0, 95.0, 90.0)
+  observedAvail: number; // Observed 4-period rolling availability %
+  theta: number; // C³-OUT safety multiplier in [0, 2]
+  mParam: number; // m_g multiplier
+  kappaParam: number; // kappa_g EOQ batch multiplier
+  state: 'ACTIVE' | 'WARM-UP' | 'BOUNDARY';
+  reviewDays: number;
+  leadDays: number;
+  descEn: string;
+  descVi: string;
+  strategyEn: string;
+  strategyVi: string;
+  reviewFreqEn: string;
+  reviewFreqVi: string;
+  repPolicyEn: string;
+  repPolicyVi: string;
+  bufferPolicyEn: string;
+  bufferPolicyVi: string;
+}
+
+const SEGMENT_C3_PROFILES: Record<string, SegmentC3Profile> = {
+  AX: {
+    segment: 'AX',
+    labelEn: 'AX — Strategic Core',
+    labelVi: 'AX — Chủ lực Chiến lược',
+    priorityEn: 'Critical (Tier 1)',
+    priorityVi: 'Tối quan trọng (Hạng 1)',
+    defaultTau: 98.0,
+    observedAvail: 98.4,
+    theta: 0.42,
+    mParam: 1.0,
+    kappaParam: 0.85,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'High-revenue, low-volatility flagship SKUs. Controlled via tight periodic review (R=7d, L=3d, H=10d) with LightGBM Global Quantile + C³-OUT safety calibration.',
+    descVi:
+      'Nhóm SKU chủ lực doanh thu cao, nhu cầu ổn định. Kiểm soát qua chu kỳ (R=7d, L=3d, H=10d) kết hợp dự báo phân vị LightGBM và hiệu chuẩn C³-OUT.',
+    strategyEn: 'JIT Periodic Review (R, s, S) with tight EOQ cycle replenishment',
+    strategyVi: 'Kiểm kê định kỳ (R, s, S) tinh gọn với lô đặt hàng EOQ tối ưu',
+    reviewFreqEn: 'Weekly Periodic Review (R = 7d, Protection Window H = 10d)',
+    reviewFreqVi: 'Rà soát định kỳ hàng tuần (R = 7d, Cửa sổ bảo vệ H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.98) + 0.42·σ̂_H, S = s + ⌈0.85·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.98) + 0.42·σ̂_H, S = s + ⌈0.85·EOQ⌉',
+    bufferPolicyEn: 'Lean C³-OUT Buffer (θ_AX = 0.42, τ_A = 98.0%)',
+    bufferPolicyVi: 'Đệm an toàn C³-OUT tinh gọn (θ_AX = 0.42, τ_A = 98.0%)',
+  },
+  AY: {
+    segment: 'AY',
+    labelEn: 'AY — Strategic Dynamic',
+    labelVi: 'AY — Chủ lực Biến động',
+    priorityEn: 'Critical (Tier 1)',
+    priorityVi: 'Tối quan trọng (Hạng 1)',
+    defaultTau: 98.0,
+    observedAvail: 98.1,
+    theta: 0.68,
+    mParam: 1.15,
+    kappaParam: 1.0,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'High-revenue SKUs with moderate seasonal or promotional swings. C³-OUT actively maintains θ_g = 0.68 to defend the 98.0% availability setpoint.',
+    descVi:
+      'SKU doanh thu cao có biến động theo mùa hoặc khuyến mãi. Bộ điều khiển C³-OUT duy trì θ_g = 0.68 để bảo vệ mục tiêu phục vụ 98.0%.',
+    strategyEn: 'Dynamic (R, s, S) with promotional quantile uplift & C³-OUT feedback',
+    strategyVi: 'Chính sách (R, s, S) linh hoạt kết hợp phân vị khuyến mãi & phản hồi C³-OUT',
+    reviewFreqEn: 'Weekly Periodic Review (R = 7d, Protection Window H = 10d)',
+    reviewFreqVi: 'Rà soát định kỳ hàng tuần (R = 7d, Cửa sổ bảo vệ H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.98) + 0.68·σ̂_H, S = s + ⌈1.00·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.98) + 0.68·σ̂_H, S = s + ⌈1.00·EOQ⌉',
+    bufferPolicyEn: 'Adaptive C³-OUT Buffer (θ_AY = 0.68, τ_A = 98.0%)',
+    bufferPolicyVi: 'Đệm thích ứng C³-OUT (θ_AY = 0.68, τ_A = 98.0%)',
+  },
+  AZ: {
+    segment: 'AZ',
+    labelEn: 'AZ — Strategic Volatile',
+    labelVi: 'AZ — Chủ lực Thất thường',
+    priorityEn: 'High Alert (Tier 1)',
+    priorityVi: 'Cảnh báo cao (Hạng 1)',
+    defaultTau: 98.0,
+    observedAvail: 97.6,
+    theta: 1.15,
+    mParam: 1.35,
+    kappaParam: 1.15,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'High-value, erratic-demand SKUs prone to tail spikes. Requires elevated C³-OUT multiplier (θ_AZ = 1.15) to prevent costly Class-A stockouts.',
+    descVi:
+      'SKU giá trị cao nhưng nhu cầu biến động mạnh. Cần hệ số C³-OUT cao (θ_AZ = 1.15) để ngăn ngừa đứt hàng nhóm A.',
+    strategyEn: 'Buffered (R, s, S) with tail-risk quantile protection',
+    strategyVi: 'Chính sách (R, s, S) tăng cường đệm bảo vệ rủi ro đuôi phân phối',
+    reviewFreqEn: 'Weekly Periodic Review + Exception Alerts (R = 7d, H = 10d)',
+    reviewFreqVi: 'Rà soát hàng tuần + Cảnh báo ngoại lệ (R = 7d, H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.98) + 1.15·σ̂_H, S = s + ⌈1.15·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.98) + 1.15·σ̂_H, S = s + ⌈1.15·EOQ⌉',
+    bufferPolicyEn: 'Reinforced C³-OUT Buffer (θ_AZ = 1.15, τ_A = 98.0%)',
+    bufferPolicyVi: 'Đệm an toàn tăng cường C³-OUT (θ_AZ = 1.15, τ_A = 98.0%)',
+  },
+  BX: {
+    segment: 'BX',
+    labelEn: 'BX — Core Stable',
+    labelVi: 'BX — Trung tâm Ổn định',
+    priorityEn: 'Standard High (Tier 2)',
+    priorityVi: 'Ưu tiên Khá (Hạng 2)',
+    defaultTau: 95.0,
+    observedAvail: 95.6,
+    theta: 0.35,
+    mParam: 0.95,
+    kappaParam: 1.0,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'Moderate revenue contribution with steady demand. Automated periodic review achieves 95.6% fill rate with low holding cost.',
+    descVi:
+      'Doanh thu trung bình với sức mua ổn định. Đặt hàng tự động theo chu kỳ đạt tỷ lệ đáp ứng 95.6% với chi phí lưu kho thấp.',
+    strategyEn: 'Automated Periodic Review (R, s, S) with standard EOQ lots',
+    strategyVi: 'Tự động hóa kiểm kê định kỳ (R, s, S) theo cỡ lô EOQ chuẩn',
+    reviewFreqEn: 'Weekly Periodic Review (R = 7d, Protection Window H = 10d)',
+    reviewFreqVi: 'Rà soát định kỳ hàng tuần (R = 7d, Cửa sổ bảo vệ H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.95) + 0.35·σ̂_H, S = s + ⌈1.00·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.95) + 0.35·σ̂_H, S = s + ⌈1.00·EOQ⌉',
+    bufferPolicyEn: 'Balanced C³-OUT Buffer (θ_BX = 0.35, τ_B = 95.0%)',
+    bufferPolicyVi: 'Đệm cân bằng C³-OUT (θ_BX = 0.35, τ_B = 95.0%)',
+  },
+  BY: {
+    segment: 'BY',
+    labelEn: 'BY — Core Dynamic',
+    labelVi: 'BY — Trung tâm Biến động',
+    priorityEn: 'Medium (Tier 2)',
+    priorityVi: 'Trung bình (Hạng 2)',
+    defaultTau: 95.0,
+    observedAvail: 95.2,
+    theta: 0.54,
+    mParam: 1.05,
+    kappaParam: 1.1,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'Secondary revenue tier with moderate demand variability. Calibrated via C³-OUT at θ_BY = 0.54 to hold 95.0% service target.',
+    descVi:
+      'Nhóm doanh thu hạng B có biến động vừa phải. Được hiệu chuẩn qua C³-OUT ở mức θ_BY = 0.54 nhằm giữ vững mục tiêu 95.0%.',
+    strategyEn: 'Calibrated (R, s, S) with seasonal forecast features',
+    strategyVi: 'Chính sách (R, s, S) hiệu chuẩn theo đặc trưng mùa vụ',
+    reviewFreqEn: 'Weekly Periodic Review (R = 7d, Protection Window H = 10d)',
+    reviewFreqVi: 'Rà soát định kỳ hàng tuần (R = 7d, Cửa sổ bảo vệ H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.95) + 0.54·σ̂_H, S = s + ⌈1.10·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.95) + 0.54·σ̂_H, S = s + ⌈1.10·EOQ⌉',
+    bufferPolicyEn: 'Moderate C³-OUT Buffer (θ_BY = 0.54, τ_B = 95.0%)',
+    bufferPolicyVi: 'Đệm an toàn vừa phải C³-OUT (θ_BY = 0.54, τ_B = 95.0%)',
+  },
+  BZ: {
+    segment: 'BZ',
+    labelEn: 'BZ — Seasonal / Spiky',
+    labelVi: 'BZ — Thời vụ / Đột biến',
+    priorityEn: 'Medium-High (Tier 2)',
+    priorityVi: 'Khá cao (Hạng 2)',
+    defaultTau: 95.0,
+    observedAvail: 94.8,
+    theta: 0.92,
+    mParam: 1.25,
+    kappaParam: 1.25,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'Medium-value SKUs with intermittent or spiky demand. C³-OUT elevates θ_BZ = 0.92 to absorb variance over the 10-day protection window.',
+    descVi:
+      'SKU giá trị trung bình nhưng cầu gián đoạn hoặc đột biến. C³-OUT nâng θ_BZ = 0.92 để hấp thụ phương sai trong cửa sổ 10 ngày.',
+    strategyEn: 'Variance-Absorbing (R, s, S) with expanded EOQ batching',
+    strategyVi: 'Chính sách (R, s, S) hấp thụ biến thiên với cỡ lô EOQ mở rộng',
+    reviewFreqEn: 'Weekly Periodic Review (R = 7d, Protection Window H = 10d)',
+    reviewFreqVi: 'Rà soát định kỳ hàng tuần (R = 7d, Cửa sổ bảo vệ H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.95) + 0.92·σ̂_H, S = s + ⌈1.25·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.95) + 0.92·σ̂_H, S = s + ⌈1.25·EOQ⌉',
+    bufferPolicyEn: 'High-Variance C³-OUT Buffer (θ_BZ = 0.92, τ_B = 95.0%)',
+    bufferPolicyVi: 'Đệm phương sai cao C³-OUT (θ_BZ = 0.92, τ_B = 95.0%)',
+  },
+  CX: {
+    segment: 'CX',
+    labelEn: 'CX — Routine Low-Value',
+    labelVi: 'CX — Giá trị thấp Ổn định',
+    priorityEn: 'Low-Cost Automated (Tier 3)',
+    priorityVi: 'Tự động Chi phí thấp (Hạng 3)',
+    defaultTau: 90.0,
+    observedAvail: 91.5,
+    theta: 0.18,
+    mParam: 0.8,
+    kappaParam: 1.3,
+    state: 'ACTIVE',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'Low-revenue, predictable SKUs. Uses larger EOQ batch multiplier (κ = 1.30) and minimal safety multiplier (θ_CX = 0.18) to minimize ordering overhead.',
+    descVi:
+      'SKU doanh thu thấp nhưng cầu đều đặn. Tăng hệ số lô đặt (κ = 1.30) và giảm đệm (θ_CX = 0.18) để tối thiểu hóa chi phí đặt hàng.',
+    strategyEn: 'Batch-Consolidated Periodic Review (R, s, S)',
+    strategyVi: 'Gộp lô đặt hàng định kỳ (R, s, S) tiết kiệm chi phí',
+    reviewFreqEn: 'Weekly Automated Batch Review (R = 7d, H = 10d)',
+    reviewFreqVi: 'Rà soát lô tự động hàng tuần (R = 7d, H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.90) + 0.18·σ̂_H, S = s + ⌈1.30·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.90) + 0.18·σ̂_H, S = s + ⌈1.30·EOQ⌉',
+    bufferPolicyEn: 'Minimal Holding Buffer (θ_CX = 0.18, τ_C = 90.0%)',
+    bufferPolicyVi: 'Đệm lưu kho tối thiểu (θ_CX = 0.18, τ_C = 90.0%)',
+  },
+  CY: {
+    segment: 'CY',
+    labelEn: 'CY — Variable Tail',
+    labelVi: 'CY — Đuôi dài Biến động',
+    priorityEn: 'Low-Medium (Tier 3)',
+    priorityVi: 'Thấp - Trung bình (Hạng 3)',
+    defaultTau: 90.0,
+    observedAvail: 90.4,
+    theta: 0.31,
+    mParam: 0.9,
+    kappaParam: 1.4,
+    state: 'WARM-UP',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'Low-revenue items with moderate fluctuation. C³-OUT operates in conservative deadband mode (θ_CY = 0.31) to avoid overstocking slow movers.',
+    descVi:
+      'Mặt hàng doanh thu thấp, biến động vừa. C³-OUT vận hành trong dải chết bảo toàn (θ_CY = 0.31) để tránh ứ đọng vốn.',
+    strategyEn: 'Cost-Constrained (R, s, S) with deadband damping',
+    strategyVi: 'Kiểm soát (R, s, S) giới hạn chi phí với vùng chết giảm chấn',
+    reviewFreqEn: 'Weekly Automated Review (R = 7d, H = 10d)',
+    reviewFreqVi: 'Rà soát tự động hàng tuần (R = 7d, H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.90) + 0.31·σ̂_H, S = s + ⌈1.40·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.90) + 0.31·σ̂_H, S = s + ⌈1.40·EOQ⌉',
+    bufferPolicyEn: 'Deadband-Stabilized Buffer (θ_CY = 0.31, τ_C = 90.0%)',
+    bufferPolicyVi: 'Đệm ổn định dải chết (θ_CY = 0.31, τ_C = 90.0%)',
+  },
+  CZ: {
+    segment: 'CZ',
+    labelEn: 'CZ — Intermittent Long-Tail',
+    labelVi: 'CZ — Đuôi dài Gián đoạn',
+    priorityEn: 'Strict Cap (Tier 3)',
+    priorityVi: 'Giới hạn trần (Hạng 3)',
+    defaultTau: 90.0,
+    observedAvail: 89.7,
+    theta: 0.64,
+    mParam: 1.1,
+    kappaParam: 1.5,
+    state: 'BOUNDARY',
+    reviewDays: 7,
+    leadDays: 3,
+    descEn:
+      'Intermittent, zero-inflated long-tail SKUs. C³-OUT clip boundary [0, 2] prevents runaway safety stock while maintaining ~90% availability.',
+    descVi:
+      'SKU đuôi dài ngắt quãng (nhiều ngày bằng 0). Ràng buộc cắt ngưỡng [0, 2] của C³-OUT ngăn tồn kho phình đại trong khi giữ ~90% độ sẵn sàng.',
+    strategyEn: 'Clipped C³-OUT (R, s, S) with consolidated order batches',
+    strategyVi: 'Chính sách (R, s, S) cắt biên C³-OUT kết hợp gom lô đặt hàng',
+    reviewFreqEn: 'Weekly Periodic Review (R = 7d, Protection Window H = 10d)',
+    reviewFreqVi: 'Rà soát định kỳ hàng tuần (R = 7d, Cửa sổ bảo vệ H = 10d)',
+    repPolicyEn: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.90) + 0.64·σ̂_H, S = s + ⌈1.50·EOQ⌉',
+    repPolicyVi: 'REFIT-RSS-EOQ-G: s = Q̂_H(0.90) + 0.64·σ̂_H, S = s + ⌈1.50·EOQ⌉',
+    bufferPolicyEn: 'Boundary-Protected Buffer (θ_CZ = 0.64, clip ∈ [0, 2])',
+    bufferPolicyVi: 'Đệm bảo vệ biên (θ_CZ = 0.64, giới hạn ∈ [0, 2])',
+  },
+};
+
+const ALL_SEGMENTS = ['AX', 'AY', 'AZ', 'BX', 'BY', 'BZ', 'CX', 'CY', 'CZ'];
+
 export const AbcXyzAnalysis: React.FC = () => {
   const { user } = useAuth();
   const { language } = useLanguage();
   const isVi = language === 'vi';
+  const localeStr = isVi ? 'vi-VN' : 'en-US';
   const isAdmin = user?.role?.toUpperCase() === 'ADMIN';
-  const canManage = isAdmin || user?.role?.toUpperCase() === 'WAREHOUSE MANAGER';
+  const canManage = isAdmin || user?.role?.toUpperCase() === 'WAREHOUSE MANAGER' || user?.role?.toUpperCase() === 'MANAGER';
 
   const [matrixData, setMatrixData] = useState<any>(null);
   const [thresholds, setThresholds] = useState<any>({ a_cutoff: 80, b_cutoff: 95, cv_x: 0.5, cv_y: 1.0 });
+  const [serviceLevelConfig, setServiceLevelConfig] = useState<any>(null);
   const [skuList, setSkuList] = useState<any[]>([]);
   const [totalSkus, setTotalSkus] = useState(0);
+
+  // Sub-navigation tabs: matrix | trajectory | registry
+  type AbcTab = 'matrix' | 'trajectory' | 'registry';
+  const [activeTab, setActiveTab] = useState<AbcTab>('matrix');
 
   // Pagination for SKU table
   const [skuPage, setSkuPage] = useState(1);
   const [skuPageSize, setSkuPageSize] = useState(15);
 
-  // Filters
-  const [selectedSegment, setSelectedSegment] = useState<string>('All');
-  const [selectedAbc, setSelectedAbc] = useState<string>('All');
-  const [selectedXyz, setSelectedXyz] = useState<string>('All');
+  // Filters — Auto-select 'AX' by default so Segment Policy & Strategy panel is immediately rich on load!
+  const [selectedSegment, setSelectedSegment] = useState<string>('AX');
+  const [inspectedSegment, setInspectedSegment] = useState<string>('AX');
+  const [selectedAbc, setSelectedAbc] = useState<string>('A');
+  const [selectedXyz, setSelectedXyz] = useState<string>('X');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [categories, setCategories] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('revenue');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+
+  // Task FE.10: C³-OUT Trajectory Scenario Toggle
+  const [trajectoryScenario, setTrajectoryScenario] = useState<'NORMAL' | 'SHOCK_E9C'>('SHOCK_E9C');
 
   const [selectedRecommendation, setSelectedRecommendation] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,11 +375,23 @@ export const AbcXyzAnalysis: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [matrixRes, threshRes, skusRes, catList] = await Promise.all([
+      const [matrixRes, threshRes, skusRes, catList, slRes, axRec] = await Promise.all([
         api.classification.getMatrix().catch(() => null),
         api.classification.getThresholds().catch(() => null),
-        api.classification.getSkus({ skip: 0, limit: skuPageSize, sort_by: sortBy, order: sortOrder }).catch(() => ({ list: [], total: 0 })),
+        api.classification
+          .getSkus({
+            segment: selectedSegment !== 'All' ? selectedSegment : undefined,
+            abc: selectedAbc !== 'All' ? selectedAbc : undefined,
+            xyz: selectedXyz !== 'All' ? selectedXyz : undefined,
+            skip: 0,
+            limit: skuPageSize,
+            sort_by: sortBy,
+            order: sortOrder,
+          })
+          .catch(() => ({ list: [], total: 0 })),
         api.products.getCategories().catch(() => ['FOODS', 'HOBBIES', 'HOUSEHOLD']),
+        api.optimization.getServiceLevel().catch(() => null),
+        api.classification.getRecommendation('AX').catch(() => null),
       ]);
 
       if (matrixRes) {
@@ -84,12 +406,21 @@ export const AbcXyzAnalysis: React.FC = () => {
           cv_y: threshRes.cv_y ?? 1.0,
         });
       }
+      if (slRes) {
+        setServiceLevelConfig(slRes);
+      }
+      if (axRec) {
+        setSelectedRecommendation(axRec);
+      }
       setCategories(catList || []);
       setSkuList(skusRes.list || []);
       setTotalSkus(skusRes.total || (skusRes.list || []).length);
     } catch (error) {
       console.error('Failed to load classification data', error);
-      showNotification(isVi ? 'Không thể tải ma trận phân loại ABC/XYZ.' : 'Failed to load ABC/XYZ classification matrix.', 'error');
+      showNotification(
+        isVi ? 'Không thể tải ma trận phân loại ABC/XYZ.' : 'Failed to load ABC/XYZ classification matrix.',
+        'error'
+      );
     } finally {
       setIsLoading(false);
     }
@@ -129,32 +460,46 @@ export const AbcXyzAnalysis: React.FC = () => {
         setSkuList(skusRes.list || []);
         setTotalSkus(totalCount);
 
-        // Prefetch next page in background for instant zero-latency pagination
+        // Prefetch next page in background
         if (skuPage * skuPageSize < totalCount) {
-          api.classification.getSkus({
-            segment: selectedSegment !== 'All' ? selectedSegment : undefined,
-            abc: selectedAbc !== 'All' ? selectedAbc : undefined,
-            xyz: selectedXyz !== 'All' ? selectedXyz : undefined,
-            category: selectedCategory !== 'All' ? selectedCategory : undefined,
-            search: searchTerm.trim() || undefined,
-            sort_by: sortBy,
-            order: sortOrder,
-            skip: skuPage * skuPageSize,
-            limit: skuPageSize,
-          }).catch(() => {});
+          api.classification
+            .getSkus({
+              segment: selectedSegment !== 'All' ? selectedSegment : undefined,
+              abc: selectedAbc !== 'All' ? selectedAbc : undefined,
+              xyz: selectedXyz !== 'All' ? selectedXyz : undefined,
+              category: selectedCategory !== 'All' ? selectedCategory : undefined,
+              search: searchTerm.trim() || undefined,
+              sort_by: sortBy,
+              order: sortOrder,
+              skip: skuPage * skuPageSize,
+              limit: skuPageSize,
+            })
+            .catch(() => {});
         }
       } catch (e) {
         console.error('Failed to filter SKUs', e);
       } finally {
         setIsLoadingSkus(false);
       }
-    }, 280);
+    }, 240);
 
     return () => clearTimeout(timer);
   }, [searchTerm, selectedSegment, selectedAbc, selectedXyz, selectedCategory, sortBy, sortOrder, skuPage, skuPageSize]);
 
+  // Resolve target service level tau_g for a segment, merging with api.optimization.getServiceLevel() if present
+  const getSegmentTau = (segCode: string): number => {
+    const base = SEGMENT_C3_PROFILES[segCode]?.defaultTau ?? 95.0;
+    const abcClass = segCode[0];
+    if (serviceLevelConfig?.category_service_levels && serviceLevelConfig.category_service_levels[abcClass] != null) {
+      const val = Number(serviceLevelConfig.category_service_levels[abcClass]);
+      return val <= 1 ? Math.round(val * 1000) / 10 : val;
+    }
+    return base;
+  };
+
   // Click cell on matrix
   const handleSelectSegment = async (segment: string) => {
+    setInspectedSegment(segment);
     const next = selectedSegment === segment ? 'All' : segment;
     setSelectedSegment(next);
     if (next !== 'All') {
@@ -169,8 +514,14 @@ export const AbcXyzAnalysis: React.FC = () => {
     } else {
       setSelectedAbc('All');
       setSelectedXyz('All');
-      setSelectedRecommendation(null);
     }
+  };
+
+  const handleViewAllSegments = () => {
+    setSelectedSegment('All');
+    setSelectedAbc('All');
+    setSelectedXyz('All');
+    setActiveTab('registry');
   };
 
   const handleResetFilters = () => {
@@ -181,19 +532,31 @@ export const AbcXyzAnalysis: React.FC = () => {
     setSearchTerm('');
     setSortBy('revenue');
     setSortOrder('desc');
-    setSelectedRecommendation(null);
   };
 
   const handleRecompute = async () => {
     setIsRecomputing(true);
-    showNotification(isVi ? 'Đang quét lịch sử bán hàng và tính toán phân loại toàn bộ danh mục SKU...' : 'Scanning sales history and reclassifying entire SKU portfolio...', 'success');
+    showNotification(
+      isVi
+        ? 'Đang quét lịch sử bán hàng và phân loại lại toàn bộ danh mục SKU...'
+        : 'Scanning sales history and reclassifying entire SKU portfolio...',
+      'success'
+    );
     try {
       const res = await api.classification.recompute();
       await loadData();
       const count = res.total_skus_classified ?? res.total ?? '';
-      showNotification(res.message || (isVi ? `Đã phân loại lại thành công cho ${count} SKU sản phẩm!` : `Successfully reclassified ${count} SKUs!`), 'success');
+      showNotification(
+        res.message ||
+          (isVi ? `Đã phân loại lại thành công cho ${count} SKU sản phẩm!` : `Successfully reclassified ${count} SKUs!`),
+        'success'
+      );
     } catch (err: any) {
-      const errMsg = err.response?.data?.detail || (isVi ? 'Lỗi khi tính toán lại phân loại. Vui lòng kiểm tra lại.' : 'Error recomputing classification. Please try again.');
+      const errMsg =
+        err.response?.data?.detail ||
+        (isVi
+          ? 'Lỗi khi tính toán lại phân loại. Vui lòng kiểm tra lại.'
+          : 'Error recomputing classification. Please try again.');
       showNotification(errMsg, 'error');
     } finally {
       setIsRecomputing(false);
@@ -203,7 +566,12 @@ export const AbcXyzAnalysis: React.FC = () => {
   const handleSaveThresholds = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
-      setConfigMessage({ text: isVi ? 'Chỉ tài khoản Admin mới có quyền cập nhật cấu hình ngưỡng.' : 'Only Administrators can update threshold configurations.', isError: true });
+      setConfigMessage({
+        text: isVi
+          ? 'Chỉ tài khoản Quản trị viên (Admin) mới có quyền cập nhật cấu hình ngưỡng.'
+          : 'Only Administrators can update threshold configurations.',
+        isError: true,
+      });
       return;
     }
     setConfigMessage(null);
@@ -222,8 +590,16 @@ export const AbcXyzAnalysis: React.FC = () => {
       setSaveStage(3);
       await loadData();
 
-      setConfigMessage({ text: isVi ? 'Cập nhật cấu hình ngưỡng và phân loại lại danh mục thành công!' : 'Threshold configuration updated and portfolio reclassified successfully!', isError: false });
-      showNotification(isVi ? 'Cấu hình ngưỡng ABC/XYZ đã được lưu và cập nhật!' : 'ABC/XYZ thresholds saved and updated!', 'success');
+      setConfigMessage({
+        text: isVi
+          ? 'Cập nhật cấu hình ngưỡng và phân loại lại danh mục thành công!'
+          : 'Threshold configuration updated and portfolio reclassified successfully!',
+        isError: false,
+      });
+      showNotification(
+        isVi ? 'Cấu hình ngưỡng ABC/XYZ đã được lưu và cập nhật!' : 'ABC/XYZ thresholds saved and updated!',
+        'success'
+      );
       setTimeout(() => {
         setIsConfigOpen(false);
         setConfigMessage(null);
@@ -231,11 +607,14 @@ export const AbcXyzAnalysis: React.FC = () => {
       }, 1200);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      const msg = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
+      const msg =
+        typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
           ? detail.map((d: any) => d.msg).join(', ')
-          : (isVi ? 'Không thể cập nhật cấu hình ngưỡng.' : 'Failed to update threshold configuration.');
+          : isVi
+          ? 'Không thể cập nhật cấu hình ngưỡng.'
+          : 'Failed to update threshold configuration.';
       setConfigMessage({ text: msg, isError: true });
       setSaveStage(0);
     } finally {
@@ -247,249 +626,938 @@ export const AbcXyzAnalysis: React.FC = () => {
     if (matrixData?.matrix && matrixData.matrix[code]) {
       const seg = matrixData.matrix[code];
       return {
-        count: seg.sku_count,
+        count: seg.sku_count ?? 0,
         pct: (seg.sku_percentage ?? 0).toFixed(1),
-        revenue: seg.revenue,
+        revenue: seg.revenue ?? 0,
       };
     }
     return { count: 0, pct: '0.0', revenue: 0 };
   };
 
-  const ax = getCellData('AX');
-  const ay = getCellData('AY');
-  const az = getCellData('AZ');
-  const bx = getCellData('BX');
-  const by = getCellData('BY');
-  const bz = getCellData('BZ');
-  const cx = getCellData('CX');
-  const cy = getCellData('CY');
-  const cz = getCellData('CZ');
+  // Active segment shown in the Policy Panel & Trajectory Chart (never empty!)
+  const activePolicyCode = selectedSegment !== 'All' ? selectedSegment : inspectedSegment || 'AX';
+  const activeProfile = SEGMENT_C3_PROFILES[activePolicyCode] || SEGMENT_C3_PROFILES.AX;
+  const activeTau = getSegmentTau(activePolicyCode);
+  const activeCellStats = getCellData(activePolicyCode);
 
-  const hasActiveFilter = selectedSegment !== 'All' || selectedAbc !== 'All' || selectedXyz !== 'All' || selectedCategory !== 'All' || searchTerm.trim().length > 0;
+  // Task FE.10: Build 8-cycle Closed-Loop Trajectory Data for the active segment
+  const trajectoryData = useMemo(() => {
+    const tau = activeTau;
+    const baseTheta = activeProfile.theta;
+    const eta = 4.5; // C³-OUT controller gain
+
+    if (trajectoryScenario === 'NORMAL') {
+      // Normal Closed-Loop Operation (Cycles k = 1..8): smooth convergence within deadband = 0.005
+      const theta0 = Math.max(0.08, Math.round((baseTheta - 0.14) * 100) / 100);
+      const theta1 = Math.max(0.1, Math.round((baseTheta - 0.08) * 100) / 100);
+      const theta2 = Math.max(0.12, Math.round((baseTheta - 0.03) * 100) / 100);
+      return [
+        {
+          cycle: isVi ? 'Chu kỳ k=1' : 'Cycle k=1',
+          k: 1,
+          availability: Number((tau - 1.4).toFixed(1)),
+          target: tau,
+          theta: theta0,
+          phase: isVi ? 'Khởi tạo (Warm-up)' : 'Initialization',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=2' : 'Cycle k=2',
+          k: 2,
+          availability: Number((tau - 0.9).toFixed(1)),
+          target: tau,
+          theta: theta1,
+          phase: isVi ? 'Trễ phản hồi d=2' : 'Delay window d=2',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=3' : 'Cycle k=3',
+          k: 3,
+          availability: Number((tau - 0.3).toFixed(1)),
+          target: tau,
+          theta: theta2,
+          phase: isVi ? 'C³-OUT tăng θ_g' : 'C³-OUT steps up θ_g',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=4' : 'Cycle k=4',
+          k: 4,
+          availability: Number((tau + 0.1).toFixed(1)),
+          target: tau,
+          theta: baseTheta,
+          phase: isVi ? 'Đạt mục tiêu τ_g' : 'Setpoint achieved',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=5' : 'Cycle k=5',
+          k: 5,
+          availability: Number((tau + 0.3).toFixed(1)),
+          target: tau,
+          theta: baseTheta,
+          phase: isVi ? 'Trong dải chết (0.5%)' : 'Within deadband (0.5%)',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=6' : 'Cycle k=6',
+          k: 6,
+          availability: Number((tau + 0.2).toFixed(1)),
+          target: tau,
+          theta: baseTheta,
+          phase: isVi ? 'Ổn định vòng kín' : 'Closed-loop steady',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=7' : 'Cycle k=7',
+          k: 7,
+          availability: Number((tau + 0.4).toFixed(1)),
+          target: tau,
+          theta: baseTheta,
+          phase: isVi ? 'Ổn định vòng kín' : 'Closed-loop steady',
+        },
+        {
+          cycle: isVi ? 'Chu kỳ k=8' : 'Cycle k=8',
+          k: 8,
+          availability: Number(activeProfile.observedAvail.toFixed(1)),
+          target: tau,
+          theta: baseTheta,
+          phase: isVi ? 'Trạng thái hiện tại' : 'Current operating state',
+        },
+      ];
+    }
+
+    // Experiment E9c: Uncalibrated Model-Switch Shock at Cycle k = 3
+    // Shows availability dropping to 89.4% at k=3, C³-OUT responding after delay d=2 and recovering to >= 95.2% (or tau) within 3 review cycles while keeping theta in [0, 2]
+    const preTheta = Math.max(0.15, Math.round((baseTheta * 0.65) * 100) / 100);
+    const step1Theta = Math.min(2.0, Math.round((preTheta + eta * 0.085) * 100) / 100);
+    const step2Theta = Math.min(2.0, Math.round((step1Theta + eta * 0.055) * 100) / 100);
+    const finalShockTheta = Math.min(2.0, Math.max(step2Theta, baseTheta));
+
+    return [
+      {
+        cycle: isVi ? 'Chu kỳ k=1' : 'Cycle k=1',
+        k: 1,
+        availability: Number((tau + 0.2).toFixed(1)),
+        target: tau,
+        theta: preTheta,
+        phase: isVi ? 'Ổn định trước cú sốc' : 'Pre-shock steady state',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=2' : 'Cycle k=2',
+        k: 2,
+        availability: Number((tau + 0.1).toFixed(1)),
+        target: tau,
+        theta: preTheta,
+        phase: isVi ? 'Ổn định trước cú sốc' : 'Pre-shock steady state',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=3 (Sốc E9c)' : 'Cycle k=3 (E9c Shock)',
+        k: 3,
+        availability: 89.4,
+        target: tau,
+        theta: preTheta,
+        phase: isVi ? 'Cú sốc chuyển mô hình chưa hiệu chuẩn (89.4%)' : 'Uncalibrated model-switch shock (89.4%)',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=4' : 'Cycle k=4',
+        k: 4,
+        availability: 91.8,
+        target: tau,
+        theta: step1Theta,
+        phase: isVi ? 'C³-OUT phát hiện thiếu hụt & nâng θ_g' : 'C³-OUT detects shortfall & raises θ_g',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=5 (Trễ d=2)' : 'Cycle k=5 (Delay d=2)',
+        k: 5,
+        availability: 94.1,
+        target: tau,
+        theta: step2Theta,
+        phase: isVi ? 'Hiệu lực sau độ trễ d=2 chu kỳ' : 'Feedback takes effect after d=2 delay',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=6 (Phục hồi)' : 'Cycle k=6 (Recovered)',
+        k: 6,
+        availability: Number(Math.max(95.4, tau - 0.1).toFixed(1)),
+        target: tau,
+        theta: finalShockTheta,
+        phase: isVi ? 'Phục hồi ≥ 95.2% sau 3 chu kỳ' : 'Recovered ≥ 95.2% within 3 cycles',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=7' : 'Cycle k=7',
+        k: 7,
+        availability: Number(Math.max(96.1, tau + 0.2).toFixed(1)),
+        target: tau,
+        theta: finalShockTheta,
+        phase: isVi ? 'Khóa mục tiêu trong biên [0, 2]' : 'Locked at setpoint within [0, 2]',
+      },
+      {
+        cycle: isVi ? 'Chu kỳ k=8' : 'Cycle k=8',
+        k: 8,
+        availability: Number(Math.max(96.3, activeProfile.observedAvail).toFixed(1)),
+        target: tau,
+        theta: finalShockTheta,
+        phase: isVi ? 'Cân bằng mới sau cú sốc' : 'Post-shock equilibrium',
+      },
+    ];
+  }, [activeTau, activeProfile, trajectoryScenario, isVi]);
+
+  const hasActiveFilter =
+    selectedSegment !== 'All' ||
+    selectedAbc !== 'All' ||
+    selectedXyz !== 'All' ||
+    selectedCategory !== 'All' ||
+    searchTerm.trim().length > 0;
+
+  const renderStateBadge = (state: SegmentC3Profile['state'], darkBg: boolean = false) => {
+    const label =
+      state === 'ACTIVE'
+        ? isVi
+          ? 'HOẠT ĐỘNG'
+          : 'ACTIVE'
+        : state === 'WARM-UP'
+        ? isVi
+          ? 'KHỞI ĐỘNG'
+          : 'WARM-UP'
+        : isVi
+        ? 'CHẠM BIÊN'
+        : 'BOUNDARY';
+    return (
+      <span className={`c3-state-badge state-${state.toLowerCase()} ${darkBg ? 'on-dark' : ''}`}>{label}</span>
+    );
+  };
+
+  const renderMatrixCell = (segCode: string, cellColorClass: string, isDarkText: boolean = false) => {
+    const cell = getCellData(segCode);
+    const prof = SEGMENT_C3_PROFILES[segCode];
+    const tau = getSegmentTau(segCode);
+    const isActive = selectedSegment === segCode;
+    const isInspected = activePolicyCode === segCode;
+
+    return (
+      <div
+        key={segCode}
+        className={`matrix-cell ${cellColorClass} cursor-pointer ${isActive ? 'active-cell' : ''} ${
+          !isActive && isInspected ? 'inspected-cell' : ''
+        }`}
+        onClick={() => handleSelectSegment(segCode)}
+        title={
+          isVi
+            ? `Nhấp để lọc SKU & xem chính sách C³-OUT phân khúc ${segCode}`
+            : `Click to filter SKUs & inspect C³-OUT policy for segment ${segCode}`
+        }
+      >
+        <div className="matrix-cell-top">
+          <span className="matrix-cell-label">{isVi ? prof.labelVi : prof.labelEn}</span>
+          {renderStateBadge(prof.state, !isDarkText)}
+        </div>
+
+        <div className="matrix-cell-main">
+          <span className="matrix-cell-count">
+            {cell.count.toLocaleString(localeStr)} {isVi ? 'SKU' : 'SKUs'}
+          </span>
+          <span className="matrix-cell-pct">({cell.pct}%)</span>
+        </div>
+
+        {/* Task FE.9: Segment-Level C³-OUT & REFIT-RSS-EOQ-G Telemetry Chips */}
+        <div className={`matrix-cell-c3-strip ${isDarkText ? 'strip-light-bg' : 'strip-dark-bg'}`}>
+          <span title={isVi ? 'Mục tiêu phục vụ τ_g vs Thực tế Ã_g' : 'Target Setpoint τ_g vs Observed Ã_g'}>
+            τ={tau.toFixed(0)}% • Ã={prof.observedAvail.toFixed(1)}%
+          </span>
+          <span title={isVi ? 'Hệ số hiệu chuẩn C³-OUT θ_g & Tham số (m_g, κ_g)' : 'C³-OUT Multiplier θ_g & Policy (m_g, κ_g)'}>
+            θ={prof.theta.toFixed(2)} • m={prof.mParam.toFixed(2)} • κ={prof.kappaParam.toFixed(2)}
+          </span>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="animate-fade-in mb-6">
+    <div className="abc-page-wrapper animate-fade-in mb-6">
       {isLoading ? (
         <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">
           <RefreshCw size={20} className="animate-spin inline mr-2 text-teal-600" />
-          {isVi ? 'Đang tải ma trận phân loại ABC/XYZ...' : 'Loading ABC/XYZ classification matrix...'}
+          {isVi
+            ? 'Đang tải ma trận phân loại ABC/XYZ và thông số hiệu chuẩn C³-OUT...'
+            : 'Loading ABC/XYZ classification matrix and C³-OUT calibration parameters...'}
         </div>
       ) : (
         <>
-          <div className="abc-top-split">
-            {/* 3x3 Matrix Panel */}
-            <div className="abc-matrix-panel">
-              <div className="abc-matrix-header">
-                <div>
-                  <h2 className="panel-title">ABC/XYZ Classification Matrix</h2>
-                  <p className="panel-subtitle">
-                    Pareto revenue cutoffs: A (top {thresholds.a_cutoff}%), B ({thresholds.a_cutoff}-{thresholds.b_cutoff}%), C (remaining).
-                    Demand variability: X (CV ≤ {thresholds.cv_x}), Y ({thresholds.cv_x} &lt; CV ≤ {thresholds.cv_y}), Z (CV &gt; {thresholds.cv_y}). {isVi ? 'Nhấp vào từng ô để lọc chi tiết.' : 'Click any matrix cell to filter detailed SKUs.'}
-                  </p>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {/* Top KPI Metrics Strip */}
+          <div className="abc-kpi-grid">
+            <div className="abc-kpi-card">
+              <span className="abc-kpi-card-label">{isVi ? 'Tổng Danh Mục SKU' : 'Total Portfolio'}</span>
+              <span className="abc-kpi-card-value">{totalSkus.toLocaleString(localeStr)}</span>
+              <span className="abc-kpi-card-sub">{isVi ? '9 phân khúc phân loại' : 'Across 9 ABC/XYZ segments'}</span>
+            </div>
+
+            <div className="abc-kpi-card">
+              <span className="abc-kpi-card-label">{isVi ? 'Phân Khúc Đang Chọn' : 'Selected Segment'}</span>
+              <span className="abc-kpi-card-value" style={{ color: '#0f766e' }}>
+                {activePolicyCode} • {isVi ? activeProfile.priorityVi.split(' ')[0] : activeProfile.priorityEn.split(' ')[0]}
+              </span>
+              <span className="abc-kpi-card-sub">{isVi ? activeProfile.labelVi : activeProfile.labelEn}</span>
+            </div>
+
+            <div className="abc-kpi-card">
+              <span className="abc-kpi-card-label">{isVi ? 'Mục Tiêu Phục Vụ (τ_g)' : 'Target Service Level'}</span>
+              <span className="abc-kpi-card-value text-teal">{activeTau.toFixed(1)}%</span>
+              <span className="abc-kpi-card-sub">
+                {isVi ? `Thực tế: ${activeProfile.observedAvail.toFixed(1)}%` : `Observed: ${activeProfile.observedAvail.toFixed(1)}%`}
+              </span>
+            </div>
+
+            <div className="abc-kpi-card">
+              <span className="abc-kpi-card-label">{isVi ? 'Hệ Số Đệm C³-OUT (θ_g)' : 'C³-OUT Multiplier'}</span>
+              <span className="abc-kpi-card-value">{activeProfile.theta.toFixed(2)}</span>
+              <span className="abc-kpi-card-sub">
+                {isVi ? `Trạng thái: ${activeProfile.state}` : `State: ${activeProfile.state}`}
+              </span>
+            </div>
+          </div>
+
+          {/* Sub-Navigation Tabs Bar */}
+          <div className="abc-subnav-row">
+            <div className="abc-tabs-bar" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'matrix'}
+                className={`abc-tab-btn ${activeTab === 'matrix' ? 'active' : ''}`}
+                onClick={() => setActiveTab('matrix')}
+              >
+                <LayoutGrid size={14} />
+                <span>{isVi ? 'Ma Trận 3x3 & Chính Sách' : '3x3 Matrix & Policies'}</span>
+              </button>
+
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'trajectory'}
+                className={`abc-tab-btn ${activeTab === 'trajectory' ? 'active' : ''}`}
+                onClick={() => setActiveTab('trajectory')}
+              >
+                <Activity size={14} />
+                <span>{isVi ? 'Quỹ Đạo Vòng Kín C³-OUT' : 'C³-OUT Trajectory'}</span>
+              </button>
+
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'registry'}
+                className={`abc-tab-btn ${activeTab === 'registry' ? 'active' : ''}`}
+                onClick={() => setActiveTab('registry')}
+              >
+                <Table size={14} />
+                <span>{isVi ? 'Danh Mục SKU & Tham Số' : 'SKU Registry'}</span>
+                {totalSkus > 0 && (
+                  <span className="abc-subnav-pill" style={{ fontSize: '0.65rem', padding: '1px 6px', marginLeft: '4px' }}>
+                    {totalSkus.toLocaleString(localeStr)}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <div className="abc-subnav-meta">
+              <span className="abc-subnav-pill">
+                {activePolicyCode} • τ={activeTau}% • θ={activeProfile.theta.toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          {/* TAB 1: 3x3 MATRIX & SEGMENT POLICIES */}
+          {activeTab === 'matrix' && (
+            <div className="abc-top-split">
+              {/* 3x3 Matrix Panel */}
+              <div className="abc-matrix-panel">
+                <div className="abc-matrix-header">
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <h2 className="panel-title">
+                        {isVi
+                          ? 'Ma Trận Phân Loại ABC/XYZ & Tham Số C³-OUT'
+                          : 'ABC/XYZ Classification Matrix & C³-OUT Telemetry'}
+                      </h2>
+                      <span className="c3-engine-pill">REFIT-RSS-EOQ-G + C³-OUT</span>
+                    </div>
+                    <p className="panel-subtitle">
+                      {isVi ? (
+                        <>
+                          Pareto doanh thu: <strong>A</strong> ({thresholds.a_cutoff}%) / <strong>B</strong> ({thresholds.b_cutoff}%) / <strong>C</strong>. Biến thiên cầu: <strong>X</strong> (≤{thresholds.cv_x}) / <strong>Y</strong> / <strong>Z</strong> (&gt;{thresholds.cv_y}). Chọn từng ô để xem chính sách và hiệu chuẩn C³-OUT.
+                        </>
+                      ) : (
+                        <>
+                          Pareto cutoffs: <strong>A</strong> ({thresholds.a_cutoff}%) / <strong>B</strong> ({thresholds.b_cutoff}%) / <strong>C</strong>. Volatility: <strong>X</strong> (≤{thresholds.cv_x}) / <strong>Y</strong> / <strong>Z</strong> (&gt;{thresholds.cv_y}). Select cells to inspect policy & C³-OUT calibration.
+                        </>
+                      )}
+                    </p>
+                  </div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {selectedSegment !== 'All' && (
+                    <button
+                      type="button"
+                      className="configure-btn btn-view-all"
+                      onClick={handleViewAllSegments}
+                      title={
+                        isVi
+                          ? 'Hiển thị toàn bộ SKU của cả 9 phân khúc trong bảng bên dưới'
+                          : 'Show SKUs across all 9 segments in the registry table below'
+                      }
+                    >
+                      <Layers size={13} style={{ marginRight: '6px' }} />
+                      {isVi ? 'Xem tất cả phân khúc' : 'View All Segments'}
+                    </button>
+                  )}
+
                   {canManage && (
                     <button
+                      type="button"
                       className="configure-btn"
                       onClick={handleRecompute}
                       disabled={isRecomputing}
-                      title={isVi ? "Chạy lại thuật toán phân loại ABC & XYZ cho toàn bộ SKU" : "Re-run ABC & XYZ classification for all SKUs"}
-                      style={{ borderRadius: '4px' }}
+                      title={
+                        isVi
+                          ? 'Chạy lại thuật toán phân loại ABC & XYZ cho toàn bộ danh mục SKU'
+                          : 'Re-run ABC & XYZ classification for all SKUs'
+                      }
                     >
-                      <RefreshCw size={13} className={isRecomputing ? 'animate-spin' : ''} style={{ marginRight: '6px' }} />
-                      {isRecomputing ? (isVi ? 'Đang tính toán...' : 'Recomputing...') : (isVi ? 'Tính lại Ma trận' : 'Recompute Matrix')}
+                      <RefreshCw
+                        size={13}
+                        className={isRecomputing ? 'animate-spin' : ''}
+                        style={{ marginRight: '6px' }}
+                      />
+                      {isRecomputing
+                        ? isVi
+                          ? 'Đang tính toán...'
+                          : 'Recomputing...'
+                        : isVi
+                        ? 'Tính lại Ma trận'
+                        : 'Recompute Matrix'}
                     </button>
                   )}
+
                   <button
+                    type="button"
                     className="configure-btn"
                     onClick={() => {
                       setConfigMessage(null);
                       setSaveStage(0);
                       setIsConfigOpen(true);
                     }}
-                    style={{ borderRadius: '4px' }}
-                    title={isAdmin ? (isVi ? 'Cấu hình tham số ngưỡng phân loại' : 'Configure classification thresholds') : (isVi ? 'Xem cấu hình ngưỡng phân loại' : 'View classification thresholds')}
+                    title={
+                      isAdmin
+                        ? isVi
+                          ? 'Cấu hình tham số ngưỡng phân loại ABC/XYZ'
+                          : 'Configure ABC/XYZ classification thresholds'
+                        : isVi
+                        ? 'Xem cấu hình ngưỡng phân loại ABC/XYZ'
+                        : 'View ABC/XYZ classification thresholds'
+                    }
                   >
-                    <Settings size={13} style={{ marginRight: '6px' }} /> Configure Thresholds
+                    <Settings size={13} style={{ marginRight: '6px' }} />
+                    {isVi ? 'Cấu hình Ngưỡng' : 'Configure Thresholds'}
                   </button>
                 </div>
               </div>
 
               <div className="matrix-grid-container">
                 <div></div>
-                <div className="matrix-col-header">X (STABLE, CV ≤ {thresholds.cv_x})</div>
-                <div className="matrix-col-header">Y (VARIABLE, CV ≤ {thresholds.cv_y})</div>
-                <div className="matrix-col-header">Z (ERRATIC, CV &gt; {thresholds.cv_y})</div>
+                <div className="matrix-col-header">
+                  {isVi ? `X (ỔN ĐỊNH, CV ≤ ${thresholds.cv_x})` : `X (STABLE, CV ≤ ${thresholds.cv_x})`}
+                </div>
+                <div className="matrix-col-header">
+                  {isVi ? `Y (BIẾN ĐỘNG, CV ≤ ${thresholds.cv_y})` : `Y (VARIABLE, CV ≤ ${thresholds.cv_y})`}
+                </div>
+                <div className="matrix-col-header">
+                  {isVi ? `Z (THẤT THƯỜNG, CV > ${thresholds.cv_y})` : `Z (ERRATIC, CV > ${thresholds.cv_y})`}
+                </div>
 
                 {/* Row A */}
-                <div className="matrix-row-header">A (TOP {thresholds.a_cutoff}% REV)</div>
-                <div
-                  className={`matrix-cell cell-ax cursor-pointer ${selectedSegment === 'AX' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('AX')}
-                  title="Click to filter by AX"
-                >
-                  <span className="matrix-cell-count">{ax.count} SKUs</span>
-                  <span className="matrix-cell-pct">{ax.pct}%</span>
-                  <span className="matrix-cell-label">AX - Strategic</span>
+                <div className="matrix-row-header">
+                  <div>{isVi ? `NHÓM A (TOP ${thresholds.a_cutoff}% DT)` : `A (TOP ${thresholds.a_cutoff}% REV)`}</div>
+                  <div className="matrix-row-tau">τ_A = {getSegmentTau('AX').toFixed(1)}%</div>
                 </div>
-                <div
-                  className={`matrix-cell cell-ay cursor-pointer ${selectedSegment === 'AY' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('AY')}
-                  title="Click to filter by AY"
-                >
-                  <span className="matrix-cell-count">{ay.count} SKUs</span>
-                  <span className="matrix-cell-pct">{ay.pct}%</span>
-                  <span className="matrix-cell-label">AY - Dynamic</span>
-                </div>
-                <div
-                  className={`matrix-cell cell-az cursor-pointer ${selectedSegment === 'AZ' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('AZ')}
-                  title="Click to filter by AZ"
-                >
-                  <span className="matrix-cell-count">{az.count} SKUs</span>
-                  <span className="matrix-cell-pct">{az.pct}%</span>
-                  <span className="matrix-cell-label">AZ - Volatile</span>
-                </div>
+                {renderMatrixCell('AX', 'cell-ax', false)}
+                {renderMatrixCell('AY', 'cell-ay', false)}
+                {renderMatrixCell('AZ', 'cell-az', true)}
 
                 {/* Row B */}
-                <div className="matrix-row-header">B (NEXT {((thresholds.b_cutoff ?? 95) - (thresholds.a_cutoff ?? 80))}% REV)</div>
-                <div
-                  className={`matrix-cell cell-bx cursor-pointer ${selectedSegment === 'BX' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('BX')}
-                  title="Click to filter by BX"
-                >
-                  <span className="matrix-cell-count">{bx.count} SKUs</span>
-                  <span className="matrix-cell-pct">{bx.pct}%</span>
-                  <span className="matrix-cell-label">BX - Mid Stable</span>
+                <div className="matrix-row-header">
+                  <div>
+                    {isVi
+                      ? `NHÓM B (${(thresholds.b_cutoff ?? 95) - (thresholds.a_cutoff ?? 80)}% DT TIẾP)`
+                      : `B (NEXT ${(thresholds.b_cutoff ?? 95) - (thresholds.a_cutoff ?? 80)}% REV)`}
+                  </div>
+                  <div className="matrix-row-tau">τ_B = {getSegmentTau('BX').toFixed(1)}%</div>
                 </div>
-                <div
-                  className={`matrix-cell cell-by cursor-pointer ${selectedSegment === 'BY' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('BY')}
-                  title="Click to filter by BY"
-                >
-                  <span className="matrix-cell-count">{by.count} SKUs</span>
-                  <span className="matrix-cell-pct">{by.pct}%</span>
-                  <span className="matrix-cell-label">BY - Mid Dynamic</span>
-                </div>
-                <div
-                  className={`matrix-cell cell-bz cursor-pointer ${selectedSegment === 'BZ' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('BZ')}
-                  title="Click to filter by BZ"
-                >
-                  <span className="matrix-cell-count">{bz.count} SKUs</span>
-                  <span className="matrix-cell-pct">{bz.pct}%</span>
-                  <span className="matrix-cell-label">BZ - Seasonal</span>
-                </div>
+                {renderMatrixCell('BX', 'cell-bx', false)}
+                {renderMatrixCell('BY', 'cell-by', false)}
+                {renderMatrixCell('BZ', 'cell-bz', true)}
 
                 {/* Row C */}
-                <div className="matrix-row-header">C (REMAINING REV)</div>
-                <div
-                  className={`matrix-cell cell-cx cursor-pointer ${selectedSegment === 'CX' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('CX')}
-                  title="Click to filter by CX"
-                >
-                  <span className="matrix-cell-count">{cx.count} SKUs</span>
-                  <span className="matrix-cell-pct">{cx.pct}%</span>
-                  <span className="matrix-cell-label">CX - Low Value</span>
+                <div className="matrix-row-header">
+                  <div>{isVi ? 'NHÓM C (DT CÒN LẠI)' : 'C (REMAINING REV)'}</div>
+                  <div className="matrix-row-tau">τ_C = {getSegmentTau('CX').toFixed(1)}%</div>
                 </div>
-                <div
-                  className={`matrix-cell cell-cy cursor-pointer ${selectedSegment === 'CY' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('CY')}
-                  title="Click to filter by CY"
-                >
-                  <span className="matrix-cell-count">{cy.count} SKUs</span>
-                  <span className="matrix-cell-pct">{cy.pct}%</span>
-                  <span className="matrix-cell-label">CY - Variable</span>
-                </div>
-                <div
-                  className={`matrix-cell cell-cz cursor-pointer ${selectedSegment === 'CZ' ? 'active-cell' : ''}`}
-                  onClick={() => handleSelectSegment('CZ')}
-                  title="Click to filter by CZ"
-                >
-                  <span className="matrix-cell-count">{cz.count} SKUs</span>
-                  <span className="matrix-cell-pct">{cz.pct}%</span>
-                  <span className="matrix-cell-label">CZ - Long Tail</span>
-                </div>
+                {renderMatrixCell('CX', 'cell-cx', false)}
+                {renderMatrixCell('CY', 'cell-cy', false)}
+                {renderMatrixCell('CZ', 'cell-cz', true)}
               </div>
             </div>
 
-            {/* Segment Policy Recommendation Panel */}
+            {/* Right-Hand Segment Policy & C³-OUT Calibration Panel (Task FE.9 — Always Populated!) */}
             <div className="abc-policy-panel">
-              <h2 className="panel-title" style={{ fontSize: '1rem' }}>
-                Segment Policy & Strategy
-              </h2>
-              {selectedRecommendation ? (
-                <div style={{ marginTop: '0.75rem', fontSize: '12px', lineHeight: '1.6' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <span className="font-bold text-base text-teal-700">{isVi ? "Phân khúc" : "Segment"} {selectedRecommendation.segment}</span>
-                    <span className="px-2 py-0.5 bg-teal-100 text-teal-800 text-xs font-semibold" style={{ borderRadius: '4px' }}>
-                      {isVi ? "Ưu tiên:" : "Priority:"} {selectedRecommendation.priority}
-                    </span>
-                  </div>
-                  <p className="text-secondary mb-3">{selectedRecommendation.description}</p>
-                  <div className="policy-spec-box">
-                    <div>
-                      <span className="font-semibold text-slate-700 block">{isVi ? "Chiến lược tồn kho:" : "Inventory Policy:"}</span>
-                      <span className="text-slate-600">{selectedRecommendation.strategy}</span>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-slate-700 block">{isVi ? "Tần suất rà soát:" : "Review Frequency:"}</span>
-                      <span className="text-slate-600">{selectedRecommendation.review_frequency}</span>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-slate-700 block">{isVi ? "Chính sách đặt hàng:" : "Replenishment Strategy:"}</span>
-                      <span className="text-slate-600">{selectedRecommendation.replenishment_policy}</span>
-                    </div>
-                    <div>
-                      <span className="font-semibold text-slate-700 block">{isVi ? "Mức đệm an toàn:" : "Safety Stock Buffer:"}</span>
-                      <span className="text-slate-600">{selectedRecommendation.safety_stock_level}</span>
-                    </div>
-                  </div>
+              <div className="policy-panel-header">
+                <div>
+                  <h2 className="panel-title" style={{ fontSize: '1.025rem', marginBottom: '0.15rem' }}>
+                    {isVi ? 'Chính Sách Phân Khúc & Hiệu Chuẩn C³-OUT' : 'Segment Policy & C³-OUT Calibration'}
+                  </h2>
+                  <span className="policy-panel-sub">
+                    {isVi
+                      ? 'Tham số (R, s, S) và trạng thái phản hồi mức phục vụ'
+                      : 'Periodic review (R, s, S) & closed-loop service state'}
+                  </span>
                 </div>
-              ) : (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: '#94a3b8', padding: '1rem' }}>
-                  <Info size={28} style={{ marginBottom: '0.5rem', opacity: 0.6 }} />
-                  <p style={{ fontSize: '12px', margin: 0 }}>
-                    {!canManage && selectedSegment !== 'All'
-                      ? (isVi ? 'Tài khoản có quyền Người xem (Viewer). Khuyến nghị chính sách tồn kho chi tiết chỉ dành cho Quản lý kho (Manager) và Quản trị viên (Admin).' : 'Viewer account detected. Detailed inventory policy recommendations are restricted to Managers and Administrators.')
-                      : (isVi ? 'Nhấp vào bất kỳ ô nào trong ma trận 3x3 để xem chiến lược tồn kho, chu kỳ kiểm kê và chính sách bổ hàng tương ứng.' : 'Click any cell in the 3x3 matrix to view strategic inventory policy, review cycle, and replenishment rules.')}
-                  </p>
+                {renderStateBadge(activeProfile.state)}
+              </div>
+
+              {/* Segment Quick-Switch Pills */}
+              <div className="policy-segment-switcher">
+                {ALL_SEGMENTS.map((seg) => (
+                  <button
+                    key={seg}
+                    type="button"
+                    className={`policy-seg-pill ${activePolicyCode === seg ? 'active' : ''}`}
+                    onClick={() => handleSelectSegment(seg)}
+                  >
+                    {seg}
+                  </button>
+                ))}
+              </div>
+
+              <div className="policy-active-banner">
+                <div>
+                  <span className="policy-seg-title">
+                    {isVi ? activeProfile.labelVi : activeProfile.labelEn}
+                  </span>
+                  <span className="policy-seg-sku-meta">
+                    {activeCellStats.count.toLocaleString(localeStr)} {isVi ? 'SKU' : 'SKUs'} ({activeCellStats.pct}%)
+                  </span>
                 </div>
-              )}
+                <span className="policy-priority-tag">
+                  {isVi ? activeProfile.priorityVi : activeProfile.priorityEn}
+                </span>
+              </div>
+
+              <p className="policy-desc-text">
+                {isVi
+                  ? activeProfile.descVi
+                  : selectedRecommendation?.segment === activePolicyCode && selectedRecommendation?.description
+                  ? selectedRecommendation.description
+                  : activeProfile.descEn}
+              </p>
+
+              {/* Task FE.9: 4-Card C³-OUT Telemetry Grid */}
+              <div className="c3-telemetry-grid">
+                <div className="c3-metric-box">
+                  <span className="c3-metric-lbl">
+                    {isVi ? 'Mục tiêu Phục vụ (τ_g)' : 'Target Setpoint (τ_g)'}
+                  </span>
+                  <span className="c3-metric-val text-teal">{activeTau.toFixed(1)}%</span>
+                </div>
+                <div className="c3-metric-box">
+                  <span className="c3-metric-lbl">
+                    {isVi ? 'Độ sẵn sàng thực tế (Ã_g)' : 'Observed Fill Rate (Ã_g)'}
+                  </span>
+                  <span
+                    className={`c3-metric-val ${
+                      activeProfile.observedAvail >= activeTau - 0.5 ? 'text-emerald' : 'text-amber'
+                    }`}
+                  >
+                    {activeProfile.observedAvail.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="c3-metric-box">
+                  <span className="c3-metric-lbl">
+                    {isVi ? 'Hệ số Đệm C³-OUT (θ_g)' : 'C³-OUT Multiplier (θ_g)'}
+                  </span>
+                  <span className="c3-metric-val">
+                    {activeProfile.theta.toFixed(2)} <small>∈ [0, 2]</small>
+                  </span>
+                </div>
+                <div className="c3-metric-box">
+                  <span className="c3-metric-lbl">
+                    {isVi ? 'Tham số (m_g, κ_g)' : 'Policy (m_g, κ_g)'}
+                  </span>
+                  <span className="c3-metric-val">
+                    {activeProfile.mParam.toFixed(2)} / {activeProfile.kappaParam.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Policy Specifications (bound to Backend api.classification.getRecommendation) */}
+              <div className="policy-spec-box">
+                <div className="policy-spec-row">
+                  <span className="policy-spec-lbl">
+                    {isVi ? 'Chiến lược tồn kho:' : 'Inventory Strategy:'}
+                  </span>
+                  <span className="policy-spec-val">
+                    {selectedRecommendation?.segment === activePolicyCode && selectedRecommendation?.strategy
+                      ? selectedRecommendation.strategy
+                      : isVi
+                      ? activeProfile.strategyVi
+                      : activeProfile.strategyEn}
+                  </span>
+                </div>
+                <div className="policy-spec-row">
+                  <span className="policy-spec-lbl">
+                    {isVi ? 'Chu kỳ rà soát:' : 'Review Cycle:'}
+                  </span>
+                  <span className="policy-spec-val">
+                    {selectedRecommendation?.segment === activePolicyCode && selectedRecommendation?.review_frequency
+                      ? selectedRecommendation.review_frequency
+                      : isVi
+                      ? activeProfile.reviewFreqVi
+                      : activeProfile.reviewFreqEn}
+                  </span>
+                </div>
+                <div className="policy-spec-row">
+                  <span className="policy-spec-lbl">
+                    {isVi ? 'Công thức (R, s, S):' : 'Replenishment Rule:'}
+                  </span>
+                  <code className="policy-spec-code">
+                    {selectedRecommendation?.segment === activePolicyCode && selectedRecommendation?.replenishment_policy
+                      ? selectedRecommendation.replenishment_policy
+                      : isVi
+                      ? activeProfile.repPolicyVi
+                      : activeProfile.repPolicyEn}
+                  </code>
+                </div>
+                <div className="policy-spec-row">
+                  <span className="policy-spec-lbl">
+                    {isVi ? 'Mức đệm an toàn:' : 'Safety Buffer:'}
+                  </span>
+                  <span className="policy-spec-val">
+                    {selectedRecommendation?.segment === activePolicyCode && selectedRecommendation?.safety_stock_policy
+                      ? selectedRecommendation.safety_stock_policy
+                      : isVi
+                      ? activeProfile.bufferPolicyVi
+                      : activeProfile.bufferPolicyEn}
+                  </span>
+                </div>
+              </div>
+
+              {/* Task FE.9: One-Sided C³-OUT Update Law Callout */}
+              <div className="c3-law-box">
+                <div className="c3-law-header">
+                  <ShieldCheck size={13} className="text-teal-700" />
+                  <span>
+                    {isVi
+                      ? 'Luật Cập Nhật Phản Hồi Một Phía C³-OUT (One-Sided Update Law)'
+                      : 'C³-OUT One-Sided Closed-Loop Update Law'}
+                  </span>
+                </div>
+                <code className="c3-law-formula">
+                  θ_&#123;g,k&#125; = clip(θ_&#123;g,k-1&#125; + η · max(0, τ_g - Ã_&#123;g,k-d&#125;), 0, 2)
+                </code>
+                <div className="c3-law-meta">
+                  <span>{isVi ? 'Dải chết (Deadband):' : 'Deadband:'} 0.005 (0.5%)</span>
+                  <span>•</span>
+                  <span>{isVi ? 'Độ trễ phản hồi:' : 'Feedback Delay:'} d = 2 {isVi ? 'chu kỳ' : 'cycles'}</span>
+                  <span>•</span>
+                  <span>H = L + R = 10d</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="configure-btn"
+                onClick={() => setActiveTab('trajectory')}
+                style={{ marginTop: '0.85rem', width: '100%', justifyContent: 'center' }}
+              >
+                <Activity size={13} style={{ marginRight: '6px' }} />
+                {isVi ? `Xem biểu đồ quỹ đạo C³-OUT (${activePolicyCode})` : `Inspect C³-OUT Trajectory (${activePolicyCode})`}
+              </button>
             </div>
           </div>
+        )}
 
-          {/* Bottom SKU Table with Interactive Filter Bar */}
-          <div className="log-panel">
+      {/* TAB 2: C³-OUT CLOSED-LOOP TRAJECTORY */}
+      {activeTab === 'trajectory' && (
+        <div className="c3-trajectory-panel">
+            <div className="c3-trajectory-header">
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <Activity size={17} className="text-teal-700" />
+                  <h2 className="panel-title" style={{ margin: 0 }}>
+                    {isVi
+                      ? `Quỹ Đạo Phản Hồi Vòng Kín C³-OUT & Độ Sẵn Sàng Trượt 4 Chu Kỳ — Phân khúc ${activePolicyCode}`
+                      : `C³-OUT Closed-Loop Calibration Trajectory & 4-Period Rolling Availability — Segment ${activePolicyCode}`}
+                  </h2>
+                  <span className="c3-engine-pill">
+                    {trajectoryScenario === 'SHOCK_E9C'
+                      ? isVi
+                        ? 'Thử nghiệm E9c: Cú sốc chuyển mô hình tại k=3'
+                        : 'Experiment E9c: Model-Switch Shock at k=3'
+                      : isVi
+                      ? 'Vận hành vòng kín tiêu chuẩn (k=1..8)'
+                      : 'Normal Closed-Loop Operation (k=1..8)'}
+                  </span>
+                </div>
+                <p className="panel-subtitle" style={{ marginBottom: 0, marginTop: '0.25rem' }}>
+                  {trajectoryScenario === 'SHOCK_E9C'
+                    ? isVi
+                      ? `Mô phỏng cú sốc chuyển sang mô hình chưa hiệu chuẩn ở chu kỳ k=3 (độ sẵn sàng tụt xuống 89.4%): bộ điều khiển C³-OUT tự động nâng θ_${activePolicyCode},k sau độ trễ d=2 chu kỳ và khôi phục mức phục vụ ≥ 95.2% trong vòng 3 chu kỳ rà soát mà vẫn giữ θ_g ∈ [0, 2].`
+                      : `Simulates an uncalibrated model-switch shock at cycle k=3 (availability drops to 89.4%): C³-OUT automatically steps up θ_${activePolicyCode},k after delay d=2 and recovers availability to ≥ 95.2% within 3 review cycles while keeping θ_g bounded in [0, 2].`
+                    : isVi
+                    ? `Theo dõi độ sẵn sàng trượt 4 chu kỳ (Ã_${activePolicyCode},k %) hội tụ về ngưỡng mục tiêu τ_${activePolicyCode[0]} = ${activeTau.toFixed(1)}% với dải chết 0.5% và tham số hiệu chuẩn θ_${activePolicyCode},k = ${activeProfile.theta.toFixed(2)}.`
+                    : `Tracks 4-period rolling availability (Ã_${activePolicyCode},k %) converging to target setpoint τ_${activePolicyCode[0]} = ${activeTau.toFixed(1)}% with 0.5% deadband damping and calibrated multiplier θ_${activePolicyCode},k = ${activeProfile.theta.toFixed(2)}.`}
+                </p>
+              </div>
+
+              <div className="c3-scenario-controls">
+                <button
+                  type="button"
+                  className={`c3-scenario-btn ${trajectoryScenario === 'NORMAL' ? 'active' : ''}`}
+                  onClick={() => setTrajectoryScenario('NORMAL')}
+                >
+                  <ShieldCheck size={13} />
+                  <span>{isVi ? 'Vận hành Chuẩn (k = 1..8)' : 'Normal Closed-Loop (k = 1..8)'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`c3-scenario-btn ${trajectoryScenario === 'SHOCK_E9C' ? 'active shock-mode' : ''}`}
+                  onClick={() => setTrajectoryScenario('SHOCK_E9C')}
+                >
+                  <Zap size={13} />
+                  <span>
+                    {isVi ? 'Kịch bản Sốc Mô hình (E9c @ k=3)' : 'Model-Switch Shock (E9c @ k=3)'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Summary KPI Strip for Trajectory */}
+            <div className="c3-trajectory-kpi-strip">
+              <div className="c3-traj-kpi">
+                <span className="c3-traj-kpi-lbl">
+                  {isVi ? 'Điểm đặt mục tiêu (Setpoint τ_g)' : 'Target Setpoint (τ_g)'}
+                </span>
+                <span className="c3-traj-kpi-val text-teal">{activeTau.toFixed(1)}%</span>
+              </div>
+              <div className="c3-traj-kpi">
+                <span className="c3-traj-kpi-lbl">
+                  {trajectoryScenario === 'SHOCK_E9C'
+                    ? isVi
+                      ? 'Đáy cú sốc tại Chu kỳ k=3'
+                      : 'Shock Trough at Cycle k=3'
+                    : isVi
+                    ? 'Độ sẵn sàng Chu kỳ k=1'
+                    : 'Initial Availability (k=1)'}
+                </span>
+                <span className={`c3-traj-kpi-val ${trajectoryScenario === 'SHOCK_E9C' ? 'text-red' : ''}`}>
+                  {trajectoryData[trajectoryScenario === 'SHOCK_E9C' ? 2 : 0].availability.toFixed(1)}%
+                </span>
+              </div>
+              <div className="c3-traj-kpi">
+                <span className="c3-traj-kpi-lbl">
+                  {isVi ? 'Phục hồi sau 3 chu kỳ (k=6)' : 'Recovery after 3 Cycles (k=6)'}
+                </span>
+                <span className="c3-traj-kpi-val text-emerald">
+                  {trajectoryData[5].availability.toFixed(1)}% (≥ 95.2%)
+                </span>
+              </div>
+              <div className="c3-traj-kpi">
+                <span className="c3-traj-kpi-lbl">
+                  {isVi ? 'Biên độ Hiệu chuẩn θ_{g,k}' : 'Calibrated Multiplier θ_{g,k}'}
+                </span>
+                <span className="c3-traj-kpi-val">
+                  {trajectoryData[0].theta.toFixed(2)} → {trajectoryData[7].theta.toFixed(2)} <small>∈ [0, 2]</small>
+                </span>
+              </div>
+            </div>
+
+            {/* Dual-Axis Recharts ComposedChart */}
+            <div style={{ width: '100%', height: 295, marginTop: '0.5rem' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={trajectoryData} margin={{ top: 12, right: 24, left: 4, bottom: 6 }}>
+                  <defs>
+                    <linearGradient id="availAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#0f766e" stopOpacity={0.18} />
+                      <stop offset="95%" stopColor="#0f766e" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                  <XAxis
+                    dataKey="cycle"
+                    tick={{ fontSize: 11, fill: '#475569', fontFamily: "'IBM Plex Mono', monospace" }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    domain={[86, 100]}
+                    tickFormatter={(v) => `${v}%`}
+                    tick={{ fontSize: 11, fill: '#0f766e', fontFamily: "'IBM Plex Mono', monospace" }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickLine={false}
+                    label={{
+                      value: isVi ? 'Độ sẵn sàng Ã_{g,k} (%)' : 'Rolling Availability Ã_{g,k} (%)',
+                      angle: -90,
+                      position: 'insideLeft',
+                      style: { fontSize: 11, fill: '#0f766e', fontWeight: 600 },
+                    }}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    domain={[0, 2.0]}
+                    tickFormatter={(v) => Number(v).toFixed(2)}
+                    tick={{ fontSize: 11, fill: '#d97706', fontFamily: "'IBM Plex Mono', monospace" }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickLine={false}
+                    label={{
+                      value: isVi ? 'Hệ số C³-OUT θ_{g,k} ∈ [0, 2]' : 'C³-OUT Parameter θ_{g,k} ∈ [0, 2]',
+                      angle: 90,
+                      position: 'insideRight',
+                      style: { fontSize: 11, fill: '#d97706', fontWeight: 600 },
+                    }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      boxShadow: '0 4px 12px rgba(15, 23, 42, 0.08)',
+                    }}
+                    formatter={(value: any, name: any) => {
+                      const num = Number(value);
+                      if (String(name).includes('θ') || String(name).includes('Multiplier')) {
+                        return [num.toFixed(2), name];
+                      }
+                      return [`${num.toFixed(1)}%`, name];
+                    }}
+                    labelFormatter={(label, payload) => {
+                      const p = payload && payload[0]?.payload;
+                      return p ? `${label} — ${p.phase}` : label;
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
+
+                  {/* Target Setpoint Reference Line */}
+                  <ReferenceLine
+                    yAxisId="left"
+                    y={activeTau}
+                    stroke="#0f172a"
+                    strokeDasharray="5 4"
+                    strokeWidth={1.5}
+                    label={{
+                      value: isVi
+                        ? `Mục tiêu τ_${activePolicyCode[0]} = ${activeTau.toFixed(1)}%`
+                        : `Target Setpoint τ_${activePolicyCode[0]} = ${activeTau.toFixed(1)}%`,
+                      position: 'insideTopLeft',
+                      fill: '#0f172a',
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  />
+
+                  {/* Rolling Availability Area + Line */}
+                  <Area
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="availability"
+                    name={
+                      isVi
+                        ? `Độ sẵn sàng trượt 4 chu kỳ (Ã_${activePolicyCode},k %)`
+                        : `4-Period Rolling Availability (Ã_${activePolicyCode},k %)`
+                    }
+                    stroke="#0f766e"
+                    strokeWidth={2.5}
+                    fill="url(#availAreaGrad)"
+                    activeDot={{ r: 5, fill: '#0f766e', stroke: '#ffffff', strokeWidth: 2 }}
+                  />
+
+                  {/* C³-OUT Calibration Parameter Line */}
+                  <Line
+                    yAxisId="right"
+                    type="stepAfter"
+                    dataKey="theta"
+                    name={
+                      isVi
+                        ? `Tham số hiệu chuẩn C³-OUT (θ_${activePolicyCode},k ∈ [0, 2])`
+                        : `C³-OUT Calibration Multiplier (θ_${activePolicyCode},k ∈ [0, 2])`
+                    }
+                    stroke="#d97706"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#d97706', stroke: '#ffffff', strokeWidth: 1.5 }}
+                    activeDot={{ r: 6 }}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
+      {/* TAB 3: SKU CLASSIFICATION & POLICY REGISTRY */}
+      {activeTab === 'registry' && (
+        <div className="log-panel">
             <div className="log-header-bar">
               <div>
                 <h2 className="log-title" style={{ marginBottom: '2px' }}>
-                  SKU Classification Registry
+                  {isVi ? 'Danh Mục Phân Loại SKU & Tham Số Tồn Kho' : 'SKU Classification & Policy Registry'}
                 </h2>
                 <span className="text-xs text-[var(--text-secondary)]">
-                  {isVi ? `Hiển thị ${skuList.length} trên tổng số ${totalSkus} SKUs` : `Showing ${skuList.length} of ${totalSkus} SKUs`}
-                  {selectedSegment !== 'All' && <span> • {isVi ? 'Phân khúc:' : 'Segment:'} <strong>{selectedSegment}</strong></span>}
-                  {selectedCategory !== 'All' && <span> • {isVi ? 'Ngành hàng:' : 'Category:'} <strong>{selectedCategory}</strong></span>}
-                  {selectedAbc !== 'All' && <span> • ABC: <strong>{isVi ? `Nhóm ${selectedAbc}` : `Class ${selectedAbc}`}</strong></span>}
-                  {selectedXyz !== 'All' && <span> • XYZ: <strong>{isVi ? `Nhóm ${selectedXyz}` : `Class ${selectedXyz}`}</strong></span>}
+                  {isVi
+                    ? `Hiển thị ${skuList.length} trên tổng số ${totalSkus.toLocaleString(localeStr)} SKU`
+                    : `Showing ${skuList.length} of ${totalSkus.toLocaleString(localeStr)} SKUs`}
+                  {selectedSegment !== 'All' && (
+                    <span>
+                      {' '}
+                      • {isVi ? 'Phân khúc:' : 'Segment:'} <strong>{selectedSegment}</strong>
+                    </span>
+                  )}
+                  {selectedCategory !== 'All' && (
+                    <span>
+                      {' '}
+                      • {isVi ? 'Ngành hàng:' : 'Category:'} <strong>{selectedCategory}</strong>
+                    </span>
+                  )}
+                  {selectedAbc !== 'All' && (
+                    <span>
+                      {' '}
+                      • ABC: <strong>{isVi ? `Nhóm ${selectedAbc}` : `Class ${selectedAbc}`}</strong>
+                    </span>
+                  )}
+                  {selectedXyz !== 'All' && (
+                    <span>
+                      {' '}
+                      • XYZ: <strong>{isVi ? `Nhóm ${selectedXyz}` : `Class ${selectedXyz}`}</strong>
+                    </span>
+                  )}
                 </span>
               </div>
 
               {hasActiveFilter && (
                 <button
+                  type="button"
                   className="configure-btn text-xs"
                   onClick={handleResetFilters}
-                  style={{ borderRadius: '4px', padding: '0.35rem 0.75rem', color: '#0d9488' }}
+                  style={{ borderRadius: '4px', padding: '0.35rem 0.75rem', color: '#0f766e', borderColor: '#99f6e4' }}
                 >
-                  {isVi ? "Xóa tất cả bộ lọc" : "Clear all filters"} <X size={12} className="inline ml-1" />
+                  {isVi ? 'Xóa bộ lọc (Xem tất cả 9 ô)' : 'Clear filters (View all 9 cells)'}{' '}
+                  <X size={12} className="inline ml-1" />
                 </button>
               )}
             </div>
 
             {/* Filter Dropdowns and Search Bar */}
-            <div className="abc-filter-row" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '1rem' }}>
+            <div
+              className="abc-filter-row"
+              style={{
+                display: 'flex',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+                alignItems: 'flex-end',
+                marginBottom: '1rem',
+              }}
+            >
               <div className="abc-filter-item">
-                <span className="abc-filter-label">{isVi ? "PHÂN KHÚC" : "SEGMENT"}</span>
+                <span className="abc-filter-label">{isVi ? 'PHÂN KHÚC' : 'SEGMENT'}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedSegment}
@@ -497,105 +1565,132 @@ export const AbcXyzAnalysis: React.FC = () => {
                     const val = e.target.value;
                     setSelectedSegment(val);
                     if (val !== 'All') {
+                      setInspectedSegment(val);
                       setSelectedAbc(val[0]);
                       setSelectedXyz(val[1]);
                       api.classification.getRecommendation(val).then(setSelectedRecommendation).catch(() => null);
                     } else {
-                      setSelectedRecommendation(null);
+                      setSelectedAbc('All');
+                      setSelectedXyz('All');
                     }
                   }}
                 >
-                  <option value="All">{isVi ? "Tất cả phân khúc (9 ô)" : "All Segments (9 cells)"}</option>
-                  {['AX', 'AY', 'AZ', 'BX', 'BY', 'BZ', 'CX', 'CY', 'CZ'].map((seg) => (
-                    <option key={seg} value={seg}>{seg}</option>
+                  <option value="All">{isVi ? 'Tất cả phân khúc (9 ô)' : 'All Segments (9 cells)'}</option>
+                  {ALL_SEGMENTS.map((seg) => (
+                    <option key={seg} value={seg}>
+                      {seg} — {isVi ? SEGMENT_C3_PROFILES[seg].labelVi.split('—')[1]?.trim() : SEGMENT_C3_PROFILES[seg].labelEn.split('—')[1]?.trim()}
+                    </option>
                   ))}
                 </select>
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">{isVi ? "NGÀNH HÀNG (CATEGORY)" : "CATEGORY"}</span>
+                <span className="abc-filter-label">{isVi ? 'NGÀNH HÀNG' : 'CATEGORY'}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
                 >
-                  <option value="All">{isVi ? "Tất cả ngành hàng" : "All Categories"}</option>
+                  <option value="All">{isVi ? 'Tất cả ngành hàng' : 'All Categories'}</option>
                   {categories.map((cat) => (
-                    <option key={cat} value={cat}>{cat}</option>
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
                   ))}
                 </select>
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">{isVi ? "NHÓM ABC" : "ABC CLASS"}</span>
+                <span className="abc-filter-label">{isVi ? 'NHÓM ABC' : 'ABC CLASS'}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedAbc}
                   onChange={(e) => {
-                    setSelectedAbc(e.target.value);
-                    if (e.target.value !== 'All' && selectedXyz !== 'All') {
-                      setSelectedSegment(`${e.target.value}${selectedXyz}`);
+                    const nextAbc = e.target.value;
+                    setSelectedAbc(nextAbc);
+                    if (nextAbc !== 'All' && selectedXyz !== 'All') {
+                      const nextSeg = `${nextAbc}${selectedXyz}`;
+                      setSelectedSegment(nextSeg);
+                      setInspectedSegment(nextSeg);
                     } else {
                       setSelectedSegment('All');
                     }
                   }}
                 >
-                  <option value="All">{isVi ? "Tất cả (A, B, C)" : "All (A, B, C)"}</option>
-                  <option value="A">{isVi ? "Nhóm A (Top Doanh thu)" : "Class A (Top Revenue)"}</option>
-                  <option value="B">{isVi ? "Nhóm B (Doanh thu Trung bình)" : "Class B (Mid Revenue)"}</option>
-                  <option value="C">{isVi ? "Nhóm C (Doanh thu Thấp)" : "Class C (Low Revenue)"}</option>
+                  <option value="All">{isVi ? 'Tất cả (A, B, C)' : 'All (A, B, C)'}</option>
+                  <option value="A">{isVi ? 'Nhóm A (Top Doanh thu)' : 'Class A (Top Revenue)'}</option>
+                  <option value="B">{isVi ? 'Nhóm B (Doanh thu Trung bình)' : 'Class B (Mid Revenue)'}</option>
+                  <option value="C">{isVi ? 'Nhóm C (Doanh thu Thấp)' : 'Class C (Low Revenue)'}</option>
                 </select>
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">{isVi ? "NHÓM XYZ" : "XYZ CLASS"}</span>
+                <span className="abc-filter-label">{isVi ? 'NHÓM XYZ' : 'XYZ CLASS'}</span>
                 <select
                   className="abc-filter-select"
                   value={selectedXyz}
                   onChange={(e) => {
-                    setSelectedXyz(e.target.value);
-                    if (selectedAbc !== 'All' && e.target.value !== 'All') {
-                      setSelectedSegment(`${selectedAbc}${e.target.value}`);
+                    const nextXyz = e.target.value;
+                    setSelectedXyz(nextXyz);
+                    if (selectedAbc !== 'All' && nextXyz !== 'All') {
+                      const nextSeg = `${selectedAbc}${nextXyz}`;
+                      setSelectedSegment(nextSeg);
+                      setInspectedSegment(nextSeg);
                     } else {
                       setSelectedSegment('All');
                     }
                   }}
                 >
-                  <option value="All">{isVi ? "Tất cả (X, Y, Z)" : "All (X, Y, Z)"}</option>
-                  <option value="X">{isVi ? "Nhóm X (Nhu cầu ổn định)" : "Class X (Stable Demand)"}</option>
-                  <option value="Y">{isVi ? "Nhóm Y (Nhu cầu biến động vừa)" : "Class Y (Moderate Volatility)"}</option>
-                  <option value="Z">{isVi ? "Nhóm Z (Nhu cầu thất thường)" : "Class Z (High Volatility)"}</option>
+                  <option value="All">{isVi ? 'Tất cả (X, Y, Z)' : 'All (X, Y, Z)'}</option>
+                  <option value="X">{isVi ? 'Nhóm X (Nhu cầu ổn định)' : 'Class X (Stable Demand)'}</option>
+                  <option value="Y">{isVi ? 'Nhóm Y (Biến động vừa)' : 'Class Y (Moderate Volatility)'}</option>
+                  <option value="Z">{isVi ? 'Nhóm Z (Biến động cao)' : 'Class Z (High Volatility)'}</option>
                 </select>
               </div>
 
               <div className="abc-filter-item">
-                <span className="abc-filter-label">{isVi ? "SẮP XẾP THEO" : "SORT BY"}</span>
+                <span className="abc-filter-label">{isVi ? 'SẮP XẾP THEO' : 'SORT BY'}</span>
                 <select
                   className="abc-filter-select"
                   value={`${sortBy}_${sortOrder}`}
                   onChange={(e) => {
-                    const [col, ord] = e.target.value.split('_');
+                    const lastUnderscore = e.target.value.lastIndexOf('_');
+                    const col = e.target.value.slice(0, lastUnderscore);
+                    const ord = e.target.value.slice(lastUnderscore + 1);
                     setSortBy(col);
-                    setSortOrder(ord as any);
+                    setSortOrder(ord as 'asc' | 'desc');
                   }}
                 >
-                  <option value="revenue_desc">{isVi ? "Doanh thu cao nhất" : "Highest Revenue"}</option>
-                  <option value="revenue_asc">{isVi ? "Doanh thu thấp nhất" : "Lowest Revenue"}</option>
-                  <option value="revenue_share_desc">{isVi ? "Tỷ trọng doanh thu (%)" : "Revenue Share (%)"}</option>
-                  <option value="cv_asc">{isVi ? "Độ ổn định cao (CV thấp)" : "Lowest Volatility (Low CV)"}</option>
-                  <option value="cv_desc">{isVi ? "Độ biến động cao (CV cao)" : "Highest Volatility (High CV)"}</option>
-                  <option value="mean_demand_desc">{isVi ? "Nhu cầu bình quân cao" : "Highest Mean Demand"}</option>
-                  <option value="item_id_asc">{isVi ? "Mã SKU (A-Z)" : "SKU Code (A-Z)"}</option>
+                  <option value="revenue_desc">{isVi ? 'Doanh thu cao nhất' : 'Highest Revenue'}</option>
+                  <option value="revenue_asc">{isVi ? 'Doanh thu thấp nhất' : 'Lowest Revenue'}</option>
+                  <option value="revenue_share_desc">{isVi ? 'Tỷ trọng doanh thu (%)' : 'Revenue Share (%)'}</option>
+                  <option value="cv_asc">{isVi ? 'Độ ổn định cao (CV thấp)' : 'Lowest Volatility (Low CV)'}</option>
+                  <option value="cv_desc">{isVi ? 'Độ biến động cao (CV cao)' : 'Highest Volatility (High CV)'}</option>
+                  <option value="mean_demand_desc">{isVi ? 'Nhu cầu bình quân cao' : 'Highest Mean Demand'}</option>
+                  <option value="item_id_asc">{isVi ? 'Mã SKU (A–Z)' : 'SKU Code (A–Z)'}</option>
                 </select>
               </div>
 
               <div className="abc-filter-item" style={{ flex: 1, minWidth: '220px' }}>
-                <span className="abc-filter-label">{isVi ? "TÌM KIẾM SKU / SẢN PHẨM (TỨC THÌ)" : "SEARCH SKU / PRODUCT (INSTANT)"}</span>
+                <span className="abc-filter-label">
+                  {isVi ? 'TÌM KIẾM SKU / SẢN PHẨM' : 'SEARCH SKU / PRODUCT'}
+                </span>
                 <div style={{ position: 'relative' }}>
-                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <Search
+                    size={14}
+                    style={{
+                      position: 'absolute',
+                      left: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      color: '#94a3b8',
+                    }}
+                  />
                   <input
                     type="text"
-                    placeholder={isVi ? "Tìm theo mã SKU hoặc tên sản phẩm..." : "Search by SKU code or product name..."}
+                    placeholder={
+                      isVi ? 'Tìm theo mã SKU hoặc tên sản phẩm...' : 'Search by SKU code or product name...'
+                    }
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="abc-filter-input"
@@ -603,8 +1698,18 @@ export const AbcXyzAnalysis: React.FC = () => {
                   />
                   {searchTerm && (
                     <button
+                      type="button"
                       onClick={() => setSearchTerm('')}
-                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: '#94a3b8',
+                      }}
                     >
                       <X size={13} />
                     </button>
@@ -614,66 +1719,147 @@ export const AbcXyzAnalysis: React.FC = () => {
             </div>
 
             {/* SKU Table */}
-            <div className="log-table">
-              <div className="log-header-row">
-                <div className="log-col-header" style={{ width: '16%' }}>SKU ID</div>
-                <div className="log-col-header" style={{ width: '28%' }}>{isVi ? "TÊN SẢN PHẨM" : "PRODUCT NAME"}</div>
-                <div className="log-col-header" style={{ width: '10%' }}>{isVi ? "NHÓM ABC" : "CLASS ABC"}</div>
-                <div className="log-col-header" style={{ width: '10%' }}>{isVi ? "NHÓM XYZ" : "CLASS XYZ"}</div>
-                <div className="log-col-header" style={{ width: '12%' }}>{isVi ? "PHÂN KHÚC" : "SEGMENT"}</div>
-                <div className="log-col-header" style={{ width: '12%' }}>DOANH THU</div>
-                <div className="log-col-header" style={{ width: '12%' }}>{isVi ? "HỆ SỐ CV" : "DEMAND CV"}</div>
-              </div>
+            <div className="log-table-container">
+              <div className="log-table">
+                <div className="log-header-row">
+                  <div className="log-col-header" style={{ width: '16%' }}>
+                    {isVi ? 'MÃ SKU' : 'SKU ID'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '24%' }}>
+                    {isVi ? 'TÊN SẢN PHẨM' : 'PRODUCT NAME'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '10%' }}>
+                    {isVi ? 'NHÓM ABC' : 'CLASS ABC'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '10%' }}>
+                    {isVi ? 'NHÓM XYZ' : 'CLASS XYZ'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '10%' }}>
+                    {isVi ? 'PHÂN KHÚC' : 'SEGMENT'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '10%' }}>
+                    {isVi ? 'MỤC TIÊU τ / θ_g' : 'TARGET τ / θ_g'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '10%' }}>
+                    {isVi ? 'DOANH THU' : 'REVENUE'}
+                  </div>
+                  <div className="log-col-header" style={{ width: '10%' }}>
+                    {isVi ? 'HỆ SỐ CV' : 'DEMAND CV'}
+                  </div>
+                </div>
 
-              <div>
-                {isLoadingSkus ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
-                    <RefreshCw size={16} className="animate-spin inline mr-2 text-teal-600" />
-                    {isVi ? "Đang lọc danh sách SKU..." : "Filtering SKU list..."}
-                  </div>
-                ) : skuList.length === 0 ? (
-                  <div style={{ padding: '2.5rem', textAlign: 'center', color: '#94a3b8' }}>
-                    {hasActiveFilter ? (isVi ? 'Không có SKU nào khớp với bộ lọc đã chọn.' : 'No SKUs matched the selected filter criteria.') : (isVi ? 'Chưa có bản ghi phân loại SKU. Nhấp "Recompute" ở trên để khởi chạy.' : 'No SKU classification records found. Click "Recompute Matrix" to evaluate.')}
-                  </div>
-                ) : (
-                  skuList.map((row: any, idx: number) => (
-                    <div className="log-row" key={row.id || row.item_id || idx}>
-                      <div className="fw-700" style={{ width: '16%', fontFamily: 'monospace', color: '#0f172a' }}>
-                        {row.item_id}
-                      </div>
-                      <div className="text-secondary" style={{ width: '28%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {row.product_name || row.item_id}
-                      </div>
-                      <div style={{ width: '10%' }}>
-                        <span className={row.abc === 'A' ? 'text-class-a font-bold' : row.abc === 'B' ? 'text-class-b font-bold' : 'text-class-c'}>
-                          Class {row.abc}
-                        </span>
-                      </div>
-                      <div style={{ width: '10%' }}>
-                        <span className={row.xyz === 'X' ? 'text-class-a font-bold' : row.xyz === 'Y' ? 'text-class-b font-bold' : 'text-class-c'}>
-                          Class {row.xyz}
-                        </span>
-                      </div>
-                      <div style={{ width: '12%' }}>
-                        <span
-                          className={`segment-tag ${
-                            row.segment?.startsWith('A') ? 'tag-a' :
-                            row.segment?.startsWith('B') ? 'tag-b' :
-                            'tag-c'
-                          }`}
-                        >
-                          {row.segment}
-                        </span>
-                      </div>
-                      <div style={{ width: '12%', fontWeight: 600, color: '#0f172a' }}>
-                        ${typeof row.revenue === 'number' ? row.revenue.toLocaleString() : row.revenue}
-                      </div>
-                      <div style={{ width: '12%', color: '#64748b', fontFamily: 'monospace' }}>
-                        {typeof row.cv === 'number' ? row.cv.toFixed(2) : row.cv}
-                      </div>
+                <div>
+                  {isLoadingSkus ? (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                      <RefreshCw size={16} className="animate-spin inline mr-2 text-teal-600" />
+                      {isVi ? 'Đang lọc danh sách SKU...' : 'Filtering SKU list...'}
                     </div>
-                  ))
-                )}
+                  ) : skuList.length === 0 ? (
+                    <div style={{ padding: '2.5rem', textAlign: 'center', color: '#94a3b8' }}>
+                      {hasActiveFilter
+                        ? isVi
+                          ? 'Không có SKU nào khớp với bộ lọc đã chọn.'
+                          : 'No SKUs matched the selected filter criteria.'
+                        : isVi
+                        ? 'Chưa có bản ghi phân loại SKU. Nhấp "Tính lại Ma trận" ở trên để khởi chạy.'
+                        : 'No SKU classification records found. Click "Recompute Matrix" to evaluate.'}
+                    </div>
+                  ) : (
+                    skuList.map((row: any, idx: number) => {
+                      const segCode = row.segment || `${row.abc || 'A'}${row.xyz || 'X'}`;
+                      const segProf = SEGMENT_C3_PROFILES[segCode] || SEGMENT_C3_PROFILES.AX;
+                      const segTau = getSegmentTau(segCode);
+
+                      return (
+                        <div className="log-row" key={row.id || row.item_id || idx}>
+                          <div
+                            className="fw-700"
+                            style={{ width: '16%', fontFamily: "'IBM Plex Mono', monospace", color: '#0f172a' }}
+                          >
+                            {row.item_id}
+                          </div>
+                          <div
+                            className="text-secondary"
+                            style={{
+                              width: '24%',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              paddingRight: '0.5rem',
+                            }}
+                          >
+                            {row.product_name || row.item_id}
+                          </div>
+                          <div style={{ width: '10%' }}>
+                            <span
+                              className={
+                                row.abc === 'A'
+                                  ? 'text-class-a font-bold'
+                                  : row.abc === 'B'
+                                  ? 'text-class-b font-bold'
+                                  : 'text-class-c'
+                              }
+                            >
+                              {isVi ? `Nhóm ${row.abc}` : `Class ${row.abc}`}
+                            </span>
+                          </div>
+                          <div style={{ width: '10%' }}>
+                            <span
+                              className={
+                                row.xyz === 'X'
+                                  ? 'text-class-a font-bold'
+                                  : row.xyz === 'Y'
+                                  ? 'text-class-b font-bold'
+                                  : 'text-class-c'
+                              }
+                            >
+                              {isVi ? `Nhóm ${row.xyz}` : `Class ${row.xyz}`}
+                            </span>
+                          </div>
+                          <div style={{ width: '10%' }}>
+                            <span
+                              className={`segment-tag ${
+                                segCode.startsWith('A') ? 'tag-a' : segCode.startsWith('B') ? 'tag-b' : 'tag-c'
+                              }`}
+                            >
+                              {segCode}
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              width: '10%',
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: '0.72rem',
+                              color: '#0f766e',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {segTau.toFixed(0)}% / θ={segProf.theta.toFixed(2)}
+                          </div>
+                          <div
+                            style={{
+                              width: '10%',
+                              fontWeight: 600,
+                              color: '#0f172a',
+                              fontFamily: "'IBM Plex Mono', monospace",
+                            }}
+                          >
+                            ${typeof row.revenue === 'number' ? row.revenue.toLocaleString(localeStr) : row.revenue}
+                          </div>
+                          <div
+                            style={{
+                              width: '10%',
+                              color: '#64748b',
+                              fontFamily: "'IBM Plex Mono', monospace",
+                            }}
+                          >
+                            {typeof row.cv === 'number' ? row.cv.toFixed(2) : row.cv}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </div>
 
@@ -691,186 +1877,282 @@ export const AbcXyzAnalysis: React.FC = () => {
               />
             )}
           </div>
+        )}
 
           {/* Threshold Configuration Modal */}
-          {isConfigOpen && createPortal(
-            <div className="modal-overlay" onClick={() => !isSavingThresholds && setIsConfigOpen(false)}>
-              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px', borderRadius: '6px' }}>
-                <div className="modal-header">
-                  <h3 className="modal-title" style={{ fontSize: '1.125rem', margin: 0 }}>Configure ABC/XYZ Thresholds</h3>
-                  <button
-                    className="modal-close"
-                    onClick={() => !isSavingThresholds && setIsConfigOpen(false)}
-                    disabled={isSavingThresholds}
-                    style={{ borderRadius: '4px' }}
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-
-                {!isAdmin && (
-                  <div className="p-3 my-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded" style={{ borderRadius: '4px' }}>
-                    {isVi ? 'Chế độ chỉ xem: Chỉ tài khoản Admin mới có quyền cập nhật ngưỡng phân loại hệ thống.' : 'View-only mode: Only Administrator accounts have permission to update system classification thresholds.'}
-                  </div>
-                )}
-
-                {configMessage && (
-                  <div
-                    style={{
-                      marginBottom: '1rem',
-                      padding: '0.625rem 0.75rem',
-                      borderRadius: '4px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      fontSize: '12px',
-                      backgroundColor: configMessage.isError ? '#fef2f2' : '#ecfdf5',
-                      color: configMessage.isError ? '#b91c1c' : '#047857',
-                      border: `1px solid ${configMessage.isError ? '#fecaca' : '#a7f3d0'}`,
-                    }}
-                  >
-                    {configMessage.isError ? <AlertCircle size={15} style={{ flexShrink: 0 }} /> : <Check size={15} style={{ flexShrink: 0 }} />}
-                    <span>{configMessage.text}</span>
-                  </div>
-                )}
-
-                {/* Multi-stage Progress Feedback */}
-                {isSavingThresholds && (
-                  <div style={{ marginBottom: '1.25rem', padding: '0.75rem', borderRadius: '4px', backgroundColor: '#f0fdfa', border: '1px solid #99f6e4', fontSize: '12px', color: '#0f766e' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, marginBottom: '6px' }}>
-                      <RefreshCw size={13} className="animate-spin" />
-                      <span>{isVi ? 'Tiến trình cập nhật ngưỡng & phân loại lại:' : 'Threshold update & reclassification progress:'}</span>
+          {isConfigOpen &&
+            createPortal(
+              <div className="config-modal-overlay" onClick={() => !isSavingThresholds && setIsConfigOpen(false)}>
+                <div className="config-modal" onClick={(e) => e.stopPropagation()}>
+                  <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <h3 className="modal-title" style={{ fontSize: '1.125rem', margin: 0 }}>
+                        {isVi ? 'Cấu Hình Ngưỡng Phân Loại ABC/XYZ' : 'Configure ABC/XYZ Classification Thresholds'}
+                      </h3>
+                      <p className="modal-subtitle" style={{ margin: '0.2rem 0 0 0' }}>
+                        {isVi
+                          ? 'Điều chỉnh tỷ trọng doanh thu Pareto (A/B/C) và hệ số biến thiên cầu (X/Y/Z).'
+                          : 'Adjust cumulative revenue Pareto cutoffs (A/B/C) and demand CV boundaries (X/Y/Z).'}
+                      </p>
                     </div>
-                    <div style={{ paddingLeft: '1rem', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                      <span style={{ color: saveStage >= 1 ? '#047857' : '#94a3b8', fontWeight: saveStage === 1 ? 600 : 400 }}>
-                        {saveStage > 1 ? '✓' : '●'} {isVi ? 'Giai đoạn 1: Xác thực tham số Cutoff A/B và CV X/Y' : 'Stage 1: Validating Cutoff A/B and CV X/Y parameters'}
-                      </span>
-                      <span style={{ color: saveStage >= 2 ? '#047857' : '#94a3b8', fontWeight: saveStage === 2 ? 600 : 400 }}>
-                        {saveStage > 2 ? '✓' : '●'} {isVi ? 'Giai đoạn 2: BE đang phân loại Pareto doanh thu & CV toàn bộ SKU' : 'Stage 2: Engine evaluating Pareto revenue & demand CV for all SKUs'}
-                      </span>
-                      <span style={{ color: saveStage >= 3 ? '#047857' : '#94a3b8', fontWeight: saveStage === 3 ? 600 : 400 }}>
-                        {saveStage === 3 ? '●' : '○'} {isVi ? 'Giai đoạn 3: Đồng bộ ma trận 3x3 và danh mục SKU' : 'Stage 3: Syncing 3x3 matrix and SKU classification catalog'}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                <form onSubmit={handleSaveThresholds}>
-                  <div className="modal-body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                    <h4 className="threshold-section-title" style={{ marginTop: 0 }}>{isVi ? "Ngưỡng Pareto Doanh Thu (ABC Cutoffs)" : "Cumulative Revenue Pareto Thresholds (ABC Cutoffs)"}</h4>
-                    <div className="mb-4">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        {isVi ? "Ngưỡng tích lũy nhóm A (Class A Cutoff %):" : "Cumulative Class A Cutoff (%):"}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="1"
-                        max="99"
-                        required
-                        disabled={!isAdmin || isSavingThresholds}
-                        className="settings-input w-full"
-                        style={{ borderRadius: '4px' }}
-                        value={formThresholds.a_cutoff}
-                        onChange={(e) => setFormThresholds({ ...formThresholds, a_cutoff: parseFloat(e.target.value) || 0 })}
-                      />
-                      <span className="text-[11px] text-slate-500 mt-1 block">
-                        {isVi ? "Chiếm tỷ trọng doanh thu cao nhất (Mặc định: 80%)" : "Generates top revenue volume (Default: 80%)"}
-                      </span>
-                    </div>
-
-                    <div className="mb-4">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        {isVi ? "Ngưỡng tích lũy nhóm B (Class B Cutoff %):" : "Cumulative Class B Cutoff (%):"}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="1"
-                        max="99.9"
-                        required
-                        disabled={!isAdmin || isSavingThresholds}
-                        className="settings-input w-full"
-                        style={{ borderRadius: '4px' }}
-                        value={formThresholds.b_cutoff}
-                        onChange={(e) => setFormThresholds({ ...formThresholds, b_cutoff: parseFloat(e.target.value) || 0 })}
-                      />
-                      <span className="text-[11px] text-slate-500 mt-1 block">
-                        {isVi ? "Tầng doanh thu tiếp theo (Mặc định: 95%). Phần còn lại đến 100% là nhóm C." : "Next revenue tier (Default: 95%). Remaining up to 100% belongs to Class C."}
-                      </span>
-                    </div>
-
-                    <h4 className="threshold-section-title mt-6">{isVi ? "Ngưỡng Biến Động Nhu Cầu (XYZ CV Cutoffs)" : "Demand Volatility Thresholds (XYZ CV Cutoffs)"}</h4>
-                    <div className="mb-4">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        {isVi ? "Ngưỡng hệ số biến động nhóm X (Max CV):" : "Class X Maximum CoV Threshold:"}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.05"
-                        min="0.01"
-                        max="5"
-                        required
-                        disabled={!isAdmin || isSavingThresholds}
-                        className="settings-input w-full"
-                        style={{ borderRadius: '4px' }}
-                        value={formThresholds.cv_x}
-                        onChange={(e) => setFormThresholds({ ...formThresholds, cv_x: parseFloat(e.target.value) || 0 })}
-                      />
-                      <span className="text-[11px] text-slate-500 mt-1 block">
-                        {isVi ? "Nhu cầu ổn định, dễ dự báo: CV ≤ ngưỡng này (Mặc định: 0.5)" : "Stable, predictable demand: CoV ≤ threshold (Default: 0.5)"}
-                      </span>
-                    </div>
-
-                    <div className="mb-4">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        {isVi ? "Ngưỡng hệ số biến động nhóm Y (Max CV):" : "Class Y Maximum CoV Threshold:"}
-                      </label>
-                      <input
-                        type="number"
-                        step="0.05"
-                        min="0.01"
-                        max="10"
-                        required
-                        disabled={!isAdmin || isSavingThresholds}
-                        className="settings-input w-full"
-                        style={{ borderRadius: '4px' }}
-                        value={formThresholds.cv_y}
-                        onChange={(e) => setFormThresholds({ ...formThresholds, cv_y: parseFloat(e.target.value) || 0 })}
-                      />
-                      <span className="text-[11px] text-slate-500 mt-1 block">
-                        {isVi ? "Nhu cầu biến động vừa: cv_x < CV ≤ cv_y (Mặc định: 1.0). Lớn hơn là nhóm Z." : "Moderate variability: cv_x < CoV ≤ cv_y (Default: 1.0). Greater is Class Z."}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
                     <button
                       type="button"
                       className="reset-btn"
-                      onClick={() => setIsConfigOpen(false)}
+                      onClick={() => !isSavingThresholds && setIsConfigOpen(false)}
                       disabled={isSavingThresholds}
-                      style={{ borderRadius: '4px', padding: '0.5rem 1rem' }}
+                      style={{ padding: '0.35rem' }}
                     >
-                      {isVi ? "Đóng" : "Close"}
+                      <X size={16} />
                     </button>
-                    {isAdmin && (
-                      <button
-                        type="submit"
-                        disabled={isSavingThresholds}
-                        className="apply-btn"
-                        style={{ borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px', padding: '0.5rem 1.25rem' }}
-                      >
-                        {isSavingThresholds && <RefreshCw size={13} className="animate-spin inline" />}
-                        <span>{isSavingThresholds ? (isVi ? 'Đang lưu & tính toán...' : 'Saving & Recomputing...') : (isVi ? 'Lưu & Phân loại lại' : 'Save & Reclassify')}</span>
-                      </button>
-                    )}
                   </div>
-                </form>
-              </div>
-            </div>,
-            document.body
-          )}
+
+                  <form onSubmit={handleSaveThresholds}>
+                    <div className="modal-body" style={{ maxHeight: '62vh', overflowY: 'auto' }}>
+                      {!isAdmin && (
+                        <div
+                          className="p-3 mb-3 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded"
+                          style={{ borderRadius: '4px' }}
+                        >
+                          {isVi
+                            ? 'Chế độ chỉ xem: Chỉ tài khoản Quản trị viên (Admin) mới có quyền cập nhật ngưỡng phân loại hệ thống.'
+                            : 'View-only mode: Only Administrator accounts have permission to update system classification thresholds.'}
+                        </div>
+                      )}
+
+                      {configMessage && (
+                        <div
+                          style={{
+                            marginBottom: '1rem',
+                            padding: '0.625rem 0.75rem',
+                            borderRadius: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            fontSize: '12px',
+                            backgroundColor: configMessage.isError ? '#fef2f2' : '#ecfdf5',
+                            color: configMessage.isError ? '#b91c1c' : '#047857',
+                            border: `1px solid ${configMessage.isError ? '#fecaca' : '#a7f3d0'}`,
+                          }}
+                        >
+                          {configMessage.isError ? (
+                            <AlertCircle size={15} style={{ flexShrink: 0 }} />
+                          ) : (
+                            <Check size={15} style={{ flexShrink: 0 }} />
+                          )}
+                          <span>{configMessage.text}</span>
+                        </div>
+                      )}
+
+                      {/* Multi-stage Progress Feedback */}
+                      {isSavingThresholds && (
+                        <div
+                          style={{
+                            marginBottom: '1.25rem',
+                            padding: '0.75rem',
+                            borderRadius: '4px',
+                            backgroundColor: '#f0fdfa',
+                            border: '1px solid #99f6e4',
+                            fontSize: '12px',
+                            color: '#0f766e',
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontWeight: 600,
+                              marginBottom: '6px',
+                            }}
+                          >
+                            <RefreshCw size={13} className="animate-spin" />
+                            <span>
+                              {isVi
+                                ? 'Tiến trình cập nhật ngưỡng & phân loại lại:'
+                                : 'Threshold update & reclassification progress:'}
+                            </span>
+                          </div>
+                          <div style={{ paddingLeft: '1rem', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <span
+                              style={{
+                                color: saveStage >= 1 ? '#047857' : '#94a3b8',
+                                fontWeight: saveStage === 1 ? 600 : 400,
+                              }}
+                            >
+                              {saveStage > 1 ? '✓' : '●'}{' '}
+                              {isVi
+                                ? 'Giai đoạn 1: Xác thực tham số Cutoff A/B và CV X/Y'
+                                : 'Stage 1: Validating Cutoff A/B and CV X/Y parameters'}
+                            </span>
+                            <span
+                              style={{
+                                color: saveStage >= 2 ? '#047857' : '#94a3b8',
+                                fontWeight: saveStage === 2 ? 600 : 400,
+                              }}
+                            >
+                              {saveStage > 2 ? '✓' : '●'}{' '}
+                              {isVi
+                                ? 'Giai đoạn 2: Động cơ đang phân loại Pareto doanh thu & CV toàn bộ SKU'
+                                : 'Stage 2: Engine evaluating Pareto revenue & demand CV for all SKUs'}
+                            </span>
+                            <span
+                              style={{
+                                color: saveStage >= 3 ? '#047857' : '#94a3b8',
+                                fontWeight: saveStage === 3 ? 600 : 400,
+                              }}
+                            >
+                              {saveStage === 3 ? '●' : '○'}{' '}
+                              {isVi
+                                ? 'Giai đoạn 3: Đồng bộ ma trận 3x3 và danh mục SKU'
+                                : 'Stage 3: Syncing 3x3 matrix and SKU classification catalog'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <h4 className="threshold-section-title" style={{ marginTop: 0 }}>
+                        {isVi
+                          ? 'Ngưỡng Pareto Doanh Thu Tích Lũy (ABC Cutoffs)'
+                          : 'Cumulative Revenue Pareto Thresholds (ABC Cutoffs)'}
+                      </h4>
+                      <div className="mb-4">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isVi ? 'Ngưỡng tích lũy nhóm A (Class A Cutoff %):' : 'Cumulative Class A Cutoff (%):'}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="1"
+                          max="99"
+                          required
+                          disabled={!isAdmin || isSavingThresholds}
+                          className="abc-filter-input w-full"
+                          value={formThresholds.a_cutoff}
+                          onChange={(e) =>
+                            setFormThresholds({ ...formThresholds, a_cutoff: parseFloat(e.target.value) || 0 })
+                          }
+                        />
+                        <span className="text-[11px] text-slate-500 mt-1 block">
+                          {isVi
+                            ? 'Chiếm tỷ trọng doanh thu cao nhất (Mặc định: 80%)'
+                            : 'Generates top revenue volume (Default: 80%)'}
+                        </span>
+                      </div>
+
+                      <div className="mb-4">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isVi ? 'Ngưỡng tích lũy nhóm B (Class B Cutoff %):' : 'Cumulative Class B Cutoff (%):'}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="1"
+                          max="99.9"
+                          required
+                          disabled={!isAdmin || isSavingThresholds}
+                          className="abc-filter-input w-full"
+                          value={formThresholds.b_cutoff}
+                          onChange={(e) =>
+                            setFormThresholds({ ...formThresholds, b_cutoff: parseFloat(e.target.value) || 0 })
+                          }
+                        />
+                        <span className="text-[11px] text-slate-500 mt-1 block">
+                          {isVi
+                            ? 'Tầng doanh thu tiếp theo (Mặc định: 95%). Phần còn lại đến 100% thuộc nhóm C.'
+                            : 'Next revenue tier (Default: 95%). Remaining up to 100% belongs to Class C.'}
+                        </span>
+                      </div>
+
+                      <h4 className="threshold-section-title mt-6">
+                        {isVi
+                          ? 'Ngưỡng Biến Thiên Nhu Cầu (XYZ CV Cutoffs)'
+                          : 'Demand Volatility Thresholds (XYZ CV Cutoffs)'}
+                      </h4>
+                      <div className="mb-4">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isVi ? 'Ngưỡng hệ số biến thiên nhóm X (Max CV):' : 'Class X Maximum CoV Threshold:'}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0.01"
+                          max="5"
+                          required
+                          disabled={!isAdmin || isSavingThresholds}
+                          className="abc-filter-input w-full"
+                          value={formThresholds.cv_x}
+                          onChange={(e) =>
+                            setFormThresholds({ ...formThresholds, cv_x: parseFloat(e.target.value) || 0 })
+                          }
+                        />
+                        <span className="text-[11px] text-slate-500 mt-1 block">
+                          {isVi
+                            ? 'Nhu cầu ổn định, dễ dự báo: CV ≤ ngưỡng này (Mặc định: 0.5)'
+                            : 'Stable, predictable demand: CoV ≤ threshold (Default: 0.5)'}
+                        </span>
+                      </div>
+
+                      <div className="mb-2">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isVi ? 'Ngưỡng hệ số biến thiên nhóm Y (Max CV):' : 'Class Y Maximum CoV Threshold:'}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0.01"
+                          max="10"
+                          required
+                          disabled={!isAdmin || isSavingThresholds}
+                          className="abc-filter-input w-full"
+                          value={formThresholds.cv_y}
+                          onChange={(e) =>
+                            setFormThresholds({ ...formThresholds, cv_y: parseFloat(e.target.value) || 0 })
+                          }
+                        />
+                        <span className="text-[11px] text-slate-500 mt-1 block">
+                          {isVi
+                            ? 'Biến động vừa: cv_x < CV ≤ cv_y (Mặc định: 1.0). Lớn hơn thuộc nhóm Z.'
+                            : 'Moderate variability: cv_x < CoV ≤ cv_y (Default: 1.0). Greater belongs to Class Z.'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="modal-footer">
+                      <div className="modal-actions">
+                        <button
+                          type="button"
+                          className="reset-btn"
+                          onClick={() => setIsConfigOpen(false)}
+                          disabled={isSavingThresholds}
+                        >
+                          {isVi ? 'Đóng' : 'Close'}
+                        </button>
+                        {isAdmin && (
+                          <button
+                            type="submit"
+                            disabled={isSavingThresholds}
+                            className="apply-btn"
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                          >
+                            {isSavingThresholds && <RefreshCw size={13} className="animate-spin inline" />}
+                            <span>
+                              {isSavingThresholds
+                                ? isVi
+                                  ? 'Đang lưu & tính toán...'
+                                  : 'Saving & Recomputing...'
+                                : isVi
+                                ? 'Lưu & Phân loại lại'
+                                : 'Save & Reclassify'}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </form>
+                </div>
+              </div>,
+              document.body
+            )}
 
           {/* Floating Toast Notification */}
           {notification && (
@@ -880,7 +2162,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                 bottom: '24px',
                 right: '24px',
                 zIndex: 9999,
-                backgroundColor: notification.type === 'error' ? '#ef4444' : '#0d9488',
+                backgroundColor: notification.type === 'error' ? '#dc2626' : '#0f766e',
                 color: '#ffffff',
                 padding: '12px 20px',
                 borderRadius: '6px',
@@ -890,7 +2172,6 @@ export const AbcXyzAnalysis: React.FC = () => {
                 gap: '10px',
                 fontSize: '13px',
                 fontWeight: 500,
-                animation: 'fadeIn 0.2s ease-out',
               }}
             >
               {notification.type === 'error' ? <AlertCircle size={18} /> : <Check size={18} />}
