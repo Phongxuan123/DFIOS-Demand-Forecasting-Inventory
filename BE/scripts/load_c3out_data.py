@@ -21,13 +21,8 @@ if BE_DIR not in sys.path:
 
 from app.core.database import engine
 
-C3_CLASS_FILE = os.path.expanduser(r"~\Downloads\RESULT_FULL\c3ok_artifacts\c3ok_sku_class.csv")
-TIER2_INPUT_FILE = os.path.expanduser(r"~\Downloads\Result OK\Result OK\results\dfios_artifacts\tier2_input.parquet")
-
-if not os.path.exists(C3_CLASS_FILE):
-    C3_CLASS_FILE = os.path.join(SCRIPT_DIR, "c3ok_sku_class.csv")
-if not os.path.exists(TIER2_INPUT_FILE):
-    TIER2_INPUT_FILE = os.path.join(SCRIPT_DIR, "tier2_input.parquet")
+C3_CLASS_FILE = os.path.join(SCRIPT_DIR, "c3ok_sku_class.csv")
+TIER2_INPUT_FILE = os.path.join(SCRIPT_DIR, "tier2_input.parquet")
 
 STORE_ID = "CA_1"
 LEAD_TIME = 7
@@ -53,6 +48,15 @@ def main():
     print("=" * 60)
     print("DFIOS: Synchronizing C3-OUT inventory data (Report 4 & 5)")
     print("=" * 60)
+
+    with engine.connect() as conn:
+        existing_classes = conn.execute(text("SELECT COUNT(*) FROM sku_classifications")).scalar()
+        existing_params = conn.execute(text("SELECT COUNT(*) FROM inventory_params WHERE store_id = :s"), {"s": STORE_ID}).scalar()
+
+    if existing_classes > 0 and existing_params > 0:
+        print(f"Data already synchronized on database ({existing_classes} SKUs classified). Nothing to do.")
+        print("=" * 60)
+        return
 
     if not os.path.exists(C3_CLASS_FILE):
         print(f"ERROR: File not found: {C3_CLASS_FILE}")
