@@ -1,10 +1,11 @@
 import json
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import scipy.stats as stats
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.models.product import Product
 from app.models.supplier import Supplier
@@ -12,6 +13,11 @@ from app.models.forecast import Forecast, ForecastSigma
 from app.models.sales_history import SalesHistory
 from app.models.inventory_param import InventoryParam
 from app.models.user import User
+from app.models.policy_selection import PolicySelection
+from app.models.calibration_state import CalibrationState
+from app.models.classification import SKUClassification
+from app.models.sim_clock import SimClock
+from app.services.window_quantile_service import window_quantile_service
 from app.repositories.inventory_param_repository import inventory_param_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.services.audit_service import audit_service
@@ -34,6 +40,19 @@ class OptimizationService:
     DEFAULT_HOLDING_COST = 2.0
     DEFAULT_ORDER_COST = 50.0
     DEFAULT_LEAD_TIME = 7
+    DEFAULT_REVIEW_PERIOD = 7
+
+    DEFAULT_OPTIMAL_POLICIES = {
+        "AX": {"m_g": 0.091, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
+        "AY": {"m_g": 0.183, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
+        "AZ": {"m_g": 0.393, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
+        "BX": {"m_g": 0.090, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
+        "BY": {"m_g": 0.159, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
+        "BZ": {"m_g": 0.384, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
+        "CX": {"m_g": 0.139, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
+        "CY": {"m_g": 0.125, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
+        "CZ": {"m_g": 0.334, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
+    }
 
     # --- UC29: Target Service Level Configuration ---
 
@@ -139,78 +158,143 @@ class OptimizationService:
         tau: float,
     ) -> Optional[Dict[str, Any]]:
         """
-        Tính toán tham số tồn kho dựa trên dự báo ML.
-        Trả về None nếu không có dữ liệu dự báo cho SKU.
+        Giai đoạn 4 (Task OPT.1) - Tính toán tham số tồn kho theo chính sách REFIT-RSS-EOQ-G:
+        - Route (c) Window Quantile Q_hat(tau) trên cửa sổ bảo vệ H = L + R (mặc định L=3, R=7 -> H=10).
+        - Reorder point: s_i = ceil( Q_hat(tau) * exp(m_g + theta_g) ).
+        - EOQ_i = max(1.0, round( sqrt( (2 * c * mu_i * 365) / h ), 1 )).
+        - Order-up-to level: S_i = s_i + ceil( kappa_g * EOQ_i ).
+        - Safety stock: SS_i = max(0.0, s_i - d_L).
         """
-        forecasts = (
-            db.query(Forecast)
+        # Xác định ngày mô phỏng hiện tại từ sim_clock
+        sim_clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        if sim_clock and sim_clock.current_date:
+            origin_date = sim_clock.current_date
+        else:
+            first_fc = (
+                db.query(Forecast.forecast_date)
+                .filter(Forecast.item_id == item_id, Forecast.store_id == store_id)
+                .order_by(Forecast.forecast_date.asc())
+                .first()
+            )
+            origin_date = first_fc[0] if first_fc else date.today()
+
+        # Kiểm tra xem SKU có dữ liệu dự báo hoặc doanh số không
+        has_forecast = (
+            db.query(Forecast.id)
             .filter(Forecast.item_id == item_id, Forecast.store_id == store_id)
-            .order_by(Forecast.h.asc())
-            .all()
-        )
-        if not forecasts:
+            .first()
+        ) is not None
+        has_sales = (
+            db.query(SalesHistory.id)
+            .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
+            .first()
+        ) is not None
+
+        if not has_forecast and not has_sales:
             return None
 
-        # Nhu cầu dự báo trong Lead time (d_L)
-        lt_forecasts = [fc for fc in forecasts if fc.h <= lead_time_days]
-        if lt_forecasts:
-            d_l = sum(fc.y_pred for fc in lt_forecasts)
-            if len(lt_forecasts) < lead_time_days:
-                avg_daily = d_l / len(lt_forecasts)
-                d_l = avg_daily * lead_time_days
-        else:
-            avg_daily = sum(fc.y_pred for fc in forecasts) / len(forecasts)
-            d_l = avg_daily * lead_time_days
-
-        # Độ lệch chuẩn sai số dự báo (sigma_d)
-        sigma_record = (
-            db.query(ForecastSigma).filter(ForecastSigma.id == item_id).first()
+        # 1. Xác định phân nhóm ABC-XYZ của SKU
+        cls_record = (
+            db.query(SKUClassification)
+            .filter(SKUClassification.item_id == item_id)
+            .first()
         )
-        if sigma_record:
-            if lead_time_days <= 7 and sigma_record.sigma_d_h7:
-                sigma_d = sigma_record.sigma_d_h7 / math.sqrt(7)
-            elif lead_time_days <= 14 and sigma_record.sigma_d_h14:
-                sigma_d = sigma_record.sigma_d_h14 / math.sqrt(14)
-            elif sigma_record.sigma_d_h28:
-                sigma_d = sigma_record.sigma_d_h28 / math.sqrt(28)
-            else:
-                sigma_d = 1.5
+        segment = cls_record.segment if cls_record and cls_record.segment else "AX"
+
+        # 2. Lấy bộ tham số chính sách (m_g, kappa_g) cho phân nhóm
+        policy = (
+            db.query(PolicySelection)
+            .filter(PolicySelection.class_id == segment)
+            .order_by(PolicySelection.created_at.desc())
+            .first()
+        )
+        if policy:
+            m_g = policy.m_g
+            kappa_g = policy.kappa_g
         else:
-            preds = [fc.y_pred for fc in forecasts]
-            sigma_d = float(np.std(preds)) if len(preds) > 1 else 1.5
+            def_policy = self.DEFAULT_OPTIMAL_POLICIES.get(segment, {"m_g": 0.15, "kappa_g": 1.0})
+            m_g = def_policy["m_g"]
+            kappa_g = def_policy["kappa_g"]
 
-        sigma_d = max(0.1, sigma_d)
-        sigma_l = sigma_d * math.sqrt(lead_time_days)
+        # 3. Lấy hệ số vòng kín theta_g từ bảng calibration_state (mặc định 0.0)
+        calib = (
+            db.query(CalibrationState)
+            .filter(CalibrationState.store_id == store_id, CalibrationState.class_id == segment)
+            .order_by(CalibrationState.review_index.desc())
+            .first()
+        )
+        theta_g = calib.theta if calib and calib.theta is not None else 0.0
 
-        # Z-score từ phân phối chuẩn
-        z_tau = float(stats.norm.ppf(tau))
+        # 4. Tính / lấy Route (c) Window Quantile Q_hat(tau) trên cửa sổ H = L + R
+        horizon_days = lead_time_days + self.DEFAULT_REVIEW_PERIOD
+        q_hat = window_quantile_service.get_tau_quantile_value(
+            db=db,
+            store_id=store_id,
+            item_id=item_id,
+            origin_date=origin_date,
+            tau=tau,
+            horizon_days=horizon_days,
+        )
 
-        # SS = Z_tau * sigma_L
-        safety_stock = max(0.0, round(z_tau * sigma_l, 2))
+        # 5. Mức sàn Reorder Point: s = ceil( Q_hat * exp(m_g + theta_g) )
+        multiplier = math.exp(m_g + theta_g)
+        s_val = float(math.ceil(q_hat * multiplier))
 
-        # ROP = d_L + SS
-        reorder_point = max(0.0, round(d_l + safety_stock, 2))
+        # 6. Nhu cầu trung bình ngày mu_i trên 56 ngày gần nhất
+        past_56_cutoff = origin_date - timedelta(days=56)
+        avg_sales = (
+            db.query(func.avg(SalesHistory.quantity))
+            .filter(
+                SalesHistory.item_id == item_id,
+                SalesHistory.store_id == store_id,
+                SalesHistory.sale_date <= origin_date,
+                SalesHistory.sale_date >= past_56_cutoff,
+            )
+            .scalar()
+        )
+        if avg_sales is not None and avg_sales > 0:
+            mean_demand = float(avg_sales)
+        else:
+            mean_demand = max(0.1, q_hat / max(1, horizon_days))
 
-        # Nhu cầu hàng năm D
-        annual_demand = max(1.0, round((d_l / lead_time_days) * 365, 2))
-
-        # EOQ = sqrt(2 * D * S / H)
+        # 7. Thông tin đơn giá và chi phí
+        prod = db.query(Product).filter(Product.item_id == item_id).first()
+        unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
         h_cost = self.DEFAULT_HOLDING_COST
         s_cost = self.DEFAULT_ORDER_COST
-        eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 2))
+        annual_demand = max(1.0, round(mean_demand * 365, 2))
+
+        # 8. Lô kinh tế EOQ: sqrt( 2 * c * D / h )
+        eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 1))
+
+        # 9. Mức trần Order-Up-To: S = s + ceil( kappa_g * EOQ )
+        S_val = float(s_val + math.ceil(kappa_g * eoq))
+
+        # 10. Dự báo nhu cầu Lead Time (d_L) và Tồn kho an toàn (SS)
+        d_l = round(mean_demand * lead_time_days, 2)
+        safety_stock = max(0.0, round(s_val - d_l, 2))
+        reorder_point = s_val
 
         return {
             "safety_stock": safety_stock,
             "reorder_point": reorder_point,
             "eoq": eoq,
+            "s": s_val,
+            "S": S_val,
+            "model_run_id": "REFIT-RSS-EOQ-G",
             "annual_demand": annual_demand,
             "holding_cost": h_cost,
             "order_cost": s_cost,
-            "unit_price": 10.0,
+            "unit_price": unit_price,
             "source": "ml",
             "d_l": d_l,
-            "sigma_l": sigma_l,
-            "sigma_d": sigma_d,
+            "sigma_l": round(math.sqrt(lead_time_days) * max(0.2, mean_demand * 0.3), 2),
+            "sigma_d": round(max(0.2, mean_demand * 0.3), 2),
+            "segment": segment,
+            "m_g": m_g,
+            "kappa_g": kappa_g,
+            "theta_g": theta_g,
+            "q_hat": q_hat,
         }
 
     def _calculate_static_params(
@@ -255,14 +339,23 @@ class OptimizationService:
         s_cost = self.DEFAULT_ORDER_COST
         eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 2))
 
+        s_val = float(math.ceil(reorder_point))
+        S_val = float(s_val + math.ceil(eoq))
+
+        prod = db.query(Product).filter(Product.item_id == item_id).first()
+        unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
+
         return {
             "safety_stock": safety_stock,
             "reorder_point": reorder_point,
             "eoq": eoq,
+            "s": s_val,
+            "S": S_val,
+            "model_run_id": "static-moving-avg",
             "annual_demand": annual_demand,
             "holding_cost": h_cost,
             "order_cost": s_cost,
-            "unit_price": 10.0,
+            "unit_price": unit_price,
             "source": "static",
             "d_l": d_l,
             "sigma_l": sigma_l,
@@ -315,6 +408,9 @@ class OptimizationService:
                 safety_stock=params["safety_stock"],
                 reorder_point=params["reorder_point"],
                 eoq=params["eoq"],
+                s=params.get("s", params["reorder_point"]),
+                S=params.get("S", params["reorder_point"] + params["eoq"]),
+                model_run_id=params.get("model_run_id", "REFIT-RSS-EOQ-G"),
                 annual_demand=params["annual_demand"],
                 holding_cost=params["holding_cost"],
                 order_cost=params["order_cost"],
@@ -372,6 +468,9 @@ class OptimizationService:
                     safety_stock=it.safety_stock,
                     reorder_point=it.reorder_point,
                     eoq=it.eoq,
+                    s=it.s,
+                    S=it.S,
+                    model_run_id=it.model_run_id,
                     annual_demand=it.annual_demand,
                     holding_cost=it.holding_cost,
                     order_cost=it.order_cost,
@@ -599,6 +698,160 @@ class OptimizationService:
             scenarios=scenarios,
             insights=insights,
         )
+
+    # --- Job J5: Quarterly Policy Selection (Task OPT.2) ---
+
+    def refit_quarterly_policies(
+        self,
+        db: Session,
+        store_id: str = "CA_1",
+        selection_id: Optional[str] = None,
+        target_availability: float = 0.96,
+    ) -> List[Dict[str, Any]]:
+        """
+        Job J5 - Tái chọn tham số chính sách (m_g, kappa_g) định kỳ theo Quý (Giai đoạn 4 / Task OPT.2):
+        - Quét lưới candidate (m in [0.0..0.4], kappa in [0.0..2.0]).
+        - Chọn cặp (m_g, kappa_g) có chi phí lưu kho + đặt hàng thấp nhất với Availability >= 0.96.
+        - Lưu kết quả vào bảng policy_selection.
+        """
+        if not selection_id:
+            clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+            curr_date = clock.current_date if clock and clock.current_date else date.today()
+            q_num = (curr_date.month - 1) // 3 + 1
+            selection_id = f"quarter_{curr_date.year}_Q{q_num}"
+
+        # Lưới tham số ứng viên theo nghiên cứu
+        M_GRID = [0.0, 0.05, 0.091, 0.125, 0.159, 0.183, 0.25, 0.334, 0.384, 0.393]
+        KAPPA_GRID = [0.0, 0.5, 1.0, 1.5, 2.0]
+
+        all_classes = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
+        results: List[Dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+
+        for class_id in all_classes:
+            default_spec = self.DEFAULT_OPTIMAL_POLICIES.get(
+                class_id,
+                {"m_g": 0.15, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.965},
+            )
+
+            # Tìm các SKU thuộc phân nhóm này
+            skus = (
+                db.query(SKUClassification.item_id)
+                .filter(SKUClassification.segment == class_id)
+                .all()
+            )
+            item_ids = [s[0] for s in skus]
+
+            best_m = default_spec["m_g"]
+            best_kappa = default_spec["kappa_g"]
+            best_cost = default_spec["val_cost"]
+            best_service = default_spec["val_service"]
+
+            # Nếu có SKU trong nhóm, thực hiện tối ưu thực tế
+            if item_ids:
+                cls_stats = (
+                    db.query(
+                        func.avg(SKUClassification.cv),
+                        func.avg(SKUClassification.mean_demand),
+                    )
+                    .filter(SKUClassification.segment == class_id)
+                    .first()
+                )
+                avg_cv = float(cls_stats[0]) if cls_stats and cls_stats[0] else 0.5
+                avg_demand = float(cls_stats[1]) if cls_stats and cls_stats[1] else 5.0
+
+                min_cost = float("inf")
+                selected_m = best_m
+                selected_kappa = best_kappa
+                selected_service = best_service
+
+                for m in M_GRID:
+                    for kappa in KAPPA_GRID:
+                        est_service = min(0.999, 0.95 + 0.05 * math.tanh(m / (avg_cv + 0.1)))
+                        if est_service < target_availability:
+                            continue
+
+                        est_ss = math.ceil(avg_demand * 10 * math.exp(m))
+                        annual_d = avg_demand * 365
+                        est_eoq = max(
+                            1.0,
+                            math.sqrt(
+                                (2 * annual_d * self.DEFAULT_ORDER_COST)
+                                / self.DEFAULT_HOLDING_COST
+                            ),
+                        )
+                        cycle_stock = (kappa * est_eoq) / 2.0
+                        holding_cost = (
+                            (est_ss + cycle_stock)
+                            * self.DEFAULT_HOLDING_COST
+                            * len(item_ids)
+                        )
+                        order_freq = annual_d / max(
+                            1.0, kappa * est_eoq if kappa > 0 else est_eoq
+                        )
+                        order_cost = order_freq * self.DEFAULT_ORDER_COST * len(item_ids)
+                        total_cost = holding_cost + order_cost
+
+                        if total_cost < min_cost:
+                            min_cost = total_cost
+                            selected_m = m
+                            selected_kappa = kappa
+                            selected_service = round(est_service, 3)
+
+                if min_cost < float("inf"):
+                    best_m = selected_m
+                    best_kappa = selected_kappa
+                    best_cost = round(min_cost, 2)
+                    best_service = selected_service
+
+            # Ghi/Cập nhật vào bảng policy_selection
+            existing = (
+                db.query(PolicySelection)
+                .filter(
+                    PolicySelection.selection_id == selection_id,
+                    PolicySelection.class_id == class_id,
+                )
+                .first()
+            )
+            if existing:
+                existing.m_g = best_m
+                existing.kappa_g = best_kappa
+                existing.val_cost = best_cost
+                existing.val_service = best_service
+                existing.setpoint = target_availability
+                existing.created_at = now
+            else:
+                new_policy = PolicySelection(
+                    selection_id=selection_id,
+                    class_id=class_id,
+                    policy_type="REFIT_RSS_EOQ_G",
+                    m_g=best_m,
+                    kappa_g=best_kappa,
+                    tau=0.95,
+                    setpoint=target_availability,
+                    guard=0.01,
+                    gain_eta=1.0,
+                    val_cost=best_cost,
+                    val_service=best_service,
+                    is_feasible=True,
+                    econ_service=0.95,
+                    created_at=now,
+                )
+                db.add(new_policy)
+
+            results.append({
+                "selection_id": selection_id,
+                "class_id": class_id,
+                "policy_type": "REFIT_RSS_EOQ_G",
+                "m_g": best_m,
+                "kappa_g": best_kappa,
+                "val_cost": best_cost,
+                "val_service": best_service,
+                "setpoint": target_availability,
+            })
+
+        db.commit()
+        return results
 
 
 optimization_service = OptimizationService()

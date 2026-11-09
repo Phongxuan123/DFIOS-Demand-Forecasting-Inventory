@@ -18,6 +18,9 @@ from app.schemas.optimization import (
     CompareStaticResponse,
     SensitivityAnalysisRequest,
     SensitivityAnalysisResponse,
+    RefitPoliciesRequest,
+    RefitPoliciesResponse,
+    PolicySelectionItem,
 )
 from app.services.optimization_service import optimization_service
 
@@ -185,3 +188,45 @@ def run_cost_sensitivity_analysis(
     Role: Admin only (Manager/Viewer 403).
     """
     return optimization_service.run_sensitivity_analysis(db, request=body)
+
+
+# --- Task OPT.2: Quarterly Refit Policies (Job J5) ---
+
+@router.post(
+    "/refit-policies",
+    response_model=RefitPoliciesResponse,
+    summary="Job J5 - Tái chọn tham số chính sách (m_g, kappa_g) định kỳ theo Quý (Admin only)",
+)
+def refit_policies(
+    body: Optional[RefitPoliciesRequest] = None,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """
+    **Job J5 - Quarterly Policy Refit**:
+    Tái chọn cặp tham số chính sách (m_g, kappa_g) cho 9 nhóm phân loại ABC/XYZ.
+    Tối ưu hóa tổng chi phí lưu kho và đặt hàng dưới ràng buộc Availability >= 0.96.
+    Lưu vết vào bảng policy_selection.
+    Role: Admin only.
+    """
+    store_id = body.store_id if body and body.store_id else "CA_1"
+    selection_id = body.selection_id if body else None
+    target_avail = body.target_availability if body and body.target_availability else 0.96
+
+    results = optimization_service.refit_quarterly_policies(
+        db=db,
+        store_id=store_id,
+        selection_id=selection_id,
+        target_availability=target_avail,
+    )
+
+    sid = results[0]["selection_id"] if results else "quarterly_refit"
+    policy_items = [PolicySelectionItem(**p) for p in results]
+
+    return RefitPoliciesResponse(
+        success=True,
+        selection_id=sid,
+        policies=policy_items,
+        message=f"Đã tái chọn và lưu thành công chính sách REFIT-RSS-EOQ-G cho {len(policy_items)} nhóm hàng.",
+    )
+

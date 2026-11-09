@@ -65,7 +65,7 @@ class ReplenishmentService:
             on_hand = float(inv.on_hand) if inv else 0.0
             on_order = float(inv.on_order) if inv else 0.0
 
-            # Lấy tham số tối ưu (ROP, SS, EOQ)
+            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ)
             param = inventory_param_repository.get_by_item_store(db, item_id, store_id)
             if not param:
                 # Nếu chưa có, tính toán nhanh tham số cho SKU
@@ -79,20 +79,27 @@ class ReplenishmentService:
             rop = float(param.reorder_point) if param else 50.0
             safety_stock = float(param.safety_stock) if param else 20.0
             eoq = float(param.eoq) if param else 60.0
+            s_level = float(param.s) if (param and param.s is not None) else rop
+            S_level = float(param.S) if (param and param.S is not None) else (s_level + eoq)
+            policy_name = param.model_run_id if (param and param.model_run_id) else "REFIT-RSS-EOQ-G"
 
-            # Điều kiện kích hoạt đề xuất: On_hand + On_order <= ROP
-            if (on_hand + on_order) <= rop:
+            # Vị trí tồn kho IP = On_hand + On_order
+            ip = on_hand + on_order
+
+            # Điều kiện kích hoạt chính sách (R, s, S): IP < s hoặc IP <= ROP
+            if ip < s_level or ip <= rop:
+                # Lượng đặt đề xuất: q = S - IP theo chính sách Order-Up-To
+                recommended_qty = max(1.0, round(S_level - ip, 0))
+
                 # Xác định mức độ ưu tiên
                 if on_hand <= 0:
                     priority = "CRITICAL"
                 elif on_hand <= safety_stock:
                     priority = "HIGH"
-                elif on_hand <= rop:
+                elif ip <= s_level:
                     priority = "MEDIUM"
                 else:
                     priority = "LOW"
-
-                recommended_qty = max(1.0, round(eoq, 0))
 
                 rec = ReplenishmentRecommendation(
                     id=str(uuid.uuid4()),
@@ -103,7 +110,13 @@ class ReplenishmentService:
                     final_qty=recommended_qty,
                     priority=priority,
                     status="PENDING",
-                    reason="Hệ thống tự động sinh: Tồn kho hiện tại đạt điểm đặt hàng lại (ROP)",
+                    reason=f"Đề xuất {policy_name}: IP ({ip:.1f}) < s ({s_level:.1f}), đặt q = S - IP = {recommended_qty:.0f}",
+                    order_up_to_S=S_level,
+                    reorder_point_s=s_level,
+                    inventory_position=ip,
+                    eoq_quantity=eoq,
+                    policy_applied=policy_name,
+                    review_date=now.date(),
                     decided_by=None,
                     created_at=now,
                     decided_at=None,
@@ -142,6 +155,12 @@ class ReplenishmentService:
             on_order=float(inv.on_order) if inv else 0.0,
             rop=float(param.reorder_point) if param else 0.0,
             safety_stock=float(param.safety_stock) if param else 0.0,
+            order_up_to_S=rec.order_up_to_S,
+            reorder_point_s=rec.reorder_point_s,
+            inventory_position=rec.inventory_position,
+            eoq_quantity=rec.eoq_quantity,
+            policy_applied=rec.policy_applied,
+            review_date=rec.review_date,
             recommended_qty=rec.recommended_qty,
             final_qty=rec.final_qty,
             priority=rec.priority,

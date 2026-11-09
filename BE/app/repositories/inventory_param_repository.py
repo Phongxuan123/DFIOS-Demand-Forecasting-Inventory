@@ -65,6 +65,9 @@ class InventoryParamRepository:
             existing.order_cost = param.order_cost
             existing.unit_price = param.unit_price
             existing.source = param.source
+            existing.s = param.s
+            existing.S = param.S
+            existing.model_run_id = param.model_run_id
             existing.updated_at = param.updated_at
             db.add(existing)
             db.commit()

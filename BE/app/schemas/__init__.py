@@ -106,6 +106,9 @@ from app.schemas.optimization import (
     SensitivityScenario,
     SensitivityAnalysisRequest,
     SensitivityAnalysisResponse,
+    PolicySelectionItem,
+    RefitPoliciesRequest,
+    RefitPoliciesResponse,
 )
 from app.schemas.replenishment import (
     ReplenishmentItemResponse,
@@ -211,6 +214,9 @@ __all__ = [
     "SensitivityScenario",
     "SensitivityAnalysisRequest",
     "SensitivityAnalysisResponse",
+    "PolicySelectionItem",
+    "RefitPoliciesRequest",
+    "RefitPoliciesResponse",
     "ReplenishmentItemResponse",
     "ReplenishmentListResponse",
     "ReplenishmentAdjustRequest",
