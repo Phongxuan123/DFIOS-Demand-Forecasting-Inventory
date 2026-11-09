@@ -15,6 +15,7 @@ from app.services.fast_inference_service import FastInferenceService, fast_infer
 from app.services.predictor_service import DFIOSPredictor, dfios_predictor
 from app.services.window_quantile_service import WindowQuantileService, window_quantile_service
 from app.services.calibrator_service import CalibratorService, calibrator_service
+from app.services.simulation_service import SimulationService, simulation_service
 
 __all__ = [
     "AuthService",
@@ -51,4 +52,6 @@ __all__ = [
     "window_quantile_service",
     "CalibratorService",
     "calibrator_service",
+    "SimulationService",
+    "simulation_service",
 ]

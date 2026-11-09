@@ -141,6 +141,21 @@ from app.schemas.clock import (
     ClockResetRequest,
     ClockSpeedRequest,
 )
+from app.schemas.data_import import (
+    DataImportResponse,
+    FastInferenceRequest,
+    FastInferenceResponse,
+)
+from app.schemas.simulation import (
+    PolicySimulationMetric,
+    PolicyComparisonResponse,
+    PolicyComparisonRequest,
+)
+from app.schemas.kpi_dashboard import (
+    CostCurvePoint,
+    SegmentAvailability,
+    KPIDashboardResponse,
+)
 
 __all__ = [
     "LoginRequest",
@@ -255,6 +270,15 @@ __all__ = [
     "ClockAdvanceResponse",
     "ClockResetRequest",
     "ClockSpeedRequest",
+    "DataImportResponse",
+    "FastInferenceRequest",
+    "FastInferenceResponse",
+    "PolicySimulationMetric",
+    "PolicyComparisonResponse",
+    "PolicyComparisonRequest",
+    "CostCurvePoint",
+    "SegmentAvailability",
+    "KPIDashboardResponse",
 ]
 
 
