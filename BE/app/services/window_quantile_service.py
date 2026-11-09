@@ -237,3 +237,4 @@ class WindowQuantileService:
 
 
 window_quantile_service = WindowQuantileService()
+

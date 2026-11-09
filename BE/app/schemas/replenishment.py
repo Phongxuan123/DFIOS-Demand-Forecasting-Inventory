@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +19,12 @@ class ReplenishmentItemResponse(BaseModel):
     on_order: float = 0.0
     rop: float = 0.0
     safety_stock: float = 0.0
+    order_up_to_S: Optional[float] = None
+    reorder_point_s: Optional[float] = None
+    inventory_position: Optional[float] = None
+    eoq_quantity: Optional[float] = None
+    policy_applied: Optional[str] = None
+    review_date: Optional[date] = None
     recommended_qty: float
     final_qty: float
     priority: str = Field(..., description="Mức độ ưu tiên: CRITICAL, HIGH, MEDIUM, LOW")

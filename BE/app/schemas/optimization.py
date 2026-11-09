@@ -31,6 +31,9 @@ class InventoryParamItem(BaseModel):
     safety_stock: float
     reorder_point: float
     eoq: float
+    s: Optional[float] = None
+    S: Optional[float] = None
+    model_run_id: Optional[str] = None
     annual_demand: float
     holding_cost: float
     order_cost: float
@@ -134,3 +137,32 @@ class SensitivityAnalysisResponse(BaseModel):
     baseline_scenario: SensitivityScenario
     scenarios: List[SensitivityScenario]
     insights: List[str]
+
+
+# --- Task OPT.2: Policy Selection & Quarterly Refit ---
+
+class PolicySelectionItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    selection_id: str
+    class_id: str
+    policy_type: str = "REFIT_RSS_EOQ_G"
+    m_g: float
+    kappa_g: float
+    val_cost: Optional[float] = None
+    val_service: Optional[float] = None
+    setpoint: float = 0.96
+
+
+class RefitPoliciesRequest(BaseModel):
+    store_id: Optional[str] = Field("CA_1", description="Mã kho hàng")
+    selection_id: Optional[str] = Field(None, description="Mã chu kỳ (ví dụ: quarter_2015_Q3)")
+    target_availability: Optional[float] = Field(0.96, ge=0.85, le=0.999, description="Mức Availability mục tiêu")
+
+
+class RefitPoliciesResponse(BaseModel):
+    success: bool
+    selection_id: str
+    policies: List[PolicySelectionItem]
+    message: str
+

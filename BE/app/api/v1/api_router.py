@@ -56,6 +56,10 @@ api_router.include_router(optimization_router, prefix="/optimization", tags=["In
 from app.api.v1.endpoints.replenishments import router as replenishments_router
 api_router.include_router(replenishments_router, prefix="/replenishments", tags=["Replenishment Recommendations (UC33-UC38)"])
 
+# Stage 5 / Tier 3: C³-OUT Closed-Loop Calibrator
+from app.api.v1.endpoints.calibration import router as calibration_router
+api_router.include_router(calibration_router, prefix="/calibration", tags=["C³-OUT Closed-Loop Calibrator (Tier 3)"])
+
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 
