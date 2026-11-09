@@ -11,6 +11,7 @@ from app.schemas.dashboard import (
     DemandTrendResponse,
     RealtimeStockAlertTriggerResponse,
 )
+from app.schemas.kpi_dashboard import KPIDashboardResponse
 from app.services.dashboard_service import dashboard_service
 
 router = APIRouter()
@@ -104,3 +105,23 @@ def get_dashboard_overview(
     current_user: User = Depends(get_current_user),
 ) -> DashboardOverviewResponse:
     return dashboard_service.get_overview(db, store_id=store_id)
+
+
+# --- Task API.4: Dashboard KPI với Shadow Baseline B0 ---
+
+@router.get(
+    "/kpi-dashboard",
+    response_model=KPIDashboardResponse,
+    summary="Task API.4 - KPI Dashboard so sánh C³-OUT với Shadow Baseline B0",
+)
+def get_kpi_shadow_dashboard(
+    store_id: str = Query("CA_1", description="Mã cửa hàng/kho"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> KPIDashboardResponse:
+    """
+    **Task API.4 - KPI Dashboard with Shadow Baseline B0**:
+    Trả về chi phí lũy kế (lưu kho, đặt hàng, phạt thiếu hàng), availability 9 nhóm hàng,
+    và đường chi phí của chính sách tĩnh B0 chạy song song để vẽ biểu đồ so sánh.
+    """
+    return dashboard_service.get_shadow_baseline_dashboard(db, store_id=store_id)
