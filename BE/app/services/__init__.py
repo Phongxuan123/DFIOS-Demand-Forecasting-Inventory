@@ -10,6 +10,9 @@ from app.services.forecast_service import ForecastService, forecast_service
 from app.services.classification_service import ClassificationService, classification_service
 from app.services.optimization_service import OptimizationService, optimization_service
 from app.services.replenishment_service import ReplenishmentService, replenishment_service
+from app.services.data_preprocessing_service import DataPreprocessingService, data_preprocessing_service
+from app.services.fast_inference_service import FastInferenceService, fast_inference_service
+from app.services.predictor_service import DFIOSPredictor, dfios_predictor
 
 __all__ = [
     "AuthService",
@@ -36,4 +39,10 @@ __all__ = [
     "optimization_service",
     "ReplenishmentService",
     "replenishment_service",
+    "DataPreprocessingService",
+    "data_preprocessing_service",
+    "FastInferenceService",
+    "fast_inference_service",
+    "DFIOSPredictor",
+    "dfios_predictor",
 ]
