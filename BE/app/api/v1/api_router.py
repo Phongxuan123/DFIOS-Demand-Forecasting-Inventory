@@ -60,6 +60,10 @@ api_router.include_router(replenishments_router, prefix="/replenishments", tags=
 from app.api.v1.endpoints.calibration import router as calibration_router
 api_router.include_router(calibration_router, prefix="/calibration", tags=["C³-OUT Closed-Loop Calibrator (Tier 3)"])
 
+# Stage 6 & 7 / Task API.1: Sim Clock Control & Batch Orchestration
+from app.api.v1.endpoints.clock import router as clock_router
+api_router.include_router(clock_router, prefix="/clock", tags=["Simulation Clock & Batch Orchestration (Task API.1)"])
+
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 

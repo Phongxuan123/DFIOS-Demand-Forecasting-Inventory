@@ -134,6 +134,13 @@ from app.schemas.calibration import (
     CalibrationStepResponse,
     CalibrationStatusResponse,
 )
+from app.schemas.clock import (
+    SimClockResponse,
+    ClockAdvanceRequest,
+    ClockAdvanceResponse,
+    ClockResetRequest,
+    ClockSpeedRequest,
+)
 
 __all__ = [
     "LoginRequest",
@@ -243,6 +250,11 @@ __all__ = [
     "CalibrationStepRequest",
     "CalibrationStepResponse",
     "CalibrationStatusResponse",
+    "SimClockResponse",
+    "ClockAdvanceRequest",
+    "ClockAdvanceResponse",
+    "ClockResetRequest",
+    "ClockSpeedRequest",
 ]
 
 
