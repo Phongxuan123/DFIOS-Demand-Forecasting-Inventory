@@ -126,3 +126,4 @@ class FastInferenceService:
 
 
 fast_inference_service = FastInferenceService()
+
