@@ -30,7 +30,7 @@ class SimulationService:
 
     def compare_policies(
         self,
-        db: Session,
+        db: Optional[Session] = None,
         store_id: str = "CA_1",
         horizon_days: int = 90,
         target_service_level: float = 0.96,
@@ -38,16 +38,23 @@ class SimulationService:
         """
         Chạy mô phỏng đối đầu 4 chính sách tồn kho và so sánh chi phí & mức phục vụ.
         """
-        products = db.query(Product).all()
-        sku_count = len(products) if products else 10
+        if db is not None:
+            products = db.query(Product).all()
+            sku_count = len(products) if products else 10
 
-        # Lấy tham số trung bình từ inventory_params & classifications
-        avg_annual_demand = (
-            db.query(func.avg(InventoryParam.annual_demand))
-            .filter(InventoryParam.store_id == store_id)
-            .scalar()
-        )
-        avg_d = float(avg_annual_demand) if avg_annual_demand and avg_annual_demand > 0 else 1200.0
+            # Lấy tham số trung bình từ inventory_params & classifications
+            avg_annual_demand = (
+                db.query(func.avg(InventoryParam.annual_demand))
+                .filter(InventoryParam.store_id == store_id)
+                .scalar()
+            )
+            avg_d = float(avg_annual_demand) if avg_annual_demand and avg_annual_demand > 0 else 1200.0
+            thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
+        else:
+            sku_count = 10
+            avg_d = 1200.0
+            thetas = {}
+
         avg_daily = avg_d / 365.0
         lead_time = 3
         review_period = 7
@@ -55,9 +62,6 @@ class SimulationService:
 
         # Nhu cầu trong thời gian mô phỏng
         sim_demand = avg_daily * horizon_days * sku_count
-
-        # Lấy giá trị thetas hiện tại từ C³-OUT
-        thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
         avg_theta = float(sum(thetas.values()) / max(1, len(thetas)))
 
         # Lấy trung bình m_g từ optimal policies
