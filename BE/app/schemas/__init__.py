@@ -1,3 +1,4 @@
+from app.schemas.window_quantile import WindowQuantileResponse
 from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
@@ -223,6 +224,7 @@ __all__ = [
     "DashboardAlertsResponse",
     "RealtimeStockAlertTriggerResponse",
     "DashboardOverviewResponse",
+    "WindowQuantileResponse",
 ]
 
 

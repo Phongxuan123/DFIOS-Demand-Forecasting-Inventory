@@ -13,6 +13,7 @@ from app.services.replenishment_service import ReplenishmentService, replenishme
 from app.services.data_preprocessing_service import DataPreprocessingService, data_preprocessing_service
 from app.services.fast_inference_service import FastInferenceService, fast_inference_service
 from app.services.predictor_service import DFIOSPredictor, dfios_predictor
+from app.services.window_quantile_service import WindowQuantileService, window_quantile_service
 
 __all__ = [
     "AuthService",
@@ -45,4 +46,6 @@ __all__ = [
     "fast_inference_service",
     "DFIOSPredictor",
     "dfios_predictor",
+    "WindowQuantileService",
+    "window_quantile_service",
 ]

@@ -17,7 +17,10 @@ from app.schemas.forecast import (
     BulkOverrideRequest,
     BulkOverrideResponse,
 )
+from app.schemas.window_quantile import WindowQuantileResponse
+from app.models.sim_clock import SimClock
 from app.services.forecast_service import forecast_service
+from app.services.window_quantile_service import window_quantile_service
 
 router = APIRouter()
 
@@ -235,3 +238,49 @@ def list_forecast_overrides(
     Xem toàn bộ lịch sử các lần can thiệp điều chỉnh dự báo của một SKU.
     """
     return forecast_service.list_overrides(db, sku=sku, store_id=store_id)
+
+
+@router.get("/{sku}/window-quantiles", response_model=WindowQuantileResponse, summary="Route (c) - Lấy phân phối xác suất cửa sổ bảo vệ H = L + R = 10 ngày")
+def get_sku_window_quantiles(
+    sku: str,
+    store_id: str = Query("CA_1", description="Mã kho / cửa hàng"),
+    origin_date: Optional[date] = Query(None, description="Ngày điểm gốc review (mặc định lấy theo sim_clock)"),
+    horizon_days: int = Query(10, description="Độ dài cửa sổ bảo vệ H = L + R (mặc định 10 ngày)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    **Route (c) Window Quantiles**:
+    Truy xuất phân phối xác suất thực nghiệm trên cửa sổ bảo vệ H = L + R (mặc định 10 ngày) cho SKU.
+    Cung cấp dải 19 mức quantile thực nghiệm Q_hat(tau) và mức Q_hat(0.95) chuẩn bị cho Tier 2.
+    """
+    if not origin_date:
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        target_date = clock.current_date if clock else date(2015, 5, 24)
+    else:
+        target_date = origin_date
+
+    record = window_quantile_service.get_or_create_window_quantile(
+        db,
+        store_id=store_id,
+        item_id=sku,
+        origin_date=target_date,
+        horizon_days=horizon_days,
+    )
+
+    q_dict = record.q_levels or {}
+    tau_95 = float(q_dict.get("0.95", round(record.point_window * 1.6, 2)))
+
+    return WindowQuantileResponse(
+        id=record.id,
+        model_run_id=record.model_run_id,
+        store_id=record.store_id,
+        item_id=record.item_id,
+        origin_date=record.origin_date,
+        horizon_days=record.horizon_days,
+        point_window=record.point_window,
+        q_levels=q_dict,
+        tau_95=tau_95,
+        route=record.route or "c",
+    )
+

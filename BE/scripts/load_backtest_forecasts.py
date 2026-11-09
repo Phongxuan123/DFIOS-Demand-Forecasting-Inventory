@@ -83,3 +83,4 @@ with engine.begin() as conn:
 
 df_backtest.to_sql("forecast_backtest", engine, if_exists="append", index=False, chunksize=10000, method="multi")
 print(f"Successfully loaded {len(df_backtest)} causal backtest forecasts into forecast_backtest!")
+
