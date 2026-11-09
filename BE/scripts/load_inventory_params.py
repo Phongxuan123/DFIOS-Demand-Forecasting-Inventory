@@ -22,6 +22,14 @@ Z_TAU = 1.645
 HOLDING_COST = 2.0
 ORDER_COST = 50.0
 
+with engine.begin() as conn:
+    conn.execute(text("""
+        ALTER TABLE inventory_params
+            ADD COLUMN IF NOT EXISTS "s" DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS "S" DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS model_run_id VARCHAR(100) DEFAULT 'c3out-calibrated';
+    """))
+
 C3_EXP_THETA = {
     "AX": 1.095,
     "AY": 1.201,
@@ -63,6 +71,10 @@ merged["reorder_point"] = (merged["d_l"] + merged["safety_stock"]).round(2).clip
 merged["annual_demand"] = ((merged["d_l"] / LEAD_TIME) * 365).round(2).clip(lower=1.0)
 merged["eoq"] = np.sqrt((2 * merged["annual_demand"] * ORDER_COST) / HOLDING_COST).round(2).clip(lower=1.0)
 
+merged["s"] = merged["reorder_point"]
+merged["S"] = (merged["s"] + merged["eoq"]).round(2)
+merged["model_run_id"] = "c3out-calibrated"
+
 now = datetime.now(timezone.utc)
 merged["id"] = STORE_ID + "_" + merged["item_id"]
 merged["store_id"] = STORE_ID
@@ -77,11 +89,12 @@ merged["updated_at"] = now
 final_params = merged[[
     "id", "item_id", "store_id", "service_level", "lead_time_days",
     "safety_stock", "reorder_point", "eoq", "annual_demand",
-    "holding_cost", "order_cost", "unit_price", "source", "updated_at"
+    "holding_cost", "order_cost", "unit_price", "source", "updated_at",
+    "s", "S", "model_run_id"
 ]]
 
 with engine.begin() as conn:
     conn.execute(text("DELETE FROM inventory_params WHERE store_id = :s"), {"s": STORE_ID})
 
 final_params.to_sql("inventory_params", engine, if_exists="append", index=False, chunksize=1000, method="multi")
-print(f"Seeded {len(final_params)} inventory_params records with C3-OUT calibration factors!")
+print(f"Seeded {len(final_params)} inventory_params records!")
