@@ -4,7 +4,15 @@ sqlalchemy
 psycopg2-binary
 pandas
 pyarrow
+numpy
+scipy
+numba
+alembic
+apscheduler
+httpx
+pytest
+mlflow
 bcrypt
 pyjwt
 python-dotenv
-python-multipart
+python-multipart

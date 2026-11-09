@@ -18,6 +18,16 @@ from app.models.inventory_param import InventoryParam
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.alert import Alert
 
+# Extended Models for DFIOS Engine & C3-OUT
+from app.models.sim_clock import SimClock
+from app.models.calendar import Calendar
+from app.models.inventory_daily import InventoryDaily
+from app.models.forecast_window_quantile import ForecastWindowQuantile
+from app.models.policy_selection import PolicySelection
+from app.models.calibration_state import CalibrationState
+from app.models.service_outcomes import ServiceOutcome
+from app.models.data_imports import DataImport
+
 __all__ = [
     "Base",
     "User",
@@ -41,4 +51,12 @@ __all__ = [
     "InventoryParam",
     "ReplenishmentRecommendation",
     "Alert",
+    "SimClock",
+    "Calendar",
+    "InventoryDaily",
+    "ForecastWindowQuantile",
+    "PolicySelection",
+    "CalibrationState",
+    "ServiceOutcome",
+    "DataImport",
 ]

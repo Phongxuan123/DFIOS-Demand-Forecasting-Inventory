@@ -274,3 +274,10 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Large AI models & artifacts (DFIOS)
+BE/MODEL/
+c3ok_artifacts/
+*.pth
+*.ubj
+*.npz
+
