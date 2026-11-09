@@ -64,3 +64,4 @@ class CalibrationStatusResponse(BaseModel):
     at_boundary_classes: List[str]
     has_warning: bool
     states: List[CalibrationStateItem]
+

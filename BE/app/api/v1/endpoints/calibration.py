@@ -115,3 +115,4 @@ def get_calibration_history(
         db=db, store_id=store_id, class_id=class_id, limit=limit
     )
     return [CalibrationStateItem.model_validate(r) for r in records]
+
