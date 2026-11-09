@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String
+from sqlalchemy import Column, String, Float
 from app.models.base import Base
 
 class Product(Base):
@@ -8,3 +8,4 @@ class Product(Base):
     name = Column(String, nullable=False)
     dept_id = Column(String)
     cat_id = Column(String)
+    price = Column(Float, nullable=False, default=1.0)

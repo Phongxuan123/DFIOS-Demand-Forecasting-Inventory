@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, DateTime
+from sqlalchemy import Column, String, Float, DateTime, Date
 from app.models.base import Base
 
 class ReplenishmentRecommendation(Base):
@@ -18,3 +18,11 @@ class ReplenishmentRecommendation(Base):
     decided_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     decided_at = Column(DateTime, nullable=True)
+
+    # Periodic Review (R, s, S) extension fields
+    order_up_to_S = Column("order_up_to_S", Float, nullable=True)
+    reorder_point_s = Column(Float, nullable=True)
+    inventory_position = Column(Float, nullable=True)
+    eoq_quantity = Column(Float, nullable=True)
+    policy_applied = Column(String(50), nullable=True, default="REFIT-RSS-EOQ-G")
+    review_date = Column(Date, nullable=True)

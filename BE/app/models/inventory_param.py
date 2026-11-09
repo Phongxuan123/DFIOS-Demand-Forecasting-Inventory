@@ -18,6 +18,12 @@ class InventoryParam(Base):
     order_cost = Column(Float, nullable=False, default=50.0)
     unit_price = Column(Float, nullable=False, default=10.0)
     source = Column(String, nullable=False, default="ml")
+
+    # Extension fields for (R, s, S) and C3-OUT
+    s = Column("s", Float, nullable=True)
+    S = Column("S", Float, nullable=True)
+    model_run_id = Column(String(100), nullable=True, default="c3out-calibrated")
+
     updated_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),
