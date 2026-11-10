@@ -565,7 +565,7 @@ export const api = {
       item_id?: string;
       auto_generate?: boolean;
     }) => {
-      const res = await cachedGet('/replenishments', params, 15000);
+      const res = await cachedGet('/replenishments', params, 45000);
       return {
         items: res?.items || [],
         total: res?.total || 0,
@@ -1074,6 +1074,8 @@ export const api = {
     recompute: async (data: { store_id?: string; item_id?: string; force_static?: boolean }) => {
       clearApiCache('/optimization');
       clearApiCache('/inventory');
+      clearApiCache('/dashboard');
+      clearApiCache('/replenishments');
       const res = await apiClient.post('/optimization/recompute', data);
       return res.data;
     },

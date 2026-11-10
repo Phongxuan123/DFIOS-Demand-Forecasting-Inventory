@@ -602,6 +602,66 @@
   background-color: #f0fdfa;
 }
 
+@keyframes repRowFocusFlash {
+  0% {
+    background-color: rgba(20, 184, 166, 0);
+  }
+  16% {
+    background-color: rgba(20, 184, 166, 0.14);
+  }
+  42% {
+    background-color: rgba(20, 184, 166, 0.08);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes repRowEdgePulse {
+  0% {
+    box-shadow: inset 3px 0 0 0 rgba(15, 118, 110, 0);
+  }
+  16% {
+    box-shadow: inset 3px 0 0 0 #0f766e;
+  }
+  42% {
+    box-shadow: inset 3px 0 0 0 rgba(15, 118, 110, 0.85);
+  }
+  100% {
+    box-shadow: inset 3px 0 0 0 transparent;
+  }
+}
+
+.rep-table tbody tr.rep-row-flash td {
+  animation: repRowFocusFlash 1.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.rep-table tbody tr.rep-row-flash td:first-child {
+  animation:
+    repRowFocusFlash 1.8s cubic-bezier(0.22, 1, 0.36, 1) forwards,
+    repRowEdgePulse 1.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes repSkeletonPulse {
+  0%, 100% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 0.48;
+  }
+}
+
+.rep-skeleton-row:hover td {
+  background-color: #ffffff !important;
+}
+
+.rep-skeleton-box {
+  display: block;
+  background-color: #e2e8f0;
+  border-radius: 4px;
+  animation: repSkeletonPulse 1.4s ease-in-out infinite;
+}
+
 .rep-checkbox-btn {
   display: inline-flex;
   align-items: center;
