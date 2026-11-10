@@ -20,6 +20,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
+import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
 import './Settings.css';
 
 interface CsvPreviewStats {
@@ -531,6 +532,7 @@ export const Settings: React.FC = () => {
         replenishments_generated:
           repRes?.generated_count ?? pipeRes?.replenishments_generated ?? 14,
       });
+      emitAlertsSyncEvent({ action: 'po_generated', storeId: fastInfStore });
     } catch (e: any) {
       console.error('Fast inference trigger error', e);
     } finally {

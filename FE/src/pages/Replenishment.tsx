@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   Pencil,
   RefreshCw,
@@ -23,6 +24,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
+import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
 import './Replenishment.css';
 
 const formatQty = (val: number | string | null | undefined, locale: string = 'en-US'): string => {
@@ -110,8 +112,31 @@ export const Replenishment: React.FC = () => {
   const priorityLabels = isVi ? PRIORITY_LABELS_VI : PRIORITY_LABELS_EN;
   const statusLabels = isVi ? STATUS_LABELS_VI : STATUS_LABELS_EN;
 
-  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusSkuParam = searchParams.get('sku');
+  const focusStoreParam = searchParams.get('store');
+  const focusTokenParam = searchParams.get('focus');
+
+  const [storeOptions, setStoreOptions] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
+  const [selectedStore, setSelectedStore] = useState<string>(() =>
+    focusStoreParam && focusStoreParam !== 'All' ? focusStoreParam : 'CA_1'
+  );
   const [viewTab, setViewTab] = useState<'RECOMMENDATIONS' | 'INVENTORY' | 'HISTORY'>('RECOMMENDATIONS');
+
+  const [pendingScrollTarget, setPendingScrollTarget] = useState<{
+    sku: string;
+    recId?: string;
+    tab: 'RECOMMENDATIONS' | 'INVENTORY';
+    token: string;
+  } | null>(null);
+  const [flashingRowKey, setFlashingRowKey] = useState<string | null>(null);
+
+  const recRequestIdRef = useRef(0);
+  const invRequestIdRef = useRef(0);
+  const locateTokenRef = useRef<string | null>(null);
+  const skipNextAutoLoadRef = useRef(false);
+  const lastLoadedStoreRef = useRef<string>(selectedStore);
+  const flashTimeoutRef = useRef<number | null>(null);
 
   // Recommendations State
   const [recommendations, setRecommendations] = useState<any[]>([]);
@@ -178,28 +203,121 @@ export const Replenishment: React.FC = () => {
     return pendingItemsOnPage.every((r) => selectedRecIds.includes(r.id));
   }, [pendingItemsOnPage, selectedRecIds]);
 
+  const fetchInventoryWithParams = useCallback(async (store: string) => {
+    const [firstInv, firstParams] = await Promise.all([
+      api.inventory.getInventory({ limit: 500, store_id: store }).catch(() => ({ list: [], total: 0 })),
+      api.optimization
+        .getParameters({ limit: 200, skip: 0, store_id: store })
+        .catch(() => ({ items: [], total: 0 })),
+    ]);
+
+    const invList: any[] = [...(firstInv.list || [])];
+    const invTotal = Number(firstInv.total || invList.length);
+    const paramItems: any[] = [...(firstParams.items || [])];
+    const paramTotal = Number(firstParams.total || paramItems.length);
+
+    // Fetch all remaining inventory and parameter pages in parallel without re-fetching offset 0
+    const invOffsets: number[] = [];
+    for (let skip = invList.length; skip < invTotal; skip += 500) {
+      invOffsets.push(skip);
+    }
+
+    const paramOffsets: number[] = [];
+    const paramCap = Math.min(paramTotal, 1400);
+    for (let skip = 200; skip < paramCap; skip += 200) {
+      paramOffsets.push(skip);
+    }
+
+    if (invOffsets.length > 0 || paramOffsets.length > 0) {
+      const [extraInvPages, extraParamPages] = await Promise.all([
+        Promise.all(
+          invOffsets.map((skip) =>
+            api.inventory
+              .getInventory({ skip, limit: 500, store_id: store })
+              .catch(() => ({ list: [] }))
+          )
+        ),
+        Promise.all(
+          paramOffsets.map((skip) =>
+            api.optimization
+              .getParameters({ limit: 200, skip, store_id: store })
+              .catch(() => ({ items: [] }))
+          )
+        ),
+      ]);
+
+      extraInvPages.forEach((p) => {
+        if (Array.isArray(p?.list)) invList.push(...p.list);
+      });
+      extraParamPages.forEach((p) => {
+        if (Array.isArray(p?.items)) paramItems.push(...p.items);
+      });
+    }
+
+    const paramMap = new Map();
+    paramItems.forEach((p: any) => {
+      paramMap.set(p.item_id, p);
+    });
+
+    const mapped = invList.map((item: any) => {
+      const opt = paramMap.get(item.item_id) || {};
+      return {
+        ...item,
+        safety_stock:
+          opt.safety_stock != null
+            ? Math.round(opt.safety_stock)
+            : item.safety_stock != null
+            ? Math.round(item.safety_stock)
+            : null,
+        reorder_point:
+          opt.reorder_point != null
+            ? Math.round(opt.reorder_point)
+            : item.reorder_point != null
+            ? Math.round(item.reorder_point)
+            : null,
+        eoq: opt.eoq != null ? Math.round(opt.eoq) : item.eoq != null ? Math.round(item.eoq) : null,
+      };
+    });
+
+    return { mapped, invTotal };
+  }, []);
+
   const loadRecommendations = async (store: string = selectedStore) => {
+    const reqId = ++recRequestIdRef.current;
     try {
+      const hasCustomFilters =
+        recStatusFilter !== 'ALL' || recPriorityFilter !== 'ALL' || recSearch.trim().length > 0;
+      const globalOffset = (recPage - 1) * recPageSize;
+      // When unfiltered, fetch aligned 200-item blocks to share cache with notification deep-link jumps
+      const blockSkip = hasCustomFilters ? globalOffset : Math.floor(globalOffset / 200) * 200;
+      const blockLimit = hasCustomFilters ? recPageSize : 200;
+
       const [res, invMeta] = await Promise.all([
         api.replenishment.listRecommendations({
           store_id: store,
           status: recStatusFilter !== 'ALL' ? recStatusFilter : undefined,
           priority: recPriorityFilter !== 'ALL' ? recPriorityFilter : undefined,
           search: recSearch.trim() || undefined,
-          skip: (recPage - 1) * recPageSize,
-          limit: recPageSize,
+          skip: blockSkip,
+          limit: blockLimit,
           auto_generate: false,
         }),
-        api.inventory.getInventory({ limit: 100, store_id: store }).catch(() => ({ list: [], total: 0 })),
+        api.inventory.getInventory({ limit: 1, store_id: store }).catch(() => ({ list: [], total: 0 })),
       ]);
 
-      const recItems = res.items || [];
+      if (reqId !== recRequestIdRef.current) return;
+
+      const rawItems = res.items || [];
+      const recItems = hasCustomFilters
+        ? rawItems
+        : rawItems.slice(globalOffset - blockSkip, globalOffset - blockSkip + recPageSize);
+
       setRecommendations(recItems);
       setRecTotal(res.total || 0);
       setPendingCount(res.pending_count || 0);
       setApprovedCount(res.approved_count || 0);
 
-      const invTotal = invMeta.total || (invMeta.list || []).length || res.total || recItems.length;
+      const invTotal = invMeta.total || res.total || recItems.length;
       setTotalMonitoredSkus(invTotal);
 
       setSelectedRecIds((prev) =>
@@ -211,36 +329,12 @@ export const Replenishment: React.FC = () => {
   };
 
   const loadInventory = async (store: string = selectedStore) => {
+    const reqId = ++invRequestIdRef.current;
     try {
-      const [invRes, paramsRes] = await Promise.all([
-        api.inventory.getInventory({ limit: 100, store_id: store }).catch(() => ({ list: [], total: 0 })),
-        api.optimization.getParameters({ limit: 100, store_id: store }).catch(() => ({ items: [], total: 0 })),
-      ]);
-      const paramMap = new Map();
-      (paramsRes.items || []).forEach((p: any) => {
-        paramMap.set(p.item_id, p);
-      });
-      const mapped = (invRes.list || []).map((item: any) => {
-        const opt = paramMap.get(item.item_id) || {};
-        return {
-          ...item,
-          safety_stock:
-            opt.safety_stock != null
-              ? Math.round(opt.safety_stock)
-              : item.safety_stock != null
-              ? Math.round(item.safety_stock)
-              : null,
-          reorder_point:
-            opt.reorder_point != null
-              ? Math.round(opt.reorder_point)
-              : item.reorder_point != null
-              ? Math.round(item.reorder_point)
-              : null,
-          eoq: opt.eoq != null ? Math.round(opt.eoq) : item.eoq != null ? Math.round(item.eoq) : null,
-        };
-      });
+      const { mapped, invTotal } = await fetchInventoryWithParams(store);
+      if (reqId !== invRequestIdRef.current) return;
       setInventory(mapped);
-      setTotalMonitoredSkus(Math.max(invRes.total || 0, mapped.length, recTotal));
+      setTotalMonitoredSkus((prevTotal) => Math.max(invTotal, mapped.length, recTotal, prevTotal));
     } catch (err) {
       console.error('Failed to load inventory levels', err);
     }
@@ -269,27 +363,341 @@ export const Replenishment: React.FC = () => {
       } else if (viewTab === 'INVENTORY') {
         await loadInventory(store);
       } else {
-        await Promise.all([loadHistory(store), loadRecommendations(store)]);
+        await loadHistory(store);
       }
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Load store list dynamically so any alerted store is present in selector
   useEffect(() => {
-    setSelectedRecIds([]);
-    loadAll(selectedStore);
-  }, [selectedStore]);
+    api.inventory
+      .getStores()
+      .then((stores: any) => {
+        if (Array.isArray(stores) && stores.length > 0) {
+          setStoreOptions((prev) => Array.from(new Set([...stores, ...prev])));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Ensure store from URL is included in store selector options cleanly
+  const availableStoreOptions = useMemo(() => {
+    if (focusStoreParam && focusStoreParam !== 'All' && !storeOptions.includes(focusStoreParam)) {
+      return [...storeOptions, focusStoreParam];
+    }
+    return storeOptions;
+  }, [storeOptions, focusStoreParam]);
+
+  // Deep-link locator: jump straight to the exact SKU row across store, tab, and page
+  useEffect(() => {
+    if (!focusSkuParam) return;
+    const token = focusTokenParam || `${focusSkuParam}:${focusStoreParam || ''}:${Date.now()}`;
+    locateTokenRef.current = token;
+    const targetStore = focusStoreParam && focusStoreParam !== 'All' ? focusStoreParam : selectedStore;
+
+    // Delay showing skeleton by 60ms so warm-cache deep-link jumps never flash a loading frame
+    let skeletonTimer: number | null = window.setTimeout(() => {
+      if (locateTokenRef.current === token) {
+        setIsLoading(true);
+      }
+    }, 60);
+
+    const clearSkeleton = () => {
+      if (skeletonTimer !== null) {
+        window.clearTimeout(skeletonTimer);
+        skeletonTimer = null;
+      }
+    };
+
+    const pickMatchingIndex = (batch: any[]) => {
+      const pendingIdx = batch.findIndex(
+        (r: any) => r.item_id === focusSkuParam && (r.status === 'PENDING' || r.status === 'PROPOSED')
+      );
+      if (pendingIdx !== -1) return pendingIdx;
+      return batch.findIndex((r: any) => r.item_id === focusSkuParam);
+    };
+
+    const locateTargetSku = async () => {
+      try {
+        if (targetStore !== selectedStore) {
+          skipNextAutoLoadRef.current = true;
+          lastLoadedStoreRef.current = targetStore;
+          setSelectedStore(targetStore);
+        }
+
+        // Fire light total-SKU count non-blocking in the background
+        void api.inventory
+          .getInventory({ limit: 1, store_id: targetStore })
+          .then((meta) => {
+            if (locateTokenRef.current === token && meta?.total) {
+              setTotalMonitoredSkus((prev) => Math.max(prev, Number(meta.total)));
+            }
+          })
+          .catch(() => {});
+
+        // 1. Search PO Recommendations table (batch 0 hits warm cache if hovered/opened in Topbar)
+        if (canEdit) {
+          try {
+            const firstRes = await api.replenishment.listRecommendations({
+              store_id: targetStore,
+              skip: 0,
+              limit: 200,
+              auto_generate: false,
+            });
+            if (locateTokenRef.current !== token) return;
+
+            const firstBatch = firstRes?.items || [];
+            const totalRecs = Number(firstRes?.total || firstBatch.length);
+            const summaryMeta = {
+              total: totalRecs,
+              pending_count: Number(firstRes?.pending_count || 0),
+              approved_count: Number(firstRes?.approved_count || 0),
+            };
+
+            let matchedRec: any = null;
+            let matchedIndex = -1;
+            let matchedPageItems: any[] | null = null;
+
+            const firstIdx = pickMatchingIndex(firstBatch);
+            if (firstIdx !== -1) {
+              matchedRec = firstBatch[firstIdx];
+              matchedIndex = firstIdx;
+              const pageInBatchStart = Math.floor((matchedIndex % 200) / recPageSize) * recPageSize;
+              matchedPageItems = firstBatch.slice(pageInBatchStart, pageInBatchStart + recPageSize);
+            } else if (totalRecs > 200 && firstBatch.length === 200) {
+              // Scan remaining pages in parallel chunks of 4 (much faster than sequential awaits)
+              const maxScan = Math.min(totalRecs, 1400);
+              const offsets: number[] = [];
+              for (let skip = 200; skip < maxScan; skip += 200) {
+                offsets.push(skip);
+              }
+
+              for (let i = 0; i < offsets.length; i += 4) {
+                const chunk = offsets.slice(i, i + 4);
+                const chunkResults = await Promise.all(
+                  chunk.map((skip) =>
+                    api.replenishment
+                      .listRecommendations({
+                        store_id: targetStore,
+                        skip,
+                        limit: 200,
+                        auto_generate: false,
+                      })
+                      .then((res) => ({ skip, batch: res?.items || [] }))
+                      .catch(() => ({ skip, batch: [] }))
+                  )
+                );
+                if (locateTokenRef.current !== token) return;
+
+                for (const { skip, batch } of chunkResults) {
+                  const localIdx = pickMatchingIndex(batch);
+                  if (localIdx !== -1) {
+                    matchedRec = batch[localIdx];
+                    matchedIndex = skip + localIdx;
+                    const pageInBatchStart = Math.floor((matchedIndex % 200) / recPageSize) * recPageSize;
+                    matchedPageItems = batch.slice(pageInBatchStart, pageInBatchStart + recPageSize);
+                    break;
+                  }
+                }
+                if (matchedRec) break;
+              }
+            }
+
+            if (matchedRec && matchedIndex !== -1) {
+              const targetPage = Math.floor(matchedIndex / recPageSize) + 1;
+              recRequestIdRef.current += 1;
+              skipNextAutoLoadRef.current = true;
+              clearSkeleton();
+
+              setRecStatusFilter('ALL');
+              setRecPriorityFilter('ALL');
+              setRecSearch('');
+              setViewTab('RECOMMENDATIONS');
+              setRecPage(targetPage);
+              if (matchedPageItems) {
+                setRecommendations(matchedPageItems);
+              }
+              setRecTotal(summaryMeta.total);
+              setPendingCount(summaryMeta.pending_count);
+              setApprovedCount(summaryMeta.approved_count);
+              setIsLoading(false);
+              setPendingScrollTarget({
+                sku: focusSkuParam,
+                recId: matchedRec.id,
+                tab: 'RECOMMENDATIONS',
+                token,
+              });
+              setSearchParams({}, { replace: true });
+              return;
+            }
+
+            // If store has > 1,400 recs, verify exact item_id query before falling back to Inventory
+            if (totalRecs > 1400) {
+              const directRes = await api.replenishment.listRecommendations({
+                store_id: targetStore,
+                item_id: focusSkuParam,
+                auto_generate: false,
+              });
+              if (locateTokenRef.current !== token) return;
+              const directItems = directRes?.items || [];
+              if (directItems.length > 0) {
+                const preferred =
+                  directItems.find((r: any) => r.status === 'PENDING' || r.status === 'PROPOSED') ||
+                  directItems[0];
+                recRequestIdRef.current += 1;
+                skipNextAutoLoadRef.current = true;
+                clearSkeleton();
+                setRecStatusFilter('ALL');
+                setRecPriorityFilter('ALL');
+                setRecSearch(focusSkuParam);
+                setViewTab('RECOMMENDATIONS');
+                setRecPage(1);
+                setRecommendations(directItems.slice(0, recPageSize));
+                setRecTotal(Number(directRes?.total || directItems.length));
+                setIsLoading(false);
+                setPendingScrollTarget({
+                  sku: focusSkuParam,
+                  recId: preferred.id,
+                  tab: 'RECOMMENDATIONS',
+                  token,
+                });
+                setSearchParams({}, { replace: true });
+                return;
+              }
+            }
+          } catch {
+            // Fall through to Inventory levels table
+          }
+        }
+
+        // 2. Fallback to Stock & Thresholds (INVENTORY) tab (always works for VIEWER or ungenerated PO SKUs)
+        const { mapped, invTotal } = await fetchInventoryWithParams(targetStore);
+        if (locateTokenRef.current !== token) return;
+
+        const invIdx = mapped.findIndex((item: any) => item.item_id === focusSkuParam);
+        if (invIdx !== -1) {
+          const targetInvPage = Math.floor(invIdx / invPageSize) + 1;
+          invRequestIdRef.current += 1;
+          skipNextAutoLoadRef.current = true;
+          clearSkeleton();
+          setInventory(mapped);
+          setTotalMonitoredSkus((prevTotal) => Math.max(invTotal, mapped.length, prevTotal));
+          setViewTab('INVENTORY');
+          setInvPage(targetInvPage);
+          setIsLoading(false);
+          setPendingScrollTarget({
+            sku: focusSkuParam,
+            tab: 'INVENTORY',
+            token,
+          });
+          setSearchParams({}, { replace: true });
+          return;
+        }
+
+        skipNextAutoLoadRef.current = false;
+        setSearchParams({}, { replace: true });
+        showToast(
+          isVi
+            ? `Không tìm thấy SKU ${focusSkuParam} tại kho ${targetStore}.`
+            : `SKU ${focusSkuParam} not found in store ${targetStore}.`,
+          'error'
+        );
+      } finally {
+        clearSkeleton();
+        if (locateTokenRef.current === token) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void locateTargetSku();
+    return () => {
+      clearSkeleton();
+    };
+  }, [focusSkuParam, focusStoreParam, focusTokenParam]);
+
+  // Execute smooth scroll & brief highlight flash once the target row renders in DOM
+  useEffect(() => {
+    if (!pendingScrollTarget || isLoading) return;
+    if (pendingScrollTarget.tab !== viewTab) return;
+
+    let rowEl: HTMLElement | null = null;
+    let flashKey: string | null = null;
+
+    if (viewTab === 'RECOMMENDATIONS') {
+      if (pendingScrollTarget.recId) {
+        rowEl = document.querySelector(
+          `tr[data-rep-rec-id="${CSS.escape(pendingScrollTarget.recId)}"]`
+        );
+        if (rowEl) {
+          flashKey = `rec:${pendingScrollTarget.recId}`;
+        }
+      }
+      if (!rowEl) {
+        rowEl = document.querySelector(
+          `tr[data-rep-sku="${CSS.escape(pendingScrollTarget.sku)}"]`
+        );
+        const recId = rowEl?.getAttribute('data-rep-rec-id');
+        if (rowEl && recId) {
+          flashKey = `rec:${recId}`;
+        }
+      }
+    } else if (viewTab === 'INVENTORY') {
+      rowEl = document.querySelector(
+        `tr[data-rep-inv-sku="${CSS.escape(pendingScrollTarget.sku)}"]`
+      );
+      if (rowEl) {
+        flashKey = `inv:${pendingScrollTarget.sku}`;
+      }
+    }
+
+    if (!rowEl || !flashKey) return;
+
+    setPendingScrollTarget(null);
+    const targetElement = rowEl;
+    const keyToFlash = flashKey;
+
+    // Reset then re-apply on next frame so clicking the same item twice replays the brief flash
+    setFlashingRowKey(null);
+    if (flashTimeoutRef.current) {
+      window.clearTimeout(flashTimeoutRef.current);
+    }
+
+    requestAnimationFrame(() => {
+      targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      requestAnimationFrame(() => {
+        setFlashingRowKey(keyToFlash);
+        flashTimeoutRef.current = window.setTimeout(() => {
+          setFlashingRowKey((curr) => (curr === keyToFlash ? null : curr));
+        }, 1850);
+      });
+    });
+  }, [pendingScrollTarget, viewTab, recommendations, inventory, isLoading, recPage, invPage]);
 
   useEffect(() => {
-    if (viewTab === 'RECOMMENDATIONS') {
-      loadRecommendations(selectedStore);
-    } else if (viewTab === 'HISTORY') {
-      loadHistory(selectedStore);
-    } else {
-      loadInventory(selectedStore);
+    return () => {
+      if (flashTimeoutRef.current) {
+        window.clearTimeout(flashTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Single unified tab/store/filter loader (prevents duplicate mount requests)
+  useEffect(() => {
+    if (focusSkuParam) return;
+    if (lastLoadedStoreRef.current !== selectedStore) {
+      lastLoadedStoreRef.current = selectedStore;
+      setSelectedRecIds([]);
     }
+    if (skipNextAutoLoadRef.current) {
+      skipNextAutoLoadRef.current = false;
+      return;
+    }
+    void loadAll(selectedStore);
   }, [
+    selectedStore,
     viewTab,
     recPage,
     recPageSize,
@@ -299,6 +707,7 @@ export const Replenishment: React.FC = () => {
     historyPage,
     historyPageSize,
     historyStatusFilter,
+    focusSkuParam,
   ]);
 
   const handleToggleSelectRow = (id: string, e: React.MouseEvent) => {
@@ -317,7 +726,11 @@ export const Replenishment: React.FC = () => {
   };
 
   const handleBulkApprove = async () => {
-    const targetIds = selectedRecIds.length > 0 ? selectedRecIds : pendingItemsOnPage.map((r) => r.id);
+    const targetRecs =
+      selectedRecIds.length > 0
+        ? recommendations.filter((r) => selectedRecIds.includes(r.id))
+        : pendingItemsOnPage;
+    const targetIds = targetRecs.map((r) => r.id).filter(Boolean);
     if (targetIds.length === 0) {
       showToast(isVi ? 'Chưa chọn đơn chờ duyệt nào.' : 'No pending orders selected.', 'error');
       return;
@@ -327,12 +740,17 @@ export const Replenishment: React.FC = () => {
     setBulkProgress({ done: 0, total: targetIds.length });
     let approvedOk = 0;
     let failedCount = 0;
+    const approvedItems: Array<{ itemId: string; storeId?: string }> = [];
 
     try {
       for (let i = 0; i < targetIds.length; i++) {
         try {
           await api.replenishment.approve(targetIds[i]);
           approvedOk++;
+          const recObj = targetRecs[i];
+          if (recObj?.item_id) {
+            approvedItems.push({ itemId: recObj.item_id, storeId: recObj.store_id || selectedStore });
+          }
         } catch {
           failedCount++;
         }
@@ -341,6 +759,13 @@ export const Replenishment: React.FC = () => {
 
       setSelectedRecIds([]);
       await loadRecommendations(selectedStore);
+      if (approvedItems.length > 0) {
+        emitAlertsSyncEvent({
+          action: 'po_bulk_approved',
+          storeId: selectedStore,
+          items: approvedItems,
+        });
+      }
 
       if (failedCount === 0) {
         showToast(
@@ -369,6 +794,7 @@ export const Replenishment: React.FC = () => {
       const res = await api.replenishment.generateRecommendations(selectedStore);
       showToast(res.message || (isVi ? 'Đã tạo đề xuất PO mới.' : 'Generated PO recommendations.'));
       await loadRecommendations(selectedStore);
+      emitAlertsSyncEvent({ action: 'po_generated', storeId: selectedStore });
     } catch (err: any) {
       showToast(
         err.response?.data?.detail || (isVi ? 'Không thể tạo đề xuất' : 'Failed to generate recommendations'),
@@ -400,6 +826,11 @@ export const Replenishment: React.FC = () => {
       if (selectedItem?.id === rec.id) {
         setSelectedItem({ ...selectedItem, status: 'APPROVED' });
       }
+      emitAlertsSyncEvent({
+        action: 'po_approved',
+        itemId: rec.item_id,
+        storeId: rec.store_id || selectedStore,
+      });
     } catch (err: any) {
       showToast(err.response?.data?.detail || (isVi ? 'Phê duyệt thất bại' : 'Approval failed'), 'error');
     }
@@ -458,6 +889,11 @@ export const Replenishment: React.FC = () => {
       if (selectedItem?.id === targetRec.id) {
         setSelectedItem({ ...selectedItem, status: 'REJECTED' });
       }
+      emitAlertsSyncEvent({
+        action: 'po_rejected',
+        itemId: targetRec.item_id,
+        storeId: targetRec.store_id || selectedStore,
+      });
     } catch (err: any) {
       showToast(err.response?.data?.detail || (isVi ? 'Lỗi từ chối' : 'Rejection failed'), 'error');
     } finally {
@@ -485,6 +921,11 @@ export const Replenishment: React.FC = () => {
       if (selectedItem?.id === targetRec.id) {
         setSelectedItem({ ...selectedItem, status: 'CANCELLED' });
       }
+      emitAlertsSyncEvent({
+        action: 'po_cancelled',
+        itemId: targetRec.item_id,
+        storeId: targetRec.store_id || selectedStore,
+      });
     } catch (err: any) {
       showToast(err.response?.data?.detail || (isVi ? 'Lỗi hủy đơn' : 'Cancellation failed'), 'error');
     } finally {
@@ -498,6 +939,7 @@ export const Replenishment: React.FC = () => {
       const res = await api.optimization.recompute({ store_id: selectedStore });
       showToast(res.message || (isVi ? 'Đã tính lại tham số (R, s, S)!' : 'Recomputed (R, s, S) parameters!'));
       await loadAll(selectedStore);
+      emitAlertsSyncEvent({ action: 'params_recomputed', storeId: selectedStore });
     } catch (err: any) {
       showToast(err.response?.data?.detail || (isVi ? 'Lỗi tính lại tham số' : 'Recompute failed'), 'error');
     } finally {
@@ -556,12 +998,18 @@ export const Replenishment: React.FC = () => {
             <select
               className="rep-store-select"
               value={selectedStore}
-              onChange={(e) => setSelectedStore(e.target.value)}
+              onChange={(e) => {
+                setSelectedStore(e.target.value);
+                setRecPage(1);
+                setInvPage(1);
+                setHistoryPage(1);
+              }}
             >
-              <option value="CA_1">CA_1</option>
-              <option value="CA_2">CA_2</option>
-              <option value="TX_1">TX_1</option>
-              <option value="WI_1">WI_1</option>
+              {availableStoreOptions.map((st) => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -858,14 +1306,29 @@ export const Replenishment: React.FC = () => {
                 </thead>
                 <tbody>
                   {isLoading ? (
-                    <tr>
-                      <td colSpan={canEdit ? 12 : 11} style={{ textAlign: 'center', padding: '2.5rem', color: '#0f766e' }}>
-                        <RefreshCw size={20} className="animate-spin" style={{ margin: '0 auto 8px', display: 'block' }} />
-                        <span style={{ fontSize: '0.8125rem', fontWeight: 600 }}>
-                          {isVi ? 'Đang tải đề xuất đặt hàng...' : 'Loading recommendations...'}
-                        </span>
-                      </td>
-                    </tr>
+                    Array.from({ length: 6 }).map((_, idx) => (
+                      <tr key={`skeleton-rec-${idx}`} className="rep-skeleton-row" aria-hidden="true">
+                        {canEdit && (
+                          <td style={{ textAlign: 'center' }}>
+                            <span className="rep-skeleton-box" style={{ width: '14px', height: '14px', margin: '0 auto' }} />
+                          </td>
+                        )}
+                        <td>
+                          <span className="rep-skeleton-box" style={{ width: '112px', height: '12px', marginBottom: '6px' }} />
+                          <span className="rep-skeleton-box" style={{ width: '76px', height: '10px', opacity: 0.65 }} />
+                        </td>
+                        <td><span className="rep-skeleton-box" style={{ width: '40px', height: '18px' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '74px', height: '14px', marginLeft: 'auto' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '42px', height: '14px', marginLeft: 'auto' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '42px', height: '14px', marginLeft: 'auto' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '38px', height: '14px', marginLeft: 'auto' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '62px', height: '20px' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '68px', height: '20px' }} /></td>
+                        <td><span className="rep-skeleton-box" style={{ width: '64px', height: '20px', margin: '0 auto' }} /></td>
+                      </tr>
+                    ))
                   ) : recommendations.length === 0 ? (
                     <tr>
                       <td colSpan={canEdit ? 12 : 11} style={{ textAlign: 'center', padding: '2.5rem', color: '#94a3b8' }}>
@@ -880,6 +1343,7 @@ export const Replenishment: React.FC = () => {
                       const isApproved = rec.status === 'APPROVED';
                       const isSelected = selectedItem?.id === rec.id;
                       const isChecked = selectedRecIds.includes(rec.id);
+                      const isFlashing = flashingRowKey === `rec:${rec.id}`;
                       const priClass = (rec.priority || 'LOW').toLowerCase();
                       const statusClass = (rec.status || 'PENDING').toLowerCase();
                       const m = computeRssMetrics(rec);
@@ -887,7 +1351,11 @@ export const Replenishment: React.FC = () => {
                       return (
                         <tr
                           key={rec.id}
-                          className={`${isSelected ? 'selected' : ''} ${isChecked ? 'row-checked' : ''}`}
+                          data-rep-rec-id={rec.id}
+                          data-rep-sku={rec.item_id}
+                          className={`${isSelected ? 'selected' : ''} ${isChecked ? 'row-checked' : ''} ${
+                            isFlashing ? 'rep-row-flash' : ''
+                          }`}
                           onClick={() => setSelectedItem(rec)}
                           style={{ cursor: 'pointer' }}
                         >
@@ -1065,7 +1533,26 @@ export const Replenishment: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {inventory.slice((invPage - 1) * invPageSize, invPage * invPageSize).map((item) => {
+                {isLoading ? (
+                  Array.from({ length: 6 }).map((_, idx) => (
+                    <tr key={`skeleton-inv-${idx}`} className="rep-skeleton-row" aria-hidden="true">
+                      <td>
+                        <span className="rep-skeleton-box" style={{ width: '112px', height: '12px', marginBottom: '6px' }} />
+                        <span className="rep-skeleton-box" style={{ width: '76px', height: '10px', opacity: 0.65 }} />
+                      </td>
+                      <td><span className="rep-skeleton-box" style={{ width: '40px', height: '18px' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '40px', height: '14px', marginLeft: 'auto' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '40px', height: '14px', marginLeft: 'auto' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '108px', height: '10px' }} /></td>
+                      <td><span className="rep-skeleton-box" style={{ width: '72px', height: '20px' }} /></td>
+                    </tr>
+                  ))
+                ) : (
+                  inventory.slice((invPage - 1) * invPageSize, invPage * invPageSize).map((item) => {
                   const m = computeRssMetrics(item);
                   const ss = item.safety_stock != null ? Number(item.safety_stock) : null;
                   const rop = item.reorder_point != null ? Number(item.reorder_point) : null;
@@ -1088,9 +1575,14 @@ export const Replenishment: React.FC = () => {
                     ? 'An toàn'
                     : 'Healthy';
                   const fillPct = m.bigS > 0 ? Math.min(100, Math.max(0, Math.round((m.ip / m.bigS) * 100))) : 0;
+                  const isFlashing = flashingRowKey === `inv:${item.item_id}`;
 
                   return (
-                    <tr key={item.item_id}>
+                    <tr
+                      key={item.item_id}
+                      data-rep-inv-sku={item.item_id}
+                      className={isFlashing ? 'rep-row-flash' : ''}
+                    >
                       <td>
                         <div className="rep-sku-code">{item.item_id}</div>
                         <div className="rep-sku-name">{item.name || item.item_id}</div>
@@ -1135,7 +1627,8 @@ export const Replenishment: React.FC = () => {
                       </td>
                     </tr>
                   );
-                })}
+                })
+                )}
               </tbody>
             </table>
           </div>

@@ -1,32 +1,58 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, Bell, Calendar, X, Loader2, ArrowRight, Menu, AlertTriangle, AlertCircle } from 'lucide-react';
-import { api } from '../../services/api.ts';
+import {
+  Search,
+  Bell,
+  Calendar,
+  X,
+  Loader2,
+  ArrowRight,
+  Menu,
+  AlertCircle,
+  CheckCircle2,
+  ChevronRight,
+  ChevronLeft,
+  MoreHorizontal,
+} from 'lucide-react';
+import { api, clearApiCache } from '../../services/api.ts';
 import { useSSE } from '../../hooks/useSSE.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
 import { LanguageToggle } from '../common/LanguageToggle.tsx';
+import {
+  ALERTS_SYNC_EVENT,
+  type AlertsSyncDetail,
+  type TrackedAlertItem,
+  applyOptimisticAlertSync,
+  fetchCriticalDashboardAlerts,
+  fetchRecommendationsForAlerts,
+  getAlertStorageKey,
+  loadTrackedAlerts,
+  prefetchReplenishmentTarget,
+  reconcileTrackedAlerts,
+  saveTrackedAlerts,
+} from '../../utils/alertTracker.ts';
 import './Topbar.css';
 
 interface TopbarProps {
   onToggleMobileSidebar?: () => void;
 }
 
-interface AlertItem {
-  id?: string;
-  item_id?: string;
-  name?: string;
-  store?: string;
-  store_id?: string;
-  on_hand?: number;
-  stock?: number;
-  safety_stock?: number;
-  reorder_point?: number;
-  rop?: number;
-  severity?: 'CRITICAL' | 'WARNING' | 'HEALTHY';
-  status?: string;
-  details?: string;
-}
+const NOTIF_PAGE_SIZE = 6;
+
+const getCompactPageNumbers = (current: number, total: number): Array<number | 'ellipsis'> => {
+  if (total <= 5) {
+    return Array.from({ length: total }, (_, idx) => idx + 1);
+  }
+  if (current <= 3) {
+    return [1, 2, 3, 4, 'ellipsis', total];
+  }
+  if (current >= total - 2) {
+    return [1, 'ellipsis', total - 3, total - 2, total - 1, total];
+  }
+  return [1, 'ellipsis', current - 1, current, current + 1, 'ellipsis', total];
+};
 
 const getPageConfig = (pathname: string, t: (k: string, fb?: string) => string) => {
   switch (pathname) {
@@ -109,8 +135,11 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { t, language } = useLanguage();
+  const { user } = useAuth();
   const config = getPageConfig(location.pathname, t);
-  
+  const alertStorageKey = getAlertStorageKey(user);
+  const canViewReplenishments = user?.role?.toUpperCase() !== 'VIEWER';
+
   const [searchTerm, setSearchTerm] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -124,10 +153,32 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     }
   });
   const [showNotifications, setShowNotifications] = useState(false);
-  const [stockAlerts, setStockAlerts] = useState<AlertItem[]>([]);
-  const [criticalCount, setCriticalCount] = useState<number>(0);
-  
+  const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | 'read'>('all');
+  const [notifPage, setNotifPage] = useState(1);
+  const [alertsState, setAlertsState] = useState<{
+    key: string;
+    items: TrackedAlertItem[];
+  }>(() => ({
+    key: alertStorageKey,
+    items: loadTrackedAlerts(alertStorageKey),
+  }));
+
+  const trackedAlerts = useMemo(
+    () => (alertsState.key === alertStorageKey ? alertsState.items : loadTrackedAlerts(alertStorageKey)),
+    [alertsState, alertStorageKey]
+  );
+
   const notifRef = useRef<HTMLDivElement>(null);
+  const notifListRef = useRef<HTMLDivElement>(null);
+  const trackedRef = useRef<TrackedAlertItem[]>(trackedAlerts);
+  const isSyncingRef = useRef(false);
+  const pendingResyncRef = useRef(false);
+  const lastSyncedAtRef = useRef(0);
+  const focusCounterRef = useRef(0);
+
+  useEffect(() => {
+    trackedRef.current = trackedAlerts;
+  }, [trackedAlerts]);
 
   // Close notifications on outside click
   useEffect(() => {
@@ -140,43 +191,89 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Fetch real Backend stock alerts from /dashboard/alerts
-  useEffect(() => {
-    api.dashboard.getAlerts({ severity: 'CRITICAL', limit: 8 })
-      .then((res: any) => {
-        const items = res?.items || [];
-        setStockAlerts(items);
-        setCriticalCount(res?.critical_count ?? items.length);
-      })
-      .catch(() => {
-        // Fallback gracefully to inventory alerts if needed
-        api.inventory.getReplenishmentAlerts()
-          .then((res: any) => {
-            const list = res?.alerts || [];
-            setStockAlerts(list);
-            setCriticalCount(list.length);
-          })
-          .catch(() => {
-            setStockAlerts([]);
-            setCriticalCount(0);
-          });
-      });
-  }, []);
+  const syncAlerts = useCallback(
+    async (forceFresh: boolean = false, clearReplenishCache: boolean = false) => {
+      if (isSyncingRef.current) {
+        pendingResyncRef.current = true;
+        return;
+      }
+      isSyncingRef.current = true;
+      try {
+        if (forceFresh) {
+          clearApiCache('/dashboard/alerts');
+          if (clearReplenishCache) {
+            clearApiCache('/replenishments');
+          }
+        }
+        const [critRes, recRes] = await Promise.all([
+          fetchCriticalDashboardAlerts(),
+          canViewReplenishments ? fetchRecommendationsForAlerts() : Promise.resolve(null),
+        ]);
 
-  // Realtime Server-Sent Events (SSE) stream listener
+        if (!critRes.fetchSuccess) return;
+
+        const reconciled = reconcileTrackedAlerts({
+          previousTracked: trackedRef.current,
+          criticalAlerts: critRes.items,
+          totalCriticalInDb: critRes.totalCriticalInDb,
+          recommendations: recRes,
+        });
+
+        trackedRef.current = reconciled;
+        setAlertsState({ key: alertStorageKey, items: reconciled });
+        saveTrackedAlerts(alertStorageKey, reconciled);
+        lastSyncedAtRef.current = Date.now();
+      } finally {
+        isSyncingRef.current = false;
+        if (pendingResyncRef.current) {
+          pendingResyncRef.current = false;
+          void syncAlerts(true, false);
+        }
+      }
+    },
+    [alertStorageKey, canViewReplenishments]
+  );
+
+  // Sync per-account alerts when logged-in account changes
+  useEffect(() => {
+    trackedRef.current = loadTrackedAlerts(alertStorageKey);
+    void syncAlerts(false, false);
+  }, [alertStorageKey, syncAlerts]);
+
+  // Listen to same-tab replenishment/inventory actions for immediate status & badge update
+  useEffect(() => {
+    const handleSyncEvent = (event: Event) => {
+      const detail = (event as CustomEvent<AlertsSyncDetail>).detail;
+      if (detail) {
+        const optimistic = applyOptimisticAlertSync(trackedRef.current, detail);
+        trackedRef.current = optimistic;
+        setAlertsState({ key: alertStorageKey, items: optimistic });
+        saveTrackedAlerts(alertStorageKey, optimistic);
+      }
+      void syncAlerts(true, true);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastSyncedAtRef.current > 15000) {
+        void syncAlerts(true, true);
+      }
+    };
+
+    window.addEventListener(ALERTS_SYNC_EVENT, handleSyncEvent);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener(ALERTS_SYNC_EVENT, handleSyncEvent);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [alertStorageKey, syncAlerts]);
+
+  // Realtime Server-Sent Events (SSE) stream listener: reconcile instead of injecting raw logs
   const sse = useSSE('/events');
   useEffect(() => {
     if (sse.data && sse.data.type !== 'connected' && sse.data.type !== 'close') {
-      const newNotif: AlertItem = {
-        name: `[Event: ${sse.data.type}]`,
-        details: typeof sse.data.payload === 'object' ? JSON.stringify(sse.data.payload) : String(sse.data.payload || ''),
-        severity: 'WARNING',
-        status: 'WARNING',
-      };
-      setStockAlerts((prev) => [newNotif, ...prev]);
-      setCriticalCount((c) => c + 1);
+      void syncAlerts(true, true);
     }
-  }, [sse.data]);
+  }, [sse.data, syncAlerts]);
 
   // Keyboard shortcut for command palette (Ctrl+K or Cmd+K)
   useEffect(() => {
@@ -228,10 +325,161 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     setSearchTerm(term);
   };
 
-  const handleAlertItemClick = (alert: AlertItem) => {
+  const unreadAlerts = useMemo(
+    () => trackedAlerts.filter((item) => item.alertState === 'unread'),
+    [trackedAlerts]
+  );
+
+  const readAlerts = useMemo(
+    () => trackedAlerts.filter((item) => item.alertState === 'read'),
+    [trackedAlerts]
+  );
+
+  const unreadCount = unreadAlerts.length;
+
+  const filteredAlerts = useMemo(() => {
+    if (notifFilter === 'unread') return unreadAlerts;
+    if (notifFilter === 'read') return readAlerts;
+    return trackedAlerts;
+  }, [notifFilter, unreadAlerts, readAlerts, trackedAlerts]);
+
+  const totalNotifItems = filteredAlerts.length;
+  const totalNotifPages = Math.max(1, Math.ceil(totalNotifItems / NOTIF_PAGE_SIZE));
+  const safeNotifPage = Math.min(Math.max(1, notifPage), totalNotifPages);
+  const notifRangeStart = totalNotifItems === 0 ? 0 : (safeNotifPage - 1) * NOTIF_PAGE_SIZE + 1;
+  const notifRangeEnd = Math.min(safeNotifPage * NOTIF_PAGE_SIZE, totalNotifItems);
+
+  const paginatedAlerts = useMemo(() => {
+    const startIdx = (safeNotifPage - 1) * NOTIF_PAGE_SIZE;
+    return filteredAlerts.slice(startIdx, startIdx + NOTIF_PAGE_SIZE);
+  }, [filteredAlerts, safeNotifPage]);
+
+  const pageUnreadAlerts = useMemo(
+    () => paginatedAlerts.filter((item) => item.alertState === 'unread'),
+    [paginatedAlerts]
+  );
+
+  const pageReadAlerts = useMemo(
+    () => paginatedAlerts.filter((item) => item.alertState === 'read'),
+    [paginatedAlerts]
+  );
+
+  const compactPageNumbers = useMemo(
+    () => getCompactPageNumbers(safeNotifPage, totalNotifPages),
+    [safeNotifPage, totalNotifPages]
+  );
+
+  const handleChangeNotifFilter = (nextFilter: 'all' | 'unread' | 'read') => {
+    setNotifFilter(nextFilter);
+    setNotifPage(1);
+    if (notifListRef.current) {
+      notifListRef.current.scrollTop = 0;
+    }
+  };
+
+  const handleChangeNotifPage = (nextPage: number) => {
+    const clamped = Math.min(Math.max(1, nextPage), totalNotifPages);
+    setNotifPage(clamped);
+    if (notifListRef.current) {
+      notifListRef.current.scrollTop = 0;
+    }
+  };
+
+  const handleToggleNotifications = () => {
+    const nextOpen = !showNotifications;
+    setShowNotifications(nextOpen);
+    if (nextOpen) {
+      if (notifListRef.current) {
+        notifListRef.current.scrollTop = 0;
+      }
+      // Pre-warm the primary alert's store right on popover open
+      const topStore = unreadAlerts[0]?.store_id || trackedAlerts[0]?.store_id;
+      if (topStore) {
+        prefetchReplenishmentTarget(topStore, canViewReplenishments);
+      }
+      if (Date.now() - lastSyncedAtRef.current > 10000) {
+        void syncAlerts(true, Date.now() - lastSyncedAtRef.current > 45000);
+      }
+    }
+  };
+
+  const handlePrefetchAlertStore = (storeId?: string) => {
+    prefetchReplenishmentTarget(storeId, canViewReplenishments);
+  };
+
+  const handleAlertItemClick = (alert: TrackedAlertItem) => {
+    handlePrefetchAlertStore(alert.store_id);
     setShowNotifications(false);
-    const sku = alert.item_id || alert.id;
-    navigate(sku ? `/replenishment?search=${encodeURIComponent(sku)}` : '/replenishment');
+    focusCounterRef.current += 1;
+    const params = new URLSearchParams({
+      sku: alert.item_id,
+      store: alert.store_id || 'CA_1',
+      focus: String(focusCounterRef.current),
+    });
+    navigate(`/replenishment?${params.toString()}`);
+  };
+
+  const renderAlertItem = (alert: TrackedAlertItem) => {
+    const isUnread = alert.alertState === 'unread';
+    const resolvedSubtitle =
+      alert.resolvedReason === 'po_approved'
+        ? t('topbar.status_po_approved', 'PO approved · In transit')
+        : t('topbar.status_stock_restored', 'Stock above safety threshold');
+
+    return (
+      <button
+        type="button"
+        className={`notification-item ${isUnread ? 'is-unread' : 'is-read'}`}
+        key={alert.key}
+        onMouseEnter={() => handlePrefetchAlertStore(alert.store_id)}
+        onFocus={() => handlePrefetchAlertStore(alert.store_id)}
+        onPointerDown={() => handlePrefetchAlertStore(alert.store_id)}
+        onClick={() => handleAlertItemClick(alert)}
+      >
+        <div className="notif-icon-col">
+          {isUnread ? (
+            <AlertCircle size={15} className="notif-icon-svg critical" />
+          ) : (
+            <CheckCircle2 size={15} className="notif-icon-svg resolved" />
+          )}
+        </div>
+        <div className="notif-content">
+          <div className="notif-title-row">
+            <span className="notif-sku">{alert.item_id}</span>
+            <span className="notif-store-tag">{alert.store_id}</span>
+            <span className={`notif-sev-badge ${isUnread ? 'critical' : 'resolved'}`}>
+              {isUnread ? 'CRITICAL' : t('topbar.badge_read', 'DONE')}
+            </span>
+          </div>
+          <p className="notif-metrics">
+            {isUnread ? (
+              <>
+                On-Hand: <strong>{Math.round(alert.on_hand)}</strong> &middot; SS:{' '}
+                <strong>{Math.round(alert.safety_stock)}</strong> &middot; ROP:{' '}
+                <strong>{Math.round(alert.reorder_point)}</strong>
+              </>
+            ) : alert.resolvedReason === 'po_approved' ? (
+              <>
+                {resolvedSubtitle} &middot; OO: <strong>{Math.round(alert.on_order)}</strong>
+              </>
+            ) : (
+              <>
+                On-Hand: <strong>{Math.round(alert.on_hand)}</strong> &middot; SS:{' '}
+                <strong>{Math.round(alert.safety_stock)}</strong>
+              </>
+            )}
+          </p>
+          <span className="notif-meta">
+            {alert.product_name && alert.product_name !== alert.item_id ? `${alert.product_name} \u2022 ` : ''}
+            {isUnread ? t('topbar.status_alerting', 'Stockout alert') : resolvedSubtitle}
+          </span>
+        </div>
+        <div className="notif-trail-col">
+          {isUnread && <span className="notif-unread-dot" aria-hidden="true" />}
+          <ChevronRight size={13} className="notif-item-chevron" aria-hidden="true" />
+        </div>
+      </button>
+    );
   };
 
   const formattedDate = new Date().toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US', { 
@@ -416,96 +664,186 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
 
         {/* Stock Alerts Notification Bell */}
         <div className="notif-wrapper" ref={notifRef}>
-          <button 
-            type="button" 
-            className="topbar-bell-btn" 
-            onClick={() => setShowNotifications(!showNotifications)}
+          <button
+            type="button"
+            className={`topbar-bell-btn ${showNotifications ? 'is-open' : ''}`}
+            onClick={handleToggleNotifications}
             aria-label={t('topbar.notifications', 'Notifications')}
+            aria-expanded={showNotifications}
+            aria-haspopup="true"
           >
             <Bell size={16} />
-            {criticalCount > 0 && (
+            {unreadCount > 0 && (
               <span className="topbar-bell-badge">
-                {criticalCount > 99 ? '99+' : criticalCount}
+                {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
           </button>
-          
+
           {showNotifications && (
-            <div className="topbar-notifications-dropdown">
+            <div className="topbar-notifications-dropdown" role="dialog" aria-label={t('topbar.stock_alerts', 'Stock Alerts')}>
               <div className="notifications-header">
                 <div className="notifications-header-left">
                   <h3>{t('topbar.stock_alerts', 'Stock Alerts')}</h3>
-                  {criticalCount > 0 && (
-                    <span className="notif-count-pill">{criticalCount} critical</span>
-                  )}
                 </div>
-                <button
-                  type="button"
-                  className="notif-mark-read-btn"
-                  onClick={() => {
-                    setStockAlerts([]);
-                    setCriticalCount(0);
-                  }}
-                >
-                  {t('topbar.mark_all_read', 'Mark all read')}
-                </button>
+                {unreadCount > 0 ? (
+                  <span className="notif-count-pill is-active">
+                    {unreadCount} {t('topbar.active_alerts_count', 'active')}
+                  </span>
+                ) : (
+                  <span className="notif-count-pill is-clear">
+                    {t('topbar.all_clear', 'All clear')}
+                  </span>
+                )}
               </div>
 
-              <div className="notifications-list">
-                {stockAlerts.length === 0 && (
+              {trackedAlerts.length > 0 && (
+                <div className="notifications-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={notifFilter === 'all'}
+                    className={`notif-tab-btn ${notifFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => handleChangeNotifFilter('all')}
+                  >
+                    <span>{t('topbar.filter_all', 'All')}</span>
+                    <span className="notif-tab-count">{trackedAlerts.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={notifFilter === 'unread'}
+                    className={`notif-tab-btn ${notifFilter === 'unread' ? 'active' : ''}`}
+                    onClick={() => handleChangeNotifFilter('unread')}
+                  >
+                    <span>{t('topbar.filter_unread', 'Alerts')}</span>
+                    <span className={`notif-tab-count ${unreadCount > 0 ? 'has-unread' : ''}`}>
+                      {unreadCount}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={notifFilter === 'read'}
+                    className={`notif-tab-btn ${notifFilter === 'read' ? 'active' : ''}`}
+                    onClick={() => handleChangeNotifFilter('read')}
+                  >
+                    <span>{t('topbar.filter_read', 'Done')}</span>
+                    <span className={`notif-tab-count ${readAlerts.length > 0 ? 'has-done' : ''}`}>
+                      {readAlerts.length}
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              <div className="notifications-list" ref={notifListRef}>
+                {trackedAlerts.length === 0 && (
                   <div className="notification-empty">
-                    <p>{t('topbar.no_alerts', 'No SKU is currently below reorder point.')}</p>
+                    <div className="notification-empty-icon">
+                      <CheckCircle2 size={18} />
+                    </div>
+                    <p>{t('topbar.no_alerts', 'No active or completed alerts recorded yet.')}</p>
                     <span>{t('topbar.updated_now', 'Updated now')}</span>
                   </div>
                 )}
 
-                {stockAlerts.slice(0, 7).map((alert, idx) => {
-                  const itemId = alert.item_id || alert.id;
-                  const storeId = alert.store_id || alert.store || 'All';
-                  const onHand = alert.on_hand ?? alert.stock ?? 0;
-                  const rop = alert.reorder_point ?? alert.rop ?? 0;
-                  const isCritical = alert.severity === 'CRITICAL' || onHand <= 0;
-
-                  return (
-                    <div 
-                      className="notification-item" 
-                      key={itemId ? `${itemId}-${storeId}-${idx}` : `event-${idx}`}
-                      onClick={() => handleAlertItemClick(alert)}
-                    >
-                      <div className="notif-icon-col">
-                        {isCritical ? (
-                          <AlertCircle size={15} className="notif-icon-svg critical" />
-                        ) : (
-                          <AlertTriangle size={15} className="notif-icon-svg warning" />
-                        )}
-                      </div>
-                      <div className="notif-content">
-                        {alert.details ? (
-                          <>
-                            <p className="notif-title"><strong>{alert.name}</strong></p>
-                            <p className="notif-detail">{alert.details}</p>
-                            <span className="notif-meta">Realtime SSE &bull; {t('topbar.updated_now', 'Updated now')}</span>
-                          </>
-                        ) : (
-                          <>
-                            <div className="notif-title-row">
-                              <span className="notif-sku">{itemId}</span>
-                              <span className="notif-store-tag">{storeId}</span>
-                              <span className={`notif-sev-badge ${isCritical ? 'critical' : 'warning'}`}>
-                                {isCritical ? 'CRITICAL' : 'WARNING'}
-                              </span>
-                            </div>
-                            <p className="notif-metrics">
-                              On-Hand: <strong>{onHand}</strong> &middot; ROP: <strong>{rop}</strong>
-                            </p>
-                            <span className="notif-meta">{alert.name ? `${alert.name} &bull; ` : ''}{t('topbar.updated_now', 'Updated now')}</span>
-                          </>
-                        )}
-                      </div>
+                {trackedAlerts.length > 0 && notifFilter === 'unread' && unreadAlerts.length === 0 && (
+                  <div className="notification-empty">
+                    <div className="notification-empty-icon">
+                      <CheckCircle2 size={18} />
                     </div>
-                  );
-                })}
+                    <p>{t('topbar.no_unread_alerts', 'All critical stock alerts have been handled.')}</p>
+                    <span>{t('topbar.updated_now', 'Updated now')}</span>
+                  </div>
+                )}
+
+                {trackedAlerts.length > 0 && notifFilter === 'read' && readAlerts.length === 0 && (
+                  <div className="notification-empty">
+                    <p>{t('topbar.no_read_alerts', 'Completed alerts will appear here once resolved.')}</p>
+                    <span>{t('topbar.updated_now', 'Updated now')}</span>
+                  </div>
+                )}
+
+                {pageUnreadAlerts.length > 0 && (
+                  <div className="notifications-section">
+                    {notifFilter === 'all' && readAlerts.length > 0 && (
+                      <div className="notifications-section-label">
+                        <span>{t('topbar.section_unread', 'Active Alerts')}</span>
+                        <span>{unreadAlerts.length}</span>
+                      </div>
+                    )}
+                    {pageUnreadAlerts.map(renderAlertItem)}
+                  </div>
+                )}
+
+                {pageReadAlerts.length > 0 && (
+                  <div className="notifications-section">
+                    {notifFilter === 'all' && unreadAlerts.length > 0 && (
+                      <div className="notifications-section-label">
+                        <span>{t('topbar.section_read', 'Done · Resolved')}</span>
+                        <span>{readAlerts.length}</span>
+                      </div>
+                    )}
+                    {pageReadAlerts.map(renderAlertItem)}
+                  </div>
+                )}
               </div>
+
+              {totalNotifPages > 1 && (
+                <nav
+                  className="notifications-pagination"
+                  role="navigation"
+                  aria-label={t('topbar.pagination_aria', 'Notifications pagination')}
+                >
+                  <span className="notif-page-summary">
+                    {notifRangeStart}&ndash;{notifRangeEnd} / {totalNotifItems}
+                  </span>
+                  <ul className="notif-page-list">
+                    <li>
+                      <button
+                        type="button"
+                        className="notif-page-btn nav-arrow"
+                        onClick={() => handleChangeNotifPage(safeNotifPage - 1)}
+                        disabled={safeNotifPage === 1}
+                        aria-label={t('topbar.prev_page', 'Previous page')}
+                        title={t('topbar.prev_page', 'Previous page')}
+                      >
+                        <ChevronLeft size={13} />
+                      </button>
+                    </li>
+                    {compactPageNumbers.map((token, idx) =>
+                      token === 'ellipsis' ? (
+                        <li key={`ellipsis-${idx}`} className="notif-page-ellipsis" aria-hidden="true">
+                          <MoreHorizontal size={12} />
+                        </li>
+                      ) : (
+                        <li key={`page-${token}`}>
+                          <button
+                            type="button"
+                            className={`notif-page-btn ${safeNotifPage === token ? 'is-active' : ''}`}
+                            aria-current={safeNotifPage === token ? 'page' : undefined}
+                            onClick={() => handleChangeNotifPage(token)}
+                          >
+                            {token}
+                          </button>
+                        </li>
+                      )
+                    )}
+                    <li>
+                      <button
+                        type="button"
+                        className="notif-page-btn nav-arrow"
+                        onClick={() => handleChangeNotifPage(safeNotifPage + 1)}
+                        disabled={safeNotifPage === totalNotifPages}
+                        aria-label={t('topbar.next_page', 'Next page')}
+                        title={t('topbar.next_page', 'Next page')}
+                      >
+                        <ChevronRight size={13} />
+                      </button>
+                    </li>
+                  </ul>
+                </nav>
+              )}
 
               <div className="notifications-footer">
                 <button
@@ -516,7 +854,7 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
                     navigate('/replenishment');
                   }}
                 >
-                  <span>{t('topbar.view_all_replenishment', 'View all in Replenishment')}</span>
+                  <span>{t('topbar.view_all_replenishment', 'Open Replenishment & Orders')}</span>
                   <ArrowRight size={13} />
                 </button>
               </div>

@@ -21,6 +21,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
+import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
 import './Products.css';
 
 export type DemandRegimeType = 'SMOOTH' | 'INTERMITTENT' | 'COLD_START';
@@ -486,6 +487,11 @@ export const Products: React.FC = () => {
       );
       const adjRes = await api.inventory.getAdjustments({ limit: 100 });
       setAdjustments(adjRes.list || []);
+      emitAlertsSyncEvent({
+        action: 'inventory_updated',
+        itemId: selectedProduct.item_id,
+        storeId: selectedStore,
+      });
     } catch (error: any) {
       setStockMessage(error.response?.data?.detail || (isVi ? 'Lỗi cập nhật.' : 'Update failed.'));
     }
