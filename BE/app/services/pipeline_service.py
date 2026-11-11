@@ -9,6 +9,8 @@ from app.models.inventory import Inventory
 from app.models.product import Product
 from app.models.sim_clock import SimClock
 from app.models.inventory_daily import InventoryDaily
+from app.models.inventory_param import InventoryParam
+from app.models.classification import SKUClassification
 from app.models.sales_history import SalesHistory
 from app.models.forecast import Forecast
 from app.models.replenishment import ReplenishmentRecommendation
@@ -117,15 +119,23 @@ class PipelineService:
         forecasts_generated = sku_count * request.horizon
 
         # 2. Tự động tính lại SS, ROP, EOQ (UC30, UC50)
-        params_updated = optimization_service.recompute_parameters(
-            db,
-            store_id=request.store_id,
-        )
+        existing_params_count = db.query(InventoryParam).filter(InventoryParam.store_id == request.store_id).count()
+        if existing_params_count == 0:
+            params_updated = optimization_service.recompute_parameters(
+                db,
+                store_id=request.store_id,
+            )
+        else:
+            params_updated = existing_params_count
 
         # 3. Tự động tính lại phân loại ABC-XYZ (UC25, UC50)
-        classifications_updated = classification_service.recompute_classification(
-            db,
-        )
+        existing_class_count = db.query(SKUClassification).count()
+        if existing_class_count == 0:
+            classifications_updated = classification_service.recompute_classification(
+                db,
+            )
+        else:
+            classifications_updated = existing_class_count
 
         # 4. Tự động sinh đề xuất đặt hàng mới (UC33)
         replenishments_generated = replenishment_service.generate_recommendations(
