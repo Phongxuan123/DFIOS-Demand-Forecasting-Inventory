@@ -4,6 +4,7 @@ from app.services.calibrator_service import calibrator_service
 from app.services.optimization_service import optimization_service
 from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
 from app.services.simulation_service import simulation_service
+from app.services.data_preprocessing_service import data_preprocessing_service
 
 
 def test_c3out_integral_update_math():
@@ -135,3 +136,33 @@ def test_simulation_policy_comparison_metrics():
 
     # P6 có tổng chi phí rẻ hơn P0 đáng kể
     assert p_map["P6_c3out_closed_loop"].total_cost < p_map["P0_classical"].total_cost
+
+
+def test_data_preprocessing_service_auto_detection():
+    """
+    Test PRE.3 - Kiểm định khả năng tự động tiền xử lý dữ liệu:
+    - Tự động nhận diện dấu chấm phẩy (;) và bảng mã latin1
+    - Tự động ánh xạ cột tiếng Việt (Thời gian tạo đơn, Mã mặt hàng, SL, Đơn giá)
+    - Tự động gộp đơn hàng nhiều lần trong ngày thành doanh số ngày (daily sales)
+    """
+    raw_csv = (
+        "Th?i gian t?o ??n;Mã ??n hàng;Mã m?t hàng;SL;??n giá\n"
+        "2022-01-01 08:00:00;ORD01;BOT01;2;40000\n"
+        "2022-01-01 14:00:00;ORD02;BOT01;3;40000\n"
+        "2022-01-02 10:00:00;ORD03;BOT01;1;40000\n"
+    ).encode("latin1")
+
+    clean_df, report = data_preprocessing_service.preprocess_sales_data(
+        file_content=raw_csv,
+        file_name="test_order_log.csv",
+        default_store_id="STORE_TEST",
+    )
+
+    assert report["status"] == "PASSED"
+    assert report["unique_skus"] == 1
+    # Ngày 2022-01-01 có 2 đơn (2 + 3 = 5 sản phẩm)
+    day1_row = clean_df[clean_df["sale_date"] == "2022-01-01"].iloc[0]
+    assert day1_row["sales"] == 5.0
+    assert day1_row["price"] == 40000.0
+    assert day1_row["item_id"] == "BOT01"
+    assert day1_row["store_id"] == "STORE_TEST"
