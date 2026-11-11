@@ -1,5 +1,72 @@
 import { apiClient } from './apiClient.ts';
 
+export interface WindowQuantileResponse {
+  id: string;
+  model_run_id: string;
+  store_id: string;
+  item_id: string;
+  origin_date: string;
+  horizon_days: number;
+  point_window: number;
+  q_levels: Record<string, number>;
+  tau_95: number;
+  route: string;
+}
+
+export interface PolicySelectionItem {
+  selection_id: string;
+  class_id: string;
+  policy_type: string;
+  m_g: number;
+  kappa_g: number;
+  val_cost: number | null;
+  val_service: number | null;
+  setpoint: number;
+}
+
+export interface RefitPoliciesResponse {
+  success: boolean;
+  selection_id: string;
+  policies: PolicySelectionItem[];
+  message: string;
+}
+
+export interface CalibrationStateItem {
+  id: string;
+  calibrator_id: string;
+  store_id: string;
+  class_id: string;
+  review_index: number;
+  review_date: string;
+  theta: number;
+  multiplier: number;
+  error_rate: number;
+  at_boundary: boolean;
+  setpoint: number;
+  eta: number;
+  created_at: string;
+}
+
+export interface CalibrationStatusResponse {
+  store_id: string;
+  latest_review_index: number;
+  latest_review_date: string | null;
+  thetas: Record<string, number>;
+  multipliers: Record<string, number>;
+  at_boundary_classes: string[];
+  has_warning: boolean;
+  states: CalibrationStateItem[];
+}
+
+export interface CalibrationStepResponse {
+  success: boolean;
+  review_index: number;
+  consumed_cycle_index: number;
+  states: CalibrationStateItem[];
+  warnings: string[];
+  message: string;
+}
+
 const unwrapItems = (data: any) => Array.isArray(data) ? data : data?.items || [];
 
 interface CacheEntry<T> {
@@ -323,6 +390,12 @@ export const api = {
     },
     getUncertainty: async (sku: string, params?: { store_id?: string; horizon?: number }) => {
       return cachedGet(`/forecasts/${sku}/uncertainty`, params, 60000);
+    },
+    getWindowQuantiles: async (
+      sku: string,
+      params?: { store_id?: string; origin_date?: string; horizon_days?: number }
+    ): Promise<WindowQuantileResponse> => {
+      return cachedGet(`/forecasts/${encodeURIComponent(sku)}/window-quantiles`, params, 60000);
     },
     getExplanation: async (sku: string, params?: { store_id?: string; model_version?: string; model_name?: string }) => {
       return cachedGet(`/forecasts/${sku}/explanation`, params, 60000);
@@ -927,8 +1000,8 @@ export const api = {
       horizon?: number;
       store_id: string;
     }) => {
-      clearApiCache();
       const res = await apiClient.post('/ml/pipeline/trigger-run', data);
+      clearApiCache();
       return res.data;
     },
   },
@@ -1093,6 +1166,51 @@ export const api = {
     }) => {
       const res = await apiClient.post('/optimization/sensitivity-analysis', data);
       return res.data;
+    },
+    refitPolicies: async (data?: {
+      store_id?: string;
+      selection_id?: string;
+      target_availability?: number;
+    }): Promise<RefitPoliciesResponse> => {
+      const res = await apiClient.post('/optimization/refit-policies', data || {});
+      clearApiCache('/optimization');
+      clearApiCache('/calibration');
+      clearApiCache('/classification');
+      clearApiCache('/inventory');
+      clearApiCache('/replenishments');
+      clearApiCache('/dashboard');
+      return res.data;
+    },
+  },
+
+  calibration: {
+    getStatus: async (storeId: string = 'CA_1'): Promise<CalibrationStatusResponse> => {
+      return cachedGet('/calibration/status', { store_id: storeId }, 30000);
+    },
+    step: async (data?: {
+      store_id?: string;
+      review_index?: number;
+      review_date?: string;
+      lead_time_days?: number;
+      review_period_days?: number;
+    }): Promise<CalibrationStepResponse> => {
+      const res = await apiClient.post('/calibration/step', data || {});
+      clearApiCache('/calibration');
+      clearApiCache('/optimization');
+      clearApiCache('/classification');
+      clearApiCache('/replenishments');
+      clearApiCache('/dashboard');
+      return res.data;
+    },
+    getHistory: async (params?: {
+      store_id?: string;
+      class_id?: string;
+      limit?: number;
+    }): Promise<CalibrationStateItem[]> => {
+      return cachedGet('/calibration/history', params, 30000);
+    },
+    clearCache: () => {
+      clearApiCache('/calibration');
     },
   },
 

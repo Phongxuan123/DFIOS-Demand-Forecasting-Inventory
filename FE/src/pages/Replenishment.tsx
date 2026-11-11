@@ -25,6 +25,7 @@ import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
+import { resolveEffectiveRssMetrics } from '../utils/dfiosAnalytics.ts';
 import './Replenishment.css';
 
 const formatQty = (val: number | string | null | undefined, locale: string = 'en-US'): string => {
@@ -56,6 +57,7 @@ const PRIORITY_LABELS_VI: Record<string, string> = {
 
 const STATUS_LABELS_EN: Record<string, string> = {
   PENDING: 'Pending',
+  PROPOSED: 'Proposed',
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   CANCELLED: 'Cancelled',
@@ -63,6 +65,7 @@ const STATUS_LABELS_EN: Record<string, string> = {
 
 const STATUS_LABELS_VI: Record<string, string> = {
   PENDING: 'Chờ duyệt',
+  PROPOSED: 'Đề xuất',
   APPROVED: 'Đã duyệt',
   REJECTED: 'Từ chối',
   CANCELLED: 'Đã hủy',
@@ -71,21 +74,15 @@ const STATUS_LABELS_VI: Record<string, string> = {
 const computeRssMetrics = (row: any) => {
   const onHand = Math.round(Number(row.on_hand ?? 0));
   const onOrder = Math.round(Number(row.on_order ?? 0));
-  const ip = onHand + onOrder;
-  const rop = Number(row.rop ?? row.reorder_point ?? 0);
-  const s = Math.round(rop * 10) / 10;
-  const rawRecQty = Math.round(Number(row.recommended_qty ?? 0));
-  const rawEoq = Math.round(Number(row.eoq ?? (rawRecQty > 0 ? rawRecQty : Math.max(12, rop * 0.75))));
-  const eoq = Math.max(1, rawEoq);
-  const ss =
-    row.safety_stock != null && !isNaN(Number(row.safety_stock))
-      ? Math.round(Number(row.safety_stock) * 10) / 10
-      : Math.round(Math.max(2, rop * 0.32) * 10) / 10;
-
-  const bigS = Math.ceil(rop + Math.max(eoq, rawRecQty));
-  const isTriggered = ip <= rop;
+  const resolved = resolveEffectiveRssMetrics(row);
+  const ip = Math.round(resolved.inventoryPosition);
+  const s = resolved.reorderPointS;
+  const bigS = resolved.orderUpToS;
+  const eoq = Math.max(1, resolved.eoq);
+  const ss = resolved.safetyStock;
+  const isTriggered = ip <= s;
   const computedOrderQty = isTriggered ? Math.max(0, bigS - ip) : 0;
-  const recommendedQty = rawRecQty > 0 ? rawRecQty : computedOrderQty;
+  const recommendedQty = resolved.recommendedQty > 0 ? resolved.recommendedQty : computedOrderQty;
   const finalQty = Math.round(Number(row.final_qty ?? recommendedQty));
 
   return {
@@ -99,6 +96,10 @@ const computeRssMetrics = (row: any) => {
     isTriggered,
     recommendedQty,
     finalQty,
+    policyApplied: resolved.policyApplied,
+    reviewDate: resolved.reviewDate,
+    modelRunId: resolved.modelRunId,
+    source: resolved.source,
   };
 };
 
@@ -223,8 +224,7 @@ export const Replenishment: React.FC = () => {
     }
 
     const paramOffsets: number[] = [];
-    const paramCap = Math.min(paramTotal, 1400);
-    for (let skip = 200; skip < paramCap; skip += 200) {
+    for (let skip = 200; skip < paramTotal; skip += 200) {
       paramOffsets.push(skip);
     }
 
@@ -261,8 +261,16 @@ export const Replenishment: React.FC = () => {
 
     const mapped = invList.map((item: any) => {
       const opt = paramMap.get(item.item_id) || {};
+      const resolvedS = opt.s ?? opt.reorder_point ?? item.reorder_point;
       return {
         ...item,
+        s: opt.s != null ? Math.round(opt.s) : undefined,
+        S: opt.S != null ? Math.round(opt.S) : undefined,
+        order_up_to_S: opt.S != null ? Math.round(opt.S) : item.order_up_to_S,
+        reorder_point_s: resolvedS != null ? Math.round(resolvedS) : item.reorder_point_s,
+        model_run_id: opt.model_run_id || item.model_run_id || null,
+        source: opt.source || item.source || null,
+        policy_applied: opt.source === 'ml' ? 'ML Dynamic (R, s, S)' : undefined,
         safety_stock:
           opt.safety_stock != null
             ? Math.round(opt.safety_stock)
@@ -270,10 +278,8 @@ export const Replenishment: React.FC = () => {
             ? Math.round(item.safety_stock)
             : null,
         reorder_point:
-          opt.reorder_point != null
-            ? Math.round(opt.reorder_point)
-            : item.reorder_point != null
-            ? Math.round(item.reorder_point)
+          resolvedS != null
+            ? Math.round(resolvedS)
             : null,
         eoq: opt.eoq != null ? Math.round(opt.eoq) : item.eoq != null ? Math.round(item.eoq) : null,
       };
@@ -1160,6 +1166,7 @@ export const Replenishment: React.FC = () => {
                 {[
                   { val: 'ALL', label: isVi ? 'Tất cả' : 'All' },
                   { val: 'PENDING', label: isVi ? 'Chờ duyệt' : 'Pending' },
+                  { val: 'PROPOSED', label: isVi ? 'Đề xuất' : 'Proposed' },
                   { val: 'APPROVED', label: isVi ? 'Đã duyệt' : 'Approved' },
                   { val: 'REJECTED', label: isVi ? 'Từ chối' : 'Rejected' },
                   { val: 'CANCELLED', label: isVi ? 'Đã hủy' : 'Cancelled' },
@@ -1843,9 +1850,22 @@ export const Replenishment: React.FC = () => {
                     <span className="rep-mono-num">{formatQty(selectedDrawerMetrics.recommendedQty, localeStr)}</span>
                   </div>
                   <div className="drawer-rec-row-sub">
-                    <span>{isVi ? 'Cửa sổ bảo vệ:' : 'Protection Window:'}</span>
-                    <span className="rep-mono-num">H = L + R = 10d</span>
+                    <span>{isVi ? 'Chính sách áp dụng:' : 'Policy Applied:'}</span>
+                    <span className="rep-mono-num">{selectedDrawerMetrics.policyApplied}</span>
                   </div>
+                  <div className="drawer-rec-row-sub">
+                    <span>{isVi ? 'Cửa sổ bảo vệ:' : 'Protection Window:'}</span>
+                    <span className="rep-mono-num">
+                      H = L + R = 10d
+                      {selectedDrawerMetrics.reviewDate ? ` • ${selectedDrawerMetrics.reviewDate}` : ''}
+                    </span>
+                  </div>
+                  {selectedDrawerMetrics.modelRunId && (
+                    <div className="drawer-rec-row-sub">
+                      <span>{isVi ? 'Mã lượt chạy ML:' : 'Model Run ID:'}</span>
+                      <span className="rep-mono-num">{selectedDrawerMetrics.modelRunId}</span>
+                    </div>
+                  )}
                 </div>
 
                 {selectedItem.reason && (

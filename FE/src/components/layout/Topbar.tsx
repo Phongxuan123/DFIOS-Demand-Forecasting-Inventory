@@ -20,6 +20,11 @@ import { useSSE } from '../../hooks/useSSE.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { LanguageToggle } from '../common/LanguageToggle.tsx';
+import { toIsoDateKey } from '../../utils/dfiosAnalytics.ts';
+import {
+  OperationalCalendar,
+  type CalendarEventBadge,
+} from '../ui/OperationalCalendar.tsx';
 import {
   ALERTS_SYNC_EVENT,
   type AlertsSyncDetail,
@@ -153,6 +158,13 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     }
   });
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(() => new Date());
+  const [calendarViewDate, setCalendarViewDate] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [calendarEventsByDate, setCalendarEventsByDate] = useState<Record<string, CalendarEventBadge[]>>({});
   const [notifFilter, setNotifFilter] = useState<'all' | 'unread' | 'read'>('all');
   const [notifPage, setNotifPage] = useState(1);
   const [alertsState, setAlertsState] = useState<{
@@ -169,6 +181,7 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
   );
 
   const notifRef = useRef<HTMLDivElement>(null);
+  const calendarRef = useRef<HTMLDivElement>(null);
   const notifListRef = useRef<HTMLDivElement>(null);
   const trackedRef = useRef<TrackedAlertItem[]>(trackedAlerts);
   const isSyncingRef = useRef(false);
@@ -180,11 +193,15 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     trackedRef.current = trackedAlerts;
   }, [trackedAlerts]);
 
-  // Close notifications on outside click
+  // Close notifications & operational calendar on outside click
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+      const targetNode = event.target as Node;
+      if (notifRef.current && !notifRef.current.contains(targetNode)) {
         setShowNotifications(false);
+      }
+      if (calendarRef.current && !calendarRef.current.contains(targetNode)) {
+        setShowCalendar(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -275,20 +292,65 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     }
   }, [sse.data, syncAlerts]);
 
-  // Keyboard shortcut for command palette (Ctrl+K or Cmd+K)
+  // Keyboard shortcut for command palette (Ctrl+K or Cmd+K) and Escape close
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setIsCommandPaletteOpen((open) => !open);
       }
-      if (e.key === 'Escape' && isCommandPaletteOpen) {
-        setIsCommandPaletteOpen(false);
+      if (e.key === 'Escape') {
+        if (isCommandPaletteOpen) setIsCommandPaletteOpen(false);
+        if (showNotifications) setShowNotifications(false);
+        if (showCalendar) setShowCalendar(false);
       }
     };
     document.addEventListener('keydown', down);
     return () => document.removeEventListener('keydown', down);
-  }, [isCommandPaletteOpen]);
+  }, [isCommandPaletteOpen, showNotifications, showCalendar]);
+
+  // Lazy load operational calendar event markers for the visible month
+  useEffect(() => {
+    if (!showCalendar) return;
+    let active = true;
+    const year = calendarViewDate.getFullYear();
+    const month = calendarViewDate.getMonth();
+    const start = toIsoDateKey(new Date(year, month, 1));
+    const end = toIsoDateKey(new Date(year, month + 1, 0));
+
+    api.eventsCalendar
+      .listEvents({ start_date: start, end_date: end, limit: 100 })
+      .then((res) => {
+        if (!active || !Array.isArray(res?.list)) return;
+        const map: Record<string, CalendarEventBadge[]> = {};
+        for (const ev of res.list) {
+          const evStart = String(ev?.event_date || ev?.start_date || '').slice(0, 10);
+          if (!evStart) continue;
+          const evEnd = String(ev?.end_date || evStart).slice(0, 10);
+          const sDate = new Date(`${evStart}T00:00:00`);
+          const eDate = new Date(`${evEnd}T00:00:00`);
+          if (Number.isNaN(sDate.getTime())) continue;
+          const maxDays = Number.isNaN(eDate.getTime())
+            ? 1
+            : Math.min(31, Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / 86400000) + 1));
+          for (let d = 0; d < maxDays; d++) {
+            const cur = new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate() + d);
+            const k = toIsoDateKey(cur);
+            if (!map[k]) map[k] = [];
+            map[k].push({
+              event_name: ev.event_name || ev.event_type || 'Event',
+              event_type: ev.event_type,
+            });
+          }
+        }
+        setCalendarEventsByDate(map);
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [showCalendar, calendarViewDate]);
 
   // Backend product/SKU search
   useEffect(() => {
@@ -387,6 +449,9 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
 
   const handleToggleNotifications = () => {
     const nextOpen = !showNotifications;
+    if (nextOpen) {
+      setShowCalendar(false);
+    }
     setShowNotifications(nextOpen);
     if (nextOpen) {
       if (notifListRef.current) {
@@ -482,10 +547,25 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     );
   };
 
-  const formattedDate = new Date().toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US', { 
-    month: 'short', 
-    day: 'numeric', 
-    year: 'numeric' 
+  const handleToggleCalendar = () => {
+    const nextOpen = !showCalendar;
+    if (nextOpen) {
+      setShowNotifications(false);
+      const anchor = selectedCalendarDate || new Date();
+      setCalendarViewDate(new Date(anchor.getFullYear(), anchor.getMonth(), 1));
+    }
+    setShowCalendar(nextOpen);
+  };
+
+  const todayDate = new Date();
+  const displayDate = selectedCalendarDate || todayDate;
+  const isCustomCalendarDate = Boolean(
+    selectedCalendarDate && toIsoDateKey(selectedCalendarDate) !== toIsoDateKey(todayDate)
+  );
+  const formattedDate = displayDate.toLocaleDateString(language === 'vi' ? 'vi-VN' : 'en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
   });
 
   return (
@@ -862,11 +942,46 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
           )}
         </div>
         
-        {/* Date / Live Operational Clock */}
-        <div className="topbar-date-display" title="Operational Date">
-          <Calendar size={13} className="topbar-date-icon" />
-          <span className="topbar-date-text">{formattedDate}</span>
-          <span className="topbar-live-dot" title="Live Clock" />
+        {/* Date / Live Operational Clock & Calendar Popover */}
+        <div className="date-picker-wrapper" ref={calendarRef}>
+          <button
+            type="button"
+            className={`topbar-date-display ${showCalendar ? 'is-open' : ''}`}
+            onClick={handleToggleCalendar}
+            aria-label={t('topbar.calendar_open', 'Open operational calendar')}
+            aria-expanded={showCalendar}
+            aria-haspopup="dialog"
+            title={formattedDate}
+          >
+            <Calendar size={13} className="topbar-date-icon" />
+            <span className="topbar-date-text">{formattedDate}</span>
+            <span
+              className={`topbar-live-dot ${isCustomCalendarDate ? 'is-custom' : ''}`}
+              title={isCustomCalendarDate ? formattedDate : 'Live Clock'}
+            />
+          </button>
+
+          {showCalendar && (
+            <div className="topbar-calendar-dropdown">
+              <OperationalCalendar
+                language={language}
+                selectedDate={selectedCalendarDate}
+                onSelectDate={(date) => setSelectedCalendarDate(date)}
+                onSelectToday={() => setSelectedCalendarDate(new Date())}
+                onClearDate={() => setSelectedCalendarDate(null)}
+                eventsByDate={calendarEventsByDate}
+                viewDate={calendarViewDate}
+                onViewMonthChange={setCalendarViewDate}
+                labels={{
+                  clear: t('topbar.calendar_clear', 'Clear'),
+                  today: t('topbar.calendar_today', 'Today'),
+                  prevMonth: t('topbar.calendar_prev_month', 'Previous month'),
+                  nextMonth: t('topbar.calendar_next_month', 'Next month'),
+                  pickMonthYear: t('topbar.calendar_pick_month_year', 'Select month and year'),
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </header>

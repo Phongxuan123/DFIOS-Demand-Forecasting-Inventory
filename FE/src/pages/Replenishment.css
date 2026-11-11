@@ -862,6 +862,15 @@
   flex-shrink: 0;
 }
 
+.rep-status-pill.status-proposed {
+  background-color: #f0f9ff;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+}
+.rep-status-pill.status-proposed .rep-status-dot {
+  background-color: #0284c7;
+}
+
 .rep-status-pill.status-pending {
   background-color: #fffbeb;
   color: #92400e;

@@ -24,6 +24,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
+import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
@@ -48,8 +49,10 @@ interface PolicyBenchmarkRow {
 }
 
 export const Reports: React.FC = () => {
+  const { user } = useAuth();
   const { language } = useLanguage();
   const isVi = language === 'vi';
+  const isAdmin = user?.role?.toUpperCase() === 'ADMIN';
 
   const [activeReport, setActiveReport] = useState<string | null>(null);
   const [selectedStore, setSelectedStore] = useState<string>('CA_1');
@@ -265,29 +268,41 @@ export const Reports: React.FC = () => {
     setIsSimulatingPolicies(true);
     setFeedbackMsg('');
     try {
-      const [sensRes, btRes] = await Promise.all([
-        api.optimization.runSensitivityAnalysis({
-          store_id: selectedStore,
-          holding_cost_rate: paramH * 365,
-          stockout_cost_per_unit: paramB,
-          order_cost: paramC,
-          lead_time_deltas: [-0.2, 0.0, Number(((paramL - 3) / 3).toFixed(2)), 0.2],
-          service_level_deltas: [-0.05, -0.02, 0.0, 0.01, 0.03],
-        }).catch(() => null),
-        api.reports.runBacktesting({
-          model_name: btModel,
-          backtest_days: paramR * 8,
-          store_id: selectedStore,
-          target_service_level: btServiceLevel / 100,
-        }).catch(() => null),
-      ]);
+      const [sensOutcome, btOutcome] = isAdmin
+        ? await Promise.allSettled([
+            api.optimization.runSensitivityAnalysis({
+              store_id: selectedStore,
+              holding_cost_rate: paramH * 365,
+              stockout_cost_per_unit: paramB,
+              order_cost: paramC,
+              lead_time_deltas: [-0.2, 0.0, Number(((paramL - 3) / 3).toFixed(2)), 0.2],
+              service_level_deltas: [-0.05, -0.02, 0.0, 0.01, 0.03],
+            }),
+            api.reports.runBacktesting({
+              model_name: btModel,
+              backtest_days: paramR * 8,
+              store_id: selectedStore,
+              target_service_level: btServiceLevel / 100,
+            }),
+          ])
+        : ([
+            { status: 'rejected', reason: new Error('Admin required') },
+            { status: 'rejected', reason: new Error('Admin required') },
+          ] as const);
+
+      const sensRes = sensOutcome.status === 'fulfilled' ? sensOutcome.value : null;
+      const btRes = btOutcome.status === 'fulfilled' ? btOutcome.value : null;
       if (sensRes) setLiveSensitivityRes(sensRes);
       if (btRes) setBacktestResult(btRes);
       setSimRunCount((c) => c + 1);
       setFeedbackMsg(
-        isVi
-          ? `Đã chạy mô phỏng đối đầu 4 chính sách (P₀, P₁, P₄, P₆) tại kho ${selectedStore} với H = L + R = ${protectionWindowH} ngày (h=$${paramH}, b=$${paramB}, c=$${paramC.toFixed(2)}).`
-          : `Executed 4-policy head-to-head simulation (P₀, P₁, P₄, P₆) on ${selectedStore} with protection window H = L + R = ${protectionWindowH}d (h=$${paramH}, b=$${paramB}, c=$${paramC.toFixed(2)}).`
+        sensRes || btRes
+          ? isVi
+            ? `Đã chạy mô phỏng đối đầu 4 chính sách (P₀, P₁, P₄, P₆) tại kho ${selectedStore} với H = L + R = ${protectionWindowH} ngày (h=$${paramH}, b=$${paramB}, c=$${paramC.toFixed(2)}).`
+            : `Executed 4-policy head-to-head simulation (P₀, P₁, P₄, P₆) on ${selectedStore} with protection window H = L + R = ${protectionWindowH}d (h=$${paramH}, b=$${paramB}, c=$${paramC.toFixed(2)}).`
+          : isVi
+          ? `Đã cập nhật mô phỏng tham số cục bộ trên ${selectedStore} (tính năng backtesting BE yêu cầu quyền Admin).`
+          : `Updated local parameter simulation on ${selectedStore} (backend backtesting endpoints require Admin access).`
       );
       setTimeout(() => setFeedbackMsg(''), 5000);
     } catch (err) {
@@ -311,9 +326,17 @@ export const Reports: React.FC = () => {
         const res = await api.reports.getInventoryPerformance({ store_id: selectedStore, limit: 50 });
         setInventoryReport(res);
       } else if (reportId === 'cost-comparison') {
+        if (!isAdmin) {
+          setFeedbackMsg(isVi ? 'Báo cáo So sánh Chi phí yêu cầu quyền Admin.' : 'Cost Comparison report requires Admin access.');
+          return;
+        }
         const res = await api.reports.getCostComparison({ store_id: selectedStore });
         setCostReport(res);
       } else if (reportId === 'backtest') {
+        if (!isAdmin) {
+          setFeedbackMsg(isVi ? 'Backtesting Lịch sử yêu cầu quyền Admin.' : 'Historical Backtesting requires Admin access.');
+          return;
+        }
         const res = await api.reports.runBacktesting({
           model_name: btModel,
           backtest_days: btDays,
@@ -322,8 +345,12 @@ export const Reports: React.FC = () => {
         });
         setBacktestResult(res);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Failed to load report ${reportId}`, err);
+      const detail = err?.response?.data?.detail;
+      setFeedbackMsg(
+        detail || (isVi ? `Không thể tải báo cáo ${reportId}.` : `Unable to load report ${reportId}.`)
+      );
     } finally {
       setIsReportLoading(false);
     }

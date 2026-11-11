@@ -52,6 +52,7 @@ export const ModelPerformance: React.FC = () => {
   const { language } = useLanguage();
   const isVi = language === 'vi';
   const isAdmin = user?.role?.toUpperCase() === 'ADMIN';
+  const canManage = user?.role?.toUpperCase() !== 'VIEWER';
 
   const [activeTab, setActiveTab] = useState<ModelPerfTab>('diagnostics');
   const [data, setData] = useState<any>(null);
@@ -133,8 +134,8 @@ export const ModelPerformance: React.FC = () => {
     try {
       const [perfResult, jobsResult, slRes] = await Promise.all([
         api.models.getPerformanceMetrics().catch(() => null),
-        api.ml.listAllTrainJobs().catch(() => ({ list: [], total: 0 })),
-        api.optimization.getServiceLevel().catch(() => null),
+        isAdmin ? api.ml.listAllTrainJobs().catch(() => ({ list: [], total: 0 })) : Promise.resolve({ list: [], total: 0 }),
+        canManage ? api.optimization.getServiceLevel().catch(() => null) : Promise.resolve(null),
       ]);
       setData(perfResult);
       setTrainingJobs(jobsResult.list || []);
