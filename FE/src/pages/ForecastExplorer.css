@@ -262,6 +262,34 @@
   font-weight: 700;
 }
 
+.route-c-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.route-c-source-badge.live {
+  background-color: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+}
+
+.route-c-source-badge.fallback {
+  background-color: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
+.route-c-kpi-val,
+.route-c-kpi-sub {
+  font-variant-numeric: tabular-nums;
+}
+
 .route-c-subtitle {
   margin: 0;
   font-size: 0.8125rem;

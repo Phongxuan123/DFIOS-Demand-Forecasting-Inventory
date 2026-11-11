@@ -22,6 +22,7 @@ import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
+import { resolveEffectiveRssMetrics } from '../utils/dfiosAnalytics.ts';
 import './Products.css';
 
 export type DemandRegimeType = 'SMOOTH' | 'INTERMITTENT' | 'COLD_START';
@@ -42,6 +43,8 @@ export interface SkuRssMetrics {
   historyDays: number;
   regime: DemandRegimeType;
   abcClass: string;
+  unitPrice: number | null;
+  modelRunId: string | null;
 }
 
 const hashCode = (str: string): number => {
@@ -58,7 +61,7 @@ export const Products: React.FC = () => {
   const navigate = useNavigate();
   const isVi = language === 'vi';
   const role = user?.role?.toUpperCase() || 'VIEWER';
-  const canEdit = role === 'ADMIN' || role === 'WAREHOUSE MANAGER';
+  const canEdit = role === 'ADMIN' || role === 'WAREHOUSE MANAGER' || role === 'MANAGER';
   const isAdmin = role === 'ADMIN';
 
   const [activeTab, setActiveTab] = useState('Products');
@@ -82,9 +85,10 @@ export const Products: React.FC = () => {
   const [stores, setStores] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
   const [selectedStore, setSelectedStore] = useState('CA_1');
 
-  // Inventory & Optimization Maps for Periodic Review (R, s, S)
+  // Inventory, Optimization & Classification Maps for Periodic Review (R, s, S)
   const [inventoryMap, setInventoryMap] = useState<Record<string, any>>({});
   const [optParamsMap, setOptParamsMap] = useState<Record<string, any>>({});
+  const [skuSegmentMap, setSkuSegmentMap] = useState<Record<string, string>>({});
   const [customCreatedSkus, setCustomCreatedSkus] = useState<Record<string, boolean>>({});
 
   // Filters for Products
@@ -180,10 +184,14 @@ export const Products: React.FC = () => {
 
   const loadStoreInventoryAndOptimization = async (storeId: string) => {
     try {
-      const [invRes, optRes] = await Promise.all([
-        api.inventory.getInventory({ store_id: storeId, limit: 200 }).catch(() => ({ list: [] })),
-        api.optimization.getParameters({ store_id: storeId, limit: 200 }).catch(() => ({ items: [] })),
+      const [invRes, optRes, clsFirst] = await Promise.all([
+        api.inventory.getAllInventory({ store_id: storeId }).catch(() => ({ list: [] })),
+        canEdit
+          ? api.optimization.getAllParameters({ store_id: storeId }).catch(() => ({ items: [] }))
+          : Promise.resolve({ items: [] }),
+        api.classification.getSkus({ skip: 0, limit: 500 }).catch(() => ({ list: [], total: 0 })),
       ]);
+
       const invDict: Record<string, any> = {};
       (invRes.list || []).forEach((it: any) => {
         if (it?.item_id) invDict[it.item_id] = it;
@@ -192,8 +200,19 @@ export const Products: React.FC = () => {
       (optRes.items || []).forEach((op: any) => {
         if (op?.item_id) optDict[op.item_id] = op;
       });
+
+      const segDict: Record<string, string> = {};
+      (clsFirst.list || []).forEach((c: any) => {
+        if (c?.item_id) {
+          segDict[c.item_id] = c.segment || `${c.abc || 'A'}${c.xyz || 'X'}`;
+        }
+      });
+
       setInventoryMap(invDict);
       setOptParamsMap(optDict);
+      if (Object.keys(segDict).length > 0) {
+        setSkuSegmentMap(segDict);
+      }
     } catch (e) {
       console.error('Failed to load store inventory/optimization parameters', e);
     }
@@ -346,45 +365,42 @@ export const Products: React.FC = () => {
 
     const onHand = Math.max(0, Math.round(isNaN(rawOnHand) ? 0 : rawOnHand));
     const onOrder = Math.max(0, Math.round(isNaN(rawOnOrder) ? 0 : rawOnOrder));
-    const ip = onHand + onOrder;
 
-    const ss = Math.max(
-      4,
-      Math.round(
-        opt.safety_stock != null
-          ? Number(opt.safety_stock)
-          : inv.safety_stock != null
-            ? Number(inv.safety_stock)
-            : 10 + (h % 22)
-      )
-    );
+    const fallbackSs = 10 + (h % 22);
+    const hasBeOpt =
+      opt.s != null ||
+      opt.S != null ||
+      opt.reorder_point != null ||
+      opt.safety_stock != null ||
+      inv.reorder_point != null;
 
-    const rop_s = Math.max(
-      ss + 8,
-      Math.round(
-        opt.reorder_point != null
-          ? Number(opt.reorder_point)
-          : inv.reorder_point != null
-            ? Number(inv.reorder_point)
-            : ss + 14 + (h % 28)
-      )
-    );
+    const eff = resolveEffectiveRssMetrics({
+      on_hand: onHand,
+      on_order: onOrder,
+      safety_stock: opt.safety_stock ?? inv.safety_stock ?? fallbackSs,
+      reorder_point: opt.reorder_point ?? inv.reorder_point ?? fallbackSs + 14 + (h % 28),
+      s: opt.s ?? null,
+      S: opt.S ?? null,
+      eoq: opt.eoq ?? inv.eoq ?? null,
+      model_run_id: opt.model_run_id ?? null,
+      source: opt.source ?? null,
+    });
 
-    const eoq = Math.max(
-      12,
-      Math.round(
-        opt.eoq != null
-          ? Number(opt.eoq)
-          : inv.eoq != null
-            ? Number(inv.eoq)
-            : Math.round(rop_s * 0.65) + (h % 15)
-      )
-    );
+    const ip = eff.inventoryPosition;
+    const ss = Math.max(1, eff.safetyStock);
+    const rop_s = Math.max(ss + 1, eff.reorderPointS);
+    const eoq = Math.max(1, eff.eoq);
 
     const catUpper = String(prod?.cat_id || '').toUpperCase();
-    const kappa = catUpper === 'FOODS' ? 1.0 : catUpper === 'HOUSEHOLD' ? 1.5 : 1.0;
-    const orderUpTo_S = rop_s + Math.ceil(kappa * eoq);
-    const orderQty_q = ip < rop_s ? Math.max(0, orderUpTo_S - ip) : 0;
+    const defaultKappa = catUpper === 'FOODS' ? 1.0 : catUpper === 'HOUSEHOLD' ? 1.5 : 1.0;
+    const hasExplicitS = opt.S != null && Number(opt.S) > rop_s;
+    const orderUpTo_S = hasExplicitS
+      ? eff.orderUpToS
+      : rop_s + Math.ceil(defaultKappa * eoq);
+    const kappa = hasExplicitS && eoq > 0
+      ? Number(Math.max(0.5, (orderUpTo_S - rop_s) / eoq).toFixed(2))
+      : defaultKappa;
+    const orderQty_q = ip <= rop_s ? Math.max(0, orderUpTo_S - ip) : 0;
 
     const isStandardM5 =
       itemId.startsWith('FOODS_') || itemId.startsWith('HOBBIES_') || itemId.startsWith('HOUSEHOLD_');
@@ -417,7 +433,14 @@ export const Products: React.FC = () => {
       adi = 1.02 + (h % 28) / 100;
     }
 
-    const abcClass = h % 5 === 0 ? 'AX' : h % 5 === 1 ? 'AY' : h % 5 === 2 ? 'BX' : h % 5 === 3 ? 'BY' : 'CZ';
+    const abcClass =
+      skuSegmentMap[itemId] ||
+      prod?.abc_class ||
+      inv?.abc_class ||
+      (h % 5 === 0 ? 'AX' : h % 5 === 1 ? 'AY' : h % 5 === 2 ? 'BX' : h % 5 === 3 ? 'BY' : 'CZ');
+
+    const rawPrice = prod?.price ?? inv?.unit_price ?? opt?.unit_price ?? null;
+    const unitPrice = rawPrice != null && Number.isFinite(Number(rawPrice)) ? Number(rawPrice) : null;
 
     return {
       onHand,
@@ -435,6 +458,8 @@ export const Products: React.FC = () => {
       historyDays,
       regime,
       abcClass,
+      unitPrice,
+      modelRunId: hasBeOpt ? (opt.model_run_id || null) : null,
     };
   };
 
@@ -1198,6 +1223,11 @@ export const Products: React.FC = () => {
                   <span className="prod-tag active-badge">{selectedStore}</span>
                   <span className="prod-tag">{prod.dept_id || 'DEPT'}</span>
                   <span className="prod-tag">{selectedMetrics.abcClass}</span>
+                  {selectedMetrics.unitPrice != null && (
+                    <span className="prod-tag" title={isVi ? 'Giá bán niêm yết BE' : 'Unit Sell Price'}>
+                      ${selectedMetrics.unitPrice.toFixed(2)}
+                    </span>
+                  )}
                 </div>
                 <h2 className="prod-detail-title">{prod.name}</h2>
                 <div className="sku-inspector-meta-row">

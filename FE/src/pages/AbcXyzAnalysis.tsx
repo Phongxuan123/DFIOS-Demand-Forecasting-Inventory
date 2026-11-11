@@ -5,6 +5,7 @@ import {
   RefreshCw,
   X,
   AlertCircle,
+  AlertTriangle,
   Check,
   Search,
   ShieldCheck,
@@ -13,6 +14,8 @@ import {
   Layers,
   LayoutGrid,
   Table,
+  Play,
+  SlidersHorizontal,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -28,7 +31,16 @@ import {
 } from 'recharts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
-import { api } from '../services/api.ts';
+import {
+  api,
+  type CalibrationStateItem,
+  type CalibrationStatusResponse,
+  type PolicySelectionItem,
+} from '../services/api.ts';
+import {
+  buildCalibrationTrajectory,
+  findPolicySelectionForClass,
+} from '../utils/dfiosAnalytics.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './AbcXyzAnalysis.css';
 
@@ -340,8 +352,16 @@ export const AbcXyzAnalysis: React.FC = () => {
   const [sortBy, setSortBy] = useState('revenue');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  // Task FE.10: C³-OUT Trajectory Scenario Toggle
-  const [trajectoryScenario, setTrajectoryScenario] = useState<'NORMAL' | 'SHOCK_E9C'>('SHOCK_E9C');
+  // Task FE.10: C³-OUT Store & Trajectory Scenario State
+  const [stores, setStores] = useState<string[]>(['CA_1']);
+  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatusResponse | null>(null);
+  const [calibrationHistory, setCalibrationHistory] = useState<CalibrationStateItem[]>([]);
+  const [refittedPolicies, setRefittedPolicies] = useState<PolicySelectionItem[]>([]);
+  const [policySelectionId, setPolicySelectionId] = useState<string | null>(null);
+  const [isSteppingCalibration, setIsSteppingCalibration] = useState(false);
+  const [isRefittingPolicies, setIsRefittingPolicies] = useState(false);
+  const [trajectoryScenario, setTrajectoryScenario] = useState<'LIVE' | 'NORMAL' | 'SHOCK_E9C'>('LIVE');
 
   const [selectedRecommendation, setSelectedRecommendation] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -372,10 +392,25 @@ export const AbcXyzAnalysis: React.FC = () => {
     cv_y: 1.0,
   });
 
-  const loadData = async () => {
+  const loadCalibrationForStore = async (storeId: string) => {
+    if (!canManage) {
+      setCalibrationStatus(null);
+      setCalibrationHistory([]);
+      return;
+    }
+    const [calStatusRes, calHistoryRes] = await Promise.all([
+      api.calibration.getStatus(storeId).catch(() => null),
+      api.calibration.getHistory({ store_id: storeId, limit: 200 }).catch(() => []),
+    ]);
+    setCalibrationStatus(calStatusRes);
+    setCalibrationHistory(Array.isArray(calHistoryRes) ? calHistoryRes : []);
+  };
+
+  const loadData = async (storeIdParam?: string) => {
+    const activeStore = storeIdParam || selectedStore || 'CA_1';
     setIsLoading(true);
     try {
-      const [matrixRes, threshRes, skusRes, catList, slRes, axRec] = await Promise.all([
+      const [matrixRes, threshRes, skusRes, catList, storeList, slRes, axRec, calStatusRes, calHistoryRes] = await Promise.all([
         api.classification.getMatrix().catch(() => null),
         api.classification.getThresholds().catch(() => null),
         api.classification
@@ -390,8 +425,11 @@ export const AbcXyzAnalysis: React.FC = () => {
           })
           .catch(() => ({ list: [], total: 0 })),
         api.products.getCategories().catch(() => ['FOODS', 'HOBBIES', 'HOUSEHOLD']),
-        api.optimization.getServiceLevel().catch(() => null),
-        api.classification.getRecommendation('AX').catch(() => null),
+        api.inventory.getStores().catch(() => ['CA_1']),
+        canManage ? api.optimization.getServiceLevel().catch(() => null) : Promise.resolve(null),
+        canManage ? api.classification.getRecommendation('AX').catch(() => null) : Promise.resolve(null),
+        canManage ? api.calibration.getStatus(activeStore).catch(() => null) : Promise.resolve(null),
+        canManage ? api.calibration.getHistory({ store_id: activeStore, limit: 200 }).catch(() => []) : Promise.resolve([]),
       ]);
 
       if (matrixRes) {
@@ -406,12 +444,17 @@ export const AbcXyzAnalysis: React.FC = () => {
           cv_y: threshRes.cv_y ?? 1.0,
         });
       }
+      if (Array.isArray(storeList) && storeList.length > 0) {
+        setStores(storeList);
+      }
       if (slRes) {
         setServiceLevelConfig(slRes);
       }
       if (axRec) {
         setSelectedRecommendation(axRec);
       }
+      setCalibrationStatus(calStatusRes);
+      setCalibrationHistory(Array.isArray(calHistoryRes) ? calHistoryRes : []);
       setCategories(catList || []);
       setSkuList(skusRes.list || []);
       setTotalSkus(skusRes.total || (skusRes.list || []).length);
@@ -505,15 +548,86 @@ export const AbcXyzAnalysis: React.FC = () => {
     if (next !== 'All') {
       setSelectedAbc(next[0]);
       setSelectedXyz(next[1]);
-      try {
-        const rec = await api.classification.getRecommendation(next).catch(() => null);
-        setSelectedRecommendation(rec);
-      } catch {
-        setSelectedRecommendation(null);
+      if (canManage) {
+        try {
+          const rec = await api.classification.getRecommendation(next).catch(() => null);
+          setSelectedRecommendation(rec);
+        } catch {
+          setSelectedRecommendation(null);
+        }
       }
     } else {
       setSelectedAbc('All');
       setSelectedXyz('All');
+    }
+  };
+
+  const handleStoreChange = async (newStore: string) => {
+    setSelectedStore(newStore);
+    setRefittedPolicies([]);
+    setPolicySelectionId(null);
+    await loadCalibrationForStore(newStore);
+  };
+
+  const handleRunCalibrationStep = async () => {
+    if (!isAdmin) return;
+    setIsSteppingCalibration(true);
+    try {
+      const res = await api.calibration.step({
+        store_id: selectedStore,
+        lead_time_days: 3,
+        review_period_days: 7,
+      });
+      await loadCalibrationForStore(selectedStore);
+      const warnSuffix =
+        Array.isArray(res.warnings) && res.warnings.length > 0
+          ? ` (${res.warnings[0]})`
+          : '';
+      showNotification(
+        `${res.message || (isVi ? `Đã cập nhật C³-OUT chu kỳ k=${res.review_index}` : `C³-OUT stepped to cycle k=${res.review_index}`)}${warnSuffix}`,
+        'success'
+      );
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      showNotification(
+        detail ||
+          (isVi
+            ? 'Không thể chạy bước hiệu chuẩn C³-OUT (yêu cầu quyền Admin hoặc dữ liệu cycle hợp lệ).'
+            : 'Unable to step C³-OUT calibration (requires Admin and available service outcome cycle).'),
+        'error'
+      );
+    } finally {
+      setIsSteppingCalibration(false);
+    }
+  };
+
+  const handleRefitPolicies = async () => {
+    if (!isAdmin) return;
+    setIsRefittingPolicies(true);
+    try {
+      const res = await api.optimization.refitPolicies({
+        store_id: selectedStore,
+      });
+      setRefittedPolicies(res.policies || []);
+      setPolicySelectionId(res.selection_id || null);
+      showNotification(
+        res.message ||
+          (isVi
+            ? `Đã refit ${res.policies?.length || 0} chính sách REFIT-RSS-EOQ-G (${res.selection_id}).`
+            : `Refitted ${res.policies?.length || 0} REFIT-RSS-EOQ-G policies (${res.selection_id}).`),
+        'success'
+      );
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      showNotification(
+        detail ||
+          (isVi
+            ? 'Không thể chạy refit chính sách REFIT-RSS-EOQ-G.'
+            : 'Failed to refit REFIT-RSS-EOQ-G policies.'),
+        'error'
+      );
+    } finally {
+      setIsRefittingPolicies(false);
     }
   };
 
@@ -634,165 +748,146 @@ export const AbcXyzAnalysis: React.FC = () => {
     return { count: 0, pct: '0.0', revenue: 0 };
   };
 
+  const getEffectiveProfile = (segCode: string) => {
+    const fallback = SEGMENT_C3_PROFILES[segCode] || SEGMENT_C3_PROFILES.AX;
+    const stateItem = calibrationStatus?.states?.find(
+      (s) => (s.class_id || '').toUpperCase() === segCode.toUpperCase()
+    );
+    const policyItem = findPolicySelectionForClass(refittedPolicies, segCode);
+
+    const tau = getSegmentTau(segCode);
+    const thetaFromStatus =
+      calibrationStatus?.thetas?.[segCode] ??
+      stateItem?.theta;
+    const theta = thetaFromStatus != null ? Number(thetaFromStatus) : fallback.theta;
+    const multiplierFromStatus =
+      calibrationStatus?.multipliers?.[segCode] ??
+      stateItem?.multiplier;
+    const observedAvail =
+      stateItem != null
+        ? Number(((1 - Number(stateItem.error_rate || 0)) * 100).toFixed(1))
+        : fallback.observedAvail;
+    const atBoundary = Boolean(
+      stateItem?.at_boundary ||
+        calibrationStatus?.at_boundary_classes?.includes(segCode) ||
+        theta >= 2.0
+    );
+
+    const state: SegmentC3Profile['state'] =
+      stateItem != null
+        ? atBoundary
+          ? 'BOUNDARY'
+          : Math.abs(observedAvail - tau) <= 0.5
+          ? 'ACTIVE'
+          : 'WARM-UP'
+        : fallback.state;
+
+    const mParam = policyItem
+      ? Number(policyItem.m_g)
+      : multiplierFromStatus != null
+      ? Number(multiplierFromStatus)
+      : fallback.mParam;
+    const kappaParam = policyItem ? Number(policyItem.kappa_g) : fallback.kappaParam;
+
+    return {
+      ...fallback,
+      theta: Number(theta.toFixed(2)),
+      mParam: Number(mParam.toFixed(2)),
+      kappaParam: Number(kappaParam.toFixed(2)),
+      observedAvail,
+      atBoundary,
+      state,
+      isLiveCalibration: stateItem != null || thetaFromStatus != null,
+      policyType: policyItem?.policy_type || null,
+      valCost: policyItem?.val_cost ?? null,
+      valService: policyItem?.val_service ?? null,
+      reviewIndex: stateItem?.review_index ?? calibrationStatus?.latest_review_index ?? null,
+      reviewDate: stateItem?.review_date ?? calibrationStatus?.latest_review_date ?? null,
+    };
+  };
+
   // Active segment shown in the Policy Panel & Trajectory Chart (never empty!)
   const activePolicyCode = selectedSegment !== 'All' ? selectedSegment : inspectedSegment || 'AX';
-  const activeProfile = SEGMENT_C3_PROFILES[activePolicyCode] || SEGMENT_C3_PROFILES.AX;
+  const activeProfile = getEffectiveProfile(activePolicyCode);
   const activeTau = getSegmentTau(activePolicyCode);
   const activeCellStats = getCellData(activePolicyCode);
 
-  // Task FE.10: Build 8-cycle Closed-Loop Trajectory Data for the active segment
+  const liveTrajectoryPoints = useMemo(
+    () => buildCalibrationTrajectory(calibrationHistory, activePolicyCode, isVi),
+    [calibrationHistory, activePolicyCode, isVi]
+  );
+
+  // Task FE.10: Build Closed-Loop Trajectory Data (Live BE History OR Benchmark Modes)
   const trajectoryData = useMemo(() => {
+    if (trajectoryScenario === 'LIVE') {
+      return liveTrajectoryPoints;
+    }
+
     const tau = activeTau;
     const baseTheta = activeProfile.theta;
     const eta = 4.5; // C³-OUT controller gain
 
     if (trajectoryScenario === 'NORMAL') {
-      // Normal Closed-Loop Operation (Cycles k = 1..8): smooth convergence within deadband = 0.005
       const theta0 = Math.max(0.08, Math.round((baseTheta - 0.14) * 100) / 100);
       const theta1 = Math.max(0.1, Math.round((baseTheta - 0.08) * 100) / 100);
       const theta2 = Math.max(0.12, Math.round((baseTheta - 0.03) * 100) / 100);
       return [
-        {
-          cycle: isVi ? 'Chu kỳ k=1' : 'Cycle k=1',
-          k: 1,
-          availability: Number((tau - 1.4).toFixed(1)),
-          target: tau,
-          theta: theta0,
-          phase: isVi ? 'Khởi tạo (Warm-up)' : 'Initialization',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=2' : 'Cycle k=2',
-          k: 2,
-          availability: Number((tau - 0.9).toFixed(1)),
-          target: tau,
-          theta: theta1,
-          phase: isVi ? 'Trễ phản hồi d=2' : 'Delay window d=2',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=3' : 'Cycle k=3',
-          k: 3,
-          availability: Number((tau - 0.3).toFixed(1)),
-          target: tau,
-          theta: theta2,
-          phase: isVi ? 'C³-OUT tăng θ_g' : 'C³-OUT steps up θ_g',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=4' : 'Cycle k=4',
-          k: 4,
-          availability: Number((tau + 0.1).toFixed(1)),
-          target: tau,
-          theta: baseTheta,
-          phase: isVi ? 'Đạt mục tiêu τ_g' : 'Setpoint achieved',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=5' : 'Cycle k=5',
-          k: 5,
-          availability: Number((tau + 0.3).toFixed(1)),
-          target: tau,
-          theta: baseTheta,
-          phase: isVi ? 'Trong dải chết (0.5%)' : 'Within deadband (0.5%)',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=6' : 'Cycle k=6',
-          k: 6,
-          availability: Number((tau + 0.2).toFixed(1)),
-          target: tau,
-          theta: baseTheta,
-          phase: isVi ? 'Ổn định vòng kín' : 'Closed-loop steady',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=7' : 'Cycle k=7',
-          k: 7,
-          availability: Number((tau + 0.4).toFixed(1)),
-          target: tau,
-          theta: baseTheta,
-          phase: isVi ? 'Ổn định vòng kín' : 'Closed-loop steady',
-        },
-        {
-          cycle: isVi ? 'Chu kỳ k=8' : 'Cycle k=8',
-          k: 8,
-          availability: Number(activeProfile.observedAvail.toFixed(1)),
-          target: tau,
-          theta: baseTheta,
-          phase: isVi ? 'Trạng thái hiện tại' : 'Current operating state',
-        },
+        { cycle: isVi ? 'Chu kỳ k=1' : 'Cycle k=1', k: 1, availability: Number((tau - 1.4).toFixed(1)), target: tau, theta: theta0, phase: isVi ? 'Khởi tạo (Warm-up)' : 'Initialization' },
+        { cycle: isVi ? 'Chu kỳ k=2' : 'Cycle k=2', k: 2, availability: Number((tau - 0.9).toFixed(1)), target: tau, theta: theta1, phase: isVi ? 'Trễ phản hồi d=2' : 'Delay window d=2' },
+        { cycle: isVi ? 'Chu kỳ k=3' : 'Cycle k=3', k: 3, availability: Number((tau - 0.3).toFixed(1)), target: tau, theta: theta2, phase: isVi ? 'C³-OUT tăng θ_g' : 'C³-OUT steps up θ_g' },
+        { cycle: isVi ? 'Chu kỳ k=4' : 'Cycle k=4', k: 4, availability: Number((tau + 0.1).toFixed(1)), target: tau, theta: baseTheta, phase: isVi ? 'Đạt mục tiêu τ_g' : 'Setpoint achieved' },
+        { cycle: isVi ? 'Chu kỳ k=5' : 'Cycle k=5', k: 5, availability: Number((tau + 0.3).toFixed(1)), target: tau, theta: baseTheta, phase: isVi ? 'Trong dải chết (0.5%)' : 'Within deadband (0.5%)' },
+        { cycle: isVi ? 'Chu kỳ k=6' : 'Cycle k=6', k: 6, availability: Number((tau + 0.2).toFixed(1)), target: tau, theta: baseTheta, phase: isVi ? 'Ổn định vòng kín' : 'Closed-loop steady' },
+        { cycle: isVi ? 'Chu kỳ k=7' : 'Cycle k=7', k: 7, availability: Number((tau + 0.4).toFixed(1)), target: tau, theta: baseTheta, phase: isVi ? 'Ổn định vòng kín' : 'Closed-loop steady' },
+        { cycle: isVi ? 'Chu kỳ k=8' : 'Cycle k=8', k: 8, availability: Number(activeProfile.observedAvail.toFixed(1)), target: tau, theta: baseTheta, phase: isVi ? 'Trạng thái hiện tại' : 'Current operating state' },
       ];
     }
 
-    // Experiment E9c: Uncalibrated Model-Switch Shock at Cycle k = 3
-    // Shows availability dropping to 89.4% at k=3, C³-OUT responding after delay d=2 and recovering to >= 95.2% (or tau) within 3 review cycles while keeping theta in [0, 2]
     const preTheta = Math.max(0.15, Math.round((baseTheta * 0.65) * 100) / 100);
     const step1Theta = Math.min(2.0, Math.round((preTheta + eta * 0.085) * 100) / 100);
     const step2Theta = Math.min(2.0, Math.round((step1Theta + eta * 0.055) * 100) / 100);
     const finalShockTheta = Math.min(2.0, Math.max(step2Theta, baseTheta));
 
     return [
-      {
-        cycle: isVi ? 'Chu kỳ k=1' : 'Cycle k=1',
-        k: 1,
-        availability: Number((tau + 0.2).toFixed(1)),
-        target: tau,
-        theta: preTheta,
-        phase: isVi ? 'Ổn định trước cú sốc' : 'Pre-shock steady state',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=2' : 'Cycle k=2',
-        k: 2,
-        availability: Number((tau + 0.1).toFixed(1)),
-        target: tau,
-        theta: preTheta,
-        phase: isVi ? 'Ổn định trước cú sốc' : 'Pre-shock steady state',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=3 (Sốc E9c)' : 'Cycle k=3 (E9c Shock)',
-        k: 3,
-        availability: 89.4,
-        target: tau,
-        theta: preTheta,
-        phase: isVi ? 'Cú sốc chuyển mô hình chưa hiệu chuẩn (89.4%)' : 'Uncalibrated model-switch shock (89.4%)',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=4' : 'Cycle k=4',
-        k: 4,
-        availability: 91.8,
-        target: tau,
-        theta: step1Theta,
-        phase: isVi ? 'C³-OUT phát hiện thiếu hụt & nâng θ_g' : 'C³-OUT detects shortfall & raises θ_g',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=5 (Trễ d=2)' : 'Cycle k=5 (Delay d=2)',
-        k: 5,
-        availability: 94.1,
-        target: tau,
-        theta: step2Theta,
-        phase: isVi ? 'Hiệu lực sau độ trễ d=2 chu kỳ' : 'Feedback takes effect after d=2 delay',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=6 (Phục hồi)' : 'Cycle k=6 (Recovered)',
-        k: 6,
-        availability: Number(Math.max(95.4, tau - 0.1).toFixed(1)),
-        target: tau,
-        theta: finalShockTheta,
-        phase: isVi ? 'Phục hồi ≥ 95.2% sau 3 chu kỳ' : 'Recovered ≥ 95.2% within 3 cycles',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=7' : 'Cycle k=7',
-        k: 7,
-        availability: Number(Math.max(96.1, tau + 0.2).toFixed(1)),
-        target: tau,
-        theta: finalShockTheta,
-        phase: isVi ? 'Khóa mục tiêu trong biên [0, 2]' : 'Locked at setpoint within [0, 2]',
-      },
-      {
-        cycle: isVi ? 'Chu kỳ k=8' : 'Cycle k=8',
-        k: 8,
-        availability: Number(Math.max(96.3, activeProfile.observedAvail).toFixed(1)),
-        target: tau,
-        theta: finalShockTheta,
-        phase: isVi ? 'Cân bằng mới sau cú sốc' : 'Post-shock equilibrium',
-      },
+      { cycle: isVi ? 'Chu kỳ k=1' : 'Cycle k=1', k: 1, availability: Number((tau + 0.2).toFixed(1)), target: tau, theta: preTheta, phase: isVi ? 'Ổn định trước cú sốc' : 'Pre-shock steady state' },
+      { cycle: isVi ? 'Chu kỳ k=2' : 'Cycle k=2', k: 2, availability: Number((tau + 0.1).toFixed(1)), target: tau, theta: preTheta, phase: isVi ? 'Ổn định trước cú sốc' : 'Pre-shock steady state' },
+      { cycle: isVi ? 'Chu kỳ k=3 (Sốc E9c)' : 'Cycle k=3 (E9c Shock)', k: 3, availability: 89.4, target: tau, theta: preTheta, phase: isVi ? 'Cú sốc chuyển mô hình chưa hiệu chuẩn (89.4%)' : 'Uncalibrated model-switch shock (89.4%)' },
+      { cycle: isVi ? 'Chu kỳ k=4' : 'Cycle k=4', k: 4, availability: 91.8, target: tau, theta: step1Theta, phase: isVi ? 'C³-OUT phát hiện thiếu hụt & nâng θ_g' : 'C³-OUT detects shortfall & raises θ_g' },
+      { cycle: isVi ? 'Chu kỳ k=5 (Trễ d=2)' : 'Cycle k=5 (Delay d=2)', k: 5, availability: 94.1, target: tau, theta: step2Theta, phase: isVi ? 'Hiệu lực sau độ trễ d=2 chu kỳ' : 'Feedback takes effect after d=2 delay' },
+      { cycle: isVi ? 'Chu kỳ k=6 (Phục hồi)' : 'Cycle k=6 (Recovered)', k: 6, availability: Number(Math.max(95.4, tau - 0.1).toFixed(1)), target: tau, theta: finalShockTheta, phase: isVi ? 'Phục hồi ≥ 95.2% sau 3 chu kỳ' : 'Recovered ≥ 95.2% within 3 cycles' },
+      { cycle: isVi ? 'Chu kỳ k=7' : 'Cycle k=7', k: 7, availability: Number(Math.max(96.1, tau + 0.2).toFixed(1)), target: tau, theta: finalShockTheta, phase: isVi ? 'Khóa mục tiêu trong biên [0, 2]' : 'Locked at setpoint within [0, 2]' },
+      { cycle: isVi ? 'Chu kỳ k=8' : 'Cycle k=8', k: 8, availability: Number(Math.max(96.3, activeProfile.observedAvail).toFixed(1)), target: tau, theta: finalShockTheta, phase: isVi ? 'Cân bằng mới sau cú sốc' : 'Post-shock equilibrium' },
     ];
-  }, [activeTau, activeProfile, trajectoryScenario, isVi]);
+  }, [activeTau, activeProfile, trajectoryScenario, liveTrajectoryPoints, isVi]);
+
+  const trajStats = useMemo(() => {
+    if (!trajectoryData || trajectoryData.length === 0) {
+      return {
+        firstAvail: activeProfile.observedAvail,
+        troughAvail: activeProfile.observedAvail,
+        recoveryAvail: activeProfile.observedAvail,
+        firstTheta: activeProfile.theta,
+        lastTheta: activeProfile.theta,
+        hasPoints: false,
+      };
+    }
+    const first = trajectoryData[0];
+    const last = trajectoryData[trajectoryData.length - 1];
+    const minAvail = trajectoryData.reduce(
+      (min, pt) => (pt.availability < min ? pt.availability : min),
+      first.availability
+    );
+    const recoveryIdx = trajectoryScenario === 'SHOCK_E9C' ? Math.min(5, trajectoryData.length - 1) : trajectoryData.length - 1;
+    const recovery = trajectoryData[recoveryIdx];
+    return {
+      firstAvail: first.availability,
+      troughAvail: minAvail,
+      recoveryAvail: recovery.availability,
+      firstTheta: first.theta,
+      lastTheta: last.theta,
+      hasPoints: true,
+    };
+  }, [trajectoryData, trajectoryScenario, activeProfile]);
 
   const hasActiveFilter =
     selectedSegment !== 'All' ||
@@ -821,7 +916,7 @@ export const AbcXyzAnalysis: React.FC = () => {
 
   const renderMatrixCell = (segCode: string, cellColorClass: string, isDarkText: boolean = false) => {
     const cell = getCellData(segCode);
-    const prof = SEGMENT_C3_PROFILES[segCode];
+    const prof = getEffectiveProfile(segCode);
     const tau = getSegmentTau(segCode);
     const isActive = selectedSegment === segCode;
     const isInspected = activePolicyCode === segCode;
@@ -903,10 +998,36 @@ export const AbcXyzAnalysis: React.FC = () => {
               <span className="abc-kpi-card-label">{isVi ? 'Hệ Số Đệm C³-OUT (θ_g)' : 'C³-OUT Multiplier'}</span>
               <span className="abc-kpi-card-value">{activeProfile.theta.toFixed(2)}</span>
               <span className="abc-kpi-card-sub">
-                {isVi ? `Trạng thái: ${activeProfile.state}` : `State: ${activeProfile.state}`}
+                {isVi
+                  ? `Trạng thái: ${activeProfile.state}${activeProfile.isLiveCalibration ? ` • ${selectedStore}` : ''}`
+                  : `State: ${activeProfile.state}${activeProfile.isLiveCalibration ? ` • ${selectedStore}` : ''}`}
               </span>
             </div>
           </div>
+
+          {(calibrationStatus?.has_warning || (calibrationStatus?.at_boundary_classes?.length ?? 0) > 0) && (
+            <div className="c3-boundary-alert" role="alert">
+              <div className="c3-boundary-alert-main">
+                <AlertTriangle size={16} style={{ marginTop: '2px', flexShrink: 0 }} />
+                <div>
+                  <strong>
+                    {isVi
+                      ? `Cảnh báo Chạm biên Suy giảm C³-OUT (${selectedStore})`
+                      : `C³-OUT Boundary Saturation Alert (${selectedStore})`}
+                  </strong>{' '}
+                  —{' '}
+                  {isVi
+                    ? `Các phân khúc ${(calibrationStatus?.at_boundary_classes || []).join(', ')} đã chạm ngưỡng trần θ_max = 2.0 tại chu kỳ k=${calibrationStatus?.latest_review_index ?? 0}. Cần rà soát lại độ chính xác dự báo hoặc tham số mục tiêu.`
+                    : `Segments ${(calibrationStatus?.at_boundary_classes || []).join(', ')} reached upper clip θ_max = 2.0 at cycle k=${calibrationStatus?.latest_review_index ?? 0}. Review underlying forecast bias or policy targets.`}
+                </div>
+              </div>
+              {calibrationStatus?.latest_review_date && (
+                <span className="abc-subnav-pill">
+                  k={calibrationStatus.latest_review_index} • {String(calibrationStatus.latest_review_date).slice(0, 10)}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Sub-Navigation Tabs Bar */}
           <div className="abc-subnav-row">
@@ -951,8 +1072,22 @@ export const AbcXyzAnalysis: React.FC = () => {
             </div>
 
             <div className="abc-subnav-meta">
+              {canManage && (
+                <select
+                  aria-label={isVi ? 'Chọn cửa hàng C³-OUT' : 'Select Store for C³-OUT'}
+                  className="c3-store-select"
+                  value={selectedStore}
+                  onChange={(e) => handleStoreChange(e.target.value)}
+                >
+                  {stores.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
+              )}
               <span className="abc-subnav-pill">
-                {activePolicyCode} • τ={activeTau}% • θ={activeProfile.theta.toFixed(2)}
+                {activePolicyCode} • τ={activeTau}% • θ={activeProfile.theta.toFixed(2)} • m={activeProfile.mParam.toFixed(2)}×
               </span>
             </div>
           </div>
@@ -985,6 +1120,42 @@ export const AbcXyzAnalysis: React.FC = () => {
                     </p>
                   </div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        className="configure-btn primary-action"
+                        onClick={handleRunCalibrationStep}
+                        disabled={isSteppingCalibration}
+                        title={
+                          isVi
+                            ? 'Job J4: Thực thi 1 chu kỳ phản hồi C³-OUT trên Service Outcome mới nhất'
+                            : 'Job J4: Step one closed-loop C³-OUT review cycle from latest service outcome'
+                        }
+                      >
+                        <Play size={12} style={{ marginRight: '5px' }} />
+                        {isSteppingCalibration
+                          ? isVi ? 'Đang chạy J4...' : 'Stepping J4...'
+                          : isVi ? 'Bước C³-OUT (J4)' : 'Step C³-OUT (J4)'}
+                      </button>
+                      <button
+                        type="button"
+                        className="configure-btn"
+                        onClick={handleRefitPolicies}
+                        disabled={isRefittingPolicies}
+                        title={
+                          isVi
+                            ? 'Job J5: Tối ưu lại tham số (m_g, κ_g) theo phân khúc bằng REFIT-RSS-EOQ-G'
+                            : 'Job J5: Refit class-level (m_g, κ_g) policies via REFIT-RSS-EOQ-G'
+                        }
+                      >
+                        <SlidersHorizontal size={12} style={{ marginRight: '5px' }} />
+                        {isRefittingPolicies
+                          ? isVi ? 'Đang refit...' : 'Refitting...'
+                          : isVi ? 'Refit Chính sách (J5)' : 'Refit Policies (J5)'}
+                      </button>
+                    </>
+                  )}
                   {selectedSegment !== 'All' && (
                     <button
                       type="button"
@@ -1105,9 +1276,14 @@ export const AbcXyzAnalysis: React.FC = () => {
                     {isVi ? 'Chính Sách Phân Khúc & Hiệu Chuẩn C³-OUT' : 'Segment Policy & C³-OUT Calibration'}
                   </h2>
                   <span className="policy-panel-sub">
-                    {isVi
+                    {activeProfile.isLiveCalibration
+                      ? isVi
+                        ? `Hiệu chuẩn thực BE (${selectedStore} • k=${activeProfile.reviewIndex ?? 0})${activeProfile.policyType ? ` • ${activeProfile.policyType}` : ''}`
+                        : `Live BE Calibration (${selectedStore} • k=${activeProfile.reviewIndex ?? 0})${activeProfile.policyType ? ` • ${activeProfile.policyType}` : ''}`
+                      : isVi
                       ? 'Tham số (R, s, S) và trạng thái phản hồi mức phục vụ'
                       : 'Periodic review (R, s, S) & closed-loop service state'}
+                    {policySelectionId ? ` • ${policySelectionId}` : ''}
                   </span>
                 </div>
                 {renderStateBadge(activeProfile.state)}
@@ -1287,7 +1463,11 @@ export const AbcXyzAnalysis: React.FC = () => {
                       : `C³-OUT Closed-Loop Calibration Trajectory & 4-Period Rolling Availability — Segment ${activePolicyCode}`}
                   </h2>
                   <span className="c3-engine-pill">
-                    {trajectoryScenario === 'SHOCK_E9C'
+                    {trajectoryScenario === 'LIVE'
+                      ? isVi
+                        ? `Dữ Liệu Thực BE (${selectedStore} • ${trajectoryData.length} chu kỳ)`
+                        : `Live BE History (${selectedStore} • ${trajectoryData.length} cycles)`
+                      : trajectoryScenario === 'SHOCK_E9C'
                       ? isVi
                         ? 'Thử nghiệm E9c: Cú sốc chuyển mô hình tại k=3'
                         : 'Experiment E9c: Model-Switch Shock at k=3'
@@ -1297,7 +1477,11 @@ export const AbcXyzAnalysis: React.FC = () => {
                   </span>
                 </div>
                 <p className="panel-subtitle" style={{ marginBottom: 0, marginTop: '0.25rem' }}>
-                  {trajectoryScenario === 'SHOCK_E9C'
+                  {trajectoryScenario === 'LIVE'
+                    ? isVi
+                      ? `Chuỗi lịch sử chu kỳ thực tế của bộ điều khiển C³-OUT tại kho ${selectedStore} cho phân khúc ${activePolicyCode} (θ_${activePolicyCode} = ${activeProfile.theta.toFixed(2)}, m_${activePolicyCode} = ${activeProfile.mParam.toFixed(2)}×).`
+                      : `Persisted closed-loop C³-OUT calibration cycles at ${selectedStore} for segment ${activePolicyCode} (θ_${activePolicyCode} = ${activeProfile.theta.toFixed(2)}, m_${activePolicyCode} = ${activeProfile.mParam.toFixed(2)}×).`
+                    : trajectoryScenario === 'SHOCK_E9C'
                     ? isVi
                       ? `Mô phỏng cú sốc chuyển sang mô hình chưa hiệu chuẩn ở chu kỳ k=3 (độ sẵn sàng tụt xuống 89.4%): bộ điều khiển C³-OUT tự động nâng θ_${activePolicyCode},k sau độ trễ d=2 chu kỳ và khôi phục mức phục vụ ≥ 95.2% trong vòng 3 chu kỳ rà soát mà vẫn giữ θ_g ∈ [0, 2].`
                       : `Simulates an uncalibrated model-switch shock at cycle k=3 (availability drops to 89.4%): C³-OUT automatically steps up θ_${activePolicyCode},k after delay d=2 and recovers availability to ≥ 95.2% within 3 review cycles while keeping θ_g bounded in [0, 2].`
@@ -1310,11 +1494,19 @@ export const AbcXyzAnalysis: React.FC = () => {
               <div className="c3-scenario-controls">
                 <button
                   type="button"
+                  className={`c3-scenario-btn ${trajectoryScenario === 'LIVE' ? 'active' : ''}`}
+                  onClick={() => setTrajectoryScenario('LIVE')}
+                >
+                  <Activity size={13} />
+                  <span>{isVi ? 'Dữ liệu Thực (BE)' : 'Live BE History'}</span>
+                </button>
+                <button
+                  type="button"
                   className={`c3-scenario-btn ${trajectoryScenario === 'NORMAL' ? 'active' : ''}`}
                   onClick={() => setTrajectoryScenario('NORMAL')}
                 >
                   <ShieldCheck size={13} />
-                  <span>{isVi ? 'Vận hành Chuẩn (k = 1..8)' : 'Normal Closed-Loop (k = 1..8)'}</span>
+                  <span>{isVi ? 'Chuẩn Tham Chiếu (k=1..8)' : 'Nominal Benchmark'}</span>
                 </button>
                 <button
                   type="button"
@@ -1323,7 +1515,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                 >
                   <Zap size={13} />
                   <span>
-                    {isVi ? 'Kịch bản Sốc Mô hình (E9c @ k=3)' : 'Model-Switch Shock (E9c @ k=3)'}
+                    {isVi ? 'Sốc Mô Hình (E9c @ k=3)' : 'E9c Shock Benchmark'}
                   </span>
                 </button>
               </div>
@@ -1342,21 +1534,31 @@ export const AbcXyzAnalysis: React.FC = () => {
                   {trajectoryScenario === 'SHOCK_E9C'
                     ? isVi
                       ? 'Đáy cú sốc tại Chu kỳ k=3'
-                      : 'Shock Trough at Cycle k=3'
+                      : 'Shock Trough (k=3)'
+                    : trajectoryScenario === 'LIVE'
+                    ? isVi
+                      ? 'Độ sẵn sàng thấp nhất (Min Ã)'
+                      : 'Minimum Observed Ã'
                     : isVi
                     ? 'Độ sẵn sàng Chu kỳ k=1'
                     : 'Initial Availability (k=1)'}
                 </span>
                 <span className={`c3-traj-kpi-val ${trajectoryScenario === 'SHOCK_E9C' ? 'text-red' : ''}`}>
-                  {trajectoryData[trajectoryScenario === 'SHOCK_E9C' ? 2 : 0].availability.toFixed(1)}%
+                  {trajStats.troughAvail.toFixed(1)}%
                 </span>
               </div>
               <div className="c3-traj-kpi">
                 <span className="c3-traj-kpi-lbl">
-                  {isVi ? 'Phục hồi sau 3 chu kỳ (k=6)' : 'Recovery after 3 Cycles (k=6)'}
+                  {trajectoryScenario === 'LIVE'
+                    ? isVi
+                      ? 'Độ sẵn sàng Chu kỳ gần nhất'
+                      : 'Latest Cycle Availability'
+                    : isVi
+                    ? 'Phục hồi sau 3 chu kỳ (k=6)'
+                    : 'Recovery after 3 Cycles (k=6)'}
                 </span>
                 <span className="c3-traj-kpi-val text-emerald">
-                  {trajectoryData[5].availability.toFixed(1)}% (≥ 95.2%)
+                  {trajStats.recoveryAvail.toFixed(1)}%
                 </span>
               </div>
               <div className="c3-traj-kpi">
@@ -1364,11 +1566,57 @@ export const AbcXyzAnalysis: React.FC = () => {
                   {isVi ? 'Biên độ Hiệu chuẩn θ_{g,k}' : 'Calibrated Multiplier θ_{g,k}'}
                 </span>
                 <span className="c3-traj-kpi-val">
-                  {trajectoryData[0].theta.toFixed(2)} → {trajectoryData[7].theta.toFixed(2)} <small>∈ [0, 2]</small>
+                  {trajStats.firstTheta.toFixed(2)} → {trajStats.lastTheta.toFixed(2)} <small>∈ [0, 2]</small>
                 </span>
               </div>
             </div>
 
+            {trajectoryScenario === 'LIVE' && trajectoryData.length === 0 ? (
+              <div
+                style={{
+                  padding: '2.25rem 1.5rem',
+                  border: '1px dashed #cbd5e1',
+                  borderRadius: '6px',
+                  backgroundColor: '#f8fafc',
+                  textAlign: 'center',
+                  marginTop: '0.75rem',
+                }}
+              >
+                <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem', color: '#475569' }}>
+                  {!canManage
+                    ? isVi
+                      ? 'Lịch sử hiệu chuẩn C³-OUT yêu cầu quyền Warehouse Manager hoặc Admin.'
+                      : 'Live C³-OUT calibration history requires Warehouse Manager or Admin access.'
+                    : isVi
+                    ? `Chưa có bản ghi chu kỳ C³-OUT nào cho kho ${selectedStore} / phân khúc ${activePolicyCode}.`
+                    : `No persisted C³-OUT review cycles recorded yet for ${selectedStore} / ${activePolicyCode}.`}
+                </p>
+                <div style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="configure-btn primary-action"
+                      onClick={handleRunCalibrationStep}
+                      disabled={isSteppingCalibration}
+                    >
+                      <Play size={12} style={{ marginRight: '5px' }} />
+                      {isSteppingCalibration
+                        ? isVi ? 'Đang chạy J4...' : 'Stepping J4...'
+                        : isVi ? 'Chạy bước C³-OUT (J4)' : 'Run C³-OUT Step (J4)'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="configure-btn"
+                    onClick={() => setTrajectoryScenario('SHOCK_E9C')}
+                  >
+                    <Zap size={12} style={{ marginRight: '5px' }} />
+                    {isVi ? 'Xem kịch bản tham chiếu E9c' : 'View E9c Reference Simulation'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+            <>
             {/* Dual-Axis Recharts ComposedChart */}
             <div style={{ width: '100%', height: 295, marginTop: '0.5rem' }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -1490,6 +1738,8 @@ export const AbcXyzAnalysis: React.FC = () => {
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
+            </>
+            )}
           </div>
         )}
 
@@ -1767,7 +2017,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   ) : (
                     skuList.map((row: any, idx: number) => {
                       const segCode = row.segment || `${row.abc || 'A'}${row.xyz || 'X'}`;
-                      const segProf = SEGMENT_C3_PROFILES[segCode] || SEGMENT_C3_PROFILES.AX;
+                      const segProf = getEffectiveProfile(segCode);
                       const segTau = getSegmentTau(segCode);
 
                       return (

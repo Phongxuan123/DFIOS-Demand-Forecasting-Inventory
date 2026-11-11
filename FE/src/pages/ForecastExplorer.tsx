@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Card } from '../components/ui/Card.tsx';
 import {
   XAxis,
@@ -32,7 +33,12 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
-import { api } from '../services/api.ts';
+import {
+  api,
+  type CalibrationStatusResponse,
+  type WindowQuantileResponse,
+} from '../services/api.ts';
+import { computeRouteCSummary, formatTauLabel } from '../utils/dfiosAnalytics.ts';
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './ForecastExplorer.css';
 
@@ -112,46 +118,31 @@ const FEATURE_METADATA_VI: Record<string, { label: string; desc: string; default
   },
 };
 
-// 19 Research Quantile Grid Levels (tau in {0.05..0.999}) for Route (c) Protection Window H = L + R = 10d
-const ROUTE_C_QUANTILES = [
-  { tau: 0.05, label: '0.05', z: -1.645 },
-  { tau: 0.10, label: '0.10', z: -1.282 },
-  { tau: 0.15, label: '0.15', z: -1.036 },
-  { tau: 0.20, label: '0.20', z: -0.842 },
-  { tau: 0.25, label: '0.25', z: -0.674 },
-  { tau: 0.30, label: '0.30', z: -0.524 },
-  { tau: 0.40, label: '0.40', z: -0.253 },
-  { tau: 0.50, label: '0.50', z: 0.0 },
-  { tau: 0.60, label: '0.60', z: 0.253 },
-  { tau: 0.70, label: '0.70', z: 0.524 },
-  { tau: 0.75, label: '0.75', z: 0.674 },
-  { tau: 0.80, label: '0.80', z: 0.842 },
-  { tau: 0.85, label: '0.85', z: 1.036 },
-  { tau: 0.90, label: '0.90', z: 1.282 },
-  { tau: 0.95, label: '0.95', z: 1.645 },
-  { tau: 0.975, label: '0.975', z: 1.96 },
-  { tau: 0.99, label: '0.99', z: 2.326 },
-  { tau: 0.995, label: '0.995', z: 2.576 },
-  { tau: 0.999, label: '0.999', z: 3.09 },
-];
-
 type ForecastTab = 'forecast' | 'window_route_c' | 'benchmark' | 'schedule';
 
 export const ForecastExplorer: React.FC = () => {
   const { user } = useAuth();
   const { language } = useLanguage();
   const isVi = language === 'vi';
-  const FEATURE_METADATA = isVi ? FEATURE_METADATA_VI : FEATURE_METADATA_EN;
   const canEdit = user?.role?.toUpperCase() !== 'VIEWER';
+  const [searchParams, setSearchParams] = useSearchParams();
+  const FEATURE_METADATA = isVi ? FEATURE_METADATA_VI : FEATURE_METADATA_EN;
 
-  const [activeTab, setActiveTab] = useState<ForecastTab>('forecast');
+  const initialTabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<ForecastTab>(
+    initialTabParam === 'window_route_c' ||
+      initialTabParam === 'benchmark' ||
+      initialTabParam === 'schedule'
+      ? initialTabParam
+      : 'forecast'
+  );
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [skuSearch, setSkuSearch] = useState('');
+  const [skuSearch, setSkuSearch] = useState(searchParams.get('sku') || '');
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [stores, setStores] = useState<string[]>([]);
-  const [selectedStore, setSelectedStore] = useState('');
+  const [selectedStore, setSelectedStore] = useState(searchParams.get('store') || 'CA_1');
   const [horizon, setHorizon] = useState<number>(28);
   const [selectedEngine, setSelectedEngine] = useState('LightGBM');
   const [explanation, setExplanation] = useState<any>(null);
@@ -160,6 +151,9 @@ export const ForecastExplorer: React.FC = () => {
   const [uncertaintyRaw, setUncertaintyRaw] = useState<any>(null);
   const [compareRaw, setCompareRaw] = useState<any>(null);
   const [registeredModels, setRegisteredModels] = useState<any[]>([]);
+  const [windowQuantileRaw, setWindowQuantileRaw] = useState<WindowQuantileResponse | null>(null);
+  const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatusResponse | null>(null);
+  const [skuSegmentClass, setSkuSegmentClass] = useState<string>('AX');
 
   // Task FE.4 — Target Service Setpoint tau_g for Route (c) Protection Window H = 10d
   const [targetTau, setTargetTau] = useState<number>(0.95);
@@ -252,23 +246,36 @@ export const ForecastExplorer: React.FC = () => {
   const fetchForecast = async (sku?: string, h: number = horizon, store?: string) => {
     setIsLoading(true);
     try {
-      const targetSku = sku || skuSearch || 'FOODS_1_001';
-      const targetStore = store !== undefined ? store : selectedStore;
-      const [forecast, explRes, overRes, uncRes, cmpRes, modelsRes] = await Promise.all([
-        api.forecasting.getExplorerData(targetSku, h, targetStore || undefined),
-        api.forecasting.getExplanation(targetSku, { store_id: targetStore || undefined }).catch(() => null),
-        api.forecasting.getOverrides(targetSku, { store_id: targetStore || undefined }).catch(() => []),
-        api.forecasting.getUncertainty(targetSku, { store_id: targetStore || undefined, horizon: h }).catch(() => null),
-        api.forecasting.compare(targetSku, { store_id: targetStore || undefined }).catch(() => null),
+      const targetSku = (sku || skuSearch || 'FOODS_1_001').trim();
+      const targetStore = store !== undefined && store !== '' ? store : selectedStore || 'CA_1';
+      const [forecast, explRes, overRes, uncRes, cmpRes, modelsRes, wqRes, calRes, clsSkuRes] = await Promise.all([
+        api.forecasting.getExplorerData(targetSku, h, targetStore),
+        api.forecasting.getExplanation(targetSku, { store_id: targetStore }).catch(() => null),
+        api.forecasting.getOverrides(targetSku, { store_id: targetStore }).catch(() => []),
+        api.forecasting.getUncertainty(targetSku, { store_id: targetStore, horizon: h }).catch(() => null),
+        api.forecasting.compare(targetSku, { store_id: targetStore }).catch(() => null),
         api.ml.getModels().catch(() => ({ list: [] })),
+        api.forecasting.getWindowQuantiles(targetSku, { store_id: targetStore, horizon_days: 10 }).catch(() => null),
+        canEdit ? api.calibration.getStatus(targetStore).catch(() => null) : Promise.resolve(null),
+        api.classification.getSkus({ search: targetSku, limit: 5 }).catch(() => null),
       ]);
 
       if (modelsRes?.list) {
         setRegisteredModels(modelsRes.list);
       }
 
-      if (forecast?.sku && !skuSearch) {
+      if (forecast?.sku && !sku) {
         setSkuSearch(forecast.sku);
+      }
+
+      const matchedClassRow = (clsSkuRes?.list || []).find(
+        (item: any) => String(item.item_id || '').toUpperCase() === targetSku.toUpperCase()
+      );
+      if (matchedClassRow) {
+        const seg =
+          matchedClassRow.segment ||
+          `${matchedClassRow.abc_class || 'A'}${matchedClassRow.xyz_class || 'X'}`;
+        setSkuSegmentClass(seg);
       }
 
       const rawList = forecast?.chartData || [];
@@ -310,6 +317,8 @@ export const ForecastExplorer: React.FC = () => {
       setOverrides(overRes || []);
       setUncertaintyRaw(uncRes);
       setCompareRaw(cmpRes);
+      setWindowQuantileRaw(wqRes);
+      setCalibrationStatus(calRes);
     } catch (error) {
       console.error('Failed to load forecast explorer data', error);
       setToast({
@@ -323,9 +332,27 @@ export const ForecastExplorer: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    fetchForecast('FOODS_1_001', 28, 'CA_1');
+  const urlSkuParam = searchParams.get('sku');
+  const urlStoreParam = searchParams.get('store');
+  const urlTabParam = searchParams.get('tab');
 
+  useEffect(() => {
+    const targetSku = urlSkuParam || 'FOODS_1_001';
+    const targetStore = urlStoreParam || 'CA_1';
+    setSkuSearch(targetSku);
+    setSelectedStore(targetStore);
+    if (
+      urlTabParam === 'forecast' ||
+      urlTabParam === 'window_route_c' ||
+      urlTabParam === 'benchmark' ||
+      urlTabParam === 'schedule'
+    ) {
+      setActiveTab(urlTabParam);
+    }
+    fetchForecast(targetSku, horizon, targetStore);
+  }, [urlSkuParam, urlStoreParam, urlTabParam]);
+
+  useEffect(() => {
     const initFilters = async () => {
       try {
         const [catList, storeList, prodRes] = await Promise.all([
@@ -344,6 +371,13 @@ export const ForecastExplorer: React.FC = () => {
     initFilters();
   }, []);
 
+  const syncUrlParams = (sku: string, store: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (sku) next.set('sku', sku);
+    if (store) next.set('store', store);
+    setSearchParams(next, { replace: true });
+  };
+
   const handleHorizonChange = (newH: number) => {
     setHorizon(newH);
     setMatrixPageSize(newH);
@@ -351,8 +385,10 @@ export const ForecastExplorer: React.FC = () => {
   };
 
   const handleStoreChange = (newStore: string) => {
-    setSelectedStore(newStore);
-    fetchForecast(skuSearch, horizon, newStore);
+    const nextStore = newStore || 'CA_1';
+    setSelectedStore(nextStore);
+    syncUrlParams(skuSearch || 'FOODS_1_001', nextStore);
+    fetchForecast(skuSearch, horizon, nextStore);
   };
 
   const handleCategoryChange = (newCat: string) => {
@@ -361,6 +397,7 @@ export const ForecastExplorer: React.FC = () => {
       const match = products.find((p: any) => p.cat_id === newCat || p.category === newCat);
       if (match) {
         setSkuSearch(match.item_id);
+        syncUrlParams(match.item_id, selectedStore || 'CA_1');
         fetchForecast(match.item_id, horizon, selectedStore);
         return;
       }
@@ -370,56 +407,24 @@ export const ForecastExplorer: React.FC = () => {
 
   const handleSkuSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    fetchForecast(skuSearch, horizon, selectedStore);
+    const cleaned = (skuSearch || 'FOODS_1_001').trim();
+    syncUrlParams(cleaned, selectedStore || 'CA_1');
+    fetchForecast(cleaned, horizon, selectedStore);
   };
 
-  // Task FE.4 — Compute Route (c) Cumulative Protection Window Quantiles Q_{D_H}(tau) over H = L + R = 10 days
+  // Compute Route (c) Cumulative Protection Window Quantiles Q_{D_H}(tau) over H = L + R = 10 days
   const routeCWindowTelemetry = useMemo(() => {
-    const H = 10; // L = 3d lead time + R = 7d review period
-    const windowRows = fullScheduleMatrix.slice(0, H);
-    const meanDaily =
-      windowRows.length > 0
-        ? windowRows.reduce((acc: number, r: any) => acc + Number(r.demand || 0), 0) / windowRows.length
-        : 18.5;
-
-    const muH = Math.max(12, Math.round(meanDaily * H));
     const sigmaHFromApi = uncertaintyRaw?.sigma_h != null ? Number(uncertaintyRaw.sigma_h) : null;
-    // Route (c) captures positive cross-day autocorrelation rho > 0, whereas naive Route (b) either sums daily quantiles (over-conservative comonotonicity) or uses i.i.d sqrt(H)
-    const sigmaH = sigmaHFromApi && sigmaHFromApi > 0 ? sigmaHFromApi : Number((muH * 0.215).toFixed(1));
-    const thetaG = 0.18; // C³-OUT closed-loop conformal calibration offset
-
-    const curve = ROUTE_C_QUANTILES.map((q) => {
-      // Right-skewed negative binomial / conformal cumulative window quantile Q_{D_H}(tau)
-      const skewFactor = q.z > 0 ? 1 + 0.11 * q.z : 1 - 0.04 * Math.abs(q.z);
-      const routeCQuantile = Math.max(1, Math.round(muH + q.z * sigmaH * skewFactor));
-      // Route (b) naive daily quantile sum (assumes perfect comonotonicity across 10 days -> inflates tail or distorts variance)
-      const routeBDailySum = Math.max(1, Math.round(muH + q.z * sigmaH * 1.32));
-      return {
-        tau: q.tau,
-        tauLabel: q.label,
-        routeC: routeCQuantile,
-        routeB: routeBDailySum,
-      };
+    const dailyDemands = fullScheduleMatrix.map((r: any) => Number(r.demand || 0));
+    return computeRouteCSummary({
+      windowQuantile: windowQuantileRaw,
+      dailyForecastDemands: dailyDemands,
+      sigmaHFromUncertainty: sigmaHFromApi,
+      targetTau,
+      segmentClass: skuSegmentClass,
+      calibrationStatus,
     });
-
-    const selectedPoint = curve.find((c) => Math.abs(c.tau - targetTau) < 0.001) || curve[14]; // default 0.95
-    const sBase = selectedPoint.routeC;
-    const conformalOffset = Math.round(thetaG * sigmaH);
-    const sCalibrated = sBase + conformalOffset;
-    const routeBAtTarget = selectedPoint.routeB;
-
-    return {
-      H,
-      muH,
-      sigmaH: Number(sigmaH.toFixed(1)),
-      thetaG,
-      sBase,
-      conformalOffset,
-      sCalibrated,
-      routeBAtTarget,
-      curve,
-    };
-  }, [fullScheduleMatrix, uncertaintyRaw, targetTau]);
+  }, [windowQuantileRaw, fullScheduleMatrix, uncertaintyRaw, targetTau, skuSegmentClass, calibrationStatus]);
 
   // Multi-Model Benchmark Comparison Table bound directly to Backend Model Registry
   const benchmarkModels = useMemo(() => {
@@ -1356,13 +1361,25 @@ export const ForecastExplorer: React.FC = () => {
                   : 'Route (c) Cumulative Protection Window Demand Distribution — H = L + R = 10 Days'}
               </h3>
               <span className="route-c-formula-badge">
-                D_H = Σ y_(T+t) | 19-Quantile Grid (τ ∈ [0.05, 0.999])
+                D_H = Σ y_(T+t) | {routeCWindowTelemetry.isLive ? `${routeCWindowTelemetry.quantileCount}-Quantile Grid (Live BE)` : 'Quantile Grid Preview'}
+              </span>
+              <span
+                className={`route-c-source-badge ${routeCWindowTelemetry.isLive ? 'live' : 'fallback'}`}
+                title={routeCWindowTelemetry.modelRunId || undefined}
+              >
+                {routeCWindowTelemetry.isLive
+                  ? (isVi
+                      ? `Dữ liệu thực • Origin ${routeCWindowTelemetry.originDate || 'N/A'} • ${routeCWindowTelemetry.segmentClass}`
+                      : `Live API • Origin ${routeCWindowTelemetry.originDate || 'N/A'} • Seg ${routeCWindowTelemetry.segmentClass}`)
+                  : (isVi
+                      ? 'Ước lượng dự phòng (chưa có dữ liệu Route c từ batch)'
+                      : 'Estimated Preview (no persisted Route c quantiles yet)')}
               </span>
             </div>
             <p className="route-c-subtitle">
               {isVi
-                ? `Ước lượng trực tiếp hàm phân vị tích lũy Q̂_{D_H}(τ) trên toàn cửa sổ bảo vệ H = 10 ngày (Lead time L = 3d + Chu kỳ rà soát R = 7d) kết hợp hiệu chỉnh Conformal C³-OUT cho SKU ${skuSearch || 'FOODS_1_001'}.`
-                : `Direct cumulative window quantile estimation Q̂_{D_H}(τ) over the 10-day protection window (Lead time L = 3d + Review period R = 7d) with C³-OUT closed-loop conformal calibration for SKU ${skuSearch || 'FOODS_1_001'}.`}
+                ? `Ước lượng trực tiếp hàm phân vị tích lũy Q̂_{D_H}(τ) trên toàn cửa sổ bảo vệ H = ${routeCWindowTelemetry.H} ngày kết hợp hiệu chỉnh Conformal C³-OUT (${routeCWindowTelemetry.segmentClass}) cho SKU ${skuSearch || 'FOODS_1_001'}.`
+                : `Direct cumulative window quantile estimation Q̂_{D_H}(τ) over the ${routeCWindowTelemetry.H}-day protection window with C³-OUT closed-loop conformal calibration (${routeCWindowTelemetry.segmentClass}) for SKU ${skuSearch || 'FOODS_1_001'}.`}
             </p>
           </div>
 
@@ -1425,7 +1442,7 @@ export const ForecastExplorer: React.FC = () => {
               +{routeCWindowTelemetry.conformalOffset} units
             </strong>
             <span className="route-c-kpi-sub">
-              θ_g = {routeCWindowTelemetry.thetaG} • σ̂_H = {routeCWindowTelemetry.sigmaH} u
+              θ_g = {routeCWindowTelemetry.thetaG} (m_g = {routeCWindowTelemetry.multiplierG}×) • σ̂_H = {routeCWindowTelemetry.sigmaH} u
             </span>
           </div>
 
@@ -1437,7 +1454,9 @@ export const ForecastExplorer: React.FC = () => {
               {routeCWindowTelemetry.sCalibrated} units
             </strong>
             <span className="route-c-kpi-sub">
-              s = Q̂_&#123;D_H&#125;(τ_g) + θ_g · σ̂_H
+              {isVi
+                ? `τ=0.95 BE: ${routeCWindowTelemetry.tau95Value}u • s = Q̂_{D_H}(τ_g) + θ_g·σ̂_H`
+                : `BE τ_95: ${routeCWindowTelemetry.tau95Value}u • s = Q̂_{D_H}(τ_g) + θ_g·σ̂_H`}
             </span>
           </div>
         </div>
@@ -1475,7 +1494,7 @@ export const ForecastExplorer: React.FC = () => {
                   labelFormatter={(label) => (isVi ? `Mức phân vị τ = ${label}` : `Quantile Level τ = ${label}`)}
                 />
                 <ReferenceLine
-                  x={String(targetTau)}
+                  x={formatTauLabel(targetTau)}
                   stroke="#0f766e"
                   strokeWidth={2}
                   strokeDasharray="4 4"

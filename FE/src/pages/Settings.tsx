@@ -513,28 +513,54 @@ export const Settings: React.FC = () => {
     setFastInfResult(null);
     const t0 = Date.now();
     try {
-      const [pipeRes, repRes] = await Promise.all([
-        api.ml
-          .triggerPipelineRun({
-            model_name: 'lightgbm',
-            horizon: 28,
-            store_id: fastInfStore,
-          })
-          .catch(() => null),
-        api.replenishment.generateRecommendations(fastInfStore).catch(() => null),
+      const [pipeOutcome, repOutcome] = await Promise.allSettled([
+        api.ml.triggerPipelineRun({
+          model_name: 'lightgbm',
+          horizon: 28,
+          store_id: fastInfStore,
+        }),
+        api.replenishment.generateRecommendations(fastInfStore),
       ]);
+
       const elapsedSec = ((Date.now() - t0) / 1000).toFixed(2);
+      const pipeRes = pipeOutcome.status === 'fulfilled' ? pipeOutcome.value : null;
+      const repRes = repOutcome.status === 'fulfilled' ? repOutcome.value : null;
+
+      if (!pipeRes && !repRes) {
+        const pipeErr: any = pipeOutcome.status === 'rejected' ? pipeOutcome.reason : null;
+        const repErr: any = repOutcome.status === 'rejected' ? repOutcome.reason : null;
+        const errMsg =
+          pipeErr?.response?.data?.detail ||
+          repErr?.response?.data?.detail ||
+          (isVi
+            ? `Không thể chạy Fast Inference / sinh đơn cho kho ${fastInfStore}. Vui lòng kiểm tra quyền Admin và kết nối BE.`
+            : `Failed to execute Fast Inference / replenishment generation for ${fastInfStore}. Verify Admin permissions and backend health.`);
+        setFastInfResult({
+          error: true,
+          store_id: fastInfStore,
+          elapsed_seconds: elapsedSec,
+          message: errMsg,
+        });
+        return;
+      }
+
       setFastInfResult({
+        error: false,
         store_id: fastInfStore,
         elapsed_seconds: pipeRes?.duration_seconds ?? elapsedSec,
-        forecasts_generated: pipeRes?.forecasts_generated ?? 280,
-        inventory_params_updated: pipeRes?.inventory_params_updated ?? 50,
+        forecasts_generated: pipeRes?.forecasts_generated ?? 0,
+        inventory_params_updated: pipeRes?.inventory_params_updated ?? 0,
         replenishments_generated:
-          repRes?.generated_count ?? pipeRes?.replenishments_generated ?? 14,
+          repRes?.generated_count ?? pipeRes?.replenishments_generated ?? 0,
       });
       emitAlertsSyncEvent({ action: 'po_generated', storeId: fastInfStore });
     } catch (e: any) {
       console.error('Fast inference trigger error', e);
+      setFastInfResult({
+        error: true,
+        store_id: fastInfStore,
+        message: isVi ? 'Lỗi không xác định khi chạy Fast Inference.' : 'Unexpected Fast Inference error.',
+      });
     } finally {
       setIsRunningFastInf(false);
     }
@@ -2191,12 +2217,25 @@ export const Settings: React.FC = () => {
                 </div>
 
                 {fastInfResult && (
-                  <div className="fe14-fast-result">
-                    <CheckCircle2 size={15} color="#047857" style={{ flexShrink: 0 }} />
+                  <div
+                    className="fe14-fast-result"
+                    style={
+                      fastInfResult.error
+                        ? { backgroundColor: '#fef2f2', borderColor: '#fecaca', color: '#991b1b' }
+                        : undefined
+                    }
+                  >
+                    {fastInfResult.error ? (
+                      <AlertCircle size={15} color="#dc2626" style={{ flexShrink: 0 }} />
+                    ) : (
+                      <CheckCircle2 size={15} color="#047857" style={{ flexShrink: 0 }} />
+                    )}
                     <span>
-                      {isVi
-                        ? `Kho ${fastInfResult.store_id} hoàn tất trong ${fastInfResult.elapsed_seconds}s: Đã sinh ${fastInfResult.forecasts_generated} dự báo 28 ngày, cập nhật ${fastInfResult.inventory_params_updated} tham số (R, s, S) và tạo ${fastInfResult.replenishments_generated} đề xuất đặt hàng.`
-                        : `Store ${fastInfResult.store_id} completed in ${fastInfResult.elapsed_seconds}s: ${fastInfResult.forecasts_generated} 28d forecasts, ${fastInfResult.inventory_params_updated} (R, s, S) parameters, and ${fastInfResult.replenishments_generated} replenishment orders generated.`}
+                      {fastInfResult.error
+                        ? fastInfResult.message
+                        : isVi
+                          ? `Kho ${fastInfResult.store_id} hoàn tất trong ${fastInfResult.elapsed_seconds}s: Đã sinh ${fastInfResult.forecasts_generated} dự báo 28 ngày, cập nhật ${fastInfResult.inventory_params_updated} tham số (R, s, S) và tạo ${fastInfResult.replenishments_generated} đề xuất đặt hàng.`
+                          : `Store ${fastInfResult.store_id} completed in ${fastInfResult.elapsed_seconds}s: ${fastInfResult.forecasts_generated} 28d forecasts, ${fastInfResult.inventory_params_updated} (R, s, S) parameters, and ${fastInfResult.replenishments_generated} replenishment orders generated.`}
                     </span>
                   </div>
                 )}

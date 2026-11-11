@@ -137,7 +137,9 @@ export const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const isVi = language === 'vi';
 
-  const canScanAlerts = user?.role === 'ADMIN' || user?.role === 'WAREHOUSE MANAGER';
+  const roleUpper = user?.role?.toUpperCase() || 'VIEWER';
+  const isAdmin = roleUpper === 'ADMIN';
+  const canScanAlerts = isAdmin || roleUpper === 'WAREHOUSE MANAGER' || roleUpper === 'MANAGER';
 
   // Active sub-navigation view (100% distinct content per tab)
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
@@ -206,8 +208,8 @@ export const Dashboard: React.FC = () => {
       const [kpisRes, alertsRes, costRes, staticRes] = await Promise.all([
         api.dashboard.getKpis(storeParam).catch(() => null),
         api.dashboard.getAlerts({ store_id: storeParam, limit: 8, offset: 0 }).catch(() => null),
-        api.reports.getCostComparison({ store_id: storeParam }).catch(() => null),
-        api.optimization.compareStatic(storeId || 'CA_1').catch(() => null),
+        isAdmin ? api.reports.getCostComparison({ store_id: storeParam }).catch(() => null) : Promise.resolve(null),
+        isAdmin ? api.optimization.compareStatic(storeId || 'CA_1').catch(() => null) : Promise.resolve(null),
       ]);
       if (kpisRes) setKpis(kpisRes);
       if (alertsRes) setOverviewAlerts(alertsRes);
@@ -218,7 +220,7 @@ export const Dashboard: React.FC = () => {
     } finally {
       setIsLoadingCore(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   const fetchDemandTrend = useCallback(
     async (storeId: string, category: string, days: number, granularity: string) => {
@@ -310,8 +312,17 @@ export const Dashboard: React.FC = () => {
 
   // Task FE.1 — Advance Simulation Clock & Trigger ML Pipeline Run (UC50)
   const handleAdvanceSimulation = async (deltaDays: number, isReset: boolean = false) => {
+    if (!isAdmin) {
+      setScanBanner({
+        type: 'error',
+        message: isVi
+          ? 'Chỉ tài khoản Admin mới có quyền chạy Pipeline UC50 từ thanh mô phỏng.'
+          : 'Admin permission is required to trigger UC50 Pipeline runs.',
+      });
+      return;
+    }
+
     const nextOffset = isReset ? 0 : Math.min(56, simOffsetDays + deltaDays);
-    setSimOffsetDays(nextOffset);
     const nextSimDate = addDaysToIso(BASE_SIM_DATE, nextOffset);
     const nextDayCode = `d_${BASE_SIM_DAY_INDEX + nextOffset}`;
     const cycleIdx = Math.min(8, Math.floor(nextOffset / 7) + 1);
@@ -319,15 +330,14 @@ export const Dashboard: React.FC = () => {
     setIsRunningPipeline(true);
     setScanBanner(null);
     try {
-      await api.ml
-        .triggerPipelineRun({
-          store_id: selectedStore || 'CA_1',
-          horizon: 28,
-          model_name: 'LightGBM_Quantile_Ensemble',
-        })
-        .catch(() => null);
+      await api.ml.triggerPipelineRun({
+        store_id: selectedStore || 'CA_1',
+        horizon: 28,
+        model_name: 'LightGBM_Quantile_Ensemble',
+      });
 
-      setLastPipelineRunAt('06:00 UTC');
+      setSimOffsetDays(nextOffset);
+      setLastPipelineRunAt(`${new Date().toTimeString().slice(0, 5)} UTC`);
       setScanBanner({
         type: 'success',
         message: isVi
@@ -340,24 +350,42 @@ export const Dashboard: React.FC = () => {
       });
       fetchDashboardData(true);
       setTimeout(() => setScanBanner(null), 4500);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setScanBanner({
+        type: 'error',
+        message:
+          detail ||
+          (isVi
+            ? 'Không thể thực thi Pipeline ML UC50. Vui lòng kiểm tra backend hoặc quyền Admin.'
+            : 'Failed to trigger UC50 ML Pipeline. Check backend status or Admin permissions.'),
+      });
     } finally {
       setIsRunningPipeline(false);
     }
   };
 
   const handleTriggerPipelineOnly = async () => {
+    if (!isAdmin) {
+      setScanBanner({
+        type: 'error',
+        message: isVi
+          ? 'Chỉ tài khoản Admin mới có quyền chạy Pipeline UC50.'
+          : 'Admin permission is required to execute the UC50 ML Pipeline.',
+      });
+      return;
+    }
+
     const currentSimDate = addDaysToIso(BASE_SIM_DATE, simOffsetDays);
     const currentDayCode = `d_${BASE_SIM_DAY_INDEX + simOffsetDays}`;
     setIsRunningPipeline(true);
     setScanBanner(null);
     try {
-      const res = await api.ml
-        .triggerPipelineRun({
-          store_id: selectedStore || 'CA_1',
-          horizon: 28,
-          model_name: 'LightGBM_Quantile_Ensemble',
-        })
-        .catch(() => null);
+      const res = await api.ml.triggerPipelineRun({
+        store_id: selectedStore || 'CA_1',
+        horizon: 28,
+        model_name: 'LightGBM_Quantile_Ensemble',
+      });
 
       const statusLabel = res?.status || 'OK';
       setLastPipelineRunAt(`${new Date().toTimeString().slice(0, 5)} UTC`);
@@ -369,6 +397,16 @@ export const Dashboard: React.FC = () => {
       });
       fetchDashboardData(true);
       setTimeout(() => setScanBanner(null), 4500);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setScanBanner({
+        type: 'error',
+        message:
+          detail ||
+          (isVi
+            ? 'Thực thi Pipeline UC50 thất bại.'
+            : 'UC50 ML Pipeline execution failed.'),
+      });
     } finally {
       setIsRunningPipeline(false);
     }
@@ -1339,8 +1377,9 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               className="dash-sim-step-btn"
-              disabled={isRunningPipeline || simOffsetDays >= 56}
+              disabled={!isAdmin || isRunningPipeline || simOffsetDays >= 56}
               onClick={() => handleAdvanceSimulation(1)}
+              title={!isAdmin ? (isVi ? 'Chỉ Admin' : 'Admin only') : undefined}
             >
               <Play size={11} />
               <span>+1d</span>
@@ -1348,8 +1387,9 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               className="dash-sim-step-btn"
-              disabled={isRunningPipeline || simOffsetDays >= 56}
+              disabled={!isAdmin || isRunningPipeline || simOffsetDays >= 56}
               onClick={() => handleAdvanceSimulation(7)}
+              title={!isAdmin ? (isVi ? 'Chỉ Admin' : 'Admin only') : undefined}
             >
               <FastForward size={11} />
               <span>+7d</span>
@@ -1357,8 +1397,9 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               className="dash-sim-step-btn"
-              disabled={isRunningPipeline || simOffsetDays >= 56}
+              disabled={!isAdmin || isRunningPipeline || simOffsetDays >= 56}
               onClick={() => handleAdvanceSimulation(56 - simOffsetDays)}
+              title={!isAdmin ? (isVi ? 'Chỉ Admin' : 'Admin only') : undefined}
             >
               <Layers size={11} />
               <span>+56d</span>
@@ -1366,8 +1407,9 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               className="dash-sim-step-btn reset"
-              disabled={isRunningPipeline || simOffsetDays === 0}
+              disabled={!isAdmin || isRunningPipeline || simOffsetDays === 0}
               onClick={() => handleAdvanceSimulation(0, true)}
+              title={!isAdmin ? (isVi ? 'Chỉ Admin' : 'Admin only') : undefined}
             >
               <RotateCcw size={11} />
               <span>Reset</span>
@@ -1375,8 +1417,9 @@ export const Dashboard: React.FC = () => {
             <button
               type="button"
               className="dash-sim-pipeline-btn"
-              disabled={isRunningPipeline}
+              disabled={!isAdmin || isRunningPipeline}
               onClick={handleTriggerPipelineOnly}
+              title={!isAdmin ? (isVi ? 'Chỉ Admin' : 'Admin only') : undefined}
             >
               <Cpu size={13} className={isRunningPipeline ? 'dash-spin' : ''} />
               <span>{isRunningPipeline ? '...' : isVi ? 'Chạy Pipeline' : 'Run Pipeline'}</span>
