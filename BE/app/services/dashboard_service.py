@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.core.events import event_bus
 from app.repositories.dashboard_repository import dashboard_repository
+from app.models.alert import Alert
 from app.schemas.dashboard import (
     AlertSummary,
     DashboardAlertsResponse,
@@ -101,6 +102,7 @@ class DashboardService:
     ) -> RealtimeStockAlertTriggerResponse:
         """
         UC10: Quét kho và phát sự kiện cảnh báo thời gian thực qua Server-Sent Events (SSE).
+        Sử dụng cơ chế Bulk Query và Bulk Commit để xử lý nhanh dưới 2s thay vì N+1 queries.
         Có cơ chế chống spam trùng lặp cho các cảnh báo chưa xử lý.
         """
         items, _, _ = dashboard_repository.get_stock_alerts(
@@ -115,26 +117,53 @@ class DashboardService:
             it for it in items if it["severity"] in ("CRITICAL", "WARNING")
         ]
 
-        alerts_generated = 0
-        broadcast_count = 0
+        if not critical_or_warning:
+            return RealtimeStockAlertTriggerResponse(
+                alerts_generated=0,
+                broadcast_count=0,
+            )
+
+        # 1. Bulk query các alert chưa đọc để chống trùng lặp trong 1 lần truy vấn
+        target_stores = list({it["store_id"] for it in critical_or_warning})
+        target_items = list({it["item_id"] for it in critical_or_warning})
+        existing_alerts = (
+            db.query(Alert.item_id, Alert.store_id, Alert.type)
+            .filter(
+                Alert.store_id.in_(target_stores),
+                Alert.item_id.in_(target_items),
+                Alert.is_read == False,
+            )
+            .all()
+        )
+        existing_set = {(a.item_id, a.store_id, a.type) for a in existing_alerts}
+
+        # 2. Gom các alert mới và sự kiện broadcast
+        new_alerts: List[Alert] = []
+        events_to_broadcast = []
+        now = datetime.now(timezone.utc)
 
         for it in critical_or_warning:
             alert_type = f"STOCK_{it['severity']}"
-            msg = (
-                f"[{it['severity']}] SKU '{it['item_id']}' at store '{it['store_id']}': "
-                f"On-hand {it['on_hand']} <= threshold (SS: {it['safety_stock']}, ROP: {it['reorder_point']})."
-            )
+            key = (it["item_id"], it["store_id"], alert_type)
 
-            _, is_new = dashboard_repository.find_or_create_alert(
-                db,
-                item_id=it["item_id"],
-                store_id=it["store_id"],
-                alert_type=alert_type,
-                message=msg,
-            )
+            if key not in existing_set:
+                msg = (
+                    f"[{it['severity']}] SKU '{it['item_id']}' at store '{it['store_id']}': "
+                    f"On-hand {it['on_hand']} <= threshold (SS: {it['safety_stock']}, ROP: {it['reorder_point']})."
+                )
 
-            if is_new:
-                alerts_generated += 1
+                new_alerts.append(
+                    Alert(
+                        item_id=it["item_id"],
+                        store_id=it["store_id"],
+                        type=alert_type,
+                        message=msg,
+                        is_read=False,
+                        created_at=now,
+                    )
+                )
+                existing_set.add(key)
+
                 event = create_stock_alert_event(
                     item_id=it["item_id"],
                     store_id=it["store_id"],
@@ -144,11 +173,23 @@ class DashboardService:
                     safety_stock=it["safety_stock"],
                     message=msg,
                 )
-                try:
-                    await event_bus.publish(event)
-                    broadcast_count += 1
-                except Exception as e:
-                    logger.warning(f"Error publishing stock alert event: {e}")
+                events_to_broadcast.append(event)
+
+        # 3. Bulk commit vào database trong một transaction duy nhất
+        alerts_generated = 0
+        if new_alerts:
+            db.add_all(new_alerts)
+            db.commit()
+            alerts_generated = len(new_alerts)
+
+        # 4. Phát sự kiện realtime qua SSE
+        broadcast_count = 0
+        for event in events_to_broadcast:
+            try:
+                await event_bus.publish(event)
+                broadcast_count += 1
+            except Exception as e:
+                logger.warning(f"Error publishing stock alert event: {e}")
 
         return RealtimeStockAlertTriggerResponse(
             alerts_generated=alerts_generated,
