@@ -155,7 +155,7 @@ export const Dashboard: React.FC = () => {
   const [categories, setCategories] = useState<string[]>([]);
 
   // Backend query parameters
-  const [selectedStore, setSelectedStore] = useState<string>('');
+  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
   const [trendCategory, setTrendCategory] = useState<string>('');
   const [trendDays, setTrendDays] = useState<number>(30);
   const [trendGranularity, setTrendGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -190,7 +190,8 @@ export const Dashboard: React.FC = () => {
     ]).then(([storeList, categoryList]) => {
       if (!active) return;
       if (Array.isArray(storeList)) {
-        setStores(storeList.filter(Boolean));
+        const cleaned = storeList.filter(Boolean);
+        setStores(cleaned.length > 0 ? cleaned : ['CA_1']);
       }
       if (Array.isArray(categoryList)) {
         setCategories(categoryList.filter(Boolean));
@@ -568,8 +569,8 @@ export const Dashboard: React.FC = () => {
       kpis?.estimated_service_level != null && kpis.estimated_service_level > 0
         ? Number(kpis.estimated_service_level).toFixed(1)
         : cycles.length > 0
-        ? (cycles.reduce((a, b) => a + b.dfiosFillRate, 0) / cycles.length).toFixed(1)
-        : '95.0';
+          ? (cycles.reduce((a, b) => a + b.dfiosFillRate, 0) / cycles.length).toFixed(1)
+          : '95.0';
     const avgShadowFillRate =
       cycles.length > 0
         ? (cycles.reduce((a, b) => a + b.shadowFillRate, 0) / cycles.length).toFixed(1)
@@ -654,7 +655,7 @@ export const Dashboard: React.FC = () => {
             <span className="dash-formula-chip">UC08 • H=28d</span>
           </div>
           <p className="dash-card-subtitle">
-            {demandTrend?.store_id ? demandTrend.store_id : t('dashboard.all_stores', 'All Stores')}
+            {demandTrend?.store_id || selectedStore || 'CA_1'}
             {demandTrend?.category ? ` • ${demandTrend.category}` : ` • ${t('dashboard.all_categories', 'All Categories')}`}
           </p>
         </div>
@@ -1130,29 +1131,29 @@ export const Dashboard: React.FC = () => {
                   </tr>
                 ) : (
                   costTelemetry.cycles.map((row) => {
-                  const isActiveCycle = row.cycle === currentCycleIndex;
-                  return (
-                    <tr key={row.cycle} className={isActiveCycle ? 'active-sim-cycle' : ''}>
-                      <td className="mono-bold">
-                        {row.cycleLabel}
-                        {isActiveCycle && <span className="dash-cycle-now-tag">NOW</span>}
-                      </td>
-                      <td className="mono-muted">{row.dayRange}</td>
-                      <td className="text-right mono-teal">${row.dfiosTotal.toLocaleString()}</td>
-                      <td className="text-right mono-muted">${row.shadowTotal.toLocaleString()}</td>
-                      <td className="text-right">
-                        <span className="dash-savings-pill">
-                          -${row.netSavings.toLocaleString()} (-{row.savingsPct}%)
-                        </span>
-                      </td>
-                      <td className="text-right mono-bold">
-                        <span className="text-teal">{row.dfiosFillRate}%</span>
-                        <span className="mono-muted"> / {row.shadowFillRate}%</span>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
+                    const isActiveCycle = row.cycle === currentCycleIndex;
+                    return (
+                      <tr key={row.cycle} className={isActiveCycle ? 'active-sim-cycle' : ''}>
+                        <td className="mono-bold">
+                          {row.cycleLabel}
+                          {isActiveCycle && <span className="dash-cycle-now-tag">NOW</span>}
+                        </td>
+                        <td className="mono-muted">{row.dayRange}</td>
+                        <td className="text-right mono-teal">${row.dfiosTotal.toLocaleString()}</td>
+                        <td className="text-right mono-muted">${row.shadowTotal.toLocaleString()}</td>
+                        <td className="text-right">
+                          <span className="dash-savings-pill">
+                            -${row.netSavings.toLocaleString()} (-{row.savingsPct}%)
+                          </span>
+                        </td>
+                        <td className="text-right mono-bold">
+                          <span className="text-teal">{row.dfiosFillRate}%</span>
+                          <span className="mono-muted"> / {row.shadowFillRate}%</span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -1291,8 +1292,7 @@ export const Dashboard: React.FC = () => {
               onChange={(e) => handleStoreChange(e.target.value)}
               aria-label="Select store scope"
             >
-              <option value="">{t('dashboard.all_stores', 'All Stores')}</option>
-              {stores.map((st) => (
+              {(stores.length > 0 ? stores : ['CA_1']).map((st) => (
                 <option key={st} value={st}>
                   {st}
                 </option>
@@ -1491,9 +1491,9 @@ export const Dashboard: React.FC = () => {
               <div className="dash-kpi-value">
                 {kpis != null
                   ? `$${kpis.total_inventory_value.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}`
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}`
                   : '—'}
               </div>
               <p className="dash-kpi-meta">{isVi ? 'Giá trị tồn kho (USD)' : 'On-hand value (USD)'}</p>
@@ -1536,9 +1536,8 @@ export const Dashboard: React.FC = () => {
                 />
               </div>
               <div
-                className={`dash-kpi-value ${
-                  kpis && kpis.stockout_rate > 3 ? 'text-danger' : ''
-                }`}
+                className={`dash-kpi-value ${kpis && kpis.stockout_rate > 3 ? 'text-danger' : ''
+                  }`}
               >
                 {kpis != null ? `${kpis.stockout_rate}%` : '—'}
               </div>
@@ -1556,15 +1555,13 @@ export const Dashboard: React.FC = () => {
                 </span>
                 <BellRing
                   size={16}
-                  className={`dash-kpi-icon ${
-                    kpis && kpis.reorder_alerts_count > 0 ? 'warning' : 'teal'
-                  }`}
+                  className={`dash-kpi-icon ${kpis && kpis.reorder_alerts_count > 0 ? 'warning' : 'teal'
+                    }`}
                 />
               </div>
               <div
-                className={`dash-kpi-value ${
-                  kpis && kpis.reorder_alerts_count > 0 ? 'text-warning' : ''
-                }`}
+                className={`dash-kpi-value ${kpis && kpis.reorder_alerts_count > 0 ? 'text-warning' : ''
+                  }`}
               >
                 {kpis != null ? kpis.reorder_alerts_count.toLocaleString() : '—'}
               </div>
@@ -1720,9 +1717,8 @@ export const Dashboard: React.FC = () => {
                           <span className="dash-store-chip">{row.store_id}</span>
                         </td>
                         <td
-                          className={`text-right font-semibold ${
-                            tone === 'critical' ? 'text-danger' : tone === 'warning' ? 'text-warning' : ''
-                          }`}
+                          className={`text-right font-semibold ${tone === 'critical' ? 'text-danger' : tone === 'warning' ? 'text-warning' : ''
+                            }`}
                         >
                           {row.on_hand.toLocaleString()}
                         </td>
