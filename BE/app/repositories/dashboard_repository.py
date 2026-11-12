@@ -41,8 +41,8 @@ class DashboardRepository:
             & (Inventory.store_id == InventoryParam.store_id),
         )
 
-        if store_id and store_id.strip() and store_id.strip().upper() != "GLOBAL":
-            inv_query = inv_query.filter(Inventory.store_id == store_id.strip())
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        inv_query = inv_query.filter(Inventory.store_id == target_store)
 
         rows = inv_query.all()
         total_monitored = len(rows)
@@ -70,10 +70,9 @@ class DashboardRepository:
         rep_query = db.query(ReplenishmentRecommendation).filter(
             ReplenishmentRecommendation.status == "PENDING"
         )
-        if store_id and store_id.strip() and store_id.strip().upper() != "GLOBAL":
-            rep_query = rep_query.filter(
-                ReplenishmentRecommendation.store_id == store_id.strip()
-            )
+        rep_query = rep_query.filter(
+            ReplenishmentRecommendation.store_id == target_store
+        )
         pending_replenishments = rep_query.count()
 
         return {
@@ -104,8 +103,8 @@ class DashboardRepository:
             func.sum(SalesHistory.quantity).label("total_qty"),
         )
 
-        if store_id and store_id.strip() and store_id.strip().upper() != "GLOBAL":
-            sales_q = sales_q.filter(SalesHistory.store_id == store_id.strip())
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        sales_q = sales_q.filter(SalesHistory.store_id == target_store)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             sales_q = sales_q.join(Product, SalesHistory.item_id == Product.item_id).filter(
@@ -133,8 +132,7 @@ class DashboardRepository:
             func.sum(Forecast.y_pred).label("total_pred"),
         )
 
-        if store_id and store_id.strip() and store_id.strip().upper() != "GLOBAL":
-            fc_q = fc_q.filter(Forecast.store_id == store_id.strip())
+        fc_q = fc_q.filter(Forecast.store_id == target_store)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             fc_q = fc_q.join(Product, Forecast.item_id == Product.item_id).filter(
@@ -211,8 +209,8 @@ class DashboardRepository:
             & (Inventory.store_id == InventoryParam.store_id),
         )
 
-        if store_id and store_id.strip() and store_id.strip().upper() != "GLOBAL":
-            query = query.filter(Inventory.store_id == store_id.strip())
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        query = query.filter(Inventory.store_id == target_store)
 
         all_records = query.all()
 
