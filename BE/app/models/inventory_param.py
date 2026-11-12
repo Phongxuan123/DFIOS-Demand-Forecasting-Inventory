@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, DateTime, SmallInteger
+from sqlalchemy import Column, String, Float, DateTime, SmallInteger, event
 from app.models.base import Base
 
 class InventoryParam(Base):
@@ -19,7 +19,6 @@ class InventoryParam(Base):
     unit_price = Column(Float, nullable=False, default=10.0)
     source = Column(String, nullable=False, default="ml")
 
-    # Extension fields for (R, s, S) and C3-OUT
     s = Column("s", Float, nullable=True)
     S = Column("S", Float, nullable=True)
     model_run_id = Column(String(100), nullable=True, default="c3out-calibrated")
@@ -30,3 +29,11 @@ class InventoryParam(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+@event.listens_for(InventoryParam.__table__, "before_create")
+def _adapt_inventory_param_columns_for_sqlite(target, connection, **kw):
+    if connection.dialect.name == "sqlite":
+        for col in target.columns:
+            if col.key == "S":
+                col.name = "order_up_to_S"
+

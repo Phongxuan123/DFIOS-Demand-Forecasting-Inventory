@@ -193,6 +193,15 @@ class OptimizationService:
         if not has_forecast and not has_sales:
             return None
 
+        if not has_forecast:
+            return self._calculate_static_params(
+                db=db,
+                item_id=item_id,
+                store_id=store_id,
+                lead_time_days=lead_time_days,
+                tau=tau,
+            )
+
         # 1. Xác định phân nhóm ABC-XYZ của SKU
         cls_record = (
             db.query(SKUClassification)
