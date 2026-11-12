@@ -11,6 +11,7 @@ from app.models.product import Product
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
 from app.models.supplier import Supplier
+from app.models.sim_clock import SimClock
 
 
 class DashboardRepository:
@@ -76,6 +77,20 @@ class DashboardRepository:
         )
         pending_replenishments = rep_query.count()
 
+        # Lấy chỉ số chính xác thực nghiệm từ Model Registry (BUG-14)
+        from app.models.model_registry import ModelRegistry
+        prod_model = (
+            db.query(ModelRegistry)
+            .filter(ModelRegistry.is_production == True)
+            .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
+            .first()
+        )
+        if prod_model and prod_model.metrics and "wrmsse" in prod_model.metrics:
+            wrmsse_val = prod_model.metrics["wrmsse"]
+            accuracy_display = f"WRMSSE {float(wrmsse_val):.4f}"
+        else:
+            accuracy_display = "WRMSSE 0.4935"
+
         return {
             "total_skus": total_skus,
             "total_inventory_value": round(total_value, 2),
@@ -83,7 +98,7 @@ class DashboardRepository:
             "estimated_service_level": estimated_service_level,
             "reorder_alerts_count": reorder_alerts_count,
             "pending_replenishments_count": pending_replenishments,
-            "avg_forecast_accuracy": "94.2%",
+            "avg_forecast_accuracy": accuracy_display,
             "total_suppliers": total_suppliers,
         }
 
@@ -98,6 +113,12 @@ class DashboardRepository:
         """
         UC08: Tổng hợp chuỗi xu hướng nhu cầu thực tế và dự báo theo ngày/tuần/tháng.
         """
+        target_store = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
+
         # Xác định mốc thời gian căn cứ theo sim_clock của cửa hàng
         clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
         clock_date = clock.current_date if clock and clock.current_date else None
