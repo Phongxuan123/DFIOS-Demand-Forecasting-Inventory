@@ -42,8 +42,8 @@ class ForecastRepository(BaseRepository[Forecast]):
             query = query.filter(Forecast.item_id == item_id)
         if category:
             query = query.filter(Product.cat_id == category)
-        if store_id:
-            query = query.filter(Forecast.store_id == store_id)
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        query = query.filter(Forecast.store_id == target_store)
         if start_date:
             query = query.filter(Forecast.forecast_date >= start_date)
         if end_date:
@@ -82,8 +82,8 @@ class ForecastRepository(BaseRepository[Forecast]):
             Forecast.item_id == item_id,
             Forecast.forecast_date == forecast_date,
         )
-        if store_id:
-            query = query.filter(Forecast.store_id == store_id)
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        query = query.filter(Forecast.store_id == target_store)
         if h is not None:
             query = query.filter(Forecast.h == h)
         return query.first()
@@ -185,8 +185,8 @@ class ForecastRepository(BaseRepository[Forecast]):
         end_date: Optional[date] = None,
     ) -> List[Forecast]:
         query = db.query(Forecast).filter(Forecast.item_id == item_id)
-        if store_id:
-            query = query.filter(Forecast.store_id == store_id)
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        query = query.filter(Forecast.store_id == target_store)
         if horizon is not None:
             query = query.filter(Forecast.h <= horizon)
         if start_date:

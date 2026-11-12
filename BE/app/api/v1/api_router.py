@@ -60,6 +60,10 @@ api_router.include_router(replenishments_router, prefix="/replenishments", tags=
 from app.api.v1.endpoints.calibration import router as calibration_router
 api_router.include_router(calibration_router, prefix="/calibration", tags=["C³-OUT Closed-Loop Calibrator (Tier 3)"])
 
+# Stage 6 & 7 / Task API.1: Sim Clock Control & Batch Orchestration
+from app.api.v1.endpoints.clock import router as clock_router
+api_router.include_router(clock_router, prefix="/clock", tags=["Simulation Clock & Batch Orchestration (Task API.1)"])
+
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 
@@ -79,6 +83,21 @@ api_router.include_router(data_quality_router, prefix="/ml", tags=["ML Pipeline 
 api_router.include_router(ml_training_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC47)"])
 api_router.include_router(model_registry_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC48)"])
 api_router.include_router(pipeline_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC49, UC50)"])
+
+# Stage 7 / Task API.2: Imports, Fast Inference & Template
+from app.api.v1.endpoints.imports import router as imports_router
+api_router.include_router(imports_router, tags=["Data Ingestion & Fast Inference (Task API.2)"])
+
+# Stage 7 / Task API.3: Model Operations Alias (/models)
+api_router.include_router(model_registry_router, tags=["Model Operations & Activation (Task API.3)"])
+
+# Stage 7 / Task API.5: What-If Policy Simulation (/simulation/compare-policies)
+from app.api.v1.endpoints.simulation import router as simulation_router
+api_router.include_router(simulation_router, prefix="/simulation", tags=["What-If Policy Simulation (Task API.5)"])
+
+# Stage 7 / Task API.4: KPI Dashboard Alias (/kpi/dashboard)
+from app.api.v1.endpoints.dashboard import get_kpi_shadow_dashboard
+api_router.add_api_route("/kpi/dashboard", get_kpi_shadow_dashboard, methods=["GET"], tags=["Dashboard & Shadow Baseline (Task API.4)"], summary="Task API.4 - KPI Dashboard với Shadow Baseline B0")
 
 # Alias cho /me/email và /me/email/confirm (đáp ứng cả 2 cấu trúc URL)
 from app.api.v1.endpoints.auth import request_change_email, confirm_change_email

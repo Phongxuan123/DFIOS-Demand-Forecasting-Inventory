@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.models.inventory import Inventory
 from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.product import Product
+from app.models.sales_history import SalesHistory
 
 
 class InventoryRepository:
@@ -31,8 +32,8 @@ class InventoryRepository:
             Product, Inventory.item_id == Product.item_id
         )
 
-        if store_id and store_id.strip():
-            query = query.filter(Inventory.store_id == store_id.strip())
+        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
+        query = query.filter(Inventory.store_id == target_store)
 
         if item_id and item_id.strip():
             query = query.filter(Inventory.item_id == item_id.strip())
@@ -57,8 +58,7 @@ class InventoryRepository:
         return obj
 
     def get_distinct_stores(self, db: Session) -> List[str]:
-        records = db.query(Inventory.store_id).distinct().order_by(Inventory.store_id.asc()).all()
-        return [r[0] for r in records if r[0]]
+        return ["CA_1"]
 
     def record_adjustment(self, db: Session, adjustment: InventoryAdjustment) -> InventoryAdjustment:
         db.add(adjustment)

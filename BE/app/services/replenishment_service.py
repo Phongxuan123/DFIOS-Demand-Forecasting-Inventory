@@ -50,31 +50,37 @@ class ReplenishmentService:
         generated_count = 0
         now = datetime.now(timezone.utc)
 
+        # Bulk query để tránh N+1 network queries sang database
+        inv_records = db.query(Inventory).filter(Inventory.store_id == store_id).all()
+        inv_map = {inv.item_id: inv for inv in inv_records}
+
+        params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+        param_map = {p.item_id: p for p in params}
+
+        pending_recs = (
+            db.query(ReplenishmentRecommendation.item_id)
+            .filter(
+                ReplenishmentRecommendation.store_id == store_id,
+                ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]),
+            )
+            .all()
+        )
+        pending_set = {p[0] for p in pending_recs}
+
         for prod in products:
             item_id = prod.item_id
 
             # Kiểm tra xem SKU đã có đề xuất PENDING chưa (chống sinh trùng lặp)
-            existing_pending = replenishment_repository.get_pending_by_sku_store(
-                db, item_id=item_id, store_id=store_id
-            )
-            if existing_pending:
+            if item_id in pending_set:
                 continue
 
-            # Lấy số liệu tồn kho
-            inv = inventory_repository.get(db, item_id, store_id)
+            # Lấy số liệu tồn kho từ map
+            inv = inv_map.get(item_id)
             on_hand = float(inv.on_hand) if inv else 0.0
             on_order = float(inv.on_order) if inv else 0.0
 
-            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ)
-            param = inventory_param_repository.get_by_item_store(db, item_id, store_id)
-            if not param:
-                # Nếu chưa có, tính toán nhanh tham số cho SKU
-                optimization_service.recompute_parameters(
-                    db, store_id=store_id, item_id=item_id
-                )
-                param = inventory_param_repository.get_by_item_store(
-                    db, item_id, store_id
-                )
+            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ) từ map
+            param = param_map.get(item_id)
 
             rop = float(param.reorder_point) if param else 50.0
             safety_stock = float(param.safety_stock) if param else 20.0
@@ -122,6 +128,7 @@ class ReplenishmentService:
                     decided_at=None,
                 )
                 db.add(rec)
+                pending_set.add(item_id)
                 generated_count += 1
 
         if generated_count > 0:

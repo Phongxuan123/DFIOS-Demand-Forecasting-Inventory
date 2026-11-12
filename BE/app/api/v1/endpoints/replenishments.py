@@ -131,6 +131,10 @@ def get_replenishment_history(
     "/export",
     summary="UC38 - Xuất danh sách đề xuất nhập hàng ra CSV/Excel (Warehouse Manager, Admin)",
 )
+@router.get(
+    "/export.csv",
+    summary="Task API.6 - Xuất danh sách đề xuất nhập hàng dạng file .csv",
+)
 def export_replenishments(
     store_id: Optional[str] = Query(None, description="Lọc theo kho/cửa hàng"),
     status: Optional[str] = Query(None, description="Lọc theo trạng thái"),
@@ -159,6 +163,11 @@ def export_replenishments(
     "/{rec_id}/adjust",
     response_model=ReplenishmentItemResponse,
     summary="UC34 - Điều chỉnh số lượng đặt hàng đề xuất (Warehouse Manager, Admin)",
+)
+@router.patch(
+    "/{rec_id}",
+    response_model=ReplenishmentItemResponse,
+    summary="Task API.6 - Sửa lượng đặt hàng đề xuất (PATCH)",
 )
 def adjust_replenishment_quantity(
     rec_id: str,
