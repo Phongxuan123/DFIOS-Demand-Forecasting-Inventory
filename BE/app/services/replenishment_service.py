@@ -27,6 +27,13 @@ from app.services.optimization_service import optimization_service
 from app.services.audit_service import audit_service
 
 
+def sanitize_csv_cell(val: Any) -> Any:
+    """Chống tấn công CSV Formula Injection (CWE-1236, R-42)"""
+    if isinstance(val, str) and val.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{val}"
+    return val
+
+
 class ReplenishmentService:
     """
     Module G: Replenishment Recommendations (UC33 - UC38)
@@ -588,7 +595,7 @@ class ReplenishmentService:
             inv = inv_map.get((rec.item_id, rec.store_id))
             param = param_map.get((rec.item_id, rec.store_id))
 
-            writer.writerow([
+            row = [
                 rec.id,
                 rec.item_id,
                 prod.name if prod else rec.item_id,
@@ -607,9 +614,27 @@ class ReplenishmentService:
                 rec.decided_by or "",
                 rec.created_at.strftime("%Y-%m-%d %H:%M:%S") if rec.created_at else "",
                 rec.decided_at.strftime("%Y-%m-%d %H:%M:%S") if rec.decided_at else "",
-            ])
+            ]
+            writer.writerow([sanitize_csv_cell(c) for c in row])
 
         return output.getvalue()
+
+    def get_recommendation_item_response(
+        self, db: Session, rec: ReplenishmentRecommendation
+    ) -> ReplenishmentItemResponse:
+        """Trả về chi tiết một đề xuất kèm thông tin sản phẩm và tồn kho (BUG-35)"""
+        prod = db.query(Product).filter(Product.item_id == rec.item_id).first()
+        supp = db.query(Supplier).filter(Supplier.id == rec.supplier_id).first() if rec.supplier_id else None
+        inv = db.query(Inventory).filter(Inventory.item_id == rec.item_id, Inventory.store_id == rec.store_id).first()
+        param = db.query(InventoryParam).filter(InventoryParam.item_id == rec.item_id, InventoryParam.store_id == rec.store_id).first()
+        return self._build_response_item(
+            db,
+            rec,
+            {rec.item_id: prod} if prod else {},
+            {rec.supplier_id: supp} if supp else {},
+            {(rec.item_id, rec.store_id): inv} if inv else {},
+            {(rec.item_id, rec.store_id): param} if param else {},
+        )
 
 
 replenishment_service = ReplenishmentService()

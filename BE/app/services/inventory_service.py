@@ -96,7 +96,8 @@ class InventoryService:
                 detail=f"Sản phẩm có mã SKU '{item_id}' không tồn tại.",
             )
 
-        inv = inventory_repository.get(db, item_id, store_id)
+        # Khóa hàng với with_for_update() để đảm bảo tính nguyên tử (B-14)
+        inv = inventory_repository.get_for_update(db, item_id, store_id)
         if not inv:
             # Tạo mới bản ghi tồn kho nếu chưa có
             inv = Inventory(
@@ -119,10 +120,7 @@ class InventoryService:
             inv.on_order = float(request.on_order)
         inv.updated_at = datetime.now(timezone.utc)
 
-        db.commit()
-        db.refresh(inv)
-
-        # UC14: Ghi nhật ký điều chỉnh tồn kho
+        # UC14: Ghi nhật ký điều chỉnh tồn kho trong cùng transaction
         adjustment = InventoryAdjustment(
             item_id=item_id,
             store_id=store_id,
@@ -144,7 +142,9 @@ class InventoryService:
             ip_address=ip_address,
             details=f"Cập nhật tồn kho SKU '{item_id}' tại '{store_id}': on_hand ({old_on_hand} -> {inv.on_hand}), on_order ({old_on_order} -> {inv.on_order})",
         )
+        # Commit nguyên tử toàn bộ thay đổi (tồn kho + adjustment + audit)
         db.commit()
+        db.refresh(inv)
 
         # Phát sự kiện Realtime Server-Sent Events (SSE)
         sse_event = create_inventory_updated_event(

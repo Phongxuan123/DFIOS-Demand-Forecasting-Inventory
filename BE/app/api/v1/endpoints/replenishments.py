@@ -190,11 +190,7 @@ def adjust_replenishment_quantity(
         user_email=current_user.email,
         ip_address=ip,
     )
-    # Lấy response hoàn chỉnh với thông tin liên kết
-    res = replenishment_service.list_recommendations(db, item_id=rec.item_id, limit=1, auto_generate=False)
-    if res.items:
-        return res.items[0]
-    return rec
+    return replenishment_service.get_recommendation_item_response(db, rec)
 
 
 # --- UC35: Approve Replenishment ---
@@ -226,10 +222,7 @@ def approve_replenishment(
         ip_address=ip,
         background_tasks=background_tasks,
     )
-    res = replenishment_service.list_recommendations(db, item_id=rec.item_id, limit=1, auto_generate=False)
-    if res.items:
-        return res.items[0]
-    return rec
+    return replenishment_service.get_recommendation_item_response(db, rec)
 
 
 # --- UC36: Reject / Cancel Replenishment ---
@@ -259,10 +252,7 @@ def reject_replenishment(
         user_email=current_user.email,
         ip_address=ip,
     )
-    res = replenishment_service.list_recommendations(db, item_id=rec.item_id, limit=1, auto_generate=False)
-    if res.items:
-        return res.items[0]
-    return rec
+    return replenishment_service.get_recommendation_item_response(db, rec)
 
 
 @router.post(
@@ -293,7 +283,4 @@ def cancel_replenishment(
         ip_address=ip,
         background_tasks=background_tasks,
     )
-    res = replenishment_service.list_recommendations(db, item_id=rec.item_id, limit=1, auto_generate=False)
-    if res.items:
-        return res.items[0]
-    return rec
+    return replenishment_service.get_recommendation_item_response(db, rec)

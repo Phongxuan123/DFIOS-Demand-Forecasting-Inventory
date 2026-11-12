@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, require_admin
 from app.models.user import User
+from app.models.system_setting import SystemSetting
 from app.schemas.reports import (
     BacktestRequest,
     BacktestResponse,
@@ -119,3 +120,22 @@ def export_report_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get(
+    "/policy-comparison",
+    summary="UC42 - Báo cáo so sánh 4 chính sách tồn kho P0, P1, P4, P6 (M5 Empirical Benchmark)",
+    description="Truy xuất kết quả kiểm định thực nghiệm thật trên 72 chu kỳ review của tập M5 Walmart. So sánh đối đầu P0 (Truyền thống), P1 (Static Quantile), P4 (REFIT-EOQ) và P6 (C3-OUT).",
+)
+def get_policy_comparison_benchmark(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    setting = db.query(SystemSetting).filter(SystemSetting.key == "policy_benchmark_results").first()
+    if setting and setting.value:
+        return setting.value
+    return {
+        "status": "not_synced",
+        "message": "Chưa có dữ liệu benchmark, vui lòng chạy script sync_scientific_baseline.py.",
+    }
+

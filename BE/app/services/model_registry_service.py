@@ -24,11 +24,22 @@ class ModelRegistryService:
         request: ModelRegisterRequest,
         admin_email: Optional[str] = None,
     ) -> ModelRegistryResponse:
+        clean_scope = request.scope.strip()
+        if request.is_production:
+            # Hạ cấp toàn bộ mô hình production cũ cùng scope (B-03)
+            old_prods = (
+                db.query(ModelRegistry)
+                .filter(ModelRegistry.scope == clean_scope, ModelRegistry.is_production == True)
+                .all()
+            )
+            for old in old_prods:
+                old.is_production = False
+
         model = ModelRegistry(
             name=request.name.strip(),
             version=request.version.strip(),
             algorithm=request.algorithm.lower().strip(),
-            scope=request.scope.strip(),
+            scope=clean_scope,
             is_production=request.is_production,
             parameters=request.parameters,
             metrics=request.metrics,

@@ -1,20 +1,37 @@
 from datetime import datetime
 from typing import Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # --- UC29: Target Service Level Configuration ---
 
 class ServiceLevelConfig(BaseModel):
-    default_service_level: float = Field(0.95, ge=0.85, le=0.99, description="Mức phục vụ mục tiêu chung (0.85 - 0.99)")
+    default_service_level: float = Field(0.95, ge=0.85, le=0.999, description="Mức phục vụ mục tiêu chung (0.85 - 0.999)")
     category_service_levels: Dict[str, float] = Field(default_factory=dict, description="Mức phục vụ riêng theo nhóm hàng (ví dụ: FOODS=0.95)")
     item_service_levels: Dict[str, float] = Field(default_factory=dict, description="Mức phục vụ riêng cho từng SKU cụ thể")
 
+    @field_validator("category_service_levels", "item_service_levels", mode="after")
+    @classmethod
+    def validate_levels(cls, v: Dict[str, float]) -> Dict[str, float]:
+        for k, val in v.items():
+            if val < 0.50 or val >= 1.0:
+                raise ValueError(f"Mức phục vụ cho '{k}' phải nằm trong khoảng [0.50, 0.999], không được bằng 1.0 hoặc < 0.50.")
+        return v
+
 
 class ServiceLevelConfigUpdate(BaseModel):
-    default_service_level: Optional[float] = Field(None, ge=0.85, le=0.99, description="Mức phục vụ mục tiêu chung")
+    default_service_level: Optional[float] = Field(None, ge=0.85, le=0.999, description="Mức phục vụ mục tiêu chung")
     category_service_levels: Optional[Dict[str, float]] = Field(None, description="Mức phục vụ theo nhóm hàng")
     item_service_levels: Optional[Dict[str, float]] = Field(None, description="Mức phục vụ theo SKU")
+
+    @field_validator("category_service_levels", "item_service_levels", mode="after")
+    @classmethod
+    def validate_levels_update(cls, v: Optional[Dict[str, float]]) -> Optional[Dict[str, float]]:
+        if v:
+            for k, val in v.items():
+                if val < 0.50 or val >= 1.0:
+                    raise ValueError(f"Mức phục vụ cho '{k}' phải nằm trong khoảng [0.50, 0.999], không được bằng 1.0 hoặc < 0.50.")
+        return v
 
 
 # --- UC30: Inventory Optimization Parameters (SS, ROP, EOQ) ---

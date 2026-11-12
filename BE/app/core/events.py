@@ -62,14 +62,19 @@ class InMemoryEventBus(BaseEventBus):
 
             user_queues = self._subscribers[user_id]
 
-            # Enforce connection limit: close oldest connection if threshold reached
+            # Enforce connection limit: close oldest connection if threshold reached (B-11)
             if len(user_queues) >= self.max_connections_per_user:
                 oldest_queue = user_queues.pop(0)
                 try:
-                    # Put sentinel None to signal closure to the client generator
+                    # Clear room if queue is full so sentinel None is guaranteed to be received
+                    if oldest_queue.full():
+                        try:
+                            oldest_queue.get_nowait()
+                        except (asyncio.QueueEmpty, Exception):
+                            pass
                     oldest_queue.put_nowait(None)
-                except (asyncio.QueueFull, Exception):
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to signal close to oldest SSE connection: {e}")
 
             new_queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_maxsize)
             user_queues.append(new_queue)

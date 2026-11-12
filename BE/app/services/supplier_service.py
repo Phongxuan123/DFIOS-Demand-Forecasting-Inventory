@@ -136,6 +136,15 @@ class SupplierService:
                 detail=f"Không tìm thấy nhà cung cấp có ID '{id}'",
             )
 
+        # Chặn xóa nếu nhà cung cấp đang được liên kết với đề xuất hoặc sản phẩm (B-27)
+        from app.models.replenishment import ReplenishmentRecommendation
+        has_rec = db.query(ReplenishmentRecommendation).filter(ReplenishmentRecommendation.supplier_id == id).first()
+        if has_rec:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa nhà cung cấp '{sup.name}' vì đang có đề xuất nhập hàng liên kết.",
+            )
+
         supplier_repository.delete(db, id)
 
         audit_service.log(

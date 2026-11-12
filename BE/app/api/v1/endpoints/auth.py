@@ -38,12 +38,15 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/logout", response_model=MessageResponse, summary="UC02 - Đăng xuất tài khoản")
-def logout(current_user: User = Depends(get_current_user)):
+def logout(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     **UC02 - Logout**:
-    Người dùng kết thúc phiên làm việc hiện tại; hệ thống ghi nhận đăng xuất.
+    Người dùng kết thúc phiên làm việc hiện tại; hệ thống thu hồi ngay lập tức JWT token (R-24).
     """
-    return auth_service.logout(current_user)
+    return auth_service.logout(db, current_user)
 
 
 @router.post("/activate", response_model=MessageResponse, summary="Kích hoạt tài khoản và đặt mật khẩu lần đầu (UC06)")

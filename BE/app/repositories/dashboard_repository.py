@@ -31,10 +31,10 @@ class DashboardRepository:
             Inventory.store_id,
             Inventory.on_hand,
             Inventory.on_order,
-            func.coalesce(InventoryParam.unit_price, 10.0).label("unit_price"),
-            func.coalesce(InventoryParam.reorder_point, 20.0).label("reorder_point"),
-            func.coalesce(InventoryParam.safety_stock, 10.0).label("safety_stock"),
-            func.coalesce(InventoryParam.service_level, 0.95).label("service_level"),
+            InventoryParam.unit_price,
+            InventoryParam.reorder_point,
+            InventoryParam.safety_stock,
+            InventoryParam.service_level,
         ).outerjoin(
             InventoryParam,
             (Inventory.item_id == InventoryParam.item_id)
@@ -49,13 +49,14 @@ class DashboardRepository:
 
         if total_monitored > 0:
             total_value = sum(
-                max(0.0, float(r.on_hand or 0.0)) * float(r.unit_price or 10.0)
+                max(0.0, float(r.on_hand or 0.0)) * float(r.unit_price if r.unit_price is not None else 0.0)
                 for r in rows
             )
             stockout_count = sum(1 for r in rows if float(r.on_hand or 0.0) <= 0.0)
             stockout_rate = round((stockout_count / total_monitored) * 100.0, 2)
+            # Theo nguyên tắc kiểm soát tồn kho (R, s, S), kiểm tra vị trí tồn kho IP = on_hand + on_order <= s (ROP)
             reorder_alerts_count = sum(
-                1 for r in rows if float(r.on_hand or 0.0) <= float(r.reorder_point or 20.0)
+                1 for r in rows if (float(r.on_hand or 0.0) + float(r.on_order or 0.0)) <= float(r.reorder_point if r.reorder_point is not None else 0.0)
             )
             estimated_service_level = round(
                 max(0.0, min(100.0, 100.0 - stockout_rate)), 1
@@ -97,14 +98,19 @@ class DashboardRepository:
         """
         UC08: Tổng hợp chuỗi xu hướng nhu cầu thực tế và dự báo theo ngày/tuần/tháng.
         """
-        # 1. Truy vấn lịch sử bán hàng thực tế gần nhất
+        # Xác định mốc thời gian căn cứ theo sim_clock của cửa hàng
+        clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+        clock_date = clock.current_date if clock and clock.current_date else None
+        if not clock_date:
+            max_sale = db.query(func.max(SalesHistory.sale_date)).filter(SalesHistory.store_id == target_store).scalar()
+            clock_date = max_sale if max_sale else date(2016, 5, 23)
+
+        # 1. Truy vấn lịch sử bán hàng thực tế gần nhất (đến mốc clock_date)
         sales_q = db.query(
             SalesHistory.sale_date,
             func.sum(SalesHistory.quantity).label("total_qty"),
         )
-
-        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
-        sales_q = sales_q.filter(SalesHistory.store_id == target_store)
+        sales_q = sales_q.filter(SalesHistory.store_id == target_store, SalesHistory.sale_date <= clock_date)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             sales_q = sales_q.join(Product, SalesHistory.item_id == Product.item_id).filter(
@@ -126,13 +132,12 @@ class DashboardRepository:
             for r in reversed(sales_rows)
         }
 
-        # 2. Truy vấn dự báo nhu cầu tương lai
+        # 2. Truy vấn dự báo nhu cầu tương lai (từ mốc clock_date)
         fc_q = db.query(
             Forecast.forecast_date,
             func.sum(Forecast.y_pred).label("total_pred"),
         )
-
-        fc_q = fc_q.filter(Forecast.store_id == target_store)
+        fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             fc_q = fc_q.join(Product, Forecast.item_id == Product.item_id).filter(
@@ -157,18 +162,8 @@ class DashboardRepository:
         # 3. Tổng hợp thành danh sách các mốc thời gian liền mạch
         all_dates = sorted(set(list(actual_map.keys()) + list(predicted_map.keys())))
 
-        # Fallback: nếu DB chưa có bản ghi lịch sử, tạo baseline giả lập trực quan
         if not all_dates:
-            today = date.today()
-            trend_data = []
-            for i in range(-20, 10):
-                d = today + timedelta(days=i)
-                d_str = d.strftime("%Y-%m-%d")
-                base = 45.0 + (i % 7) * 3.5
-                act = round(base + (i * 0.4), 1) if i < 0 else None
-                pred = round(base * 1.05, 1) if i >= -1 else None
-                trend_data.append({"date": d_str, "actual": act, "predicted": pred})
-            return trend_data
+            return []
 
         trend_data = []
         for d_str in all_dates:
@@ -198,8 +193,8 @@ class DashboardRepository:
             Inventory.store_id,
             Inventory.on_hand,
             Inventory.on_order,
-            func.coalesce(InventoryParam.safety_stock, 10.0).label("safety_stock"),
-            func.coalesce(InventoryParam.reorder_point, 25.0).label("reorder_point"),
+            InventoryParam.safety_stock,
+            InventoryParam.reorder_point,
             Inventory.updated_at,
         ).outerjoin(
             Product, Inventory.item_id == Product.item_id
@@ -221,19 +216,23 @@ class DashboardRepository:
         for r in all_records:
             on_hand = float(r.on_hand or 0.0)
             on_order = float(r.on_order or 0.0)
-            ss = float(r.safety_stock or 10.0)
-            rop = float(r.reorder_point or 25.0)
+            ss = float(r.safety_stock) if r.safety_stock is not None else 0.0
+            rop = float(r.reorder_point) if r.reorder_point is not None else 0.0
+            inventory_position = on_hand + on_order
 
-            # Phân loại Traffic-light
-            if on_hand <= ss or on_hand <= 0.0:
+            # Phân loại Traffic-light theo Inventory Position IP = on_hand + on_order (B-08, B-09)
+            if on_hand <= 0.0:
                 sev = "CRITICAL"
-                action = f"Stockout risk! Create emergency PO (Safety Stock: {int(ss)})."
-            elif on_hand <= rop:
+                action = f"Rủi ro đứt hàng tức thì trên kệ (On-hand: {int(on_hand)}). Cần xử lý khẩn cấp."
+            elif on_hand <= ss and inventory_position <= rop:
+                sev = "CRITICAL"
+                action = f"Nguy cơ đứt hàng (On-hand <= SS: {int(ss)}, IP <= ROP). Cần tạo PO khẩn."
+            elif inventory_position <= rop:
                 sev = "WARNING"
-                action = f"Inventory <= ROP ({int(rop)}). Reorder recommended."
+                action = f"Vị trí tồn kho IP ({int(inventory_position)}) <= ROP ({int(rop)}). Đề xuất đặt hàng bổ sung."
             else:
                 sev = "HEALTHY"
-                action = "Stock levels optimal."
+                action = "Tồn kho trong ngưỡng an toàn."
 
             item_dict = {
                 "item_id": r.item_id,

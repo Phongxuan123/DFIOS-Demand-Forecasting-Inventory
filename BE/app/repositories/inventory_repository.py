@@ -16,6 +16,14 @@ class InventoryRepository:
             .first()
         )
 
+    def get_for_update(self, db: Session, item_id: str, store_id: str) -> Optional[Inventory]:
+        return (
+            db.query(Inventory)
+            .filter(Inventory.item_id == item_id, Inventory.store_id == store_id)
+            .with_for_update()
+            .first()
+        )
+
     def list_inventory(
         self,
         db: Session,

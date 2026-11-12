@@ -18,7 +18,7 @@ class UserResponse(BaseModel):
 
 class UserCreateRequest(BaseModel):
     email: str = Field(..., description="Email người dùng")
-    password: Optional[str] = Field(None, min_length=6, description="Mật khẩu (để trống để gửi link kích hoạt)")
+    password: Optional[str] = Field(None, min_length=6, max_length=72, description="Mật khẩu (6 đến 72 ký tự, để trống để gửi link kích hoạt)")
     role: UserRole = Field(..., description="Vai trò: Admin | Warehouse Manager | Viewer")
     display_name: Optional[str] = Field(None, description="Tên hiển thị")
 

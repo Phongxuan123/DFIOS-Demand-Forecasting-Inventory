@@ -85,12 +85,12 @@ def get_stock_alerts(
     summary="Kích hoạt quét ngưỡng tồn kho và phát cảnh báo thời gian thực qua SSE (UC10)",
     description="Dành cho Warehouse Manager và Admin: quét các mặt hàng chạm ngưỡng nguy hiểm, ghi nhận vào hệ thống và phát broadcast sự kiện realtime.",
 )
-async def trigger_realtime_stock_alerts(
+def trigger_realtime_stock_alerts(
     store_id: Optional[str] = Query(None, description="Mã cửa hàng cần quét (để trống nếu quét toàn hệ thống)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_admin),
 ) -> RealtimeStockAlertTriggerResponse:
-    return await dashboard_service.trigger_realtime_stock_alerts(db, store_id=store_id)
+    return dashboard_service.trigger_realtime_stock_alerts(db, store_id=store_id)
 
 
 @router.get(

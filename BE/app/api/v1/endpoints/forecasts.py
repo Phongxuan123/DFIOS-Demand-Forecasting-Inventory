@@ -245,7 +245,7 @@ def get_sku_window_quantiles(
     sku: str,
     store_id: str = Query("CA_1", description="Mã kho / cửa hàng"),
     origin_date: Optional[date] = Query(None, description="Ngày điểm gốc review (mặc định lấy theo sim_clock)"),
-    horizon_days: int = Query(10, description="Độ dài cửa sổ bảo vệ H = L + R (mặc định 10 ngày)"),
+    horizon_days: int = Query(10, ge=1, le=28, description="Độ dài cửa sổ bảo vệ H = L + R (1 đến 28 ngày)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -254,6 +254,13 @@ def get_sku_window_quantiles(
     Truy xuất phân phối xác suất thực nghiệm trên cửa sổ bảo vệ H = L + R (mặc định 10 ngày) cho SKU.
     Cung cấp dải 19 mức quantile thực nghiệm Q_hat(tau) và mức Q_hat(0.95) chuẩn bị cho Tier 2.
     """
+    prod = db.query(Product).filter(Product.item_id == sku).first()
+    if not prod:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
+        )
+
     if not origin_date:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
         target_date = clock.current_date if clock else date(2015, 5, 24)
