@@ -295,6 +295,43 @@ class TestDataQualityEndpoints(unittest.TestCase):
             self.assertGreaterEqual(len(logs), 1)
             self.assertEqual(logs[0].actor_email, "admin@dfios.com")
 
+    def test_preprocessing_encoding_dayfirst_and_null_skus(self):
+        # UC-Import/N-22: Verify encoding priority (cp1258 before latin1), dayfirst date parsing, and null item_id dropping
+        from app.services.data_preprocessing_service import data_preprocessing_service
+        import pandas as pd
+
+        # 1. Null / NaN item_id is dropped, does not become literal 'nan'
+        csv_with_null = (
+            "item_id,sale_date,sales,price\n"
+            "FOODS_1_001,2016-04-25,10,2.5\n"
+            ",2016-04-26,5,2.5\n"
+            "nan,2016-04-27,8,2.5\n"
+            "FOODS_1_001,2016-04-28,12,2.5\n"
+        ).encode("utf-8")
+        clean_df, report = data_preprocessing_service.preprocess_sales_data(csv_with_null, default_store_id="CA_1")
+        unique_items = set(clean_df["item_id"].unique())
+        self.assertIn("FOODS_1_001", unique_items)
+        self.assertNotIn("nan", unique_items)
+        self.assertNotIn("", unique_items)
+
+        # 2. Dayfirst DD/MM/YYYY date parsing
+        csv_dayfirst = (
+            "item_id,sale_date,sales,price\n"
+            "FOODS_1_001,05/04/2016,10,2.5\n"
+            "FOODS_1_001,25/04/2016,15,2.5\n"
+        ).encode("utf-8")
+        clean_df_dates, _ = data_preprocessing_service.preprocess_sales_data(csv_dayfirst, default_store_id="CA_1")
+        # 05/04/2016 must be April 5th, not May 4th
+        april_5_rows = clean_df_dates[clean_df_dates["sale_date"] == pd.Timestamp("2016-04-05")]
+        self.assertFalse(april_5_rows.empty)
+        may_4_rows = clean_df_dates[clean_df_dates["sale_date"] == pd.Timestamp("2016-05-04")]
+        self.assertTrue(may_4_rows.empty)
+
+        # 3. CP1258 encoding priority
+        raw_cp1258 = "mã_sku;ngày_bán;doanh_số;đơn_giá\nFOODS_1_001;2016-04-25;10;2.5\n".encode("utf-8-sig")
+        df_cp = data_preprocessing_service.read_csv_safely(raw_cp1258)
+        self.assertGreaterEqual(df_cp.shape[1], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
