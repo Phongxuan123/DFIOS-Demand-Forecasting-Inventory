@@ -119,6 +119,7 @@ def get_historical_demand(
 def compare_actual_vs_predicted(
     sku: str,
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng"),
+    model_version: Optional[str] = Query(None, description="Lọc theo phiên bản mô hình dự báo"),
     start_date: Optional[date] = Query(None, description="Ngày bắt đầu (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Ngày kết thúc (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
@@ -133,6 +134,7 @@ def compare_actual_vs_predicted(
         db,
         sku=sku,
         store_id=store_id,
+        model_version=model_version,
         start_date=start_date,
         end_date=end_date,
     )

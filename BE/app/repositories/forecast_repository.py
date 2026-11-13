@@ -191,6 +191,7 @@ class ForecastRepository(BaseRepository[Forecast]):
         horizon: Optional[int] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        model_version: Optional[str] = None,
     ) -> List[Forecast]:
         query = db.query(Forecast).filter(Forecast.item_id == item_id)
         target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
@@ -201,6 +202,8 @@ class ForecastRepository(BaseRepository[Forecast]):
             query = query.filter(Forecast.forecast_date >= start_date)
         if end_date:
             query = query.filter(Forecast.forecast_date <= end_date)
+        if model_version:
+            query = query.filter(Forecast.model_version == model_version)
         return query.order_by(asc(Forecast.forecast_date), asc(Forecast.h)).all()
 
     def get_sigma(self, db: Session, item_id: str) -> Optional[ForecastSigma]:

@@ -255,6 +255,48 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertEqual(data["metrics"]["rmse"], 1.0)
         self.assertEqual(len(data["comparison"]), 14)
 
+    def test_b05_compare_filter_by_model_version(self):
+        # UC21 / B-05: Ensure compare filters by model_version without collision
+        base_date = date(2026, 10, 1)
+        with self.TestingSessionLocal() as session:
+            for h in range(1, 15):
+                fc_date = base_date + timedelta(days=h - 1)
+                fc = Forecast(
+                    id=f"fc_v2_{h}",
+                    item_id="FOODS_1_001",
+                    store_id="CA_1",
+                    forecast_date=fc_date,
+                    h=h,
+                    y_pred=20.0 + h,
+                    p10=18.0 + h,
+                    p50=20.0 + h,
+                    p90=22.0 + h,
+                    available=True,
+                    model_version="v2.0.0",
+                )
+                session.add(fc)
+            session.commit()
+
+        # 1. Compare specifying model_version="v1.0.0" -> mae should be 1.0
+        res_v1 = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/compare?model_version=v1.0.0",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_v1.status_code, 200)
+        data_v1 = res_v1.json()
+        self.assertEqual(data_v1["model_version"], "v1.0.0")
+        self.assertEqual(data_v1["metrics"]["mae"], 1.0)
+
+        # 2. Compare specifying model_version="v2.0.0" -> mae should be 11.0 (actual is 9+h, pred is 20+h)
+        res_v2 = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/compare?model_version=v2.0.0",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_v2.status_code, 200)
+        data_v2 = res_v2.json()
+        self.assertEqual(data_v2["model_version"], "v2.0.0")
+        self.assertEqual(data_v2["metrics"]["mae"], 11.0)
+
     # --- UC22: Prediction Uncertainty Band ---
 
     def test_uncertainty_band(self):

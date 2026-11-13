@@ -270,6 +270,7 @@ class ForecastService:
         db: Session,
         sku: str,
         store_id: Optional[str] = None,
+        model_version: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> ForecastCompareResponse:
@@ -290,12 +291,39 @@ class ForecastService:
             else "CA_1"
         )
 
+        active_version = model_version
+        if not active_version:
+            prod_model = (
+                db.query(model_registry_repository.model)
+                .filter(model_registry_repository.model.is_production.is_(True))
+                .first()
+            )
+            if prod_model and prod_model.version:
+                active_version = prod_model.version
+            else:
+                active_version = forecast_repository.get_latest_model_version(db)
+
         sales = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
         )
         forecasts = forecast_repository.get_forecasts_for_sku(
-            db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
+            db,
+            item_id=sku,
+            store_id=target_store,
+            start_date=start_date,
+            end_date=end_date,
+            model_version=active_version,
         )
+
+        if not forecasts and model_version is None:
+            forecasts = forecast_repository.get_forecasts_for_sku(
+                db,
+                item_id=sku,
+                store_id=target_store,
+                start_date=start_date,
+                end_date=end_date,
+                model_version=None,
+            )
 
         overrides = forecast_repository.get_active_overrides_dict(
             db, item_id=sku, store_id=target_store
@@ -307,7 +335,19 @@ class ForecastService:
             actual_map[s.sale_date] = actual_map.get(s.sale_date, 0.0) + float(s.quantity)
 
         # Ghép cặp chỉ những ngày có cả actual và forecast
-        forecast_by_date: Dict[date, Forecast] = {f.forecast_date: f for f in forecasts}
+        forecast_by_date: Dict[date, Forecast] = {}
+        for f in forecasts:
+            if f.forecast_date not in forecast_by_date:
+                forecast_by_date[f.forecast_date] = f
+            else:
+                curr = forecast_by_date[f.forecast_date]
+                if (f.h and curr.h and f.h < curr.h) or (f.generated_at and curr.generated_at and f.generated_at > curr.generated_at):
+                    forecast_by_date[f.forecast_date] = f
+
+        selected_model_version = (
+            model_version
+            or (next(iter(forecast_by_date.values())).model_version if forecast_by_date else active_version)
+        )
 
         comparison: List[ComparePoint] = []
         errors: List[float] = []
@@ -367,6 +407,7 @@ class ForecastService:
         return ForecastCompareResponse(
             item_id=sku,
             store_id=store_id,
+            model_version=selected_model_version,
             metrics=metrics,
             comparison=comparison,
         )

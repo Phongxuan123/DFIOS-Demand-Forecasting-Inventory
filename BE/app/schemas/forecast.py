@@ -81,6 +81,7 @@ class CompareMetrics(BaseModel):
 class ForecastCompareResponse(BaseModel):
     item_id: str
     store_id: Optional[str] = None
+    model_version: Optional[str] = None
     metrics: CompareMetrics
     comparison: List[ComparePoint]
 
