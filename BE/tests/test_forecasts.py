@@ -662,3 +662,47 @@ class TestForecastEndpoints(unittest.TestCase):
                 ForecastWindowQuantile.id == "fwq-target-01"
             ).first()
             self.assertIsNone(target_record)
+
+    def test_override_keyed_with_horizon_and_bulk_override_horizon_support(self):
+        # UC24/B-04: Ensure override is correctly keyed by horizon h and bulk override supports h
+        payload = {
+            "items": [
+                {
+                    "item_id": "FOODS_1_001",
+                    "store_id": "CA_1",
+                    "date": "2026-10-01",
+                    "h": 1,
+                    "value": 42.0,
+                    "reason": "Điều chỉnh riêng cho h=1"
+                }
+            ]
+        }
+        res = self.client.post(
+            "/api/v1/forecasts/bulk-override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["created_count"], 1)
+
+        with self.TestingSessionLocal() as session:
+            ov = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_001",
+                ForecastOverride.forecast_date == date(2026, 10, 1),
+                ForecastOverride.h == 1,
+            ).first()
+            self.assertIsNotNone(ov)
+            self.assertEqual(ov.override_value, 42.0)
+            self.assertEqual(ov.h, 1)
+
+        # GET forecasts should show the override applied
+        res_fc = self.client.get(
+            "/api/v1/forecasts?item_id=FOODS_1_001&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        self.assertEqual(res_fc.status_code, 200)
+        items = res_fc.json()["items"]
+        h1_items = [it for it in items if it["h"] == 1 and it["forecast_date"] == "2026-10-01"]
+        self.assertTrue(len(h1_items) > 0)
+        self.assertEqual(h1_items[0]["y_pred"], 42.0)
+        self.assertTrue(h1_items[0]["is_overridden"])

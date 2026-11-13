@@ -46,10 +46,10 @@ class WindowQuantileService:
         """
         Tính tổng dự báo điểm trên cửa sổ bảo vệ H ngày: F_hat(H) = sum_{h=1}^H y_hat_h
         """
-        # 1. Thử lấy từ bảng forecast kết hợp overrides hiệu dụng (B-01, N-10 & N-13)
+        # 1. Thử lấy từ bảng forecast kết hợp overrides hiệu dụng (B-01, B-04, N-10 & N-13)
         # Cô lập hoàn toàn khỏi fast-inference-sba
         fc_records = (
-            db.query(Forecast.forecast_date, Forecast.y_pred)
+            db.query(Forecast.forecast_date, Forecast.h, Forecast.y_pred)
             .filter(
                 Forecast.item_id == item_id,
                 Forecast.store_id == store_id,
@@ -62,9 +62,9 @@ class WindowQuantileService:
         )
 
         if fc_records and len(fc_records) >= horizon_days:
-            # Tra cứu override đang hoạt động
+            # Tra cứu override đang hoạt động (B-04: hỗ trợ cả horizon h)
             overrides = (
-                db.query(ForecastOverride.forecast_date, ForecastOverride.override_value)
+                db.query(ForecastOverride.forecast_date, ForecastOverride.h, ForecastOverride.override_value)
                 .filter(
                     ForecastOverride.item_id == item_id,
                     ForecastOverride.store_id == store_id,
@@ -72,8 +72,16 @@ class WindowQuantileService:
                 )
                 .all()
             )
-            ov_map = {r.forecast_date: float(r.override_value) for r in overrides}
-            total_val = sum(ov_map.get(r.forecast_date, float(r.y_pred)) for r in fc_records[:horizon_days])
+            ov_map = {}
+            for ov in overrides:
+                ov_map[ov.forecast_date] = float(ov.override_value)
+                if ov.h is not None:
+                    ov_map[(ov.forecast_date, ov.h)] = float(ov.override_value)
+
+            total_val = sum(
+                ov_map.get((r.forecast_date, r.h), ov_map.get(r.forecast_date, float(r.y_pred)))
+                for r in fc_records[:horizon_days]
+            )
             return float(total_val)
 
         # 2. Nếu thiếu dữ liệu forecast, fallback từ doanh số trung bình gần nhất * H

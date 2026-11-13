@@ -86,7 +86,8 @@ class ForecastRepository(BaseRepository[Forecast]):
         query = query.filter(Forecast.store_id == target_store)
         if h is not None:
             query = query.filter(Forecast.h == h)
-        return query.first()
+        # B-04: Sắp xếp theo generated_at mới nhất để luôn lấy dự báo từ phiên chạy mới nhất
+        return query.order_by(desc(Forecast.generated_at)).first()
 
     def get_latest_model_version(self, db: Session) -> Optional[str]:
         latest = db.query(Forecast.model_version).order_by(desc(Forecast.generated_at)).first()
@@ -101,7 +102,9 @@ class ForecastRepository(BaseRepository[Forecast]):
         store_id: Optional[str] = None,
     ) -> Dict[str, ForecastOverride]:
         """
-        Lấy danh sách override đang hoạt động dưới dạng dict key: f"{item_id}_{store_id}_{forecast_date}"
+        Lấy danh sách override đang hoạt động dưới dạng dict key:
+        - f"{item_id}_{store_id}_{forecast_date}" (base key)
+        - f"{item_id}_{store_id}_{forecast_date}_{h}" (horizon key, B-04)
         """
         query = db.query(ForecastOverride).filter(ForecastOverride.is_active.is_(True))
         if item_id:
@@ -112,16 +115,19 @@ class ForecastRepository(BaseRepository[Forecast]):
 
         override_dict: Dict[str, ForecastOverride] = {}
         for ov in overrides:
-            key = f"{ov.item_id}_{ov.store_id}_{ov.forecast_date}"
-            override_dict[key] = ov
+            key_base = f"{ov.item_id}_{ov.store_id}_{ov.forecast_date}"
+            override_dict[key_base] = ov
+            if ov.h is not None:
+                key_h = f"{ov.item_id}_{ov.store_id}_{ov.forecast_date}_{ov.h}"
+                override_dict[key_h] = ov
         return override_dict
 
     def get_override_by_id(self, db: Session, override_id: str) -> Optional[ForecastOverride]:
         return db.query(ForecastOverride).filter(ForecastOverride.id == override_id).first()
 
     def create_override(self, db: Session, override: ForecastOverride) -> ForecastOverride:
-        # Nếu đã có override cũ cho cùng item, store, forecast_date đang active thì vô hiệu hóa bản cũ
-        existing = (
+        # B-04: Nếu đã có override cũ cho cùng item, store, forecast_date (và h nếu có chỉ định) đang active thì vô hiệu hóa
+        query = (
             db.query(ForecastOverride)
             .filter(
                 ForecastOverride.item_id == override.item_id,
@@ -129,8 +135,10 @@ class ForecastRepository(BaseRepository[Forecast]):
                 ForecastOverride.forecast_date == override.forecast_date,
                 ForecastOverride.is_active.is_(True),
             )
-            .all()
         )
+        if override.h is not None:
+            query = query.filter(ForecastOverride.h == override.h)
+        existing = query.all()
         for old in existing:
             old.is_active = False
 

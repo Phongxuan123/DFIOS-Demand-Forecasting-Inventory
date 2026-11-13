@@ -131,8 +131,9 @@ class ForecastService:
 
         items: List[ForecastItemResponse] = []
         for fc, p_name, p_cat in records:
-            key = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}"
-            override = active_overrides.get(key)
+            key_h = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
+            key_base = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}"
+            override = active_overrides.get(key_h) or active_overrides.get(key_base)
 
             if override:
                 display_pred = override.override_value
@@ -318,8 +319,10 @@ class ForecastService:
         for f_date, actual_val in sorted(actual_map.items()):
             if f_date in forecast_by_date:
                 fc = forecast_by_date[f_date]
-                ov_key = f"{sku}_{fc.store_id}_{f_date}"
-                pred_val = overrides[ov_key].override_value if ov_key in overrides else fc.y_pred
+                ov_key_h = f"{sku}_{fc.store_id}_{f_date}_{fc.h}"
+                ov_key_base = f"{sku}_{fc.store_id}_{f_date}"
+                ov = overrides.get(ov_key_h) or overrides.get(ov_key_base)
+                pred_val = ov.override_value if ov else fc.y_pred
 
                 err = actual_val - pred_val
                 abs_err = abs(err)
@@ -805,6 +808,7 @@ class ForecastService:
                 item_id=item.item_id,
                 forecast_date=item.date,
                 store_id=item.store_id,
+                h=item.h,
             )
             if not fc:
                 errors.append({
@@ -820,7 +824,7 @@ class ForecastService:
                 item_id=item.item_id,
                 store_id=item.store_id,
                 forecast_date=item.date,
-                h=fc.h,
+                h=item.h or fc.h,
                 original_value=fc.y_pred,
                 override_value=item.value,
                 reason=item.reason.strip(),
