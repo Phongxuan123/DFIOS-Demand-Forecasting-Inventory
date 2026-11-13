@@ -31,11 +31,11 @@ export interface SkuRssMetrics {
   onHand: number;
   onOrder: number;
   ip: number;
-  ss: number;
-  rop_s: number;
-  eoq: number;
+  ss: number | null;
+  rop_s: number | null;
+  eoq: number | null;
   kappa: number;
-  orderUpTo_S: number;
+  orderUpTo_S: number | null;
   orderQty_q: number;
   reviewDays_R: number;
   leadTime_L: number;
@@ -353,26 +353,16 @@ export const Products: React.FC = () => {
         ? Number(inv.on_order)
         : prod.on_order != null
           ? Number(prod.on_order)
-          : h % 3 === 0
-            ? 12 + (h % 20)
-            : 0;
+          : 0;
 
     const onHand = Math.max(0, Math.round(isNaN(rawOnHand) ? 0 : rawOnHand));
     const onOrder = Math.max(0, Math.round(isNaN(rawOnOrder) ? 0 : rawOnOrder));
 
-    const fallbackSs = 10 + (h % 22);
-    const hasBeOpt =
-      opt.s != null ||
-      opt.S != null ||
-      opt.reorder_point != null ||
-      opt.safety_stock != null ||
-      inv.reorder_point != null;
-
     const eff = resolveEffectiveRssMetrics({
       on_hand: onHand,
       on_order: onOrder,
-      safety_stock: opt.safety_stock ?? inv.safety_stock ?? fallbackSs,
-      reorder_point: opt.reorder_point ?? inv.reorder_point ?? fallbackSs + 14 + (h % 28),
+      safety_stock: opt.safety_stock ?? inv.safety_stock ?? null,
+      reorder_point: opt.reorder_point ?? inv.reorder_point ?? opt.s ?? null,
       s: opt.s ?? null,
       S: opt.S ?? null,
       eoq: opt.eoq ?? inv.eoq ?? null,
@@ -381,20 +371,22 @@ export const Products: React.FC = () => {
     });
 
     const ip = eff.inventoryPosition;
-    const ss = Math.max(1, eff.safetyStock);
-    const rop_s = Math.max(ss + 1, eff.reorderPointS);
-    const eoq = Math.max(1, eff.eoq);
+    const ss = eff.safetyStock;
+    const rop_s = eff.reorderPointS;
+    const eoq = eff.eoq;
 
     const catUpper = String(prod?.cat_id || '').toUpperCase();
     const defaultKappa = catUpper === 'FOODS' ? 1.0 : catUpper === 'HOUSEHOLD' ? 1.5 : 1.0;
-    const hasExplicitS = opt.S != null && Number(opt.S) > rop_s;
+    const hasExplicitS = opt.S != null && rop_s != null && Number(opt.S) > rop_s;
     const orderUpTo_S = hasExplicitS
       ? eff.orderUpToS
-      : rop_s + Math.ceil(defaultKappa * eoq);
-    const kappa = hasExplicitS && eoq > 0
+      : rop_s != null && eoq != null
+        ? rop_s + Math.ceil(defaultKappa * eoq)
+        : null;
+    const kappa = hasExplicitS && eoq != null && eoq > 0 && orderUpTo_S != null && rop_s != null
       ? Number(Math.max(0.5, (orderUpTo_S - rop_s) / eoq).toFixed(2))
       : defaultKappa;
-    const orderQty_q = ip <= rop_s ? Math.max(0, orderUpTo_S - ip) : 0;
+    const orderQty_q = rop_s != null && orderUpTo_S != null && ip <= rop_s ? Math.max(0, orderUpTo_S - ip) : 0;
 
     const isStandardM5 =
       itemId.startsWith('FOODS_') || itemId.startsWith('HOBBIES_') || itemId.startsWith('HOUSEHOLD_');
@@ -453,7 +445,7 @@ export const Products: React.FC = () => {
       regime,
       abcClass,
       unitPrice,
-      modelRunId: hasBeOpt ? (opt.model_run_id || null) : null,
+      modelRunId: opt.model_run_id || null,
     };
   };
 
@@ -897,12 +889,12 @@ export const Products: React.FC = () => {
     const selectedMetrics = prod.item_id ? getSkuRssMetrics(prod) : null;
 
     const maxGaugeScale = selectedMetrics
-      ? Math.max(selectedMetrics.orderUpTo_S * 1.15, selectedMetrics.ip * 1.1, 20)
+      ? Math.max(Number(selectedMetrics.orderUpTo_S ?? 0) * 1.15, selectedMetrics.ip * 1.1, 20)
       : 100;
     const ipPct = selectedMetrics ? Math.min(100, Math.round((selectedMetrics.ip / maxGaugeScale) * 100)) : 0;
-    const ssPct = selectedMetrics ? Math.min(96, Math.round((selectedMetrics.ss / maxGaugeScale) * 100)) : 20;
-    const ropPct = selectedMetrics ? Math.min(96, Math.round((selectedMetrics.rop_s / maxGaugeScale) * 100)) : 50;
-    const orderUpToPct = selectedMetrics
+    const ssPct = selectedMetrics && selectedMetrics.ss != null ? Math.min(96, Math.round((selectedMetrics.ss / maxGaugeScale) * 100)) : 20;
+    const ropPct = selectedMetrics && selectedMetrics.rop_s != null ? Math.min(96, Math.round((selectedMetrics.rop_s / maxGaugeScale) * 100)) : 50;
+    const orderUpToPct = selectedMetrics && selectedMetrics.orderUpTo_S != null
       ? Math.min(96, Math.round((selectedMetrics.orderUpTo_S / maxGaugeScale) * 100))
       : 85;
 
@@ -1115,7 +1107,7 @@ export const Products: React.FC = () => {
                   ) : (
                     paginatedProducts.map((p) => {
                       const m = getSkuRssMetrics(p);
-                      const needsReplenish = m.ip < m.rop_s;
+                      const needsReplenish = m.rop_s != null ? m.ip < m.rop_s : false;
                       return (
                         <tr
                           key={p.item_id}
@@ -1139,9 +1131,9 @@ export const Products: React.FC = () => {
                             <span className="rss-mono-sub">({m.onHand}+{m.onOrder})</span>
                           </td>
                           <td className="text-right">
-                            <span className="rss-mono-primary">{m.rop_s}</span>
+                            <span className="rss-mono-primary">{m.rop_s ?? '—'}</span>
                             <span className="rss-mono-sub"> / </span>
-                            <span className="rss-mono-primary teal">{m.orderUpTo_S}</span>
+                            <span className="rss-mono-primary teal">{m.orderUpTo_S ?? '—'}</span>
                           </td>
                           <td className="text-right" onClick={(e) => e.stopPropagation()}>
                             <div className="action-buttons-cell">
@@ -1220,8 +1212,8 @@ export const Products: React.FC = () => {
                     <span>
                       IP: <strong>{selectedMetrics.ip}</strong>
                     </span>
-                    <span className={selectedMetrics.ip < selectedMetrics.rop_s ? 'rss-status-order' : 'rss-status-ok'}>
-                      {selectedMetrics.ip < selectedMetrics.rop_s
+                    <span className={selectedMetrics.rop_s != null && selectedMetrics.ip < selectedMetrics.rop_s ? 'rss-status-order' : 'rss-status-ok'}>
+                      {selectedMetrics.rop_s != null && selectedMetrics.ip < selectedMetrics.rop_s
                         ? isVi
                           ? `Đặt hàng q = ${selectedMetrics.orderQty_q}`
                           : `Order q = ${selectedMetrics.orderQty_q}`
@@ -1231,45 +1223,45 @@ export const Products: React.FC = () => {
                   <div className="rss-gauge-track">
                     <div
                       className={`rss-gauge-fill ${
-                        selectedMetrics.ip <= selectedMetrics.ss
+                        selectedMetrics.ss != null && selectedMetrics.ip <= selectedMetrics.ss
                           ? 'critical'
-                          : selectedMetrics.ip < selectedMetrics.rop_s
+                          : selectedMetrics.rop_s != null && selectedMetrics.ip < selectedMetrics.rop_s
                             ? 'warning'
                             : 'healthy'
                       }`}
                       style={{ width: `${ipPct}%` }}
                     />
-                    <div className="rss-gauge-marker ss" style={{ left: `${ssPct}%` }} title={`SS = ${selectedMetrics.ss}`} />
-                    <div className="rss-gauge-marker rop" style={{ left: `${ropPct}%` }} title={`s = ${selectedMetrics.rop_s}`} />
+                    <div className="rss-gauge-marker ss" style={{ left: `${ssPct}%` }} title={`SS = ${selectedMetrics.ss ?? '—'}`} />
+                    <div className="rss-gauge-marker rop" style={{ left: `${ropPct}%` }} title={`s = ${selectedMetrics.rop_s ?? '—'}`} />
                     <div
                       className="rss-gauge-marker order-up-to"
                       style={{ left: `${orderUpToPct}%` }}
-                      title={`S = ${selectedMetrics.orderUpTo_S}`}
+                      title={`S = ${selectedMetrics.orderUpTo_S ?? '—'}`}
                     />
                   </div>
                   <div className="rss-gauge-legend">
-                    <span className="legend-ss">SS: {selectedMetrics.ss}</span>
-                    <span className="legend-rop">s: {selectedMetrics.rop_s}</span>
-                    <span className="legend-s">S: {selectedMetrics.orderUpTo_S}</span>
+                    <span className="legend-ss">SS: {selectedMetrics.ss ?? '—'}</span>
+                    <span className="legend-rop">s: {selectedMetrics.rop_s ?? '—'}</span>
+                    <span className="legend-s">S: {selectedMetrics.orderUpTo_S ?? '—'}</span>
                   </div>
 
                   {/* 2. Concise 4-Box Parameter Summary (SS, ROP s, Up-To S, EOQ) */}
                   <div className="rss-metrics-grid">
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">SS</span>
-                      <span className="rss-metric-val">{selectedMetrics.ss}</span>
+                      <span className="rss-metric-val">{selectedMetrics.ss ?? '—'}</span>
                     </div>
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">ROP (s)</span>
-                      <span className="rss-metric-val">{selectedMetrics.rop_s}</span>
+                      <span className="rss-metric-val">{selectedMetrics.rop_s ?? '—'}</span>
                     </div>
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">Up-To (S)</span>
-                      <span className="rss-metric-val teal">{selectedMetrics.orderUpTo_S}</span>
+                      <span className="rss-metric-val teal">{selectedMetrics.orderUpTo_S ?? '—'}</span>
                     </div>
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">EOQ (κ={selectedMetrics.kappa})</span>
-                      <span className="rss-metric-val">{selectedMetrics.eoq}</span>
+                      <span className="rss-metric-val">{selectedMetrics.eoq ?? '—'}</span>
                     </div>
                   </div>
                 </div>

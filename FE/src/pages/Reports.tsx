@@ -1405,12 +1405,12 @@ export const Reports: React.FC = () => {
             <table className="rep-table">
               <thead>
                 <tr>
-                  <th>{isVi ? 'Tên File Báo Cáo (Artifact)' : 'Report Artifact'}</th>
-                  <th>{isVi ? 'Phân Loại' : 'Category'}</th>
-                  <th>{isVi ? 'Ngày Khởi Tạo' : 'Generated Date'}</th>
-                  <th>{isVi ? 'Định Dạng' : 'Format'}</th>
-                  <th>{isVi ? 'Trạng Thái' : 'Status'}</th>
-                  <th style={{ textAlign: 'right' }}>{isVi ? 'Thao Tác' : 'Action'}</th>
+                  <th>{isVi ? 'Thao Tác (Action)' : 'Audit Action'}</th>
+                  <th>{isVi ? 'Phân Loại' : 'Module'}</th>
+                  <th>{isVi ? 'Người Thực Hiện' : 'Actor'}</th>
+                  <th>{isVi ? 'Chi Tiết' : 'Details'}</th>
+                  <th>{isVi ? 'Thời Gian' : 'Timestamp'}</th>
+                  <th style={{ textAlign: 'center' }}>{isVi ? 'Trạng Thái' : 'Status'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1424,39 +1424,32 @@ export const Reports: React.FC = () => {
                   <tr>
                     <td colSpan={6} style={{ textAlign: 'center', padding: '2.5rem', color: '#94a3b8' }}>
                       {isVi
-                        ? 'Chưa có lịch sử xuất báo cáo. Nhấn "Xuất Dữ Liệu (CSV)" trong bất kỳ báo cáo nào để tải xuống.'
-                        : 'No report exports recorded yet. Click "Export Data (CSV)" in any report to generate downloads.'}
+                        ? 'Chưa có lịch sử kiểm toán ghi nhận.'
+                        : 'No audit records recorded yet.'}
                     </td>
                   </tr>
                 ) : (
                   paginatedLogs.map((log: any, idx: number) => (
                     <tr key={idx}>
                       <td style={{ fontWeight: 600, color: '#0f172a', fontFamily: 'IBM Plex Mono, monospace', fontSize: '0.78rem' }}>
-                        {log.name}
+                        {log.action}
                       </td>
                       <td>
                         <span className="category-tag">{log.type}</span>
                       </td>
+                      <td style={{ color: '#0f766e', fontFamily: 'IBM Plex Mono, monospace', fontSize: '0.75rem' }}>
+                        {log.user}
+                      </td>
+                      <td style={{ color: '#475569', fontSize: '0.75rem', maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={typeof log.details === 'object' ? JSON.stringify(log.details) : String(log.details)}>
+                        {typeof log.details === 'object' ? JSON.stringify(log.details) : String(log.details)}
+                      </td>
                       <td style={{ color: '#64748b', fontFamily: 'IBM Plex Mono, monospace', fontSize: '0.75rem' }}>
-                        {log.date === 'Today' ? (isVi ? 'Hôm nay' : 'Today') : log.date}
+                        {log.date}
                       </td>
-                      <td style={{ color: '#475569', fontFamily: 'IBM Plex Mono, monospace', fontSize: '0.75rem', fontWeight: 600 }}>
-                        {log.format}
-                      </td>
-                      <td>
+                      <td style={{ textAlign: 'center' }}>
                         <span className="status-pill-ready">
-                          {log.status === 'READY' ? (isVi ? 'Sẵn sàng' : 'Ready') : log.status}
+                          {log.status === 'SUCCESS' ? (isVi ? 'Thành công' : 'Success') : log.status}
                         </span>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button
-                          type="button"
-                          className="download-link-btn"
-                          onClick={() => handleDownloadCsv(log.type.toLowerCase().includes('accuracy') ? 'forecast-accuracy' : 'inventory')}
-                        >
-                          <Download size={14} />
-                          <span>{isVi ? 'Tải xuống' : 'Download'}</span>
-                        </button>
                       </td>
                     </tr>
                   ))

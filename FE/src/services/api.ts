@@ -181,12 +181,11 @@ export const prefetchRouteData = (route: string) => {
         break;
       case '/forecast-explorer':
         cachedGet('/products/categories', null, 300000).catch(() => {});
-        cachedGet('/inventory/stores', null, 600000).catch(() => {});
-        cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
-        cachedGet('/forecasts', { item_id: 'FOODS_1_001', horizon: 28, store_id: 'CA_1' }, 180000).catch(() => {});
+        cachedGet('/products', { limit: 100 }, 120000).catch(() => {});
+        cachedGet('/forecasts/FOODS_1_001', { h: 28, store_id: 'CA_1', model_name: 'lightgbm' }, 180000).catch(() => {});
         break;
       case '/replenishment':
-        cachedGet('/replenishments', { store_id: 'CA_1', skip: 0, limit: 10, auto_generate: false }, 30000).catch(() => {});
+        cachedGet('/replenishments', { status: 'PENDING', skip: 0, limit: 200, auto_generate: false }, 30000).catch(() => {});
         break;
       case '/abc-xyz':
         cachedGet('/classification/matrix', null, 60000).catch(() => {});
@@ -198,7 +197,6 @@ export const prefetchRouteData = (route: string) => {
         break;
       case '/model-performance':
         cachedGet('/ml/models', null, 60000).catch(() => {});
-        cachedGet('/ml/train', { limit: 20 }, 30000).catch(() => {});
         break;
       case '/products':
         cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
@@ -875,8 +873,9 @@ export const api = {
     bulkCreate: async (items: Array<{ event_name: string; event_type?: string; event_date?: string; start_date?: string; end_date?: string; details?: string }>) => {
       clearApiCache('/events-calendar');
       const normalizedItems = items.map(item => ({
-        ...item,
+        event_name: item.event_name,
         event_date: item.event_date || item.start_date,
+        event_type: item.event_type || 'Promotion',
       }));
       const res = await apiClient.post('/events-calendar/bulk', { items: normalizedItems });
       return res.data;
@@ -1031,11 +1030,11 @@ export const api = {
   },
 
   models: {
-    getPerformanceMetrics: async () => {
+    getPerformanceMetrics: async (sku: string = 'FOODS_1_001') => {
       try {
         const [modelsRes, compareRes] = await Promise.all([
           apiClient.get('/ml/models').catch(() => ({ data: { items: [] } })),
-          apiClient.get('/forecasts/FOODS_1_001/compare').catch(() => ({ data: { comparison: [] } })),
+          apiClient.get(`/forecasts/${encodeURIComponent(sku)}/compare`).catch(() => ({ data: { comparison: [] } })),
         ]);
         const items = unwrapItems(modelsRes.data);
 
@@ -1045,7 +1044,7 @@ export const api = {
           type: m.is_production ? 'best' : 'challenger',
           isProduction: m.is_production,
           metrics: {
-            mase: m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : (m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(2) : '-'),
+            mase: m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : '-',
             rmse: m.metrics?.rmse != null ? Number(m.metrics.rmse).toFixed(1) : '-',
             mae: m.metrics?.mae != null ? Number(m.metrics.mae).toFixed(1) : '-',
             wrmsse: m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(3) : '-',
@@ -1055,9 +1054,10 @@ export const api = {
         }));
 
         const comparePoints = compareRes.data?.comparison || [];
-        const scatterData = comparePoints.map((c: any) => ({
+        const scatterData = comparePoints.map((c: any, idx: number) => ({
           x: Number(c.actual),
           y: Number(c.predicted),
+          sku: c.item_id || c.sku || `${sku} (t-${idx + 1})`,
           fill: '#0d9488',
         }));
 
@@ -1178,15 +1178,14 @@ export const api = {
     getRecentLogs: async () => {
       const auditRes = await cachedGet('/audit-logs', { limit: 25 }, 180000).catch(() => ({ items: [], list: [], total: 0 }));
       const logList = unwrapItems(auditRes);
-      const logs = logList.map((l: any, idx: number) => ({
-        name: `Audit_${l.action || 'Report'}_${idx + 1}.csv`,
+      const logs = logList.map((l: any) => ({
+        id: l.id,
+        action: l.action || 'system.event',
         type: l.action?.split('.')[0]?.toUpperCase() || 'SYSTEM',
-        date: l.created_at ? new Date(l.created_at).toLocaleDateString() : 'Today',
-        format: 'CSV',
-        formatClass: 'csv',
-        size: '24 KB',
-        status: 'READY',
-        action: 'Download',
+        user: l.actor_email || 'admin@dfios.com',
+        details: l.details || '—',
+        date: l.created_at ? new Date(l.created_at).toLocaleString() : '—',
+        status: 'SUCCESS',
       }));
 
       return {
