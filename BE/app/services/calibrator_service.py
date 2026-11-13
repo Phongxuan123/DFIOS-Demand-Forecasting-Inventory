@@ -16,19 +16,20 @@ from app.models.sim_clock import SimClock
 class CalibratorService:
     """
     Module C³-OUT (Closed-Loop Continuous Calibrator) – Giai đoạn 5 (Task C3.1):
-    Bộ điều khiển tích phân một phía (One-Sided C³-OUT Integral Control):
+    Bộ điều khiển tích phân chuẩn bounded integral control (research.md §8.1):
       theta_{g, k} = theta_{g, k-1} + eta * ( e~_{g, k-d} - (1 - setpoint_g) )
     - Setpoint chuẩn: 0.96 (Target 0.95 + Guard 0.01)
     - Hệ số khuếch đại: eta = 1.0
     - Trễ thông tin chu kỳ: d = ceil((L + R) / R)
-    - Kẹp biên một phía: theta_g in [0.0, 2.0]
+    - Kẹp biên hai phía chuẩn: theta_g in [-2.0, 2.0] (research.md §8.1)
+    - Quy ước biên chống bão hòa (Anti-windup): e~ = 0 khi theta >= 2.0, e~ = 1 khi theta <= -2.0
     """
 
     ALL_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
     DEFAULT_SETPOINT = 0.96
     DEFAULT_ETA = 1.0
     MAX_THETA = 2.0
-    MIN_THETA = 0.0
+    MIN_THETA = -2.0
 
     def get_current_thetas(self, db: Session, store_id: str = "CA_1") -> Dict[str, float]:
         """
@@ -255,7 +256,7 @@ class CalibratorService:
                     observed_error = float(outcome.error_rate)
                     outcome.consumed_at_review = review_index
 
-            # Quy ước biên C³-OUT theo research.md §8.1:
+            # Quy ước biên C³-OUT chống bão hòa tích phân (Anti-windup theo research.md §8.1):
             # ẽ = 0 khi prev_theta >= 2.0 (ngăn chặn windup khi kẹp trần trên)
             # ẽ = 1 khi prev_theta <= -2.0 (ngăn chặn windup khi kẹp sàn dưới)
             if prev_theta >= self.MAX_THETA:
@@ -263,18 +264,22 @@ class CalibratorService:
             elif prev_theta <= self.MIN_THETA:
                 observed_error = 1.0
 
-            # Công thức cập nhật tích phân một phía C³-OUT
+            # Công thức cập nhật tích phân C³-OUT (research.md §8.1)
             error_signal = observed_error - target_error_rate
             delta_theta = eta * error_signal
             raw_theta = prev_theta + delta_theta
 
-            # Kẹp biên một phía [0.0, 2.0]
+            # Kẹp biên hai phía [-2.0, 2.0]
             new_theta = max(self.MIN_THETA, min(self.MAX_THETA, raw_theta))
-            at_boundary = bool(new_theta >= self.MAX_THETA)
+            at_boundary = bool(new_theta >= self.MAX_THETA or new_theta <= self.MIN_THETA)
 
-            if at_boundary:
+            if new_theta >= self.MAX_THETA:
                 warnings.append(
                     f"Nhóm {class_id}: Hệ số theta đạt trần tối đa 2.0 tại review {review_index} - Mô hình dự báo có thể đã xuống cấp!"
+                )
+            elif new_theta <= self.MIN_THETA:
+                warnings.append(
+                    f"Nhóm {class_id}: Hệ số theta chạm sàn tối thiểu -2.0 tại review {review_index} - Tồn kho an toàn đã giảm tối đa."
                 )
 
             multiplier = round(math.exp(new_theta), 4)

@@ -1,6 +1,13 @@
 import unittest
 import math
 from datetime import date, timedelta
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.models.base import Base
+from app.models.calibration_state import CalibrationState
+from app.models.service_outcomes import ServiceOutcome
+from app.models.sim_clock import SimClock
 from app.services.calibrator_service import calibrator_service
 from app.services.optimization_service import optimization_service
 from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
@@ -12,12 +19,16 @@ class TestC3OutAndSimulation(unittest.TestCase):
 
     def test_c3out_integral_update_math(self):
         """
-        Test TEST.1 - Kiểm định tính đúng đắn toán học của thuật toán One-Sided C³-OUT:
+        Test TEST.1 - Kiểm định tính đúng đắn toán học của thuật toán C³-OUT (research.md §8.1, Sửa lỗi N-02):
         theta_k = theta_{k-1} + eta * ( e~_{k-d} - (1 - setpoint) )
         - Setpoint: 0.96 -> target error rate: 0.04
         - eta = 1.0
-        - Kẹp biên: [0.0, 2.0]
+        - Kẹp biên hai phía: [-2.0, 2.0]
+        - Anti-windup: e~ = 0 khi theta >= 2.0; e~ = 1 khi theta <= -2.0
         """
+        self.assertEqual(calibrator_service.MAX_THETA, 2.0)
+        self.assertEqual(calibrator_service.MIN_THETA, -2.0)
+
         eta = 1.0
         setpoint = 0.96
         target_error = 1.0 - setpoint  # 0.04
@@ -25,27 +36,116 @@ class TestC3OutAndSimulation(unittest.TestCase):
         # Trường hợp 1: Không có sai số (e~ = 0.04) -> theta không đổi
         theta_0 = 0.0
         obs_error_1 = 0.04
-        theta_1 = max(0.0, min(2.0, theta_0 + eta * (obs_error_1 - target_error)))
-        self.assertEqual(theta_1, 0.0)
+        theta_1 = max(-2.0, min(2.0, theta_0 + eta * (obs_error_1 - target_error)))
+        self.assertEqual(round(theta_1, 4), 0.0)
 
         # Trường hợp 2: Tỷ lệ thiếu hàng tăng lên e~ = 0.09 (vượt 5pp) -> theta tăng lên 0.05
         obs_error_2 = 0.09
-        theta_2 = max(0.0, min(2.0, theta_1 + eta * (obs_error_2 - target_error)))
+        theta_2 = max(-2.0, min(2.0, theta_1 + eta * (obs_error_2 - target_error)))
         self.assertEqual(round(theta_2, 4), 0.05)
         multiplier_2 = round(math.exp(theta_2), 4)
         self.assertGreater(multiplier_2, 1.0)
 
-        # Trường hợp 3: Khi lỗi âm (e~ = 0.01) nhưng theta đang ở 0.0 -> kẹp biên dưới 0.0 (one-sided)
-        obs_error_3 = 0.01
-        theta_3 = max(0.0, min(2.0, 0.0 + eta * (obs_error_3 - target_error)))
-        self.assertEqual(theta_3, 0.0)  # Không bao giờ hạ mức bảo vệ dưới 0
+        # Trường hợp 3 (Kiểm tra sửa dứt điểm N-02):
+        # Tại theta = 0.0 và 0 stockout (e~ = 0.0):
+        # Lỗi N-02 cũ: vì MIN_THETA=0 nên ép e~ = 1.0 làm theta nhảy vọt lên +0.96!
+        # Chuẩn §8.1: Quy ước biên chỉ áp dụng khi theta <= -2.0.
+        # Tại theta = 0.0, e~ = 0.0 -> delta_theta = -0.04, theta giảm nhẹ xuống -0.04, TUYỆT ĐỐI không nhảy lên +0.96.
+        prev_theta = 0.0
+        obs_error_real = 0.0  # 0 stockouts
+        if prev_theta >= calibrator_service.MAX_THETA:
+            obs_error_calc = 0.0
+        elif prev_theta <= calibrator_service.MIN_THETA:
+            obs_error_calc = 1.0
+        else:
+            obs_error_calc = obs_error_real
 
-        # Trường hợp 4: Lỗi kéo dài đẩy theta chạm trần 2.0 -> kẹp biên trên và kích hoạt cờ boundary
-        raw_high_theta = 2.45
-        theta_bounded = max(0.0, min(2.0, raw_high_theta))
-        self.assertEqual(theta_bounded, 2.0)
-        at_boundary = bool(theta_bounded >= 2.0)
-        self.assertTrue(at_boundary)
+        self.assertEqual(obs_error_calc, 0.0)  # Không bị ép thành 1.0
+        theta_3 = max(calibrator_service.MIN_THETA, min(calibrator_service.MAX_THETA, prev_theta + eta * (obs_error_calc - target_error)))
+        self.assertEqual(round(theta_3, 4), -0.04)
+        self.assertNotEqual(round(theta_3, 2), 0.96)
+
+        # Trường hợp 4: Anti-windup trần trên khi theta >= 2.0 (ép e~ = 0.0) -> kéo theta xuống
+        prev_high = 2.0
+        obs_error_high = 0.0 if prev_high >= calibrator_service.MAX_THETA else 0.5
+        self.assertEqual(obs_error_high, 0.0)
+        theta_pulled_down = prev_high + eta * (obs_error_high - target_error)
+        self.assertEqual(round(theta_pulled_down, 2), 1.96)
+
+        # Trường hợp 5: Anti-windup sàn dưới khi theta <= -2.0 (ép e~ = 1.0) -> kéo theta lên
+        prev_low = -2.0
+        obs_error_low = 1.0 if prev_low <= calibrator_service.MIN_THETA else 0.0
+        self.assertEqual(obs_error_low, 1.0)
+        theta_pulled_up = prev_low + eta * (obs_error_low - target_error)
+        self.assertEqual(round(theta_pulled_up, 2), -1.04)
+
+    def test_c3out_run_calibration_step_prev_theta_zero_no_windup(self):
+        """
+        Test TEST.1 - Tái hiện và kiểm định sửa dứt điểm lỗi N-02 trên DB thật:
+        Khi theta=0.0 ở chu kỳ trước và không có stockout (error_rate=0.0),
+        bước calibration step không được kích hoạt anti-windup và không được ép error_rate=1.0.
+        """
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+
+        try:
+            clock = SimClock(store_id="CA_1", current_date=date(2016, 5, 23), start_date=date(2016, 4, 25))
+            db.add(clock)
+            db.commit()
+
+            # Khởi tạo trạng thái CX với theta = 0.0
+            cx_init = CalibrationState(
+                id="CA_1_CX_rev_0",
+                calibrator_id="c3out_main_CA_1",
+                store_id="CA_1",
+                class_id="CX",
+                review_index=0,
+                review_date=date(2016, 5, 16),
+                theta=0.0,
+                multiplier=1.0,
+                error_rate=0.0,
+                at_boundary=False,
+                setpoint=0.96,
+                eta=1.0,
+            )
+            db.add(cx_init)
+
+            # Service outcome với 0 stockouts (error_rate = 0.0)
+            outcome = ServiceOutcome(
+                id="CA_1_CX_cycle_0",
+                calibrator_id="c3out_main_CA_1",
+                store_id="CA_1",
+                class_id="CX",
+                cycle_index=0,
+                cycle_start=date(2016, 5, 9),
+                cycle_end=date(2016, 5, 15),
+                n_sku=100,
+                n_stockout=0,
+                error_rate=0.0,
+            )
+            db.add(outcome)
+            db.commit()
+
+            # Gọi run_calibration_step tại review kỳ 2 (d=2 -> tiêu thụ cycle 0)
+            states, warnings, consumed = calibrator_service.run_calibration_step(
+                db=db,
+                store_id="CA_1",
+                review_index=2,
+                review_date=date(2016, 5, 23),
+                lead_time_days=3,
+                review_period_days=7,
+            )
+
+            cx_new = next(s for s in states if s.class_id == "CX")
+            # Kiểm tra: error_rate phải giữ nguyên 0.0, TUYỆT ĐỐI không bị ép thành 1.0
+            self.assertEqual(cx_new.error_rate, 0.0)
+            # theta phải giảm nhẹ -0.04 (hoặc giữ mức âm), TUYỆT ĐỐI không nhảy lên +0.96
+            self.assertEqual(cx_new.theta, -0.04)
+            self.assertNotEqual(cx_new.theta, 0.96)
+        finally:
+            db.close()
 
     def test_route_c_quantile_calculation_and_floor(self):
         """
