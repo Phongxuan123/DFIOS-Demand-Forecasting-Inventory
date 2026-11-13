@@ -118,7 +118,7 @@ export const Replenishment: React.FC = () => {
   const focusStoreParam = searchParams.get('store');
   const focusTokenParam = searchParams.get('focus');
 
-  const [storeOptions, setStoreOptions] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
+  const [storeOptions, setStoreOptions] = useState<string[]>(['CA_1']);
   const [selectedStore, setSelectedStore] = useState<string>(() =>
     focusStoreParam && focusStoreParam !== 'All' ? focusStoreParam : 'CA_1'
   );
@@ -382,7 +382,7 @@ export const Replenishment: React.FC = () => {
       .getStores()
       .then((stores: any) => {
         if (Array.isArray(stores) && stores.length > 0) {
-          setStoreOptions((prev) => Array.from(new Set([...stores, ...prev])));
+          setStoreOptions(stores);
         }
       })
       .catch(() => {});

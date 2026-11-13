@@ -82,7 +82,7 @@ export const Products: React.FC = () => {
   const [categories, setCategories] = useState<string[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const [stores, setStores] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
+  const [stores, setStores] = useState<string[]>(['CA_1']);
   const [selectedStore, setSelectedStore] = useState('CA_1');
 
   // Inventory, Optimization & Classification Maps for Periodic Review (R, s, S)
@@ -224,14 +224,14 @@ export const Products: React.FC = () => {
       const [initProdRes, suppRes, storesRes, adjRes, catRes, deptRes] = await Promise.all([
         api.products.getProducts({ limit: 50 }).catch(() => ({ list: [], total: 0 })),
         api.products.getAllSuppliers().catch(() => ({ list: [] })),
-        api.inventory.getStores().catch(() => ['CA_1', 'CA_2', 'TX_1', 'WI_1']),
+        api.inventory.getStores().catch(() => ['CA_1']),
         api.inventory.getAdjustments({ limit: 50 }).catch(() => ({ list: [] })),
         api.products.getCategories().catch(() => []),
         api.products.getDepartments().catch(() => []),
       ]);
 
       const initialStore = storesRes?.[0] || 'CA_1';
-      setStores(storesRes?.length ? storesRes : ['CA_1', 'CA_2', 'TX_1', 'WI_1']);
+      setStores(storesRes?.length ? storesRes : ['CA_1']);
       setSelectedStore(initialStore);
 
       const initialProdList = initProdRes.list || [];
