@@ -60,9 +60,18 @@ class ReplenishmentService:
         if not products:
             return 0
 
-        # Lấy supplier mặc định nếu có
-        default_supplier = db.query(Supplier).first()
-        default_supp_id = default_supplier.id if default_supplier else None
+        # R-28: Lấy map nhà cung cấp theo ngành hàng (FOODS/HOBBIES/HOUSEHOLD)
+        suppliers = db.query(Supplier).all()
+        default_supp_id = suppliers[0].id if suppliers else None
+        supp_by_cat = {}
+        for s in suppliers:
+            s_name_upper = s.name.upper()
+            if "THỰC PHẨM" in s_name_upper or "FOOD" in s_name_upper:
+                supp_by_cat["FOODS"] = s.id
+            elif "GIA DỤNG" in s_name_upper or "HOUSEHOLD" in s_name_upper:
+                supp_by_cat["HOUSEHOLD"] = s.id
+            elif "SỞ THÍCH" in s_name_upper or "HOBBIES" in s_name_upper:
+                supp_by_cat["HOBBIES"] = s.id
 
         generated_count = 0
         now = datetime.now(timezone.utc)
@@ -155,11 +164,12 @@ class ReplenishmentService:
                     else now
                 )
 
+                assigned_supplier_id = supp_by_cat.get(prod.cat_id.upper() if prod.cat_id else "", default_supp_id)
                 rec = ReplenishmentRecommendation(
                     id=str(uuid.uuid4()),
                     item_id=item_id,
                     store_id=store_id,
-                    supplier_id=default_supp_id,
+                    supplier_id=assigned_supplier_id,
                     recommended_qty=recommended_qty,
                     final_qty=recommended_qty,
                     priority=priority,

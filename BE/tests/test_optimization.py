@@ -382,3 +382,24 @@ class TestOptimizationEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.viewer_token}"},
         )
         self.assertEqual(res_viewer.status_code, 403)
+
+    def test_resolve_lead_time_aligns_with_category_and_research_standard(self):
+        # UC30/R-28: Lead time should resolve according to product category and match research standard L=3
+        from app.services.optimization_service import optimization_service
+        with self.TestingSessionLocal() as session:
+            supp_foods = Supplier(id="SUP_FOODS", name="Nhà cung cấp A (Thực phẩm)", lead_time_days=3)
+            supp_hobbies = Supplier(id="SUP_HOBBIES", name="Nhà cung cấp C (Sở thích)", lead_time_days=10)
+            session.add_all([supp_foods, supp_hobbies])
+            session.commit()
+
+            # FOODS_1_001 belongs to FOODS -> resolves to 3 days (Nhà cung cấp A)
+            lt_foods = optimization_service._resolve_lead_time(session, "FOODS_1_001")
+            self.assertEqual(lt_foods, 3)
+
+            # HOBBIES_1_001 belongs to HOBBIES -> resolves to 10 days (Nhà cung cấp C)
+            lt_hobbies = optimization_service._resolve_lead_time(session, "HOBBIES_1_001")
+            self.assertEqual(lt_hobbies, 10)
+
+            # Unknown item with no category -> defaults to DEFAULT_LEAD_TIME = 3
+            lt_default = optimization_service._resolve_lead_time(session, "UNKNOWN_SKU")
+            self.assertEqual(lt_default, 3)

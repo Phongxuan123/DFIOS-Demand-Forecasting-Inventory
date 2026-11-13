@@ -11,7 +11,7 @@ Session = sessionmaker(bind=engine)
 suppliers = [
     {
         "name": "Nhà cung cấp A (Thực phẩm)",
-        "lead_time_days": 5,
+        "lead_time_days": 3,
         "contact_name": "Nguyễn Văn An",
         "email": "supplier_a@dfios-supply.com",
         "phone": "0901234561",

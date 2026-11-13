@@ -146,9 +146,24 @@ class OptimizationService:
         return config.default_service_level
 
     def _resolve_lead_time(self, db: Session, item_id: str) -> int:
-        supplier = db.query(Supplier).first()
-        if supplier and supplier.lead_time_days:
-            return max(1, int(supplier.lead_time_days))
+        """
+        R-28: Xác định Lead Time (L) chuẩn cho SKU:
+        Ưu tiên nhà cung cấp theo ngành hàng (FOODS/HOBBIES/HOUSEHOLD).
+        Nếu không có, tuân thủ chuẩn nghiên cứu L = 3 ngày (research.md §3) để đảm bảo H = L + R = 10 ngày.
+        """
+        prod = db.query(Product).filter(Product.item_id == item_id).first()
+        if prod and prod.cat_id:
+            cat_keyword_map = {
+                "FOODS": "Thực phẩm",
+                "HOBBIES": "Sở thích",
+                "HOUSEHOLD": "Gia dụng",
+            }
+            kw = cat_keyword_map.get(prod.cat_id.upper())
+            if kw:
+                supp = db.query(Supplier).filter(Supplier.name.ilike(f"%{kw}%")).first()
+                if supp and supp.lead_time_days:
+                    return max(1, int(supp.lead_time_days))
+
         return self.DEFAULT_LEAD_TIME
 
     # --- UC30: View & Recompute Safety Stock / ROP / EOQ ---
