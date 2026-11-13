@@ -175,8 +175,8 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     const fetchInitialSettings = async () => {
       try {
-        const sysRes = await api.settings.getSystemSettings().catch(() => ({ settings: {}, items: [] }));
-        const settingsDict = sysRes?.settings || {};
+        const sysRes = await api.settings.getSystemSettings().catch(() => ({ settings: [], settings_dict: {} }));
+        const settingsDict = sysRes?.settings_dict || (Array.isArray(sysRes?.settings) ? Object.fromEntries(sysRes.settings.map((s: any) => [s.key, s.value])) : sysRes?.settings) || {};
         setSystemSettings(settingsDict);
         if (settingsDict.timezone) setSettingTimezone(settingsDict.timezone);
         if (settingsDict.currency) setSettingCurrency(settingsDict.currency);
@@ -366,7 +366,8 @@ export const Settings: React.FC = () => {
         type: 'success',
       });
       const updated = await api.settings.getSystemSettings();
-      setSystemSettings(updated.settings || {});
+      const updatedDict = updated?.settings_dict || (Array.isArray(updated?.settings) ? Object.fromEntries(updated.settings.map((s: any) => [s.key, s.value])) : updated?.settings) || {};
+      setSystemSettings(updatedDict);
     } catch (e: any) {
       setSystemSettingMsg({
         text:

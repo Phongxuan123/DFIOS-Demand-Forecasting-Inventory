@@ -1098,7 +1098,7 @@ export const Products: React.FC = () => {
               />
             </div>
           </div>
-          {canEdit && (
+          {isAdmin && (
             <div className="prod-filter-actions">
               <button className="prod-btn-primary" onClick={openAddProduct}>
                 <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} />{' '}
@@ -1173,7 +1173,7 @@ export const Products: React.FC = () => {
                               <span className={`rss-status-pill ${needsReplenish ? 'order' : 'ok'}`}>
                                 {needsReplenish ? `q=${m.orderQty_q}` : 'OK'}
                               </span>
-                              {canEdit && (
+                              {isAdmin && (
                                 <button
                                   onClick={() => openEditProduct(p)}
                                   className="action-btn-edit"
@@ -1490,7 +1490,7 @@ export const Products: React.FC = () => {
             <h2 className="prod-table-title" style={{ marginBottom: 0 }}>
               {isVi ? 'Danh bạ Nhà cung cấp' : 'Suppliers'} ({suppliers.length})
             </h2>
-            {canEdit && (
+            {isAdmin && (
               <button className="prod-btn-primary" onClick={openAddSupplier}>
                 <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} />{' '}
                 {isVi ? 'Thêm NCC' : 'Add Supplier'}
@@ -1583,16 +1583,14 @@ export const Products: React.FC = () => {
                 <p style={{ fontSize: '12px', margin: '2px 0', color: '#64748b' }}>{selectedSupplier.address || '—'}</p>
               </div>
 
-              {canEdit && (
+              {isAdmin && (
                 <div className="supplier-actions" style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
                   <button className="prod-btn-outline" onClick={openEditSupplier}>
                     {isVi ? 'Sửa' : 'Edit'}
                   </button>
-                  {isAdmin && (
-                    <button className="supplier-btn-danger" onClick={handleDeleteSupplier}>
-                      {isVi ? 'Xóa' : 'Remove'}
-                    </button>
-                  )}
+                  <button className="supplier-btn-danger" onClick={handleDeleteSupplier}>
+                    {isVi ? 'Xóa' : 'Remove'}
+                  </button>
                 </div>
               )}
             </>

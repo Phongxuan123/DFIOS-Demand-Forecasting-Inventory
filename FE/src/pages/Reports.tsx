@@ -55,7 +55,7 @@ export const Reports: React.FC = () => {
   const isAdmin = user?.role?.toUpperCase() === 'ADMIN';
 
   const [activeReport, setActiveReport] = useState<string | null>(null);
-  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const selectedStore = 'CA_1';
 
   // Sub-navigation tabs: policy_sim | accuracy | inventory | cost | backtest | exports
   type ReportTab = 'policy_sim' | 'accuracy' | 'inventory' | 'cost' | 'backtest' | 'exports';
@@ -130,10 +130,7 @@ export const Reports: React.FC = () => {
     const cScale = paramC / 5.00;
     const windowFactor = Math.sqrt(protectionWindowH / 10);
     const reviewFreqFactor = 7 / Math.max(1, paramR); // R=1 orders more frequently without EOQ batching
-    const storeMultiplier =
-      selectedStore === 'CA_1' ? 1.0 :
-      selectedStore === 'CA_2' ? 0.88 :
-      selectedStore === 'TX_1' ? 0.94 : 0.91;
+    const storeMultiplier = 1.0;
 
     // Incorporate live BE backtest/sensitivity anchor if available
     const beSavingAnchor = backtestResult?.holding_cost_savings
@@ -814,23 +811,6 @@ export const Reports: React.FC = () => {
               ? 'Phân tích chiến lược toàn diện: Đối chuẩn độ chính xác dự báo M5, vòng quay tồn kho, mô phỏng đối đầu 4 chính sách (P₀, P₁, P₄, P₆) và phân tích độ nhạy chi phí (h, b, c, L, R).'
               : 'Strategic decision-making analytics: Forecast accuracy benchmarks, inventory velocity, 4-policy head-to-head simulation (P₀, P₁, P₄, P₆), and (h, b, c, L, R) trade-off analysis.'}
           </p>
-        </div>
-
-        <div className="reports-store-picker">
-          <span className="reports-store-label">{isVi ? 'Cửa hàng / Kho:' : 'Location:'}</span>
-          <select
-            className="reports-store-select"
-            value={selectedStore}
-            onChange={(e) => {
-              setSelectedStore(e.target.value);
-              if (activeReport) handleOpenReport(activeReport);
-            }}
-          >
-            <option value="CA_1">CA_1 (California 1)</option>
-            <option value="CA_2">CA_2 (California 2)</option>
-            <option value="TX_1">TX_1 (Texas 1)</option>
-            <option value="WI_1">WI_1 (Wisconsin 1)</option>
-          </select>
         </div>
       </div>
 
