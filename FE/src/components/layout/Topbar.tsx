@@ -188,6 +188,7 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
   const pendingResyncRef = useRef(false);
   const lastSyncedAtRef = useRef(0);
   const focusCounterRef = useRef(0);
+  const sseDebounceTimerRef = useRef<any>(null);
 
   useEffect(() => {
     trackedRef.current = trackedAlerts;
@@ -284,12 +285,17 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleMobileSidebar }) => {
     };
   }, [alertStorageKey, syncAlerts]);
 
-  // Realtime Server-Sent Events (SSE) stream listener: reconcile instead of injecting raw logs
   const sse = useSSE('/events');
   useEffect(() => {
     if (sse.data && sse.data.type !== 'connected' && sse.data.type !== 'close') {
-      void syncAlerts(true, true);
+      if (sseDebounceTimerRef.current) clearTimeout(sseDebounceTimerRef.current);
+      sseDebounceTimerRef.current = setTimeout(() => {
+        void syncAlerts(true, true);
+      }, 500);
     }
+    return () => {
+      if (sseDebounceTimerRef.current) clearTimeout(sseDebounceTimerRef.current);
+    };
   }, [sse.data, syncAlerts]);
 
   // Keyboard shortcut for command palette (Ctrl+K or Cmd+K) and Escape close
