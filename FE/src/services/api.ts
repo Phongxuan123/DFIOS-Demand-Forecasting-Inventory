@@ -400,10 +400,20 @@ export const api = {
     getExplanation: async (sku: string, params?: { store_id?: string; model_version?: string; model_name?: string }) => {
       return cachedGet(`/forecasts/${sku}/explanation`, params, 60000);
     },
-    createOverride: async (sku: string, data: { forecast_date: string; override_value: number; reason: string; store_id?: string; horizon?: number }) => {
+    createOverride: async (sku: string, data: { forecast_date: string; override_value: number; reason: string; store_id?: string; h?: number; horizon?: number }) => {
       clearApiCache('/forecasts');
       clearApiCache('dashboard');
-      const res = await apiClient.post(`/forecasts/${sku}/override`, data);
+      const payload: any = {
+        forecast_date: data.forecast_date,
+        override_value: data.override_value,
+        reason: data.reason,
+        store_id: data.store_id || 'CA_1',
+      };
+      const stepH = data.h ?? (data.horizon != null && data.horizon <= 28 ? data.horizon : undefined);
+      if (stepH != null) {
+        payload.h = stepH;
+      }
+      const res = await apiClient.post(`/forecasts/${sku}/override`, payload);
       return res.data;
     },
     bulkOverride: async (items: Array<{ store_id?: string; item_id: string; date: string; value: number; reason: string }>) => {

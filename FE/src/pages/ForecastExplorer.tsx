@@ -585,12 +585,14 @@ export const ForecastExplorer: React.FC = () => {
     setOverrideError('');
     try {
       const fullReason = `${overrideReason}: ${overrideNotes || 'Manual business adjustment'}`;
+      const foundIdx = fullScheduleMatrix.findIndex((r: any) => r.date === overrideDate);
+      const computedH = foundIdx >= 0 ? foundIdx + 1 : undefined;
       await api.forecasting.createOverride(skuSearch, {
         forecast_date: overrideDate,
         override_value: Number(overrideValue),
         reason: fullReason,
         store_id: selectedStore || undefined,
-        horizon,
+        h: computedH,
       });
       setIsOverrideModalOpen(false);
       setOverrideNotes('');
