@@ -1,10 +1,13 @@
 import csv
 import io
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.product import Product
@@ -72,6 +75,17 @@ class ReplenishmentService:
         params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
         param_map = {p.item_id: p for p in params}
 
+        # N-21: Tự động tính toán lại tham số nếu thiếu trong InventoryParam
+        missing_skus = [p.item_id for p in products if p.item_id not in param_map]
+        if missing_skus:
+            for m_sku in missing_skus:
+                try:
+                    optimization_service.recompute_parameters(db, store_id=store_id, item_id=m_sku)
+                except Exception as e:
+                    logger.warning(f"Error recomputing params for SKU {m_sku} in store {store_id}: {e}")
+            params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+            param_map = {p.item_id: p for p in params}
+
         pending_recs = (
             db.query(ReplenishmentRecommendation.item_id)
             .filter(
@@ -94,16 +108,28 @@ class ReplenishmentService:
             on_hand = float(inv.on_hand) if inv else 0.0
             on_order = float(inv.on_order) if inv else 0.0
 
-            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ) từ map
+            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ) từ map (N-21: xóa bỏ hằng số bịa 50/20/60)
             param = param_map.get(item_id)
-
-            rop = float(param.reorder_point) if param else 50.0
-            safety_stock = float(param.safety_stock) if param else 20.0
-            eoq = float(param.eoq) if param else 60.0
-            s_level = float(param.s) if (param and param.s is not None) else rop
-            has_explicit_S = param is not None and param.S is not None
-            S_level = float(param.S) if has_explicit_S else (s_level + eoq)
-            policy_name = param.model_run_id if (param and param.model_run_id) else "REFIT-RSS-EOQ-G"
+            if not param:
+                # Fallback tính toán tham số khoa học động theo mô hình A3 nếu chưa có trong DB
+                cfg = optimization_service.get_service_level_config(db)
+                tau = optimization_service._resolve_service_level(cfg, item_id, prod.cat_id)
+                lt = optimization_service._resolve_lead_time(db, item_id)
+                calculated = optimization_service._calculate_static_params(db, item_id, store_id, lt, tau)
+                rop = float(calculated["reorder_point"])
+                safety_stock = float(calculated["safety_stock"])
+                eoq = float(calculated["eoq"])
+                s_level = float(calculated["s"])
+                S_level = float(calculated["S"])
+                policy_name = calculated.get("model_run_id", "static-moving-avg")
+            else:
+                rop = float(param.reorder_point)
+                safety_stock = float(param.safety_stock)
+                eoq = float(param.eoq)
+                s_level = float(param.s) if param.s is not None else rop
+                has_explicit_S = param.S is not None
+                S_level = float(param.S) if has_explicit_S else (s_level + eoq)
+                policy_name = param.model_run_id if param.model_run_id else "REFIT-RSS-EOQ-G"
 
             # Vị trí tồn kho IP = On_hand + On_order
             ip = on_hand + on_order

@@ -404,3 +404,42 @@ class TestReplenishmentEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.viewer_token}"},
         )
         self.assertEqual(res_viewer.status_code, 403)
+
+    def test_auto_recompute_parameters_when_missing_no_fake_constants(self):
+        # UC33/N-21: When InventoryParam is missing, automatically recompute parameters instead of fake ROP 50 / SS 20 / EOQ 60
+        from app.services.replenishment_service import replenishment_service
+        with self.TestingSessionLocal() as session:
+            p3 = Product(item_id="HOUSEHOLD_1_001", name="Kitchen Towel", dept_id="HOUSEHOLD_1", cat_id="HOUSEHOLD", price=25.0)
+            inv3 = Inventory(item_id="HOUSEHOLD_1_001", store_id="CA_1", on_hand=0.0, on_order=0.0, updated_at=datetime.now(timezone.utc))
+            session.add_all([p3, inv3])
+            session.commit()
+
+            # Ensure NO InventoryParam exists for HOUSEHOLD_1_001 initially
+            param_before = session.query(InventoryParam).filter(
+                InventoryParam.store_id == "CA_1", InventoryParam.item_id == "HOUSEHOLD_1_001"
+            ).first()
+            self.assertIsNone(param_before)
+
+            # Generate recommendations
+            count = replenishment_service.generate_recommendations(session, store_id="CA_1")
+            self.assertGreaterEqual(count, 1)
+
+            # Assert InventoryParam was automatically computed and persisted
+            param_after = session.query(InventoryParam).filter(
+                InventoryParam.store_id == "CA_1", InventoryParam.item_id == "HOUSEHOLD_1_001"
+            ).first()
+            self.assertIsNotNone(param_after)
+            # Verify parameters are scientifically calculated and NOT the old fake constants (50/20/60)
+            self.assertNotEqual((param_after.reorder_point, param_after.safety_stock, param_after.eoq), (50.0, 20.0, 60.0))
+            self.assertGreater(param_after.reorder_point, 0.0)
+            self.assertGreater(param_after.eoq, 0.0)
+
+            # Verify recommendation was created for this SKU
+            rec = session.query(ReplenishmentRecommendation).filter(
+                ReplenishmentRecommendation.store_id == "CA_1",
+                ReplenishmentRecommendation.item_id == "HOUSEHOLD_1_001",
+            ).first()
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.priority, "CRITICAL")
+            self.assertGreater(rec.recommended_qty, 0.0)
+            self.assertNotEqual(rec.recommended_qty, 60.0)
