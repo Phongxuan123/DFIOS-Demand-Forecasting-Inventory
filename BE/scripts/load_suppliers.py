@@ -52,28 +52,34 @@ suppliers = [
 ]
 
 with Session() as session:
-    existing = session.query(Supplier).all()
-    if existing:
-        for idx, s in enumerate(existing):
-            if idx < len(suppliers):
-                s.name = suppliers[idx]["name"]
-                s.lead_time_days = suppliers[idx]["lead_time_days"]
-                s.contact_name = suppliers[idx]["contact_name"]
-                s.email = suppliers[idx]["email"]
-                s.phone = suppliers[idx]["phone"]
-                s.address = suppliers[idx]["address"]
-        session.commit()
-        print(f"Updated {len(existing)} suppliers with contact info!")
-    else:
-        for s in suppliers:
+    # B-18: Upsert theo khóa tự nhiên (email hoặc name) để tránh tráo dữ liệu nhà cung cấp khi query không ORDER BY
+    existing_by_email = {s.email: s for s in session.query(Supplier).all() if s.email}
+    existing_by_name = {s.name: s for s in session.query(Supplier).all() if s.name}
+
+    updated_count = 0
+    inserted_count = 0
+
+    for s_data in suppliers:
+        target = existing_by_email.get(s_data["email"]) or existing_by_name.get(s_data["name"])
+        if target:
+            target.name = s_data["name"]
+            target.lead_time_days = s_data["lead_time_days"]
+            target.contact_name = s_data["contact_name"]
+            target.email = s_data["email"]
+            target.phone = s_data["phone"]
+            target.address = s_data["address"]
+            updated_count += 1
+        else:
             session.add(Supplier(
                 id=str(uuid.uuid4()),
-                name=s["name"],
-                lead_time_days=s["lead_time_days"],
-                contact_name=s["contact_name"],
-                email=s["email"],
-                phone=s["phone"],
-                address=s["address"],
+                name=s_data["name"],
+                lead_time_days=s_data["lead_time_days"],
+                contact_name=s_data["contact_name"],
+                email=s_data["email"],
+                phone=s_data["phone"],
+                address=s_data["address"],
             ))
-        session.commit()
-        print(f"Seeded {len(suppliers)} suppliers!")
+            inserted_count += 1
+
+    session.commit()
+    print(f"Synchronized suppliers: {updated_count} updated, {inserted_count} inserted!")
