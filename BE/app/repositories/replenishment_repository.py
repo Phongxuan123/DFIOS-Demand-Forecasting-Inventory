@@ -7,12 +7,11 @@ from app.models.replenishment import ReplenishmentRecommendation
 
 
 class ReplenishmentRepository:
-    def get(self, db: Session, rec_id: str) -> Optional[ReplenishmentRecommendation]:
-        return (
-            db.query(ReplenishmentRecommendation)
-            .filter(ReplenishmentRecommendation.id == rec_id)
-            .first()
-        )
+    def get(self, db: Session, rec_id: str, for_update: bool = False) -> Optional[ReplenishmentRecommendation]:
+        query = db.query(ReplenishmentRecommendation).filter(ReplenishmentRecommendation.id == rec_id)
+        if for_update:
+            query = query.with_for_update()
+        return query.first()
 
     def get_pending_by_sku_store(
         self, db: Session, item_id: str, store_id: str = "CA_1"

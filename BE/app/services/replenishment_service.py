@@ -327,7 +327,7 @@ class ReplenishmentService:
         UC34 - Điều chỉnh số lượng đặt hàng đề xuất (Warehouse Manager / Admin).
         Bắt buộc lý do, chỉ được sửa khi đơn ở trạng thái PENDING.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -377,7 +377,7 @@ class ReplenishmentService:
         Tự động tăng on_order tương ứng trong bảng inventory, kích hoạt SSE realtime.
         Không cho phép duyệt lần hai.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -418,6 +418,7 @@ class ReplenishmentService:
             background_tasks=background_tasks,
             user_email=user_email,
             ip_address=ip_address,
+            commit=False,
         )
 
         # 3. Ghi audit log
@@ -429,6 +430,7 @@ class ReplenishmentService:
             details=f"Phê duyệt đề xuất nhập hàng {rec_id} cho SKU {rec.item_id}: số lượng duyệt={rec.final_qty}, on_order ({current_on_order} -> {new_on_order})",
         )
         db.commit()
+        db.refresh(rec)
 
         return rec
 
@@ -444,7 +446,7 @@ class ReplenishmentService:
         UC36 - Từ chối đề xuất nhập hàng (PENDING -> REJECTED).
         Bắt buộc nhập lý do từ chối.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -493,7 +495,7 @@ class ReplenishmentService:
         UC36 - Hủy đề xuất đã duyệt (APPROVED -> CANCELLED) và hoàn trả on_order.
         Bắt buộc nhập lý do hủy.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -528,6 +530,7 @@ class ReplenishmentService:
             background_tasks=background_tasks,
             user_email=user_email,
             ip_address=ip_address,
+            commit=False,
         )
 
         # 2. Cập nhật trạng thái CANCELLED
@@ -546,6 +549,7 @@ class ReplenishmentService:
             details=f"Hủy đơn đặt hàng đã duyệt {rec_id} cho SKU {rec.item_id}: hoàn trả on_order ({current_on_order} -> {reverted_on_order}). Lý do: {reason}",
         )
         db.commit()
+        db.refresh(rec)
 
         return rec
 

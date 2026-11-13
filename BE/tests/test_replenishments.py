@@ -516,3 +516,35 @@ class TestReplenishmentEndpoints(unittest.TestCase):
         )
         self.assertEqual(res_rej.status_code, 200)
         self.assertEqual(res_rej.json()["status"], "REJECTED")
+
+    def test_r34_replenishment_atomic_approval_and_locking(self):
+        # R-34: Ensure approve_recommendation uses row locking and single atomic commit
+        with self.TestingSessionLocal() as session:
+            rec = ReplenishmentRecommendation(
+                id="rec-r34-lock",
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                recommended_qty=30.0,
+                final_qty=30.0,
+                priority="MEDIUM",
+                status="PENDING",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(rec)
+            session.commit()
+
+        # Approve recommendation
+        res_app = self.client.post(
+            "/api/v1/replenishments/rec-r34-lock/approve",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_app.status_code, 200)
+        self.assertEqual(res_app.json()["status"], "APPROVED")
+
+        # Second approval must be rejected with 400
+        res_app_again = self.client.post(
+            "/api/v1/replenishments/rec-r34-lock/approve",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_app_again.status_code, 400)
+        self.assertIn("đã được phê duyệt trước đó", res_app_again.json()["detail"])
