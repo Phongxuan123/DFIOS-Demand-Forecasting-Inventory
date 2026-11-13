@@ -451,7 +451,7 @@ export const ModelPerformance: React.FC = () => {
               </p>
             </div>
             <span className="mp-panel-tag font-mono">
-              Live Parity
+              FOODS_1_001 • Parity
             </span>
           </div>
 

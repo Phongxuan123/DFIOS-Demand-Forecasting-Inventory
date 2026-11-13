@@ -55,10 +55,10 @@ export interface LiveTrajectoryPoint {
 }
 
 export interface EffectiveRssMetrics {
-  reorderPointS: number;
-  orderUpToS: number;
-  safetyStock: number;
-  eoq: number;
+  reorderPointS: number | null;
+  orderUpToS: number | null;
+  safetyStock: number | null;
+  eoq: number | null;
   inventoryPosition: number;
   recommendedQty: number;
   policyApplied: string;
@@ -67,7 +67,7 @@ export interface EffectiveRssMetrics {
   source: string;
   kappa: number | null;
   serviceLevel: number;
-  stockoutRisk: number;
+  stockoutRisk: number | null;
 }
 
 export interface CalendarGridCell {
@@ -489,37 +489,51 @@ export function resolveEffectiveRssMetrics(row: {
       ? Number(row.inventory_position)
       : onHand + onOrder;
 
-  const explicitS = row.reorder_point_s ?? row.s ?? row.reorder_point ?? row.rop ?? 0;
-  const safetyStock = Math.max(0, Math.round(Number(row.safety_stock ?? Math.round(Number(explicitS) * 0.35))));
-  const reorderPointS = Math.max(0, Math.round(Number(explicitS)));
+  const explicitS = row.reorder_point_s ?? row.s ?? row.reorder_point ?? row.rop ?? null;
+  const explicitSs = row.safety_stock ?? null;
+  const safetyStock =
+    explicitSs != null && Number.isFinite(Number(explicitSs))
+      ? Math.max(0, Math.round(Number(explicitSs)))
+      : null;
+  const reorderPointS =
+    explicitS != null && Number.isFinite(Number(explicitS))
+      ? Math.max(0, Math.round(Number(explicitS)))
+      : null;
 
   const recQty = Math.max(0, Math.round(Number(row.final_qty ?? row.recommended_qty ?? 0)));
-  const eoq = Math.max(0, Math.round(Number(row.eoq_quantity ?? row.eoq ?? (recQty > 0 ? recQty : Math.max(12, Math.round(reorderPointS * 0.65))))));
+  const explicitEoq = row.eoq_quantity ?? row.eoq ?? null;
+  const eoq =
+    explicitEoq != null && Number.isFinite(Number(explicitEoq))
+      ? Math.max(0, Math.round(Number(explicitEoq)))
+      : recQty > 0
+        ? recQty
+        : null;
 
-  const explicitBigS = row.order_up_to_S ?? row.S;
+  const explicitBigS = row.order_up_to_S ?? row.S ?? null;
   const orderUpToS =
     explicitBigS != null && Number.isFinite(Number(explicitBigS)) && Number(explicitBigS) > 0
       ? Math.round(Number(explicitBigS))
-      : Math.max(
-          reorderPointS + Math.max(eoq, 1),
-          inventoryPosition + recQty
-        );
+      : reorderPointS != null && eoq != null
+        ? reorderPointS + eoq
+        : null;
 
   const kappa =
-    safetyStock > 0 && reorderPointS > safetyStock
-      ? Number(((safetyStock / Math.max(1, reorderPointS - safetyStock)) * 2.15).toFixed(2))
+    safetyStock != null && reorderPointS != null && safetyStock > 0 && reorderPointS > safetyStock && eoq != null && eoq > 0
+      ? Number(((reorderPointS - safetyStock) / eoq).toFixed(2))
       : null;
 
   const serviceLevel = Number(row.service_level ?? 0.95);
   const stockoutRisk =
-    inventoryPosition <= reorderPointS
+    reorderPointS != null && inventoryPosition <= reorderPointS && reorderPointS > 0
       ? Number(
           Math.min(
             98,
-            Math.max(12, Math.round(((reorderPointS - inventoryPosition) / Math.max(1, reorderPointS)) * 100))
+            Math.max(12, Math.round(((reorderPointS - inventoryPosition) / reorderPointS) * 100))
           ).toFixed(1)
         )
-      : Number(Math.max(0.5, (1 - serviceLevel) * 100 * 0.5).toFixed(1));
+      : reorderPointS != null
+        ? Number(Math.max(0.5, (1 - serviceLevel) * 100 * 0.5).toFixed(1))
+        : null;
 
   return {
     reorderPointS,

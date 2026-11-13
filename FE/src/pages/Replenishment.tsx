@@ -28,12 +28,12 @@ import { resolveEffectiveRssMetrics } from '../utils/dfiosAnalytics.ts';
 import './Replenishment.css';
 
 const formatQty = (val: number | string | null | undefined, locale: string = 'en-US'): string => {
-  if (val == null || isNaN(Number(val))) return '0';
+  if (val == null || isNaN(Number(val))) return '—';
   return Math.round(Number(val)).toLocaleString(locale);
 };
 
 const formatDecimal = (val: number | string | null | undefined, digits: number = 1, locale: string = 'en-US'): string => {
-  if (val == null || isNaN(Number(val))) return '0';
+  if (val == null || isNaN(Number(val))) return '—';
   return Number(val).toLocaleString(locale, {
     minimumFractionDigits: 0,
     maximumFractionDigits: digits,
@@ -77,10 +77,10 @@ const computeRssMetrics = (row: any) => {
   const ip = Math.round(resolved.inventoryPosition);
   const s = resolved.reorderPointS;
   const bigS = resolved.orderUpToS;
-  const eoq = Math.max(1, resolved.eoq);
+  const eoq = resolved.eoq;
   const ss = resolved.safetyStock;
-  const isTriggered = ip <= s;
-  const computedOrderQty = isTriggered ? Math.max(0, bigS - ip) : 0;
+  const isTriggered = s != null ? ip <= s : false;
+  const computedOrderQty = isTriggered && bigS != null ? Math.max(0, bigS - ip) : 0;
   const recommendedQty = resolved.recommendedQty > 0 ? resolved.recommendedQty : computedOrderQty;
   const finalQty = Math.round(Number(row.final_qty ?? recommendedQty));
 
@@ -1537,7 +1537,7 @@ export const Replenishment: React.FC = () => {
                     : isVi
                     ? 'An toàn'
                     : 'Healthy';
-                  const fillPct = m.bigS > 0 ? Math.min(100, Math.max(0, Math.round((m.ip / m.bigS) * 100))) : 0;
+                  const fillPct = m.bigS != null && m.bigS > 0 ? Math.min(100, Math.max(0, Math.round((m.ip / m.bigS) * 100))) : 0;
                   const isFlashing = flashingRowKey === `inv:${item.item_id}`;
 
                   return (

@@ -144,7 +144,14 @@ export const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
 
   // Task FE.1 — Simulation Clock & Pipeline Replay State
-  const [simOffsetDays, setSimOffsetDays] = useState<number>(0);
+  const [simOffsetDays, setSimOffsetDays] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? sessionStorage.getItem('dfios_sim_offset') : null;
+      return saved ? Number(saved) : 0;
+    } catch {
+      return 0;
+    }
+  });
   const [simMode, setSimMode] = useState<'replay' | 'live'>('replay');
   const [isRunningPipeline, setIsRunningPipeline] = useState<boolean>(false);
   const [lastPipelineRunAt, setLastPipelineRunAt] = useState<string>('06:00 UTC');
@@ -324,7 +331,10 @@ export const Dashboard: React.FC = () => {
       });
 
       setSimOffsetDays(nextOffset);
-      setLastPipelineRunAt(`${new Date().toTimeString().slice(0, 5)} UTC`);
+      try {
+        sessionStorage.setItem('dfios_sim_offset', String(nextOffset));
+      } catch {}
+      setLastPipelineRunAt(`${new Date().toISOString().slice(11, 16)} UTC`);
       setScanBanner({
         type: 'success',
         message: isVi
