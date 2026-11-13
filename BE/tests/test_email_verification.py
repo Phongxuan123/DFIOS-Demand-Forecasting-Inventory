@@ -377,6 +377,63 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
         self.assertEqual(res_blocked.status_code, 429)
         self.assertIn("10 lần trong 5 phút", res_blocked.json()["detail"])
 
+    # 8. Kiểm tra B-13 & R-24: Khóa user hủy toàn bộ token, chặn tự mở khóa, và check pass trước khi trả 403
+    def test_locked_user_token_revocation_and_password_checked_before_status(self):
+        # 1. Tạo token kích hoạt cho user-01 (Sarah Jenkins)
+        with self.TestingSessionLocal() as session:
+            tok_rec, raw_tok = email_token_service.create_token(session, user_id="user-01", purpose="activate")
+            session.commit()
+            self.assertIsNone(tok_rec.used_at)
+
+        # 2. Thử đăng nhập user-01 với mật khẩu SAI khi user còn active -> 401
+        res_wrong_pw = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "BadPassword999"},
+        )
+        self.assertEqual(res_wrong_pw.status_code, 401)
+
+        # 3. Admin khóa tài khoản user-01 (is_active = False)
+        lock_res = self.client.put(
+            "/api/v1/users/user-01",
+            json={"is_active": False},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(lock_res.status_code, 200)
+        self.assertFalse(lock_res.json()["is_active"])
+
+        # 4. Xác nhận token kích hoạt của user-01 đã tự động bị revoke khi khóa (B-13)
+        with self.TestingSessionLocal() as session:
+            refreshed_tok = session.query(EmailToken).filter(EmailToken.user_id == "user-01").first()
+            self.assertIsNotNone(refreshed_tok.used_at)
+
+        # 5. R-24: Thử đăng nhập user bị khóa với mật khẩu SAI -> VẪN TRẢ 401 (chống account enumeration)
+        res_locked_wrong_pw = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "BadPassword999"},
+        )
+        self.assertEqual(res_locked_wrong_pw.status_code, 401)
+        self.assertIn("Email hoặc mật khẩu không chính xác", res_locked_wrong_pw.json()["detail"])
+
+        # 6. R-24: Đăng nhập user bị khóa với mật khẩu ĐÚNG -> trả 403 Forbidden
+        res_locked_correct_pw = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+        )
+        self.assertEqual(res_locked_correct_pw.status_code, 403)
+        self.assertIn("vô hiệu hóa", res_locked_correct_pw.json()["detail"])
+
+        # 7. B-13: Tạo token activate thủ công cho user bị khóa và thử kích hoạt -> BỊ CHẶN 403
+        with self.TestingSessionLocal() as session:
+            tok_rec_2, raw_tok_2 = email_token_service.create_token(session, user_id="user-01", purpose="activate")
+            session.commit()
+
+        res_activate_blocked = self.client.post(
+            "/api/v1/auth/activate",
+            json={"token": raw_tok_2, "password": "NewSecretPassword123"},
+        )
+        self.assertEqual(res_activate_blocked.status_code, 403)
+        self.assertIn("đã bị quản trị viên khóa", res_activate_blocked.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

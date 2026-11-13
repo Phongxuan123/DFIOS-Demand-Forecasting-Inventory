@@ -117,6 +117,22 @@ class EmailTokenService:
         return token_record, raw_token
 
     @classmethod
+    def revoke_all_user_tokens(cls, db: Session, user_id: str) -> int:
+        """
+        Vô hiệu hóa toàn bộ token còn hiệu lực của user khi user bị khóa/vô hiệu hóa (B-13).
+        """
+        now = datetime.now(timezone.utc)
+        count = (
+            db.query(EmailToken)
+            .filter(
+                EmailToken.user_id == user_id,
+                EmailToken.used_at.is_(None),
+            )
+            .update({"used_at": now}, synchronize_session=False)
+        )
+        return count
+
+    @classmethod
     def consume_token(
         cls,
         db: Session,

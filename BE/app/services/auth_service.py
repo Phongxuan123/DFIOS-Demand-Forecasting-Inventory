@@ -57,18 +57,26 @@ class AuthService:
                 detail="Email hoặc mật khẩu không chính xác",
             )
 
-        # Kiểm tra tài khoản có bị vô hiệu hóa hoặc chưa kích hoạt không
-        if not getattr(user, "is_active", True):
+        # Nếu tài khoản chưa kích hoạt lần đầu (chưa verify), thông báo cần kích hoạt qua link email
+        if not getattr(user, "is_verified", True):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
             )
 
+        # Với tài khoản đã xác thực: kiểm tra mật khẩu TRƯỚC khi kiểm tra trạng thái active (chống account enumeration và leak trạng thái user, R-24 & B-13)
         if not verify_password(login_data.password, user.password_hash):
             rate_limiter.record_attempt(rate_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
+            )
+
+        # Kiểm tra tài khoản có bị vô hiệu hóa không (chỉ trả 403 khi mật khẩu đã đúng)
+        if not getattr(user, "is_active", True):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
             )
 
         # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
@@ -117,6 +125,14 @@ class AuthService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Link không hợp lệ hoặc đã hết hạn",
+            )
+
+        # B-13: Nếu tài khoản đã xác thực trước đó nhưng bị quản trị viên khóa (is_active=False),
+        # chặn tuyệt đối không cho phép dùng link kích hoạt cũ để tự mở khóa tài khoản
+        if user.is_verified and not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tài khoản này đã bị quản trị viên khóa, không thể tự kích hoạt lại.",
             )
 
         user.password_hash = get_password_hash(request.password)
