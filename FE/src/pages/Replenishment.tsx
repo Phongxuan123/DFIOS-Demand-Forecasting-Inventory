@@ -709,11 +709,10 @@ export const Replenishment: React.FC = () => {
   };
 
   const handleBulkApprove = async () => {
-    const targetRecs =
+    const targetIds =
       selectedRecIds.length > 0
-        ? recommendations.filter((r) => selectedRecIds.includes(r.id))
-        : pendingItemsOnPage;
-    const targetIds = targetRecs.map((r) => r.id).filter(Boolean);
+        ? [...selectedRecIds]
+        : pendingItemsOnPage.map((r) => r.id).filter(Boolean);
     if (targetIds.length === 0) {
       showToast(isVi ? 'Chưa chọn đơn chờ duyệt nào.' : 'No pending orders selected.', 'error');
       return;
@@ -727,10 +726,11 @@ export const Replenishment: React.FC = () => {
 
     try {
       for (let i = 0; i < targetIds.length; i++) {
+        const recId = targetIds[i];
         try {
-          await api.replenishment.approve(targetIds[i]);
+          await api.replenishment.approve(recId);
           approvedOk++;
-          const recObj = targetRecs[i];
+          const recObj = recommendations.find((r) => r.id === recId);
           if (recObj?.item_id) {
             approvedItems.push({ itemId: recObj.item_id, storeId: recObj.store_id || selectedStore });
           }
@@ -740,7 +740,7 @@ export const Replenishment: React.FC = () => {
         setBulkProgress({ done: i + 1, total: targetIds.length });
       }
 
-      setSelectedRecIds([]);
+      setSelectedRecIds((prev) => prev.filter((id) => !targetIds.includes(id)));
       await loadRecommendations(selectedStore);
       if (approvedItems.length > 0) {
         emitAlertsSyncEvent({

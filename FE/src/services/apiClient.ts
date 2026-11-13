@@ -41,6 +41,16 @@ apiClient.interceptors.response.use(
         }
       }
     }
+    if (error.response && error.response.status === 403) {
+      if (typeof window !== 'undefined') {
+        const detail = error.response.data?.detail || 'Forbidden: Insufficient permissions for this action.';
+        window.dispatchEvent(
+          new CustomEvent('dfios:forbidden', {
+            detail: { message: detail },
+          })
+        );
+      }
+    }
     return Promise.reject(error);
   }
 );

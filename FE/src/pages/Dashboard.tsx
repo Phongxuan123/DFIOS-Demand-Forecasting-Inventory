@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bar,
@@ -200,7 +200,12 @@ export const Dashboard: React.FC = () => {
     };
   }, []);
 
+  const coreReqIdRef = useRef(0);
+  const trendReqIdRef = useRef(0);
+  const alertsReqIdRef = useRef(0);
+
   const fetchCoreDashboard = useCallback(async (storeId: string) => {
+    const reqId = ++coreReqIdRef.current;
     setIsLoadingCore(true);
     try {
       const storeParam = storeId || undefined;
@@ -210,19 +215,25 @@ export const Dashboard: React.FC = () => {
         isAdmin ? api.reports.getCostComparison({ store_id: storeParam }).catch(() => null) : Promise.resolve(null),
         isAdmin ? api.optimization.compareStatic(storeId || 'CA_1').catch(() => null) : Promise.resolve(null),
       ]);
+      if (reqId !== coreReqIdRef.current) return;
       if (kpisRes) setKpis(kpisRes);
       if (alertsRes) setOverviewAlerts(alertsRes);
       if (costRes) setCostComparisonRaw(costRes);
       if (staticRes) setStaticComparisonRaw(staticRes);
     } catch (err) {
-      console.error('Failed to load Dashboard KPIs & Alerts from Backend:', err);
+      if (reqId === coreReqIdRef.current) {
+        console.error('Failed to load Dashboard KPIs & Alerts from Backend:', err);
+      }
     } finally {
-      setIsLoadingCore(false);
+      if (reqId === coreReqIdRef.current) {
+        setIsLoadingCore(false);
+      }
     }
   }, [isAdmin]);
 
   const fetchDemandTrend = useCallback(
     async (storeId: string, category: string, days: number, granularity: string) => {
+      const reqId = ++trendReqIdRef.current;
       setIsLoadingTrend(true);
       try {
         const res = await api.dashboard.getDemandTrend({
@@ -231,11 +242,16 @@ export const Dashboard: React.FC = () => {
           days,
           granularity,
         });
+        if (reqId !== trendReqIdRef.current) return;
         if (res) setDemandTrend(res);
       } catch (err) {
-        console.error('Failed to load Demand Trend from Backend:', err);
+        if (reqId === trendReqIdRef.current) {
+          console.error('Failed to load Demand Trend from Backend:', err);
+        }
       } finally {
-        setIsLoadingTrend(false);
+        if (reqId === trendReqIdRef.current) {
+          setIsLoadingTrend(false);
+        }
       }
     },
     []
@@ -243,6 +259,7 @@ export const Dashboard: React.FC = () => {
 
   const fetchAlertsTable = useCallback(
     async (storeId: string, severity: string, offset: number) => {
+      const reqId = ++alertsReqIdRef.current;
       setIsLoadingTable(true);
       try {
         const res = await api.dashboard.getAlerts({
@@ -251,11 +268,16 @@ export const Dashboard: React.FC = () => {
           limit: ALERT_PAGE_SIZE,
           offset,
         });
+        if (reqId !== alertsReqIdRef.current) return;
         if (res) setTableAlerts(res);
       } catch (err) {
-        console.error('Failed to load Stock Alerts table from Backend:', err);
+        if (reqId === alertsReqIdRef.current) {
+          console.error('Failed to load Stock Alerts table from Backend:', err);
+        }
       } finally {
-        setIsLoadingTable(false);
+        if (reqId === alertsReqIdRef.current) {
+          setIsLoadingTable(false);
+        }
       }
     },
     []
