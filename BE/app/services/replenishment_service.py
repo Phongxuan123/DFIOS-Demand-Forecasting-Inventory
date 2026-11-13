@@ -102,11 +102,8 @@ class ReplenishmentService:
 
             # Điều kiện kích hoạt chính sách (R, s, S): IP < s hoặc IP <= ROP
             if ip < s_level or ip <= rop:
-                # Lượng đặt đề xuất: nếu có S tường minh thì q = S - IP; nếu baseline (s, Q) thì q = EOQ
-                if has_explicit_S:
-                    recommended_qty = max(1.0, round(S_level - ip, 0))
-                else:
-                    recommended_qty = max(1.0, round(eoq, 0))
+                # Lượng đặt đề xuất theo chính sách (R, s, S): q = S - IP
+                recommended_qty = max(1.0, round(S_level - ip, 0))
 
                 # Xác định mức độ ưu tiên
                 if on_hand <= 0:

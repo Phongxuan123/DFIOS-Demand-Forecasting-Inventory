@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Float, DateTime, SmallInteger, event
-from sqlalchemy.schema import Table
 from app.models.base import Base
 
 class InventoryParam(Base):
@@ -20,7 +19,6 @@ class InventoryParam(Base):
     unit_price = Column(Float, nullable=False, default=10.0)
     source = Column(String, nullable=False, default="ml")
 
-    # Extension fields for (R, s, S) and C3-OUT
     s = Column("s", Float, nullable=True)
     S = Column("S", Float, nullable=True)
     model_run_id = Column(String(100), nullable=True, default="c3out-calibrated")
@@ -32,20 +30,9 @@ class InventoryParam(Base):
         nullable=False,
     )
 
-# SQLite treats column names as case-insensitive, so having both "s" and "S" causes
-# "duplicate column name: S" during Base.metadata.create_all in SQLite unit tests.
-# This event listener temporarily removes "S" during SQLite table creation and restores it after.
-_sqlite_temp_cols = {}
-
-@event.listens_for(Table, "before_create")
-def _sqlite_case_insensitivity_workaround(target, connection, **kw):
-    if connection.dialect.name == "sqlite" and target.name == "inventory_params":
-        if "S" in target.columns:
-            col = target.columns["S"]
-            _sqlite_temp_cols[target.name] = col
-            target._columns.remove(col)
-
-@event.listens_for(Table, "after_create")
-def _sqlite_case_insensitivity_restore(target, connection, **kw):
-    if connection.dialect.name == "sqlite" and target.name in _sqlite_temp_cols:
-        target._columns.add(_sqlite_temp_cols.pop(target.name))
+@event.listens_for(InventoryParam.__table__, "before_create")
+def _adapt_inventory_param_columns_for_sqlite(target, connection, **kw):
+    if connection.dialect.name == "sqlite":
+        for col in target.columns:
+            if col.key == "S":
+                col.name = "order_up_to_S"
