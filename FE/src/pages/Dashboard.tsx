@@ -37,7 +37,6 @@ import {
   Scale,
   ShieldAlert,
   ShieldCheck,
-  Store,
   TrendingDown,
   TrendingUp,
   Truck,
@@ -151,11 +150,10 @@ export const Dashboard: React.FC = () => {
   const [lastPipelineRunAt, setLastPipelineRunAt] = useState<string>('06:00 UTC');
 
   // Dynamic Backend filter metadata
-  const [stores, setStores] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
 
   // Backend query parameters
-  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const selectedStore = 'CA_1';
   const [trendCategory, setTrendCategory] = useState<string>('');
   const [trendDays, setTrendDays] = useState<number>(30);
   const [trendGranularity, setTrendGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -184,15 +182,8 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      api.inventory.getStores().catch(() => []),
-      api.products.getCategories().catch(() => []),
-    ]).then(([storeList, categoryList]) => {
+    api.products.getCategories().catch(() => []).then((categoryList) => {
       if (!active) return;
-      if (Array.isArray(storeList)) {
-        const cleaned = storeList.filter(Boolean);
-        setStores(cleaned.length > 0 ? cleaned : ['CA_1']);
-      }
       if (Array.isArray(categoryList)) {
         setCategories(categoryList.filter(Boolean));
       }
@@ -296,11 +287,6 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     fetchAlertsTable(selectedStore, alertSeverity, alertOffset);
   }, [selectedStore, alertSeverity, alertOffset, fetchAlertsTable]);
-
-  const handleStoreChange = (nextStore: string) => {
-    setSelectedStore(nextStore);
-    setAlertOffset(0);
-  };
 
   const handleSeverityChange = (nextSeverity: string) => {
     setAlertSeverity(nextSeverity);
@@ -1301,23 +1287,6 @@ export const Dashboard: React.FC = () => {
         </div>
 
         <div className="dash-actions-group">
-          <div className="dash-store-control">
-            <Store size={14} className="dash-store-icon" />
-            <span className="dash-store-label">{t('dashboard.store_label', 'Store:')}</span>
-            <select
-              className="dash-store-select"
-              value={selectedStore}
-              onChange={(e) => handleStoreChange(e.target.value)}
-              aria-label="Select store scope"
-            >
-              {(stores.length > 0 ? stores : ['CA_1']).map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <button
             type="button"
             className="dash-refresh-btn"

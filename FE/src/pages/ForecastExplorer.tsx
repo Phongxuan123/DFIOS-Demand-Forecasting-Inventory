@@ -141,7 +141,6 @@ export const ForecastExplorer: React.FC = () => {
   const [skuSearch, setSkuSearch] = useState(searchParams.get('sku') || '');
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [stores, setStores] = useState<string[]>([]);
   const [selectedStore, setSelectedStore] = useState(searchParams.get('store') || 'CA_1');
   const [horizon, setHorizon] = useState<number>(28);
   const [selectedEngine, setSelectedEngine] = useState('LightGBM');
@@ -355,13 +354,11 @@ export const ForecastExplorer: React.FC = () => {
   useEffect(() => {
     const initFilters = async () => {
       try {
-        const [catList, storeList, prodRes] = await Promise.all([
+        const [catList, prodRes] = await Promise.all([
           api.products.getCategories().catch(() => []),
-          api.inventory.getStores().catch(() => []),
           api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
         ]);
         if (catList && catList.length) setCategories(catList);
-        if (storeList && storeList.length) setStores(storeList);
         const pList = prodRes?.list || [];
         if (pList.length) setProducts(pList);
       } catch (e) {
@@ -382,13 +379,6 @@ export const ForecastExplorer: React.FC = () => {
     setHorizon(newH);
     setMatrixPageSize(newH);
     fetchForecast(skuSearch, newH, selectedStore);
-  };
-
-  const handleStoreChange = (newStore: string) => {
-    const nextStore = newStore || 'CA_1';
-    setSelectedStore(nextStore);
-    syncUrlParams(skuSearch || 'FOODS_1_001', nextStore);
-    fetchForecast(skuSearch, horizon, nextStore);
   };
 
   const handleCategoryChange = (newCat: string) => {
@@ -863,22 +853,6 @@ export const ForecastExplorer: React.FC = () => {
                 {categories.map((c) => (
                   <option key={c} value={c}>
                     {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="filter-item">
-              <label className="filter-label">{isVi ? 'Chi Nhánh / Kho Hàng' : 'Location / Store'}</label>
-              <select
-                className="filter-select"
-                value={selectedStore}
-                onChange={(e) => handleStoreChange(e.target.value)}
-              >
-                <option value="">{isVi ? 'Tất cả kho hàng' : 'All Warehouses'}</option>
-                {stores.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
                   </option>
                 ))}
               </select>

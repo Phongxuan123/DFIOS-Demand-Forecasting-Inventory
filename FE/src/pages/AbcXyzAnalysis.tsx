@@ -44,7 +44,20 @@ import {
 import { Pagination } from '../components/ui/Pagination.tsx';
 import './AbcXyzAnalysis.css';
 
-// Segment-Level C³-OUT & REFIT-RSS-EOQ-G Parameters from research.md
+interface TrajectoryPointItem {
+  cycle: string;
+  k: number;
+  availability: number;
+  target: number;
+  theta: number;
+  phase: string;
+  reviewDate?: string;
+  multiplier?: number;
+  errorRate?: number;
+  atBoundary?: boolean;
+  eta?: number;
+}
+
 interface SegmentC3Profile {
   segment: string;
   labelEn: string;
@@ -352,9 +365,7 @@ export const AbcXyzAnalysis: React.FC = () => {
   const [sortBy, setSortBy] = useState('revenue');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  // Task FE.10: C³-OUT Store & Trajectory Scenario State
-  const [stores, setStores] = useState<string[]>(['CA_1']);
-  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const selectedStore = 'CA_1';
   const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatusResponse | null>(null);
   const [calibrationHistory, setCalibrationHistory] = useState<CalibrationStateItem[]>([]);
   const [refittedPolicies, setRefittedPolicies] = useState<PolicySelectionItem[]>([]);
@@ -410,7 +421,7 @@ export const AbcXyzAnalysis: React.FC = () => {
     const activeStore = storeIdParam || selectedStore || 'CA_1';
     setIsLoading(true);
     try {
-      const [matrixRes, threshRes, skusRes, catList, storeList, slRes, axRec, calStatusRes, calHistoryRes] = await Promise.all([
+      const [matrixRes, threshRes, skusRes, catList, slRes, axRec, calStatusRes, calHistoryRes] = await Promise.all([
         api.classification.getMatrix().catch(() => null),
         api.classification.getThresholds().catch(() => null),
         api.classification
@@ -425,7 +436,6 @@ export const AbcXyzAnalysis: React.FC = () => {
           })
           .catch(() => ({ list: [], total: 0 })),
         api.products.getCategories().catch(() => ['FOODS', 'HOBBIES', 'HOUSEHOLD']),
-        api.inventory.getStores().catch(() => ['CA_1']),
         canManage ? api.optimization.getServiceLevel().catch(() => null) : Promise.resolve(null),
         canManage ? api.classification.getRecommendation('AX').catch(() => null) : Promise.resolve(null),
         canManage ? api.calibration.getStatus(activeStore).catch(() => null) : Promise.resolve(null),
@@ -443,9 +453,6 @@ export const AbcXyzAnalysis: React.FC = () => {
           cv_x: threshRes.cv_x ?? 0.5,
           cv_y: threshRes.cv_y ?? 1.0,
         });
-      }
-      if (Array.isArray(storeList) && storeList.length > 0) {
-        setStores(storeList);
       }
       if (slRes) {
         setServiceLevelConfig(slRes);
@@ -560,13 +567,6 @@ export const AbcXyzAnalysis: React.FC = () => {
       setSelectedAbc('All');
       setSelectedXyz('All');
     }
-  };
-
-  const handleStoreChange = async (newStore: string) => {
-    setSelectedStore(newStore);
-    setRefittedPolicies([]);
-    setPolicySelectionId(null);
-    await loadCalibrationForStore(newStore);
   };
 
   const handleRunCalibrationStep = async () => {
@@ -817,8 +817,7 @@ export const AbcXyzAnalysis: React.FC = () => {
     [calibrationHistory, activePolicyCode, isVi]
   );
 
-  // Task FE.10: Build Closed-Loop Trajectory Data (Live BE History OR Benchmark Modes)
-  const trajectoryData = useMemo(() => {
+  const trajectoryData = useMemo<TrajectoryPointItem[]>(() => {
     if (trajectoryScenario === 'LIVE') {
       return liveTrajectoryPoints;
     }
@@ -874,7 +873,7 @@ export const AbcXyzAnalysis: React.FC = () => {
     const first = trajectoryData[0];
     const last = trajectoryData[trajectoryData.length - 1];
     const minAvail = trajectoryData.reduce(
-      (min, pt) => (pt.availability < min ? pt.availability : min),
+      (min: number, pt: TrajectoryPointItem) => (pt.availability < min ? pt.availability : min),
       first.availability
     );
     const recoveryIdx = trajectoryScenario === 'SHOCK_E9C' ? Math.min(5, trajectoryData.length - 1) : trajectoryData.length - 1;
@@ -1072,20 +1071,6 @@ export const AbcXyzAnalysis: React.FC = () => {
             </div>
 
             <div className="abc-subnav-meta">
-              {canManage && (
-                <select
-                  aria-label={isVi ? 'Chọn cửa hàng C³-OUT' : 'Select Store for C³-OUT'}
-                  className="c3-store-select"
-                  value={selectedStore}
-                  onChange={(e) => handleStoreChange(e.target.value)}
-                >
-                  {stores.map((st) => (
-                    <option key={st} value={st}>
-                      {st}
-                    </option>
-                  ))}
-                </select>
-              )}
               <span className="abc-subnav-pill">
                 {activePolicyCode} • τ={activeTau}% • θ={activeProfile.theta.toFixed(2)} • m={activeProfile.mParam.toFixed(2)}×
               </span>
