@@ -240,7 +240,7 @@ class ReportsRepository:
         db: Session,
         store_id: Optional[str] = None,
         category: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
         """
@@ -315,7 +315,7 @@ class ReportsRepository:
         avg_turnover = round(turnover_sum / count, 2) if count > 0 else 0.0
         avg_dos = round(dos_sum / count, 1) if count > 0 else 0.0
 
-        paginated = item_list[offset : offset + limit]
+        paginated = item_list[offset : offset + limit] if limit is not None else item_list[offset:]
 
         return {
             "store_id": store_id or "All",

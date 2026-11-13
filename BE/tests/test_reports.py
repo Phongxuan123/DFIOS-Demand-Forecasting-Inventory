@@ -357,6 +357,18 @@ class TestReportsEndpoints(unittest.TestCase):
         # Category savings dictionary must contain keys
         self.assertIn("FOODS", data_cost["category_savings"])
 
+    def test_b15_export_inventory_no_truncation(self):
+        # B-15: Verify get_inventory_performance with limit=None returns all items without truncation
+        from app.services.reports_service import reports_service
+        with self.TestingSessionLocal() as session:
+            resp = reports_service.get_inventory_performance(
+                db=session,
+                store_id="CA_1",
+                limit=None,
+            )
+            self.assertGreaterEqual(resp.total, 1)
+            self.assertEqual(len(resp.items), resp.total)
+
 
 if __name__ == "__main__":
     unittest.main()

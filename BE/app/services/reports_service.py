@@ -54,7 +54,7 @@ class ReportsService:
         db: Session,
         store_id: Optional[str] = None,
         category: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> InventoryPerformanceReportResponse:
         """
@@ -140,7 +140,7 @@ class ReportsService:
                 write_sanitized_row([f"Class {grp}", m.mae, m.rmse, m.mase, m.wrmsse, m.sample_count])
 
         elif rtype in ("inventory", "inventory-performance"):
-            rep = self.get_inventory_performance(db, store_id=store_id, limit=5000)
+            rep = self.get_inventory_performance(db, store_id=store_id, limit=None)
             filename = f"Inventory_Performance_Report_{timestamp}.csv"
             write_sanitized_row(["SKU_ID", "PRODUCT_NAME", "CATEGORY", "STORE", "ON_HAND", "DAILY_DEMAND", "DAYS_OF_SUPPLY", "INVENTORY_VALUE", "TURNOVER_RATIO"])
             for it in rep.items:
