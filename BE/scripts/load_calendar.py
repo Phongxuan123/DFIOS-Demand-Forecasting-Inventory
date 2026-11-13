@@ -8,28 +8,13 @@ import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import text
 from app.core.database import engine
+from app.models.base import Base
+from app.models.calendar import Calendar
 
 load_dotenv(os.path.join(SCRIPT_DIR, "..", ".env"))
 
-with engine.begin() as conn:
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS calendar (
-            date DATE PRIMARY KEY,
-            wm_yr_wk INTEGER,
-            weekday VARCHAR(20),
-            wday INTEGER,
-            month INTEGER,
-            year INTEGER,
-            d VARCHAR(20),
-            event_name_1 VARCHAR(100),
-            event_type_1 VARCHAR(50),
-            event_name_2 VARCHAR(100),
-            event_type_2 VARCHAR(50),
-            snap_CA INTEGER DEFAULT 0,
-            snap_TX INTEGER DEFAULT 0,
-            snap_WI INTEGER DEFAULT 0
-        );
-    """))
+# B-17: Đồng bộ DDL với ORM schema (bỏ raw DDL tay gây lệch casing snap_CA vs snap_ca trong PostgreSQL)
+Base.metadata.create_all(engine, tables=[Calendar.__table__])
 
 CALENDAR_PATH = os.getenv("M5_CALENDAR_CSV_PATH")
 if not CALENDAR_PATH or not os.path.exists(CALENDAR_PATH):
