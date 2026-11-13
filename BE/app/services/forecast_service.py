@@ -443,8 +443,8 @@ class ForecastService:
             if fc.forecast_date in sales_map:
                 residuals.append(round(sales_map[fc.forecast_date] - fc.y_pred, 2))
 
-        # Phân bố sai số (Error distribution): ưu tiên residual thật (y - y_hat); nếu chưa có thực tế thì dùng độ rộng khoảng tin cậy (p90 - p10)
-        eval_metrics = residuals if len(residuals) >= 3 else spreads
+        # UC22: Phân bố độ rộng khoảng bất định dự báo (p90 - p10)
+        eval_metrics = spreads
         err_dist: Optional[ErrorDistribution] = None
         if eval_metrics:
             sorted_vals = sorted(eval_metrics)

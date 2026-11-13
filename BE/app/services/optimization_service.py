@@ -37,10 +37,14 @@ from app.schemas.optimization import (
 
 class OptimizationService:
     SETTINGS_KEY = "target_service_level_config"
-    DEFAULT_HOLDING_COST = 2.0
-    DEFAULT_ORDER_COST = 50.0
-    DEFAULT_LEAD_TIME = 7
-    DEFAULT_REVIEW_PERIOD = 7
+    # Giả định chi phí chuẩn A3 (research.md §3)
+    ORDER_COST_C = 2.0  # c = 2 đơn vị tiền mỗi dòng đơn (A3)
+    HOLDING_RATE_DAILY = 0.002  # h = 0.2% giá/đơn vị/ngày => h_annual = 0.73 * unit_price (A3)
+    STOCKOUT_PENALTY_RATE = 0.35  # b = 35% giá/đơn vị (A3)
+    DEFAULT_HOLDING_COST = 2.5  # Tham chiếu trung bình khi thiếu giá
+    DEFAULT_ORDER_COST = 2.0  # c = 2.0 (A3)
+    DEFAULT_LEAD_TIME = 3  # L = 3 ngày (research.md §3)
+    DEFAULT_REVIEW_PERIOD = 7  # R = 7 ngày => H = L + R = 10 ngày (research.md §3)
 
     DEFAULT_OPTIMAL_POLICIES = {
         "AX": {"m_g": 0.091, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
@@ -190,7 +194,7 @@ class OptimizationService:
             .first()
         ) is not None
 
-        if not has_forecast and not has_sales:
+        if not has_forecast:
             return None
 
         # 1. Xác định phân nhóm ABC-XYZ của SKU
@@ -257,14 +261,15 @@ class OptimizationService:
         else:
             mean_demand = max(0.1, q_hat / max(1, horizon_days))
 
-        # 7. Thông tin đơn giá và chi phí
+        # 7. Thông tin đơn giá và chi phí theo Giả định A3 (research.md §3)
         prod = db.query(Product).filter(Product.item_id == item_id).first()
         unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
-        h_cost = self.DEFAULT_HOLDING_COST
-        s_cost = self.DEFAULT_ORDER_COST
+        # Lưu kho năm h_annual = 0.2% * unit_price * 365 = 0.73 * unit_price
+        h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
+        s_cost = self.ORDER_COST_C  # c = 2.0 mỗi dòng đơn (A3)
         annual_demand = max(1.0, round(mean_demand * 365, 2))
 
-        # 8. Lô kinh tế EOQ: sqrt( 2 * c * D / h )
+        # 8. Lô kinh tế EOQ chuẩn tắc: sqrt( 2 * c * D / h )
         eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 1))
 
         # 9. Mức trần Order-Up-To: S = s + ceil( kappa_g * EOQ )
@@ -334,16 +339,16 @@ class OptimizationService:
         safety_stock = max(0.0, round(z_tau * sigma_l, 2))
         reorder_point = max(0.0, round(d_l + safety_stock, 2))
 
+        prod = db.query(Product).filter(Product.item_id == item_id).first()
+        unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
+
         annual_demand = max(1.0, round(avg_daily * 365, 2))
-        h_cost = self.DEFAULT_HOLDING_COST
-        s_cost = self.DEFAULT_ORDER_COST
-        eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 2))
+        h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
+        s_cost = self.ORDER_COST_C
+        eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 1))
 
         s_val = float(math.ceil(reorder_point))
         S_val = float(s_val + math.ceil(eoq))
-
-        prod = db.query(Product).filter(Product.item_id == item_id).first()
-        unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
 
         return {
             "safety_stock": safety_stock,
@@ -497,21 +502,40 @@ class OptimizationService:
         """
         # Tối ưu hóa hiệu năng: Bulk query tránh N+1 (giảm từ 297s xuống < 0.2s)
         params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+        if not params:
+            self.recompute_parameters(db, store_id=store_id)
+            params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
         products = db.query(Product).all()
         prod_map = {p.item_id: p for p in products}
 
         # Bulk query thống kê bán hàng theo SKU
-        sales_stats = (
-            db.query(
-                SalesHistory.item_id,
-                func.avg(SalesHistory.quantity).label("avg_qty"),
-                func.stddev_pop(SalesHistory.quantity).label("std_qty"),
+        is_sqlite = db.bind.dialect.name == "sqlite" if db.bind else False
+        if is_sqlite:
+            from collections import defaultdict
+            sales_rows = (
+                db.query(SalesHistory.item_id, SalesHistory.quantity)
+                .filter(SalesHistory.store_id == store_id)
+                .all()
             )
-            .filter(SalesHistory.store_id == store_id)
-            .group_by(SalesHistory.item_id)
-            .all()
-        )
-        stats_map = {r[0]: (float(r[1] or 5.0), float(r[2] or 1.0)) for r in sales_stats}
+            grouped = defaultdict(list)
+            for item_id_val, qty_val in sales_rows:
+                grouped[item_id_val].append(float(qty_val or 0.0))
+            stats_map = {}
+            for item_id_val, q_list in grouped.items():
+                arr = np.array(q_list)
+                stats_map[item_id_val] = (float(np.mean(arr)), float(np.std(arr)))
+        else:
+            sales_stats = (
+                db.query(
+                    SalesHistory.item_id,
+                    func.avg(SalesHistory.quantity).label("avg_qty"),
+                    func.stddev_pop(SalesHistory.quantity).label("std_qty"),
+                )
+                .filter(SalesHistory.store_id == store_id)
+                .group_by(SalesHistory.item_id)
+                .all()
+            )
+            stats_map = {r[0]: (float(r[1] or 5.0), float(r[2] or 1.0)) for r in sales_stats}
 
         items: List[CompareParamItem] = []
         total_savings = 0.0
@@ -784,11 +808,17 @@ class OptimizationService:
                 selected_service = round(min(0.999, target_availability + 0.01), 3)
                 
                 # Ước tính chi phí vận hành (Holding + Ordering) theo giả định A3
+                avg_unit_price = (
+                    db.query(func.avg(Product.price))
+                    .filter(Product.item_id.in_(item_ids))
+                    .scalar()
+                ) or 3.5
+                h_class_annual = max(0.5, round(self.HOLDING_RATE_DAILY * 365.0 * float(avg_unit_price), 3))
                 est_ss = math.ceil(avg_demand * 10 * math.exp(selected_m))
                 annual_d = avg_demand * 365
-                est_eoq = max(1.0, math.sqrt((2 * annual_d * self.DEFAULT_ORDER_COST) / self.DEFAULT_HOLDING_COST))
+                est_eoq = max(1.0, math.sqrt((2 * annual_d * self.ORDER_COST_C) / h_class_annual))
                 cycle_stock = est_eoq / 2.0
-                total_cost = round(((est_ss + cycle_stock) * self.DEFAULT_HOLDING_COST + (annual_d / est_eoq) * self.DEFAULT_ORDER_COST) * len(item_ids), 2)
+                total_cost = round(((est_ss + cycle_stock) * h_class_annual + (annual_d / est_eoq) * self.ORDER_COST_C) * len(item_ids), 2)
                 
                 best_m = selected_m
                 best_kappa = selected_kappa

@@ -7,6 +7,7 @@ from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.orm import Session
 
 from app.models.sales_history import SalesHistory
+from app.models.product import Product
 from app.schemas.sales import (
     SaleRecordCreate,
     SaleRecordResponse,
@@ -162,7 +163,7 @@ class SalesService:
                     continue
 
                 # Kiểm tra SKU và store hợp lệ (R-27)
-                if item_id not in valid_skus or store_id not in valid_stores:
+                if (valid_skus and item_id not in valid_skus) or store_id not in valid_stores:
                     skipped_count += 1
                     continue
 

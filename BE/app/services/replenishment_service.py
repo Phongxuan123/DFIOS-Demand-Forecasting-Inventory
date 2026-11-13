@@ -93,7 +93,8 @@ class ReplenishmentService:
             safety_stock = float(param.safety_stock) if param else 20.0
             eoq = float(param.eoq) if param else 60.0
             s_level = float(param.s) if (param and param.s is not None) else rop
-            S_level = float(param.S) if (param and param.S is not None) else (s_level + eoq)
+            has_explicit_S = param is not None and param.S is not None
+            S_level = float(param.S) if has_explicit_S else (s_level + eoq)
             policy_name = param.model_run_id if (param and param.model_run_id) else "REFIT-RSS-EOQ-G"
 
             # Vị trí tồn kho IP = On_hand + On_order
@@ -101,8 +102,11 @@ class ReplenishmentService:
 
             # Điều kiện kích hoạt chính sách (R, s, S): IP < s hoặc IP <= ROP
             if ip < s_level or ip <= rop:
-                # Lượng đặt đề xuất: q = S - IP theo chính sách Order-Up-To
-                recommended_qty = max(1.0, round(S_level - ip, 0))
+                # Lượng đặt đề xuất: nếu có S tường minh thì q = S - IP; nếu baseline (s, Q) thì q = EOQ
+                if has_explicit_S:
+                    recommended_qty = max(1.0, round(S_level - ip, 0))
+                else:
+                    recommended_qty = max(1.0, round(eoq, 0))
 
                 # Xác định mức độ ưu tiên
                 if on_hand <= 0:

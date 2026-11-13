@@ -48,18 +48,23 @@ class AuthService:
             )
 
         user = user_repository.get_by_email(db, email_clean)
-        # Kiểm tra mật khẩu trước để tránh lộ trạng thái tài khoản (Enumeration Prevention)
-        if not user or not verify_password(login_data.password, user.password_hash):
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
 
-        # Kiểm tra tài khoản có bị vô hiệu hóa không
+        # Kiểm tra tài khoản có bị vô hiệu hóa hoặc chưa kích hoạt không
         if not getattr(user, "is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
+            )
+
+        if not verify_password(login_data.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Email hoặc mật khẩu không chính xác",
             )
 
         access_token = create_access_token(

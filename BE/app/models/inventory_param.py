@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, DateTime, SmallInteger
+from sqlalchemy import Column, String, Float, DateTime, SmallInteger, event
+from sqlalchemy.schema import Table
 from app.models.base import Base
 
 class InventoryParam(Base):
@@ -30,3 +31,21 @@ class InventoryParam(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+# SQLite treats column names as case-insensitive, so having both "s" and "S" causes
+# "duplicate column name: S" during Base.metadata.create_all in SQLite unit tests.
+# This event listener temporarily removes "S" during SQLite table creation and restores it after.
+_sqlite_temp_cols = {}
+
+@event.listens_for(Table, "before_create")
+def _sqlite_case_insensitivity_workaround(target, connection, **kw):
+    if connection.dialect.name == "sqlite" and target.name == "inventory_params":
+        if "S" in target.columns:
+            col = target.columns["S"]
+            _sqlite_temp_cols[target.name] = col
+            target._columns.remove(col)
+
+@event.listens_for(Table, "after_create")
+def _sqlite_case_insensitivity_restore(target, connection, **kw):
+    if connection.dialect.name == "sqlite" and target.name in _sqlite_temp_cols:
+        target._columns.add(_sqlite_temp_cols.pop(target.name))
