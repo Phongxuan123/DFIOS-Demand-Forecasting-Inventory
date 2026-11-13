@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +12,7 @@ from app.models.inventory_param import InventoryParam
 from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.user import User
+from app.models.sim_clock import SimClock
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
 
@@ -159,6 +161,52 @@ class TestPipelineEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.viewer_token}"},
         )
         self.assertEqual(resp.status_code, 403)
+
+    # ---------------------------------------------------------
+    # UC51/N-19: SimClock Endpoints (no side-effect INSERT on GET)
+    # ---------------------------------------------------------
+    def test_get_clock_404_when_store_not_found_no_side_effect(self):
+        # 1. GET /clock với store không tồn tại -> 404
+        resp = self.client.get(
+            "/api/v1/clock?store_id=STORE_XYZ_999",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+        # 2. Đảm bảo KHÔNG có bản ghi nào bị INSERT lén vào DB
+        with self.TestingSessionLocal() as session:
+            count = session.query(SimClock).filter(SimClock.store_id == "STORE_XYZ_999").count()
+            self.assertEqual(count, 0)
+
+    def test_get_clock_success_when_store_exists(self):
+        with self.TestingSessionLocal() as session:
+            clock = SimClock(
+                store_id="CA_1",
+                current_date=date(2016, 4, 25),
+                start_date=date(2016, 4, 25),
+                mode="replay",
+                speed=1.0,
+            )
+            session.add(clock)
+            session.commit()
+
+        resp = self.client.get(
+            "/api/v1/clock?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["store_id"], "CA_1")
+        self.assertEqual(data["current_date"], "2016-04-25")
+
+    def test_advance_clock_404_when_store_not_found(self):
+        payload = {"store_id": "UNKNOWN_STORE", "days": 7}
+        resp = self.client.post(
+            "/api/v1/clock/advance",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 404)
 
 
 if __name__ == "__main__":

@@ -467,6 +467,38 @@ class TestC3OutAndSimulation(unittest.TestCase):
         finally:
             db.close()
 
+    def test_get_sim_clock_no_side_effect_insert(self):
+        """
+        Test N-19: GET sim_clock không được có side-effect INSERT store bất kỳ vào cơ sở dữ liệu.
+        """
+        from app.services.pipeline_service import pipeline_service
+        from app.models.sim_clock import SimClock
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            # 1. Gọi get_sim_clock với store không tồn tại
+            res = pipeline_service.get_sim_clock(db, store_id="NON_EXISTENT_STORE", auto_create=False)
+            self.assertIsNone(res)
+
+            # Đảm bảo KHÔNG có bản ghi nào bị INSERT lén vào DB
+            count = db.query(SimClock).filter(SimClock.store_id == "NON_EXISTENT_STORE").count()
+            self.assertEqual(count, 0)
+
+            # 2. advance_sim_clock, reset_sim_clock, set_sim_speed với store không tồn tại phải bắn lỗi ValueError
+            with self.assertRaises(ValueError):
+                pipeline_service.advance_sim_clock(db, store_id="NON_EXISTENT_STORE", days=1)
+
+            with self.assertRaises(ValueError):
+                pipeline_service.reset_sim_clock(db, store_id="NON_EXISTENT_STORE")
+
+            with self.assertRaises(ValueError):
+                pipeline_service.set_sim_speed(db, store_id="NON_EXISTENT_STORE", speed=2.0)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

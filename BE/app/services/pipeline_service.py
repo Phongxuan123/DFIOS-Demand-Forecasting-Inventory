@@ -165,9 +165,9 @@ class PipelineService:
 
     # --- Task PIPE.1 & Task API.1: Sim Clock Control & Batch Orchestration (J1 - J6) ---
 
-    def get_sim_clock(self, db: Session, store_id: str = "CA_1") -> SimClock:
+    def get_sim_clock(self, db: Session, store_id: str = "CA_1", auto_create: bool = False) -> Optional[SimClock]:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-        if not clock:
+        if not clock and auto_create:
             base_date = date(2016, 4, 25)
             clock = SimClock(
                 store_id=store_id,
@@ -201,7 +201,9 @@ class PipelineService:
         - Job J4 (Review Kỳ): Chạy C³-OUT -> recompute params -> sinh đề xuất replenishment.
         - Job J5 (Quarterly Refit): Tái chọn (m_g, kappa_g) đầu Quý.
         """
-        clock = self.get_sim_clock(db, store_id=store_id)
+        clock = self.get_sim_clock(db, store_id=store_id, auto_create=False)
+        if not clock:
+            raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         prev_date = clock.current_date
         t0 = clock.start_date
 
@@ -425,7 +427,9 @@ class PipelineService:
         store_id: str = "CA_1",
         target_date: Optional[date] = None,
     ) -> SimClock:
-        clock = self.get_sim_clock(db, store_id=store_id)
+        clock = self.get_sim_clock(db, store_id=store_id, auto_create=False)
+        if not clock:
+            raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         clock.current_date = target_date or clock.start_date
         clock.updated_at = datetime.now(timezone.utc)
         db.commit()
@@ -438,7 +442,9 @@ class PipelineService:
         store_id: str = "CA_1",
         speed: float = 1.0,
     ) -> SimClock:
-        clock = self.get_sim_clock(db, store_id=store_id)
+        clock = self.get_sim_clock(db, store_id=store_id, auto_create=False)
+        if not clock:
+            raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         clock.speed = speed
         clock.updated_at = datetime.now(timezone.utc)
         db.commit()
