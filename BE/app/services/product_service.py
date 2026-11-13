@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.product import Product
@@ -130,17 +131,24 @@ class ProductService:
                 detail=f"Không tìm thấy sản phẩm có mã SKU '{item_id}'",
             )
 
-        # Kiểm tra các quan hệ ràng buộc khóa ngoại trước khi xóa để tránh lỗi 500 (R-26)
         from app.models.inventory import Inventory
         from app.models.inventory_param import InventoryParam
         from app.models.sales_history import SalesHistory
         from app.models.replenishment import ReplenishmentRecommendation
+        from app.models.inventory_adjustment import InventoryAdjustment
 
         has_inventory = db.query(Inventory).filter(Inventory.item_id == item_id).first()
         if has_inventory:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Không thể xóa sản phẩm '{item_id}' vì đang có dữ liệu tồn kho liên kết.",
+            )
+
+        has_adjustment = db.query(InventoryAdjustment).filter(InventoryAdjustment.item_id == item_id).first()
+        if has_adjustment:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa sản phẩm '{item_id}' vì đang có phiếu điều chỉnh tồn kho liên kết.",
             )
 
         has_params = db.query(InventoryParam).filter(InventoryParam.item_id == item_id).first()
@@ -164,16 +172,22 @@ class ProductService:
                 detail=f"Không thể xóa sản phẩm '{item_id}' vì có lịch sử bán hàng.",
             )
 
-        product_repository.delete_by_item_id(db, item_id)
-
-        audit_service.log(
-            db,
-            action="product.delete",
-            actor_email=admin_email,
-            ip_address=ip_address,
-            details=f"Xóa sản phẩm SKU '{item_id}'",
-        )
-        db.commit()
+        try:
+            product_repository.delete_by_item_id(db, item_id)
+            audit_service.log(
+                db,
+                action="product.delete",
+                actor_email=admin_email,
+                ip_address=ip_address,
+                details=f"Xóa sản phẩm SKU '{item_id}'",
+            )
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa sản phẩm '{item_id}' do đang có dữ liệu liên kết trong hệ thống.",
+            )
 
     def bulk_create(
         self,

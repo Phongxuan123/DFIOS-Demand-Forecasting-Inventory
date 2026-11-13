@@ -335,7 +335,8 @@ class OptimizationService:
         d_l = avg_daily * lead_time_days
         sigma_l = sigma_d * math.sqrt(lead_time_days)
 
-        z_tau = float(stats.norm.ppf(tau))
+        tau_safe = min(max(float(tau), 0.50), 0.999)
+        z_tau = float(stats.norm.ppf(tau_safe))
         safety_stock = max(0.0, round(z_tau * sigma_l, 2))
         reorder_point = max(0.0, round(d_l + safety_stock, 2))
 
@@ -553,10 +554,9 @@ class OptimizationService:
             o_cost = float(p.order_cost or self.DEFAULT_ORDER_COST)
             lt_days = int(p.lead_time_days or self.DEFAULT_LEAD_TIME)
             tau = float(p.service_level or 0.95)
-
-            # Tính toán tĩnh truyền thống (Moving Average + Phân phối chuẩn)
+            tau_safe = min(max(tau, 0.50), 0.999)
             avg_daily, sigma_d = stats_map.get(p.item_id, (5.0, 1.0))
-            z_score = stats.norm.ppf(tau)
+            z_score = float(stats.norm.ppf(tau_safe))
             static_ss = round(z_score * sigma_d * math.sqrt(lt_days), 2)
             static_rop = round(avg_daily * lt_days + static_ss, 2)
             annual_d = avg_daily * 365.0
@@ -651,7 +651,8 @@ class OptimizationService:
         c_stockout = request.stockout_cost_per_unit
 
         def _calc_scenario(lt_days: int, tau: float) -> Tuple[float, float, float, float, float, float, float]:
-            z = float(stats.norm.ppf(tau))
+            tau_safe = min(max(float(tau), 0.50), 0.999)
+            z = float(stats.norm.ppf(tau_safe))
             sig_l = sigma_d * math.sqrt(lt_days)
             ss = max(0.0, round(z * sig_l, 2))
             rop = max(0.0, round((d_daily * lt_days) + ss, 2))

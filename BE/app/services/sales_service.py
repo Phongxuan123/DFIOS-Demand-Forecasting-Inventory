@@ -133,8 +133,7 @@ class SalesService:
                 detail="File CSV rỗng hoặc không có tiêu đề cột.",
             )
 
-        # Chuẩn hóa tên cột
-        fieldnames = [f.strip().lower() for f in csv_reader.fieldnames if f]
+        fieldnames = [f.strip().lstrip("\ufeff").lower() for f in csv_reader.fieldnames if f]
         date_col = "sale_date" if "sale_date" in fieldnames else ("date" if "date" in fieldnames else None)
 
         if "item_id" not in fieldnames or "store_id" not in fieldnames or not date_col or "quantity" not in fieldnames:
@@ -151,8 +150,7 @@ class SalesService:
 
         for row in csv_reader:
             try:
-                # Chuẩn hóa key của row về chữ thường để tránh lệch hoa/thường (R-27)
-                row_lower = {k.strip().lower(): v for k, v in row.items() if k}
+                row_lower = {k.strip().lstrip("\ufeff").lower(): v for k, v in row.items() if k}
                 item_id = row_lower.get("item_id", "").strip()
                 store_id = row_lower.get("store_id", "").strip()
                 raw_date = row_lower.get(date_col, "").strip()
@@ -162,7 +160,6 @@ class SalesService:
                     skipped_count += 1
                     continue
 
-                # Kiểm tra SKU và store hợp lệ (R-27)
                 if (valid_skus and item_id not in valid_skus) or store_id not in valid_stores:
                     skipped_count += 1
                     continue
