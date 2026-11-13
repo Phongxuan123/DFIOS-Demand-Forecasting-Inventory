@@ -82,8 +82,7 @@ export const Products: React.FC = () => {
   const [categories, setCategories] = useState<string[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const [stores, setStores] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
-  const [selectedStore, setSelectedStore] = useState('CA_1');
+  const selectedStore = 'CA_1';
 
   // Inventory, Optimization & Classification Maps for Periodic Review (R, s, S)
   const [inventoryMap, setInventoryMap] = useState<Record<string, any>>({});
@@ -146,7 +145,7 @@ export const Products: React.FC = () => {
   const [salesTotal, setSalesTotal] = useState(0);
   const [salesSummary, setSalesSummary] = useState<any>(null);
   const [salesFilterSku, setSalesFilterSku] = useState('');
-  const [salesFilterStore, setSalesFilterStore] = useState('All');
+  const salesFilterStore = 'CA_1';
   const [salesStartDate, setSalesStartDate] = useState('');
   const [salesEndDate, setSalesEndDate] = useState('');
   const [isLoadingSales, setIsLoadingSales] = useState(false);
@@ -221,24 +220,19 @@ export const Products: React.FC = () => {
   const loadInitialData = async () => {
     setIsLoading(true);
     try {
-      const [initProdRes, suppRes, storesRes, adjRes, catRes, deptRes] = await Promise.all([
+      const [initProdRes, suppRes, adjRes, catRes, deptRes] = await Promise.all([
         api.products.getProducts({ limit: 50 }).catch(() => ({ list: [], total: 0 })),
         api.products.getAllSuppliers().catch(() => ({ list: [] })),
-        api.inventory.getStores().catch(() => ['CA_1', 'CA_2', 'TX_1', 'WI_1']),
         api.inventory.getAdjustments({ limit: 50 }).catch(() => ({ list: [] })),
         api.products.getCategories().catch(() => []),
         api.products.getDepartments().catch(() => []),
       ]);
 
-      const initialStore = storesRes?.[0] || 'CA_1';
-      setStores(storesRes?.length ? storesRes : ['CA_1', 'CA_2', 'TX_1', 'WI_1']);
-      setSelectedStore(initialStore);
-
       const initialProdList = initProdRes.list || [];
       if (initialProdList.length > 0) {
         setProducts(initialProdList);
         setTotalProducts(initProdRes.total || initialProdList.length);
-        selectProductItem(initialProdList[0], initialStore);
+        selectProductItem(initialProdList[0], selectedStore);
       }
 
       const rawSuppliers = suppRes.list || [];
@@ -252,7 +246,7 @@ export const Products: React.FC = () => {
       setDepartments(deptRes || []);
       setIsLoading(false);
 
-      loadStoreInventoryAndOptimization(initialStore);
+      loadStoreInventoryAndOptimization(selectedStore);
 
       Promise.all([
         api.products.getAllProducts(),
@@ -280,7 +274,7 @@ export const Products: React.FC = () => {
     try {
       const params: any = {};
       if (salesFilterSku.trim()) params.item_id = salesFilterSku.trim();
-      if (salesFilterStore !== 'All') params.store_id = salesFilterStore;
+      if (salesFilterStore) params.store_id = salesFilterStore;
       if (salesStartDate) params.start_date = salesStartDate;
       if (salesEndDate) params.end_date = salesEndDate;
 
@@ -289,7 +283,7 @@ export const Products: React.FC = () => {
         api.sales
           .getSummary({
             item_id: salesFilterSku.trim() || undefined,
-            store_id: salesFilterStore !== 'All' ? salesFilterStore : undefined,
+            store_id: salesFilterStore || undefined,
           })
           .catch(() => null),
       ]);
@@ -1015,25 +1009,6 @@ export const Products: React.FC = () => {
         <div className="prod-filter-bar">
           <div className="prod-filter-group">
             <div className="prod-filter-item">
-              <span className="prod-filter-label">{isVi ? 'KHO' : 'STORE'}</span>
-              <select
-                className="prod-filter-select"
-                value={selectedStore}
-                onChange={(e) => {
-                  const nextStore = e.target.value;
-                  setSelectedStore(nextStore);
-                  loadStoreInventoryAndOptimization(nextStore);
-                  if (selectedProduct) selectProductItem(selectedProduct, nextStore);
-                }}
-              >
-                {stores.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="prod-filter-item">
               <span className="prod-filter-label">{isVi ? 'NGÀNH' : 'CATEGORY'}</span>
               <select
                 className="prod-filter-select"
@@ -1640,17 +1615,12 @@ export const Products: React.FC = () => {
                   <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">
                     {isVi ? 'KHO' : 'STORE'}
                   </label>
-                  <select
+                  <input
+                    type="text"
                     value={saleFormData.store_id}
-                    onChange={(e) => setSaleFormData({ ...saleFormData, store_id: e.target.value })}
-                    className="settings-select w-full"
-                  >
-                    {stores.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
+                    disabled
+                    className="settings-input w-full bg-[var(--bg-card-subtle)] text-[var(--text-muted)] cursor-not-allowed"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">
@@ -1737,21 +1707,6 @@ export const Products: React.FC = () => {
               value={salesFilterSku}
               onChange={(e) => setSalesFilterSku(e.target.value)}
             />
-          </div>
-          <div className="prod-filter-item">
-            <span className="prod-filter-label">{isVi ? 'KHO' : 'STORE'}</span>
-            <select
-              className="prod-filter-select"
-              value={salesFilterStore}
-              onChange={(e) => setSalesFilterStore(e.target.value)}
-            >
-              <option value="All">{isVi ? 'Tất cả' : 'All'}</option>
-              {stores.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
           </div>
           <div className="prod-filter-item">
             <span className="prod-filter-label">{isVi ? 'TỪ NGÀY' : 'FROM'}</span>

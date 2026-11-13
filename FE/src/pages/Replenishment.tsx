@@ -15,7 +15,6 @@ import {
   History as HistoryIcon,
   Search,
   Calculator,
-  Store as StoreIcon,
   ShieldCheck,
   CheckSquare,
   Square,
@@ -118,7 +117,6 @@ export const Replenishment: React.FC = () => {
   const focusStoreParam = searchParams.get('store');
   const focusTokenParam = searchParams.get('focus');
 
-  const [storeOptions, setStoreOptions] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
   const [selectedStore, setSelectedStore] = useState<string>(() =>
     focusStoreParam && focusStoreParam !== 'All' ? focusStoreParam : 'CA_1'
   );
@@ -376,27 +374,6 @@ export const Replenishment: React.FC = () => {
     }
   };
 
-  // Load store list dynamically so any alerted store is present in selector
-  useEffect(() => {
-    api.inventory
-      .getStores()
-      .then((stores: any) => {
-        if (Array.isArray(stores) && stores.length > 0) {
-          setStoreOptions((prev) => Array.from(new Set([...stores, ...prev])));
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Ensure store from URL is included in store selector options cleanly
-  const availableStoreOptions = useMemo(() => {
-    if (focusStoreParam && focusStoreParam !== 'All' && !storeOptions.includes(focusStoreParam)) {
-      return [...storeOptions, focusStoreParam];
-    }
-    return storeOptions;
-  }, [storeOptions, focusStoreParam]);
-
-  // Deep-link locator: jump straight to the exact SKU row across store, tab, and page
   useEffect(() => {
     if (!focusSkuParam) return;
     const token = focusTokenParam || `${focusSkuParam}:${focusStoreParam || ''}:${Date.now()}`;
@@ -998,27 +975,6 @@ export const Replenishment: React.FC = () => {
         </div>
 
         <div className="rep-header-right">
-          <div className="rep-store-select-group">
-            <StoreIcon size={14} className="text-slate-400" />
-            <span className="rep-store-label">{isVi ? 'KHO:' : 'STORE:'}</span>
-            <select
-              className="rep-store-select"
-              value={selectedStore}
-              onChange={(e) => {
-                setSelectedStore(e.target.value);
-                setRecPage(1);
-                setInvPage(1);
-                setHistoryPage(1);
-              }}
-            >
-              {availableStoreOptions.map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {canEdit && (
             <>
               {viewTab === 'RECOMMENDATIONS' && (selectedRecIds.length > 0 || pendingItemsOnPage.length > 0) && (

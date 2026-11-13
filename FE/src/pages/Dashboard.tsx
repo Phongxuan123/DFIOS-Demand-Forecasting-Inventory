@@ -37,7 +37,6 @@ import {
   Scale,
   ShieldAlert,
   ShieldCheck,
-  Store,
   TrendingDown,
   TrendingUp,
   Truck,
@@ -151,11 +150,10 @@ export const Dashboard: React.FC = () => {
   const [lastPipelineRunAt, setLastPipelineRunAt] = useState<string>('06:00 UTC');
 
   // Dynamic Backend filter metadata
-  const [stores, setStores] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
 
   // Backend query parameters
-  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const selectedStore = 'CA_1';
   const [trendCategory, setTrendCategory] = useState<string>('');
   const [trendDays, setTrendDays] = useState<number>(30);
   const [trendGranularity, setTrendGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -184,15 +182,8 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      api.inventory.getStores().catch(() => []),
-      api.products.getCategories().catch(() => []),
-    ]).then(([storeList, categoryList]) => {
+    api.products.getCategories().catch(() => []).then((categoryList) => {
       if (!active) return;
-      if (Array.isArray(storeList)) {
-        const cleaned = storeList.filter(Boolean);
-        setStores(cleaned.length > 0 ? cleaned : ['CA_1']);
-      }
       if (Array.isArray(categoryList)) {
         setCategories(categoryList.filter(Boolean));
       }
@@ -296,11 +287,6 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     fetchAlertsTable(selectedStore, alertSeverity, alertOffset);
   }, [selectedStore, alertSeverity, alertOffset, fetchAlertsTable]);
-
-  const handleStoreChange = (nextStore: string) => {
-    setSelectedStore(nextStore);
-    setAlertOffset(0);
-  };
 
   const handleSeverityChange = (nextSeverity: string) => {
     setAlertSeverity(nextSeverity);
@@ -576,10 +562,28 @@ export const Dashboard: React.FC = () => {
         ? (cycles.reduce((a, b) => a + b.shadowFillRate, 0) / cycles.length).toFixed(1)
         : '88.5';
 
-    const staticDiffPct =
-      staticComparisonRaw?.avg_rop_diff_pct != null
-        ? Number(staticComparisonRaw.avg_rop_diff_pct).toFixed(1)
-        : '+11.4';
+    const staticDiffPct = (() => {
+      if (staticComparisonRaw?.avg_rop_diff_pct != null) {
+        const val = Number(staticComparisonRaw.avg_rop_diff_pct);
+        return val >= 0 ? `+${val.toFixed(1)}` : val.toFixed(1);
+      }
+      if (Array.isArray(staticComparisonRaw?.items) && staticComparisonRaw.items.length > 0) {
+        const valid = staticComparisonRaw.items.filter((it: any) => Number(it.static_reorder_point) > 0);
+        if (valid.length > 0) {
+          const sumDiffPct = valid.reduce((acc: number, it: any) => {
+            const diff = Number(it.ml_reorder_point) - Number(it.static_reorder_point);
+            return acc + (diff / Number(it.static_reorder_point)) * 100;
+          }, 0);
+          const avg = sumDiffPct / valid.length;
+          return avg >= 0 ? `+${avg.toFixed(1)}` : avg.toFixed(1);
+        }
+      }
+      if (staticComparisonRaw?.avg_ss_reduction_percent != null) {
+        const val = Number(staticComparisonRaw.avg_ss_reduction_percent);
+        return val >= 0 ? `-${val.toFixed(1)}` : `+${Math.abs(val).toFixed(1)}`;
+      }
+      return '—';
+    })();
 
     return {
       cycles,
@@ -1102,7 +1106,7 @@ export const Dashboard: React.FC = () => {
             <h4 className="dash-cost-subtitle">
               {isVi ? ' Sổ Cái Đối Chiếu Chu Kỳ (B₀ vs P₆)' : 'Cycle Comparison Ledger (B₀ vs P₆)'}
             </h4>
-            <span className="dash-formula-chip">ΔROP: {costTelemetry.staticDiffPct}%</span>
+            <span className="dash-formula-chip">ΔROP: {costTelemetry.staticDiffPct}{costTelemetry.staticDiffPct !== '—' ? '%' : ''}</span>
           </div>
 
           <div className="dash-cost-table-wrap">
@@ -1283,23 +1287,6 @@ export const Dashboard: React.FC = () => {
         </div>
 
         <div className="dash-actions-group">
-          <div className="dash-store-control">
-            <Store size={14} className="dash-store-icon" />
-            <span className="dash-store-label">{t('dashboard.store_label', 'Store:')}</span>
-            <select
-              className="dash-store-select"
-              value={selectedStore}
-              onChange={(e) => handleStoreChange(e.target.value)}
-              aria-label="Select store scope"
-            >
-              {(stores.length > 0 ? stores : ['CA_1']).map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <button
             type="button"
             className="dash-refresh-btn"

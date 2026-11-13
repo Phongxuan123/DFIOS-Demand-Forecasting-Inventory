@@ -439,7 +439,7 @@ export const api = {
       const res = await cachedGet(`/forecasts/${sku}/overrides`, params, 30000);
       return Array.isArray(res) ? res : [];
     },
-    getExplorerData: async (skuParam?: string, horizon: number = 28, storeId?: string) => {
+    getExplorerData: async (skuParam?: string, horizon: number = 28, storeId?: string, engine?: string) => {
       try {
         let sku = skuParam;
         if (!sku) {
@@ -448,8 +448,9 @@ export const api = {
           sku = items[0]?.item_id || 'FOODS_1_001';
         }
 
+        const modelParam = engine ? engine.toLowerCase() : undefined;
         const [forecastsRes, compareRes, uncertaintyRes, historyRes] = await Promise.all([
-          cachedGet('/forecasts', { item_id: sku, horizon, store_id: storeId, limit: horizon }, 60000).catch(() => ({ items: [] })),
+          cachedGet('/forecasts', { item_id: sku, horizon, store_id: storeId, limit: horizon, model_name: modelParam }, 60000).catch(() => ({ items: [] })),
           cachedGet(`/forecasts/${sku}/compare`, { store_id: storeId }, 60000).catch(() => null),
           cachedGet(`/forecasts/${sku}/uncertainty`, { store_id: storeId, horizon }, 60000).catch(() => null),
           cachedGet(`/forecasts/${sku}/history`, { store_id: storeId, granularity: 'daily' }, 60000).catch(() => null),
@@ -622,21 +623,6 @@ export const api = {
       const items = unwrapItems(res);
       return { items, total: res.total || items.length };
     },
-    getReplenishmentAlerts: async () => {
-      const res = await cachedGet('/inventory', { limit: 25, store_id: 'CA_1' }, 180000);
-      const items = unwrapItems(res);
-      const lowItems = items.filter((x: any) => (x.on_hand ?? 0) <= 15);
-      return {
-        alerts: lowItems.map((x: any) => ({
-          id: x.item_id,
-          name: x.name || x.item_id,
-          store: x.store_id || 'CA_1',
-          stock: x.on_hand ?? 0,
-          rop: x.reorder_point ?? 25,
-          status: (x.on_hand ?? 0) <= 0 ? 'CRITICAL' : 'WARNING',
-        })),
-      };
-    },
   },
 
   replenishment: {
@@ -797,44 +783,6 @@ export const api = {
       clearApiCache('/suppliers');
       clearApiCache('dashboard');
       const res = await apiClient.delete(`/suppliers/${id}`);
-      return res.data;
-    },
-    uploadDataFile: async (file: File) => {
-      clearApiCache('/products');
-      clearApiCache('dashboard');
-      const text = await file.text();
-      let items: any[] = [];
-      if (file.name.endsWith('.json')) {
-        const parsed = JSON.parse(text);
-        items = Array.isArray(parsed) ? parsed : (parsed.items || []);
-      } else {
-        const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-        if (lines.length > 1) {
-          const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-          const itemIdIdx = headers.findIndex(h => h.includes('item') || h.includes('sku') || h.includes('id'));
-          const nameIdx = headers.findIndex(h => h.includes('name') || h.includes('title'));
-          const deptIdx = headers.findIndex(h => h.includes('dept') || h.includes('department'));
-          const catIdx = headers.findIndex(h => h.includes('cat') || h.includes('category'));
-
-          for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
-            if (cols.length >= 2) {
-              items.push({
-                item_id: cols[itemIdIdx !== -1 ? itemIdIdx : 0] || `SKU-${Date.now()}-${i}`,
-                name: cols[nameIdx !== -1 ? nameIdx : 1] || `Product ${i}`,
-                dept_id: deptIdx !== -1 ? cols[deptIdx] : undefined,
-                cat_id: catIdx !== -1 ? cols[catIdx] : undefined,
-              });
-            }
-          }
-        }
-      }
-
-      if (items.length === 0) {
-        throw new Error('No valid records found in file. CSV header should contain item_id, name.');
-      }
-
-      const res = await apiClient.post('/products/bulk', { items });
       return res.data;
     },
     publishTestEvent: async (skuId: string) => {

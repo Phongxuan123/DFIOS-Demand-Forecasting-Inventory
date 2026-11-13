@@ -141,7 +141,6 @@ export const ForecastExplorer: React.FC = () => {
   const [skuSearch, setSkuSearch] = useState(searchParams.get('sku') || '');
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [stores, setStores] = useState<string[]>([]);
   const [selectedStore, setSelectedStore] = useState(searchParams.get('store') || 'CA_1');
   const [horizon, setHorizon] = useState<number>(28);
   const [selectedEngine, setSelectedEngine] = useState('LightGBM');
@@ -243,14 +242,14 @@ export const ForecastExplorer: React.FC = () => {
     return fullScheduleMatrix.slice(start, start + matrixPageSize);
   }, [fullScheduleMatrix, matrixPage, matrixPageSize]);
 
-  const fetchForecast = async (sku?: string, h: number = horizon, store?: string) => {
+  const fetchForecast = async (sku?: string, h: number = horizon, store?: string, engine: string = selectedEngine) => {
     setIsLoading(true);
     try {
       const targetSku = (sku || skuSearch || 'FOODS_1_001').trim();
       const targetStore = store !== undefined && store !== '' ? store : selectedStore || 'CA_1';
       const [forecast, explRes, overRes, uncRes, cmpRes, modelsRes, wqRes, calRes, clsSkuRes] = await Promise.all([
-        api.forecasting.getExplorerData(targetSku, h, targetStore),
-        api.forecasting.getExplanation(targetSku, { store_id: targetStore }).catch(() => null),
+        api.forecasting.getExplorerData(targetSku, h, targetStore, engine),
+        api.forecasting.getExplanation(targetSku, { store_id: targetStore, model_name: engine.toLowerCase() }).catch(() => null),
         api.forecasting.getOverrides(targetSku, { store_id: targetStore }).catch(() => []),
         api.forecasting.getUncertainty(targetSku, { store_id: targetStore, horizon: h }).catch(() => null),
         api.forecasting.compare(targetSku, { store_id: targetStore }).catch(() => null),
@@ -355,13 +354,11 @@ export const ForecastExplorer: React.FC = () => {
   useEffect(() => {
     const initFilters = async () => {
       try {
-        const [catList, storeList, prodRes] = await Promise.all([
+        const [catList, prodRes] = await Promise.all([
           api.products.getCategories().catch(() => []),
-          api.inventory.getStores().catch(() => []),
           api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
         ]);
         if (catList && catList.length) setCategories(catList);
-        if (storeList && storeList.length) setStores(storeList);
         const pList = prodRes?.list || [];
         if (pList.length) setProducts(pList);
       } catch (e) {
@@ -382,13 +379,6 @@ export const ForecastExplorer: React.FC = () => {
     setHorizon(newH);
     setMatrixPageSize(newH);
     fetchForecast(skuSearch, newH, selectedStore);
-  };
-
-  const handleStoreChange = (newStore: string) => {
-    const nextStore = newStore || 'CA_1';
-    setSelectedStore(nextStore);
-    syncUrlParams(skuSearch || 'FOODS_1_001', nextStore);
-    fetchForecast(skuSearch, horizon, nextStore);
   };
 
   const handleCategoryChange = (newCat: string) => {
@@ -868,22 +858,6 @@ export const ForecastExplorer: React.FC = () => {
               </select>
             </div>
 
-            <div className="filter-item">
-              <label className="filter-label">{isVi ? 'Chi Nhánh / Kho Hàng' : 'Location / Store'}</label>
-              <select
-                className="filter-select"
-                value={selectedStore}
-                onChange={(e) => handleStoreChange(e.target.value)}
-              >
-                <option value="">{isVi ? 'Tất cả kho hàng' : 'All Warehouses'}</option>
-                {stores.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             <div className="filter-item" style={{ minWidth: '220px' }}>
               <label className="filter-label">{isVi ? 'Mã Định Danh SKU' : 'SKU Identifier'}</label>
               <div className="filter-input-wrapper">
@@ -958,10 +932,12 @@ export const ForecastExplorer: React.FC = () => {
                 className="ml-engine-select"
                 value={selectedEngine}
                 onChange={(e) => {
-                  setSelectedEngine(e.target.value);
+                  const newEngine = e.target.value;
+                  setSelectedEngine(newEngine);
+                  fetchForecast(skuSearch, horizon, selectedStore, newEngine);
                   setToast({
                     type: 'success',
-                    message: isVi ? `Đã chuyển sang mô hình ${e.target.value}` : `Switched active engine to ${e.target.value}`,
+                    message: isVi ? `Đã chuyển sang mô hình ${newEngine}` : `Switched active engine to ${newEngine}`,
                   });
                 }}
               >
