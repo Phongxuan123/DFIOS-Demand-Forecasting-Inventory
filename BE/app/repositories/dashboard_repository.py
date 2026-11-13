@@ -225,8 +225,9 @@ class DashboardRepository:
             & (Inventory.store_id == InventoryParam.store_id),
         )
 
-        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
-        query = query.filter(Inventory.store_id == target_store)
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
+        if not is_global:
+            query = query.filter(Inventory.store_id == store_id.strip())
 
         all_records = query.all()
 

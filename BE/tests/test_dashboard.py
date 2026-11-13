@@ -286,6 +286,52 @@ class TestDashboardEndpoints(unittest.TestCase):
         for item in data["items"]:
             self.assertEqual(item["severity"], "CRITICAL")
 
+    def test_get_stock_alerts_multi_store_global(self):
+        # UC09/N-14: Test that global alerts return items across all stores (not forced to CA_1)
+        with self.TestingSessionLocal() as session:
+            inv_tx = Inventory(item_id="FOODS_1_001", store_id="TX_1", on_hand=0.0, on_order=0.0)
+            param_tx = InventoryParam(
+                id="param-tx-01",
+                item_id="FOODS_1_001",
+                store_id="TX_1",
+                safety_stock=10.0,
+                reorder_point=20.0,
+                unit_price=10.0,
+                eoq=30.0,
+            )
+            session.add_all([inv_tx, param_tx])
+            session.commit()
+
+        # 1. Global alerts without store_id
+        resp_global = self.client.get(
+            "/api/v1/dashboard/alerts",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_global.status_code, 200)
+        stores_in_global = {item["store_id"] for item in resp_global.json()["items"]}
+        self.assertIn("CA_1", stores_in_global)
+        self.assertIn("TX_1", stores_in_global)
+
+        # 2. Global alerts with store_id=GLOBAL
+        resp_explicit = self.client.get(
+            "/api/v1/dashboard/alerts?store_id=GLOBAL",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_explicit.status_code, 200)
+        stores_explicit = {item["store_id"] for item in resp_explicit.json()["items"]}
+        self.assertIn("CA_1", stores_explicit)
+        self.assertIn("TX_1", stores_explicit)
+
+        # 3. Filter strictly by TX_1
+        resp_tx = self.client.get(
+            "/api/v1/dashboard/alerts?store_id=TX_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_tx.status_code, 200)
+        items_tx = resp_tx.json()["items"]
+        self.assertEqual(len(items_tx), 1)
+        self.assertEqual(items_tx[0]["store_id"], "TX_1")
+
     # ---------------------------------------------------------
     # UC10: Real-time Stock Alert
     # ---------------------------------------------------------
