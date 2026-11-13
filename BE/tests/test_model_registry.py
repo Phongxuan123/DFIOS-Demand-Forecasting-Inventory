@@ -332,6 +332,31 @@ class TestModelRegistryEndpoints(unittest.TestCase):
         # /api/v1/models (unprefixed duplicate) must NOT exist
         self.assertNotIn("/api/v1/models", paths)
 
+    def test_register_model_with_is_production_sets_promoted_at(self):
+        # UC48/N-27: Registering a model directly with is_production=True must set promoted_at timestamp
+        from app.repositories.model_registry_repository import model_registry_repository
+        res = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "Direct-Production-Ensemble",
+                "version": "v3.0.0",
+                "algorithm": "ensemble",
+                "scope": "store_test_scope",
+                "is_production": True,
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.assertTrue(data["is_production"])
+        self.assertIsNotNone(data["promoted_at"])
+
+        with self.TestingSessionLocal() as session:
+            prod_model = model_registry_repository.get_production_model(session, scope="store_test_scope")
+            self.assertIsNotNone(prod_model)
+            self.assertEqual(prod_model.id, data["id"])
+            self.assertIsNotNone(prod_model.promoted_at)
+
 
 if __name__ == "__main__":
     unittest.main()

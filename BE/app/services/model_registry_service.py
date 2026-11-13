@@ -2,6 +2,7 @@ import os
 import json
 import hashlib
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -32,6 +33,9 @@ class ModelRegistryService:
         admin_email: Optional[str] = None,
     ) -> ModelRegistryResponse:
         clean_scope = request.scope.strip()
+        now_utc = datetime.now(timezone.utc)
+        promoted_time = now_utc if request.is_production else None
+
         if request.is_production:
             # Hạ cấp toàn bộ mô hình production cũ cùng scope (B-03)
             old_prods = (
@@ -48,6 +52,7 @@ class ModelRegistryService:
             algorithm=request.algorithm.lower().strip(),
             scope=clean_scope,
             is_production=request.is_production,
+            promoted_at=promoted_time,
             parameters=request.parameters,
             metrics=request.metrics,
             trained_by=admin_email,
