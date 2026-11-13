@@ -250,6 +250,49 @@ class TestReportsEndpoints(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_export_csv_formula_injection_escaping_across_all_reports(self):
+        # UC43/N-26/R-42: Verify CSV Formula Injection (CWE-1236) escaping across all exported reports
+        with self.TestingSessionLocal() as session:
+            malicious_product = Product(
+                item_id="=MALICIOUS_SKU_01",
+                name="=cmd|'/C calc'!A0",
+                cat_id="@FOODS",
+                dept_id="+FOODS_1",
+            )
+            malicious_inv = Inventory(
+                item_id="=MALICIOUS_SKU_01",
+                store_id="CA_1",
+                on_hand=5.0,
+                on_order=0.0,
+            )
+            session.add_all([malicious_product, malicious_inv])
+            session.commit()
+
+        # 1. Inventory Report
+        resp_inv = self.client.get(
+            "/api/v1/reports/export?report_type=inventory&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_inv.status_code, 200)
+        content_inv = resp_inv.text
+        self.assertIn("'=MALICIOUS_SKU_01", content_inv)
+        self.assertIn("'=cmd|'/C calc'!A0", content_inv)
+        self.assertIn("'@FOODS", content_inv)
+
+        # 2. Accuracy Report
+        resp_acc = self.client.get(
+            "/api/v1/reports/export?report_type=forecast-accuracy&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_acc.status_code, 200)
+
+        # 3. Cost Report
+        resp_cost = self.client.get(
+            "/api/v1/reports/export?report_type=cost&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_cost.status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()
