@@ -8,6 +8,7 @@ from app.models.base import Base
 from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
 from app.models.sim_clock import SimClock
+from app.models.policy_selection import PolicySelection
 from app.services.calibrator_service import calibrator_service
 from app.services.optimization_service import optimization_service
 from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
@@ -145,6 +146,60 @@ class TestC3OutAndSimulation(unittest.TestCase):
             # theta phải giảm nhẹ -0.04 (hoặc giữ mức âm), TUYỆT ĐỐI không nhảy lên +0.96
             self.assertEqual(cx_new.theta, -0.04)
             self.assertNotEqual(cx_new.theta, 0.96)
+        finally:
+            db.close()
+
+    def test_r30_store_policy_selection_priority_and_fallback(self):
+        """
+        R-30: Kiểm tra Calibrator ưu tiên policy_selection theo store_id, fallback global
+        khi không có store_id cụ thể, không bị lỗi query %store% sai cú pháp.
+        """
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            # 1. Global policy với setpoint = 0.95, eta = 1.5
+            p_global = PolicySelection(
+                selection_id="quarter_2015_Q2",
+                class_id="AY",
+                policy_type="REFIT_RSS_EOQ_G",
+                setpoint=0.95,
+                gain_eta=1.5,
+            )
+            # 2. Store-specific policy cho CA_2 với setpoint = 0.98, eta = 2.0
+            p_store_ca2 = PolicySelection(
+                selection_id="CA_2_quarter_2015_Q2",
+                class_id="AY",
+                policy_type="REFIT_RSS_EOQ_G",
+                setpoint=0.98,
+                gain_eta=2.0,
+            )
+            db.add(p_global)
+            db.add(p_store_ca2)
+            db.commit()
+
+            # Gọi run_calibration_step cho CA_2 -> AY phải nhận setpoint 0.98, eta 2.0
+            states_ca2, _, _ = calibrator_service.run_calibration_step(
+                db=db,
+                store_id="CA_2",
+                review_index=1,
+                review_date=date(2016, 5, 23),
+            )
+            ay_ca2 = next(s for s in states_ca2 if s.class_id == "AY")
+            self.assertEqual(ay_ca2.setpoint, 0.98)
+            self.assertEqual(ay_ca2.eta, 2.0)
+
+            # Gọi run_calibration_step cho CA_1 -> AY không có store policy nên fallback sang global 0.95, eta 1.5
+            states_ca1, _, _ = calibrator_service.run_calibration_step(
+                db=db,
+                store_id="CA_1",
+                review_index=1,
+                review_date=date(2016, 5, 23),
+            )
+            ay_ca1 = next(s for s in states_ca1 if s.class_id == "AY")
+            self.assertEqual(ay_ca1.setpoint, 0.95)
+            self.assertEqual(ay_ca1.eta, 1.5)
         finally:
             db.close()
 

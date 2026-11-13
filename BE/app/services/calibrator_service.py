@@ -205,24 +205,45 @@ class CalibratorService:
         updated_states: List[CalibrationState] = []
         warnings: List[str] = []
 
-        for class_id in self.ALL_CLASSES:
-            # Lấy setpoint & eta từ policy_selection theo store_id nếu có (R-30)
-            policy = (
-                db.query(PolicySelection)
-                .filter(
-                    PolicySelection.class_id == class_id,
-                    PolicySelection.selection_id.like(f"%{store_id}%"),
-                )
-                .order_by(PolicySelection.created_at.desc())
-                .first()
+        # 4. Truy vấn policy_selection (R-30): ưu tiên store-specific selection, fallback sang global
+        store_policies = (
+            db.query(PolicySelection)
+            .filter(
+                (PolicySelection.selection_id.like(f"{store_id}_%"))
+                | (PolicySelection.selection_id.like(f"%_{store_id}"))
+                | (PolicySelection.selection_id == store_id)
             )
-            if not policy:
-                policy = (
-                    db.query(PolicySelection)
-                    .filter(PolicySelection.class_id == class_id)
-                    .order_by(PolicySelection.created_at.desc())
-                    .first()
-                )
+            .order_by(PolicySelection.created_at.desc())
+            .all()
+        )
+        store_policy_map = {p.class_id: p for p in store_policies}
+
+        missing_classes = [c for c in self.ALL_CLASSES if c not in store_policy_map]
+        if missing_classes:
+            all_candidate_policies = (
+                db.query(PolicySelection)
+                .filter(PolicySelection.class_id.in_(missing_classes))
+                .order_by(PolicySelection.created_at.desc())
+                .all()
+            )
+            for p in all_candidate_policies:
+                sid = p.selection_id or ""
+                # Bỏ qua nếu selection_id mang nhãn của một cửa hàng khác
+                if any(
+                    s in sid
+                    for s in [
+                        "CA_1", "CA_2", "CA_3", "CA_4",
+                        "TX_1", "TX_2", "TX_3",
+                        "WI_1", "WI_2", "WI_3",
+                    ]
+                    if s != store_id
+                ):
+                    continue
+                if p.class_id not in store_policy_map:
+                    store_policy_map[p.class_id] = p
+
+        for class_id in self.ALL_CLASSES:
+            policy = store_policy_map.get(class_id)
             setpoint = float(policy.setpoint) if policy and policy.setpoint else self.DEFAULT_SETPOINT
             eta = float(policy.gain_eta) if policy and policy.gain_eta else self.DEFAULT_ETA
             target_error_rate = 1.0 - setpoint
