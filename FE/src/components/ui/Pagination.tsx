@@ -1,5 +1,6 @@
 import React from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { useLanguage } from '../../context/LanguageContext.tsx';
 import './Pagination.css';
 
 export interface PaginationProps {
@@ -21,13 +22,15 @@ export const Pagination: React.FC<PaginationProps> = ({
   pageSizeOptions = [10, 20, 50],
   className = '',
 }) => {
+  const { language } = useLanguage();
+  const isVi = language === 'vi';
+
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
 
   const startItem = totalItems === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1;
   const endItem = Math.min(safeCurrentPage * pageSize, totalItems);
 
-  // Generate page numbers to display with smart ellipsis
   const getPageNumbers = () => {
     const pages: (number | string)[] = [];
     if (totalPages <= 7) {
@@ -58,13 +61,22 @@ export const Pagination: React.FC<PaginationProps> = ({
     <div className={`dfios-pagination ${className}`}>
       <div className="dfios-pagination-info">
         <span>
-          Showing <strong>{startItem.toLocaleString()}</strong> to <strong>{endItem.toLocaleString()}</strong> of{' '}
-          <strong>{totalItems.toLocaleString()}</strong> items
+          {isVi ? (
+            <>
+              Hiển thị <strong>{startItem.toLocaleString()}</strong> đến <strong>{endItem.toLocaleString()}</strong> trong{' '}
+              <strong>{totalItems.toLocaleString()}</strong> mục
+            </>
+          ) : (
+            <>
+              Showing <strong>{startItem.toLocaleString()}</strong> to <strong>{endItem.toLocaleString()}</strong> of{' '}
+              <strong>{totalItems.toLocaleString()}</strong> items
+            </>
+          )}
         </span>
 
         {onPageSizeChange && (
           <div className="dfios-page-size-selector">
-            <span className="page-size-label">Rows per page:</span>
+            <span className="page-size-label">{isVi ? 'Số hàng mỗi trang:' : 'Rows per page:'}</span>
             <select
               value={pageSize}
               onChange={(e) => {
@@ -89,7 +101,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           className="dfios-page-btn nav-btn"
           onClick={() => onPageChange(1)}
           disabled={safeCurrentPage === 1}
-          title="First page"
+          title={isVi ? 'Trang đầu' : 'First page'}
         >
           <ChevronsLeft size={15} />
         </button>
@@ -99,7 +111,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           className="dfios-page-btn nav-btn"
           onClick={() => onPageChange(safeCurrentPage - 1)}
           disabled={safeCurrentPage === 1}
-          title="Previous page"
+          title={isVi ? 'Trang trước' : 'Previous page'}
         >
           <ChevronLeft size={15} />
         </button>
@@ -128,7 +140,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           className="dfios-page-btn nav-btn"
           onClick={() => onPageChange(safeCurrentPage + 1)}
           disabled={safeCurrentPage === totalPages}
-          title="Next page"
+          title={isVi ? 'Trang sau' : 'Next page'}
         >
           <ChevronRight size={15} />
         </button>
@@ -138,7 +150,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           className="dfios-page-btn nav-btn"
           onClick={() => onPageChange(totalPages)}
           disabled={safeCurrentPage === totalPages}
-          title="Last page"
+          title={isVi ? 'Trang cuối' : 'Last page'}
         >
           <ChevronsRight size={15} />
         </button>
