@@ -386,6 +386,7 @@ export const AbcXyzAnalysis: React.FC = () => {
   // Global Toast
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const notifTimerRef = useRef<any>(null);
+  const filterReqIdRef = useRef(0);
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
@@ -488,10 +489,10 @@ export const AbcXyzAnalysis: React.FC = () => {
     setSkuPage(1);
   }, [searchTerm, selectedSegment, selectedAbc, selectedXyz, selectedCategory, sortBy, sortOrder]);
 
-  // Debounced search and filter effect
   useEffect(() => {
     if (isLoading) return;
 
+    const reqId = ++filterReqIdRef.current;
     const timer = setTimeout(async () => {
       setIsLoadingSkus(true);
       try {
@@ -506,11 +507,11 @@ export const AbcXyzAnalysis: React.FC = () => {
           skip: (skuPage - 1) * skuPageSize,
           limit: skuPageSize,
         });
+        if (reqId !== filterReqIdRef.current) return;
         const totalCount = skusRes.total || (skusRes.list || []).length;
         setSkuList(skusRes.list || []);
         setTotalSkus(totalCount);
 
-        // Prefetch next page in background
         if (skuPage * skuPageSize < totalCount) {
           api.classification
             .getSkus({
@@ -527,9 +528,13 @@ export const AbcXyzAnalysis: React.FC = () => {
             .catch(() => {});
         }
       } catch (e) {
-        console.error('Failed to filter SKUs', e);
+        if (reqId === filterReqIdRef.current) {
+          console.error('Failed to filter SKUs', e);
+        }
       } finally {
-        setIsLoadingSkus(false);
+        if (reqId === filterReqIdRef.current) {
+          setIsLoadingSkus(false);
+        }
       }
     }, 240);
 
