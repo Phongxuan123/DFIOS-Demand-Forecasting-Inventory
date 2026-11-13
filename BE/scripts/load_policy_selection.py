@@ -34,15 +34,15 @@ SELECTION_ID = "quarter_2015_Q2"
 now = datetime.now(timezone.utc)
 
 OPTIMAL_POLICIES = [
-    {"class_id": "AX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
-    {"class_id": "AY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
-    {"class_id": "AZ", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
-    {"class_id": "BX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
-    {"class_id": "BY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
-    {"class_id": "BZ", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
-    {"class_id": "CX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
-    {"class_id": "CY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
-    {"class_id": "CZ", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
+    {"class_id": "AX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
+    {"class_id": "AY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
+    {"class_id": "AZ", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 66254.19,  "val_service": 0.9490},
+    {"class_id": "BX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 64478.95,  "val_service": 0.9499},
+    {"class_id": "BY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 421200.50, "val_service": 0.9491},
+    {"class_id": "BZ", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 156711.20, "val_service": 0.9489},
+    {"class_id": "CX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 2907.45,   "val_service": 0.9483},
+    {"class_id": "CY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 176043.10, "val_service": 0.9492},
+    {"class_id": "CZ", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 491428.00, "val_service": 0.9479},
 ]
 
 records = []

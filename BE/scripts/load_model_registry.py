@@ -14,12 +14,32 @@ now = datetime.now(timezone.utc)
 
 models = [
     {
+        "id": "model-ensemble-v1",
+        "name": "Production Ensemble Bundle",
+        "version": "v1.0",
+        "algorithm": "ensemble",
+        "scope": "global",
+        "is_production": True,
+        "parameters": {
+            "components": ["LightGBM", "XGBoost", "LSTM", "TFT"],
+            "weights": {"LightGBM": 0.441, "XGBoost": 0.078, "LSTM": 0.0, "TFT": 0.481}
+        },
+        "metrics": {
+            "wrmsse": 0.4935,
+            "mase": 0.975
+        },
+        "trained_by": "DFIOS ML Pipeline",
+        "job_id": None,
+        "created_at": now,
+        "promoted_at": now
+    },
+    {
         "id": "model-tft-v1",
         "name": "TFT Seasonal Model",
         "version": "v1.0",
         "algorithm": "tft",
         "scope": "global",
-        "is_production": True,
+        "is_production": False,
         "parameters": {
             "hidden_size": 64,
             "attention_heads": 4,
@@ -27,15 +47,13 @@ models = [
             "learning_rate": 0.001
         },
         "metrics": {
-            "mae": 3.92,
-            "rmse": 4.81,
-            "mase": 0.64,
-            "wrmsse": 0.58
+            "mae": 0.948,
+            "wrmsse": 0.5004
         },
         "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
         "created_at": now,
-        "promoted_at": now
+        "promoted_at": None
     },
     {
         "id": "model-lightgbm-v1",
@@ -51,10 +69,7 @@ models = [
             "max_depth": 6
         },
         "metrics": {
-            "mae": 4.41,
-            "rmse": 5.62,
-            "mase": 0.78,
-            "wrmsse": 0.71
+            "wrmsse": 0.5083
         },
         "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
@@ -73,8 +88,6 @@ models = [
             "seasonal_order": [1, 1, 1, 7]
         },
         "metrics": {
-            "mae": 6.72,
-            "rmse": 8.43,
             "mase": 1.12,
             "wrmsse": 1.05
         },

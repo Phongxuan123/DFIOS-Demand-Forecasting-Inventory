@@ -47,15 +47,15 @@ class OptimizationService:
     DEFAULT_REVIEW_PERIOD = 7  # R = 7 ngày => H = L + R = 10 ngày (research.md §3)
 
     DEFAULT_OPTIMAL_POLICIES = {
-        "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
-        "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
-        "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
-        "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
-        "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
-        "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
-        "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
-        "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
-        "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
+        "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
+        "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
+        "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 66254.19,  "val_service": 0.9490},
+        "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 64478.95,  "val_service": 0.9499},
+        "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 421200.50, "val_service": 0.9491},
+        "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 156711.20, "val_service": 0.9489},
+        "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 2907.45,   "val_service": 0.9483},
+        "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 176043.10, "val_service": 0.9492},
+        "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 491428.00, "val_service": 0.9479},
     }
 
     # --- UC29: Target Service Level Configuration ---
@@ -752,9 +752,9 @@ class OptimizationService:
             q_num = (curr_date.month - 1) // 3 + 1
             selection_id = f"quarter_{curr_date.year}_Q{q_num}"
 
-        # Lưới tham số ứng viên theo nghiên cứu
-        M_GRID = [0.0, 0.05, 0.091, 0.125, 0.159, 0.183, 0.25, 0.334, 0.384, 0.393]
-        KAPPA_GRID = [0.0, 0.5, 1.0, 1.5, 2.0]
+        # Lưới tham số ứng viên theo nghiên cứu §7.4
+        M_GRID = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+        KAPPA_GRID = [0.5, 1.0, 1.5, 2.0]
 
         all_classes = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
         results: List[Dict[str, Any]] = []
@@ -763,7 +763,7 @@ class OptimizationService:
         for class_id in all_classes:
             default_spec = self.DEFAULT_OPTIMAL_POLICIES.get(
                 class_id,
-                {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.965},
+                {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.949},
             )
 
             # Tìm các SKU thuộc phân nhóm này
@@ -778,8 +778,9 @@ class OptimizationService:
             best_kappa = default_spec["kappa_g"]
             best_cost = default_spec["val_cost"]
             best_service = default_spec["val_service"]
+            is_class_feasible = True
 
-            # Nếu có SKU trong nhóm, thực hiện tối ưu thực tế
+            # Nếu có SKU trong nhóm, thực hiện tối ưu thực tế qua quét lưới (research.md §7.4)
             if item_ids:
                 cls_stats = (
                     db.query(
@@ -792,38 +793,74 @@ class OptimizationService:
                 avg_cv = float(cls_stats[0]) if cls_stats and cls_stats[0] else 0.5
                 avg_demand = float(cls_stats[1]) if cls_stats and cls_stats[1] else 5.0
 
-                # Tối ưu theo đặc tả Tier 2 REFIT-RSS-EOQ-G (research.md §7)
-                # Sử dụng bộ tham số thực nghiệm gốc từ c3ok_artifacts (kappa=1.0)
-                base_policy = self.DEFAULT_OPTIMAL_POLICIES.get(class_id, {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.96})
-                
-                # Điều chỉnh m_g theo mức phục vụ mục tiêu tau (Chuẩn log-odds scaling)
-                if target_availability != 0.95 and target_availability > 0:
-                    scale_factor = math.log(max(0.01, target_availability) / (1.0 - min(0.999, target_availability))) - math.log(0.95 / 0.05)
-                    selected_m = round(max(0.0, base_policy["m_g"] + 0.05 * scale_factor), 3)
+                avg_unit_price = float(
+                    (
+                        db.query(func.avg(Product.price))
+                        .filter(Product.item_id.in_(item_ids))
+                        .scalar()
+                    )
+                    or 3.5
+                )
+
+                # Giả định chi phí chuẩn A3 (§7.2)
+                h_daily = self.HOLDING_RATE_DAILY * avg_unit_price
+                h_annual = max(0.5, h_daily * 365.0)
+                b_penalty = self.STOCKOUT_PENALTY_RATE * avg_unit_price
+                c_order = self.ORDER_COST_C
+                annual_d = max(1.0, avg_demand * 365.0)
+                H_days = self.DEFAULT_LEAD_TIME + self.DEFAULT_REVIEW_PERIOD
+
+                # Quét lưới tối ưu hóa tìm min Cost(m, kappa) thỏa mãn Availability >= target + guard
+                target_with_guard = target_availability + 0.01  # Guard 1pp per §7.4
+                candidates = []
+
+                for m_cand in M_GRID:
+                    for k_cand in KAPPA_GRID:
+                        # 1. EOQ và kích thước lô đặt hàng
+                        eoq_val = max(1.0, math.sqrt((2.0 * annual_d * c_order) / h_annual))
+                        batch_size = max(1.0, k_cand * eoq_val)
+
+                        # 2. Safety stock
+                        sigma_h = max(0.1, avg_cv * avg_demand * math.sqrt(H_days))
+                        z_tau = float(stats.norm.ppf(min(0.999, max(0.5, target_availability))))
+                        ss_val = max(0.0, z_tau * sigma_h * math.exp(m_cand))
+                        cycle_stock = batch_size / 2.0
+
+                        # 3. Ước tính mức phục vụ thực tế (theo phân phối chuẩn)
+                        z_eff = z_tau + (m_cand / max(0.1, avg_cv))
+                        est_avail = float(stats.norm.cdf(z_eff))
+
+                        # 4. Chi phí thường niên theo A3 (Holding + Ordering + Stockout)
+                        n_orders = annual_d / batch_size
+                        c_ordering = n_orders * c_order
+                        c_holding = (ss_val + cycle_stock) * h_annual
+                        shortage_prob = max(0.0, 1.0 - est_avail)
+                        c_shortage = annual_d * shortage_prob * b_penalty
+
+                        tot_cost = round((c_holding + c_ordering + c_shortage) * len(item_ids), 2)
+                        is_feas = bool(est_avail >= target_with_guard)
+
+                        candidates.append({
+                            "m": m_cand,
+                            "kappa": k_cand,
+                            "cost": tot_cost,
+                            "service": round(est_avail, 4),
+                            "is_feasible": is_feas,
+                        })
+
+                # Lựa chọn ứng viên tối ưu (research.md §7.4):
+                feasible_candidates = [c for c in candidates if c["is_feasible"]]
+                if feasible_candidates:
+                    best_cand = min(feasible_candidates, key=lambda x: x["cost"])
+                    is_class_feasible = True
                 else:
-                    selected_m = base_policy["m_g"]
-                
-                # Giữ kappa = 1.0 để đảm bảo nguyên lý lô đặt hàng kinh tế EOQ (S = s + EOQ > s)
-                selected_kappa = 1.0
-                selected_service = round(min(0.999, target_availability + 0.01), 3)
-                
-                # Ước tính chi phí vận hành (Holding + Ordering) theo giả định A3
-                avg_unit_price = (
-                    db.query(func.avg(Product.price))
-                    .filter(Product.item_id.in_(item_ids))
-                    .scalar()
-                ) or 3.5
-                h_class_annual = max(0.5, round(self.HOLDING_RATE_DAILY * 365.0 * float(avg_unit_price), 3))
-                est_ss = math.ceil(avg_demand * 10 * math.exp(selected_m))
-                annual_d = avg_demand * 365
-                est_eoq = max(1.0, math.sqrt((2 * annual_d * self.ORDER_COST_C) / h_class_annual))
-                cycle_stock = est_eoq / 2.0
-                total_cost = round(((est_ss + cycle_stock) * h_class_annual + (annual_d / est_eoq) * self.ORDER_COST_C) * len(item_ids), 2)
-                
-                best_m = selected_m
-                best_kappa = selected_kappa
-                best_cost = total_cost
-                best_service = selected_service
+                    best_cand = max(candidates, key=lambda x: (x["service"], -x["cost"]))
+                    is_class_feasible = False
+
+                best_m = best_cand["m"]
+                best_kappa = best_cand["kappa"]
+                best_cost = best_cand["cost"]
+                best_service = best_cand["service"]
 
             # Ghi/Cập nhật vào bảng policy_selection
             existing = (
@@ -839,6 +876,7 @@ class OptimizationService:
                 existing.kappa_g = best_kappa
                 existing.val_cost = best_cost
                 existing.val_service = best_service
+                existing.is_feasible = is_class_feasible
                 existing.setpoint = target_availability
                 existing.created_at = now
             else:
@@ -854,7 +892,7 @@ class OptimizationService:
                     gain_eta=1.0,
                     val_cost=best_cost,
                     val_service=best_service,
-                    is_feasible=True,
+                    is_feasible=is_class_feasible,
                     econ_service=0.95,
                     created_at=now,
                 )
@@ -868,6 +906,7 @@ class OptimizationService:
                 "kappa_g": best_kappa,
                 "val_cost": best_cost,
                 "val_service": best_service,
+                "is_feasible": is_class_feasible,
                 "setpoint": target_availability,
             })
 

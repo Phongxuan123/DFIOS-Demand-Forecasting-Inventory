@@ -42,17 +42,17 @@ def run_sync():
         print(f"Updated origin_date for {res.rowcount} quantile rows in CA_1 to 2016-05-23")
 
         print("\n=== 3. SYNCING TIER 2 POLICY_SELECTION (m_g = 0.0, kappa_g = 1.0) ===")
-        # Tier 2 baseline m_g = 0.0 (tách riêng khỏi theta của Tier 3 C3-OUT để tránh lỗi nhân đôi e^{2*theta} - N-05)
+        # Giá trị thực nghiệm CSL theo lớp từ c3ok_csl_by_class.csv (P C3-OUT tau=0.95)
         optimal_policies = {
-            "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
-            "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
-            "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
-            "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
-            "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
-            "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
-            "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
-            "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
-            "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
+            "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
+            "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
+            "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 66254.19,  "val_service": 0.9490},
+            "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 64478.95,  "val_service": 0.9499},
+            "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 421200.50, "val_service": 0.9491},
+            "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 156711.20, "val_service": 0.9489},
+            "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 2907.45,   "val_service": 0.9483},
+            "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 176043.10, "val_service": 0.9492},
+            "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 491428.00, "val_service": 0.9479},
         }
         for class_id, p in optimal_policies.items():
             db.execute(text("""
@@ -102,40 +102,48 @@ def run_sync():
             print(f"Updated calibration_state for CA_1 {class_id}: theta={th}, multiplier={mult}")
 
         print("\n=== 5. SYNCING MODEL_REGISTRY METRICS ===")
-        # Ensure Ensemble is candidate/production with WRMSSE 0.4935
+        print("\n=== 5. SYNCING MODEL_REGISTRY METRICS ===")
+        # Khớp 100% số liệu thực nghiệm từ RUN_SUMMARY_C3OK.md và M5 benchmarks:
+        # Ensemble: WRMSSE 0.4935, MASE 0.975 (Duy nhất 1 bản Production)
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"mae": 1.42, "rmse": 1.95, "mase": 0.58, "wrmsse": 0.4935}',
+            SET metrics = '{"wrmsse": 0.4935, "mase": 0.975}',
                 is_production = true
             WHERE algorithm = 'ensemble' OR name ILIKE '%ensemble%'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"mae": 1.54, "rmse": 2.04, "mase": 0.67, "wrmsse": 0.5083}',
+            SET metrics = '{"wrmsse": 0.5083}',
                 is_production = false
-            WHERE algorithm = 'lightgbm' AND name ILIKE '%baseline%'
+            WHERE algorithm = 'lightgbm'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"mae": 3.92, "rmse": 4.81, "mase": 0.64, "wrmsse": 0.5004}',
+            SET metrics = '{"wrmsse": 0.5213}',
+                is_production = false
+            WHERE algorithm = 'xgboost'
+        """))
+        db.execute(text("""
+            UPDATE model_registry
+            SET metrics = '{"wrmsse": 0.5004, "mae": 0.948}',
                 is_production = false
             WHERE algorithm = 'tft'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"mae": 6.72, "rmse": 8.43, "mase": 1.12, "wrmsse": 1.05}',
+            SET metrics = '{"wrmsse": 1.05, "mase": 1.12}',
                 is_production = false
             WHERE algorithm = 'sarima'
         """))
-        print("Updated model_registry with actual WRMSSE metrics (Ensemble: 0.4935).")
+        print("Updated model_registry with actual WRMSSE & MASE metrics (Ensemble: 0.4935, MASE 0.975).")
 
         print("\n=== 6. SAVING SCIENTIFIC BENCHMARK RESULTS IN SYSTEM_SETTINGS ===")
-        # Exact results from c3ok_results.csv & c3ok_pairs.csv
+        # Khớp 100% nhãn và kết quả từ c3ok_results.csv & c3ok_pairs.csv
         benchmark_data = {
             "title": "DFIOS C3-OUT Policy Evaluation on M5 Walmart (72 Review Cycles)",
             "test_summary": {
                 "P0_Traditional": {
-                    "policy": "B0 DFIOS Baseline (Static Quantile)",
+                    "policy": "B0 DFIOS τ=0.95",
                     "tau": 0.95,
                     "csl": 0.9071,
                     "fill_rate": 0.9405,
@@ -146,7 +154,7 @@ def run_sync():
                     "total_cost_paper": 767052.47
                 },
                 "P1_Static_EOQ": {
-                    "policy": "B2 DFIOS tau*=0.99 (Static EOQ Lot-sizing)",
+                    "policy": "B2 DFIOS τ*=0.99 [BIKIP]",
                     "tau": 0.99,
                     "csl": 0.9336,
                     "fill_rate": 0.9556,
@@ -157,7 +165,7 @@ def run_sync():
                     "total_cost_paper": 699361.32
                 },
                 "P4_Refit_EOQ": {
-                    "policy": "P-CR C3-OUT tau=0.9615 (Cost-optimal Setpoint)",
+                    "policy": "P-CR C³-OUT τ=0.9615 [BIKIP]",
                     "tau": 0.9615,
                     "csl": 0.9605,
                     "fill_rate": 0.9750,
@@ -168,7 +176,7 @@ def run_sync():
                     "total_cost_paper": 598919.84
                 },
                 "P6_C3_OUT": {
-                    "policy": "P C3-OUT tau=0.95 (Adaptive Closed-Loop Control)",
+                    "policy": "P C³-OUT τ=0.95",
                     "tau": 0.95,
                     "csl": 0.9490,
                     "fill_rate": 0.9683,

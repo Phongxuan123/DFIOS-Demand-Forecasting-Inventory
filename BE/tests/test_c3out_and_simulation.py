@@ -332,6 +332,55 @@ class TestC3OutAndSimulation(unittest.TestCase):
                 f"Lớp {class_id} có m_g={policy['m_g']} != 0.0, gây lỗi nhân đôi e^(2*theta)!",
             )
 
+    def test_tier2_j5_constrained_grid_search_and_feasibility(self):
+        """
+        Test N-07: Kiểm tra tối ưu Tier 2 J5 qua quét lưới có ràng buộc theo research.md §7.4:
+        - Quét lưới thực tế (m, kappa)
+        - Kappa >= 0.5 đảm bảo batching EOQ (S > s)
+        - is_feasible kiểm tra động theo target_availability + 0.01 guard
+        """
+        from app.services.optimization_service import optimization_service
+        from app.models.classification import SKUClassification
+        from app.models.product import Product
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            # 1. Tạo dữ liệu Product và SKUClassification cho nhóm AX
+            p = Product(item_id="TEST_SKU_AX", name="Item AX", cat_id="FOODS", price=10.0)
+            db.add(p)
+            cls_ax = SKUClassification(
+                id="cls_ax_01",
+                item_id="TEST_SKU_AX",
+                abc_class="A",
+                xyz_class="X",
+                segment="AX",
+                cv=0.2,
+                mean_demand=20.0,
+            )
+            db.add(cls_ax)
+            db.commit()
+
+            # 2. Chạy refit_quarterly_policies với target = 0.95
+            res = optimization_service.refit_quarterly_policies(
+                db, store_id="CA_1", target_availability=0.95
+            )
+            ax_res = next(r for r in res if r["class_id"] == "AX")
+            self.assertGreaterEqual(ax_res["kappa_g"], 0.5)
+            self.assertGreaterEqual(ax_res["val_service"], 0.95)
+            self.assertTrue(ax_res["is_feasible"])
+
+            # 3. Chạy với target quá cao (0.999) -> Không khả thi -> is_feasible = False
+            res_high = optimization_service.refit_quarterly_policies(
+                db, store_id="CA_1", target_availability=0.999
+            )
+            ax_high = next(r for r in res_high if r["class_id"] == "AX")
+            self.assertFalse(ax_high["is_feasible"])
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()
