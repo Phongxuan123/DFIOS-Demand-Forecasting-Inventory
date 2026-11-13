@@ -434,6 +434,31 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
         self.assertEqual(res_activate_blocked.status_code, 403)
         self.assertIn("đã bị quản trị viên khóa", res_activate_blocked.json()["detail"])
 
+    def test_b24_password_max_bytes_limit(self):
+        # B-24: Password with <= 72 characters but > 72 bytes (e.g., Vietnamese 3-byte characters) must be rejected with 422
+        pw_over_bytes = "TiếngViệt" * 6  # 54 chars (< 72), 78 bytes (> 72)
+        self.assertLess(len(pw_over_bytes), 72)
+        self.assertGreater(len(pw_over_bytes.encode("utf-8")), 72)
+
+        # 1. Login with password > 72 bytes -> 422 Unprocessable Entity
+        res_login = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@dfios.com", "password": pw_over_bytes},
+        )
+        self.assertEqual(res_login.status_code, 422)
+
+        # 2. Reset password with password > 72 bytes -> 422
+        res_reset = self.client.post(
+            "/api/v1/auth/reset-password",
+            json={"token": "some-token", "new_password": pw_over_bytes},
+        )
+        self.assertEqual(res_reset.status_code, 422)
+
+        # 3. get_password_hash directly raises ValueError when > 72 bytes
+        from app.core.security import get_password_hash
+        with self.assertRaises(ValueError):
+            get_password_hash(pw_over_bytes)
+
 
 if __name__ == "__main__":
     unittest.main()
