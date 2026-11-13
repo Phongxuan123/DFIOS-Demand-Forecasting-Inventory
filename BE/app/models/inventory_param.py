@@ -36,4 +36,3 @@ def _adapt_inventory_param_columns_for_sqlite(target, connection, **kw):
         for col in target.columns:
             if col.key == "S":
                 col.name = "order_up_to_S"
-

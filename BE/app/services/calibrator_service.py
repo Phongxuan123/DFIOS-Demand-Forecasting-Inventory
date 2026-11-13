@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.calibration_state import CalibrationState
+from app.models.inventory import Inventory
 from app.models.service_outcomes import ServiceOutcome
 from app.models.classification import SKUClassification
 from app.models.inventory_daily import InventoryDaily
@@ -90,13 +91,19 @@ class CalibratorService:
             clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
             cycle_end = clock.current_date if clock and clock.current_date else date.today()
         if not cycle_start:
-            cycle_start = cycle_end - timedelta(days=7)
+            # Chu kỳ rà soát R = 7 ngày chính xác (không chồng lấn)
+            cycle_start = cycle_end - timedelta(days=6)
 
         outcomes: List[ServiceOutcome] = []
 
         for class_id in self.ALL_CLASSES:
             skus = (
                 db.query(SKUClassification.item_id)
+                .join(
+                    Inventory,
+                    (SKUClassification.item_id == Inventory.item_id)
+                    & (Inventory.store_id == store_id),
+                )
                 .filter(SKUClassification.segment == class_id)
                 .all()
             )
@@ -122,8 +129,8 @@ class CalibratorService:
                 )
                 n_stockout = len(stockout_query)
 
-            # Tính tỷ lệ lỗi e~
-            error_rate = round(n_stockout / max(1, n_sku), 4) if n_sku > 0 else 0.04
+            # Tính tỷ lệ lỗi e~ thực tế
+            error_rate = round(n_stockout / max(1, n_sku), 4) if n_sku > 0 else 0.0
 
             rec_id = f"{store_id}_{class_id}_cycle_{cycle_index}"
             existing = db.query(ServiceOutcome).filter(ServiceOutcome.id == rec_id).first()
@@ -198,13 +205,23 @@ class CalibratorService:
         warnings: List[str] = []
 
         for class_id in self.ALL_CLASSES:
-            # Lấy setpoint & eta từ policy_selection nếu có
+            # Lấy setpoint & eta từ policy_selection theo store_id nếu có (R-30)
             policy = (
                 db.query(PolicySelection)
-                .filter(PolicySelection.class_id == class_id)
+                .filter(
+                    PolicySelection.class_id == class_id,
+                    PolicySelection.selection_id.like(f"%{store_id}%"),
+                )
                 .order_by(PolicySelection.created_at.desc())
                 .first()
             )
+            if not policy:
+                policy = (
+                    db.query(PolicySelection)
+                    .filter(PolicySelection.class_id == class_id)
+                    .order_by(PolicySelection.created_at.desc())
+                    .first()
+                )
             setpoint = float(policy.setpoint) if policy and policy.setpoint else self.DEFAULT_SETPOINT
             eta = float(policy.gain_eta) if policy and policy.gain_eta else self.DEFAULT_ETA
             target_error_rate = 1.0 - setpoint
@@ -237,6 +254,14 @@ class CalibratorService:
                 if outcome:
                     observed_error = float(outcome.error_rate)
                     outcome.consumed_at_review = review_index
+
+            # Quy ước biên C³-OUT theo research.md §8.1:
+            # ẽ = 0 khi prev_theta >= 2.0 (ngăn chặn windup khi kẹp trần trên)
+            # ẽ = 1 khi prev_theta <= -2.0 (ngăn chặn windup khi kẹp sàn dưới)
+            if prev_theta >= self.MAX_THETA:
+                observed_error = 0.0
+            elif prev_theta <= self.MIN_THETA:
+                observed_error = 1.0
 
             # Công thức cập nhật tích phân một phía C³-OUT
             error_signal = observed_error - target_error_rate

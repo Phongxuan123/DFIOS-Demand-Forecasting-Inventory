@@ -95,7 +95,7 @@ class DashboardService:
             total=total,
         )
 
-    async def trigger_realtime_stock_alerts(
+    def trigger_realtime_stock_alerts(
         self,
         db: Session,
         store_id: Optional[str] = None,
@@ -104,12 +104,13 @@ class DashboardService:
         UC10: Quét kho và phát sự kiện cảnh báo thời gian thực qua Server-Sent Events (SSE).
         Sử dụng cơ chế Bulk Query và Bulk Commit để xử lý nhanh dưới 2s thay vì N+1 queries.
         Có cơ chế chống spam trùng lặp cho các cảnh báo chưa xử lý.
+        Thực thi đồng bộ an toàn qua threadpool tránh chặn event loop (B-10).
         """
         items, _, _ = dashboard_repository.get_stock_alerts(
             db,
             store_id=store_id,
             severity=None,
-            limit=500,
+            limit=3500,
             offset=0,
         )
 
@@ -182,11 +183,11 @@ class DashboardService:
             db.commit()
             alerts_generated = len(new_alerts)
 
-        # 4. Phát sự kiện realtime qua SSE
+        # 4. Phát sự kiện realtime qua SSE bằng publish_nowait không khóa event loop
         broadcast_count = 0
         for event in events_to_broadcast:
             try:
-                await event_bus.publish(event)
+                event_bus.publish_nowait(event)
                 broadcast_count += 1
             except Exception as e:
                 logger.warning(f"Error publishing stock alert event: {e}")

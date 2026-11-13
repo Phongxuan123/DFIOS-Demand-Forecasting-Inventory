@@ -94,6 +94,7 @@ def get_inventory_parameters(
     item_id: Optional[str] = Query(None, description="Lọc theo mã SKU"),
     category: Optional[str] = Query(None, description="Lọc theo ngành hàng"),
     source: Optional[str] = Query(None, description="Lọc theo nguồn tính toán ('ml' hoặc 'static')"),
+    search: Optional[str] = Query(None, description="Tìm kiếm nhanh theo mã SKU"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_admin),
 ):
@@ -107,12 +108,13 @@ def get_inventory_parameters(
     - EOQ = sqrt(2 * D * S / H)
     Role: Warehouse Manager, Admin (Viewer 403).
     """
+    target_item = item_id or search
     return optimization_service.get_parameters(
         db=db,
         skip=skip,
         limit=limit,
         store_id=store_id,
-        item_id=item_id,
+        item_id=target_item,
         category=category,
         source=source,
     )

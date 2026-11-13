@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.forecast_window_quantile import ForecastWindowQuantile
-from app.models.forecast import Forecast
+from app.models.forecast import Forecast, ForecastOverride
 from app.models.sales_history import SalesHistory
 from app.models.product import Product
 
@@ -46,9 +46,9 @@ class WindowQuantileService:
         """
         Tính tổng dự báo điểm trên cửa sổ bảo vệ H ngày: F_hat(H) = sum_{h=1}^H y_hat_h
         """
-        # 1. Thử lấy từ bảng forecast
+        # 1. Thử lấy từ bảng forecast kết hợp overrides hiệu dụng (B-01)
         fc_records = (
-            db.query(Forecast.y_pred)
+            db.query(Forecast.forecast_date, Forecast.y_pred)
             .filter(
                 Forecast.item_id == item_id,
                 Forecast.store_id == store_id,
@@ -60,7 +60,19 @@ class WindowQuantileService:
         )
 
         if fc_records and len(fc_records) >= horizon_days:
-            return float(sum(r.y_pred for r in fc_records[:horizon_days]))
+            # Tra cứu override đang hoạt động
+            overrides = (
+                db.query(ForecastOverride.forecast_date, ForecastOverride.override_value)
+                .filter(
+                    ForecastOverride.item_id == item_id,
+                    ForecastOverride.store_id == store_id,
+                    ForecastOverride.is_active == True,
+                )
+                .all()
+            )
+            ov_map = {r.forecast_date: float(r.override_value) for r in overrides}
+            total_val = sum(ov_map.get(r.forecast_date, float(r.y_pred)) for r in fc_records[:horizon_days])
+            return float(total_val)
 
         # 2. Nếu thiếu dữ liệu forecast, fallback từ doanh số trung bình gần nhất * H
         past_sales = (
@@ -90,9 +102,20 @@ class WindowQuantileService:
         """
         cutoff_date = origin_date - timedelta(days=horizon_days)
 
-        # Lấy lịch sử bán hàng trước ngày cutoff
-        sales_records = (
-            db.query(SalesHistory.sale_date, SalesHistory.quantity)
+        # 1. Thu thập dữ liệu thực tế và dự báo Ensemble đồng thời trên các mốc thời gian đã chín
+        # Sai số cửa sổ thực nghiệm chuẩn tắc: r(H) = D(H) - F_hat(H) (Route c, research.md §7.2, R-06)
+        merged_query = (
+            db.query(
+                SalesHistory.sale_date,
+                SalesHistory.quantity,
+                func.coalesce(Forecast.y_pred, SalesHistory.quantity).label("y_pred"),
+            )
+            .outerjoin(
+                Forecast,
+                (SalesHistory.item_id == Forecast.item_id)
+                & (SalesHistory.store_id == Forecast.store_id)
+                & (SalesHistory.sale_date == Forecast.forecast_date),
+            )
             .filter(
                 SalesHistory.item_id == item_id,
                 SalesHistory.store_id == store_id,
@@ -102,23 +125,22 @@ class WindowQuantileService:
             .all()
         )
 
-        if len(sales_records) < horizon_days + 5:
+        if len(merged_query) < horizon_days:
             return np.array([])
 
-        df_sales = pd.DataFrame(sales_records, columns=["sale_date", "quantity"])
-        df_sales["quantity"] = pd.to_numeric(df_sales["quantity"], errors="coerce").fillna(0.0)
+        df = pd.DataFrame(merged_query, columns=["sale_date", "quantity", "y_pred"])
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+        df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce").fillna(df["quantity"])
 
-        # Tính tổng doanh số trượt trên cửa sổ H ngày
-        rolling_demand = df_sales["quantity"].rolling(window=horizon_days).sum().dropna().values
+        # Tổng nhu cầu thực tế và tổng dự báo trượt trên cửa sổ bảo vệ H ngày
+        rolling_actual = df["quantity"].rolling(window=horizon_days).sum().dropna().values
+        rolling_pred = df["y_pred"].rolling(window=horizon_days).sum().dropna().values
 
-        if len(rolling_demand) < 5:
+        if len(rolling_actual) < 3:
             return np.array([])
 
-        # Sai số thực nghiệm r(H) = Thực tế cửa sổ - Dự báo cơ sở (EMA / Mean)
-        rolling_mean = pd.Series(rolling_demand).ewm(span=max(5, len(rolling_demand) // 4)).mean().values
-        residuals = rolling_demand - rolling_mean
-
-        # Lấy tối đa max_origins sai số gần nhất
+        # Sai số dự báo thực nghiệm r(H) = D(H) - F_hat(H) (Loại bỏ hoàn toàn EMA heuristic)
+        residuals = rolling_actual - rolling_pred
         return residuals[-max_origins:]
 
     def calculate_quantiles_dict(
@@ -181,6 +203,19 @@ class WindowQuantileService:
         if existing:
             return existing
 
+        # Tìm theo store_id, item_id, origin_date nếu khác horizon
+        existing_any = (
+            db.query(ForecastWindowQuantile)
+            .filter(
+                ForecastWindowQuantile.store_id == store_id,
+                ForecastWindowQuantile.item_id == item_id,
+                ForecastWindowQuantile.origin_date == origin_date,
+            )
+            .first()
+        )
+        if existing_any:
+            return existing_any
+
         # Tính toán F_hat(H) và residuals
         point_window = self.compute_point_window_forecast(db, item_id, store_id, origin_date, horizon_days)
         residuals = self.collect_historical_residuals(db, item_id, store_id, origin_date, horizon_days)
@@ -199,10 +234,17 @@ class WindowQuantileService:
             created_at=datetime.now(timezone.utc),
         )
 
-        db.add(record)
-        db.commit()
-        db.refresh(record)
-        return record
+        try:
+            db.add(record)
+            db.commit()
+            db.refresh(record)
+            return record
+        except Exception:
+            db.rollback()
+            existing = db.query(ForecastWindowQuantile).filter(ForecastWindowQuantile.id == record_id).first()
+            if existing:
+                return existing
+            raise
 
     def get_tau_quantile_value(
         self,

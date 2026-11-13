@@ -203,13 +203,23 @@ class DataQualityService:
             status_val = "PASSED"
             passed_val = True
 
-        # 5. Lưu vào database
+        # 5. Lưu vào database (Giới hạn tối đa 200 issues chi tiết vào DB để chống tràn RAM/JSON, B-02)
+        capped_issues = issues[:200]
+        if len(issues) > 200:
+            capped_issues.append(
+                DataQualityIssue(
+                    check_type="NOTE",
+                    severity="LOW",
+                    message=f"Đã phát hiện tổng cộng {len(issues)} vấn đề. Đã giới hạn hiển thị 200 bản ghi chi tiết đầu tiên.",
+                )
+            )
+
         run = DataQualityRun(
             triggered_by=admin_email,
             status=status_val,
             passed=passed_val,
             summary=summary.model_dump(),
-            issues=[i.model_dump() for i in issues],
+            issues=[i.model_dump() for i in capped_issues],
         )
         saved = data_quality_repository.create(db, run)
         self._log_audit(db, admin_email, status_val, passed_val, len(issues))

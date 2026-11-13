@@ -36,28 +36,37 @@ from app.core.config import settings
 class AuthService:
     def login(self, db: Session, login_data: LoginRequest) -> LoginResponse:
         """
-        UC01: Xác thực tài khoản người dùng và cấp token JWT
+        UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration)
         """
-        user = user_repository.get_by_email(db, login_data.email.strip().lower())
+        email_clean = login_data.email.strip().lower()
+
+        # Chống brute-force: tối đa 10 lần sai trong 5 phút (R-24)
+        if rate_limiter.is_rate_limited(f"login:{email_clean}", max_requests=10, window_seconds=300):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
+            )
+
+        user = user_repository.get_by_email(db, email_clean)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
-        
-        # Kiểm tra tài khoản có bị vô hiệu hóa không
+
+        # Kiểm tra tài khoản có bị vô hiệu hóa hoặc chưa kích hoạt không
         if not getattr(user, "is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
             )
-        
+
         if not verify_password(login_data.password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
-        
+
         access_token = create_access_token(
             data={
                 "sub": user.email,
@@ -66,17 +75,19 @@ class AuthService:
                 "token_version": getattr(user, "token_version", 1),
             }
         )
-        
+
         return LoginResponse(
             access_token=access_token,
             token_type="bearer",
             user=UserResponse.model_validate(user),
         )
 
-    def logout(self, user: User) -> MessageResponse:
+    def logout(self, db: Session, user: User) -> MessageResponse:
         """
-        UC02: Kết thúc phiên làm việc
+        UC02: Kết thúc phiên làm việc - tăng token_version để thu hồi ngay lập tức JWT token cũ (R-24)
         """
+        user.token_version = getattr(user, "token_version", 1) + 1
+        db.commit()
         return MessageResponse(
             message=f"Người dùng {user.email} đã đăng xuất thành công.",
         )
@@ -372,6 +383,7 @@ class AuthService:
 
         user.email = new_email
         user.is_verified = True
+        user.token_version = getattr(user, "token_version", 1) + 1  # Thu hồi toàn bộ JWT cũ (B-12)
         db.commit()
         db.refresh(user)
 

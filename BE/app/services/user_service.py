@@ -61,11 +61,11 @@ class UserService:
             )
 
         # Nếu có mật khẩu truyền vào (manual/seed), đặt active luôn; ngược lại tạo user chưa kích hoạt
-        has_password = bool(request.password and request.password.strip())
+        has_password = bool(request.password and len(request.password) > 0)
         is_active = has_password
         is_verified = has_password
         pwd_hash = (
-            get_password_hash(request.password.strip())
+            get_password_hash(request.password)
             if has_password
             else get_password_hash(uuid.uuid4().hex)
         )
@@ -176,7 +176,15 @@ class UserService:
             message=f"Đã gửi lại email kích hoạt tài khoản tới {user.email}.",
         )
 
-    def update_user(self, db: Session, user_id: str, request: UserUpdateRequest) -> UserResponse:
+    def update_user(
+        self,
+        db: Session,
+        user_id: str,
+        request: UserUpdateRequest,
+        current_admin: Optional[User] = None,
+        admin_email: Optional[str] = None,
+        ip_address: Optional[str] = None,
+    ) -> UserResponse:
         """
         UC06: Chỉnh sửa thông tin tài khoản (display_name, role, is_active)
         """
@@ -186,7 +194,33 @@ class UserService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy người dùng có ID '{user_id}'",
             )
-        
+
+        # Chặn Admin tự hạ quyền của chính mình hoặc tự vô hiệu hóa (BUG-06)
+        if current_admin and user_id == current_admin.id:
+            if request.is_active is False:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quản trị viên không thể tự vô hiệu hóa tài khoản của chính mình.",
+                )
+            if request.role is not None and request.role != "Admin":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quản trị viên không thể tự hạ quyền Admin của chính mình.",
+                )
+
+        # Chặn hạ quyền hoặc vô hiệu hóa Admin duy nhất còn lại
+        if user.role == "Admin" and (
+            (request.role is not None and request.role != "Admin") or (request.is_active is False)
+        ):
+            active_admin_count = (
+                db.query(User).filter(User.role == "Admin", User.is_active == True).count()
+            )
+            if active_admin_count <= 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Không thể thay đổi quyền hoặc vô hiệu hóa Quản trị viên duy nhất trong hệ thống.",
+                )
+
         if request.display_name is not None:
             user.display_name = request.display_name
         if request.role is not None:
@@ -195,6 +229,15 @@ class UserService:
             user.is_active = request.is_active
 
         updated_user = user_repository.update(db, user)
+
+        audit_service.log(
+            db,
+            action="admin.update_user",
+            actor_email=admin_email,
+            ip_address=ip_address,
+            details=f"Admin cập nhật tài khoản {user.email}: Role={user.role}, Active={user.is_active}",
+        )
+        db.commit()
         return UserResponse.model_validate(updated_user)
 
     def toggle_user_status(

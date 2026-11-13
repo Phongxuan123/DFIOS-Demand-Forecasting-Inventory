@@ -16,6 +16,7 @@ class ModelRegistryRepository(BaseRepository[ModelRegistry]):
         return (
             db.query(ModelRegistry)
             .filter(ModelRegistry.scope == scope, ModelRegistry.is_production == True)
+            .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
 
@@ -26,20 +27,21 @@ class ModelRegistryRepository(BaseRepository[ModelRegistry]):
         if not target_model:
             return None, None
 
-        # 1. Tìm phiên bản production cũ cùng scope để hạ cấp
-        demoted_id = None
-        old_prod = (
+        # 1. Tìm tất cả phiên bản production cũ cùng scope để hạ cấp (B-03)
+        old_prods = (
             db.query(ModelRegistry)
             .filter(
                 ModelRegistry.scope == target_model.scope,
                 ModelRegistry.is_production == True,
                 ModelRegistry.id != target_model.id,
             )
-            .first()
+            .all()
         )
-        if old_prod:
-            old_prod.is_production = False
-            demoted_id = old_prod.id
+        demoted_ids = []
+        for old in old_prods:
+            old.is_production = False
+            demoted_ids.append(old.id)
+        demoted_id = demoted_ids[0] if demoted_ids else None
 
         # 2. Thăng hạng phiên bản mới
         target_model.is_production = True

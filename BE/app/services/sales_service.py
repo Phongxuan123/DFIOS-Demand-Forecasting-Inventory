@@ -7,6 +7,7 @@ from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.orm import Session
 
 from app.models.sales_history import SalesHistory
+from app.models.product import Product
 from app.schemas.sales import (
     SaleRecordCreate,
     SaleRecordResponse,
@@ -114,11 +115,15 @@ class SalesService:
             )
 
         try:
-            content = file.file.read().decode("utf-8")
+            content_bytes = file.file.read()
+            try:
+                content = content_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                content = content_bytes.decode("latin-1")
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Không thể đọc nội dung file. Vui lòng đảm bảo file được mã hóa định dạng UTF-8.",
+                detail="Không thể đọc nội dung file. Vui lòng đảm bảo file được mã hóa định dạng UTF-8 hoặc UTF-8 BOM.",
             )
 
         csv_reader = csv.DictReader(io.StringIO(content))
@@ -129,31 +134,44 @@ class SalesService:
             )
 
         # Chuẩn hóa tên cột
-        fieldnames = [f.strip().lower() for f in csv_reader.fieldnames]
+        fieldnames = [f.strip().lower() for f in csv_reader.fieldnames if f]
         date_col = "sale_date" if "sale_date" in fieldnames else ("date" if "date" in fieldnames else None)
 
         if "item_id" not in fieldnames or "store_id" not in fieldnames or not date_col or "quantity" not in fieldnames:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cấu trúc file CSV không hợp lệ. Cần chứa các cột: item_id, store_id, sale_date (hoặc date), quantity.",
+                detail="Cấu trúc file CSV không hợp lệ. Cần chứa các cột: item_id, store_id, sale_date (hoặc date), quantity.",
             )
+
+        valid_skus = set(p[0] for p in db.query(Product.item_id).all())
+        valid_stores = {"CA_1", "CA_2", "CA_3", "CA_4", "TX_1", "TX_2", "TX_3", "WI_1", "WI_2", "WI_3"}
 
         records_to_insert = []
         skipped_count = 0
 
         for row in csv_reader:
             try:
-                item_id = row.get("item_id", "").strip()
-                store_id = row.get("store_id", "").strip()
-                raw_date = row.get(date_col, "").strip()
-                raw_qty = row.get("quantity", "").strip()
+                # Chuẩn hóa key của row về chữ thường để tránh lệch hoa/thường (R-27)
+                row_lower = {k.strip().lower(): v for k, v in row.items() if k}
+                item_id = row_lower.get("item_id", "").strip()
+                store_id = row_lower.get("store_id", "").strip()
+                raw_date = row_lower.get(date_col, "").strip()
+                raw_qty = row_lower.get("quantity", "").strip()
 
                 if not item_id or not store_id or not raw_date:
                     skipped_count += 1
                     continue
 
+                # Kiểm tra SKU và store hợp lệ (R-27)
+                if (valid_skus and item_id not in valid_skus) or store_id not in valid_stores:
+                    skipped_count += 1
+                    continue
+
                 parsed_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
                 qty = float(raw_qty)
+                if qty < 0:
+                    skipped_count += 1
+                    continue
 
                 rec_id = f"{item_id}_{store_id}_{parsed_date.isoformat()}"
                 records_to_insert.append(

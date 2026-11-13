@@ -130,6 +130,40 @@ class ProductService:
                 detail=f"Không tìm thấy sản phẩm có mã SKU '{item_id}'",
             )
 
+        # Kiểm tra các quan hệ ràng buộc khóa ngoại trước khi xóa để tránh lỗi 500 (R-26)
+        from app.models.inventory import Inventory
+        from app.models.inventory_param import InventoryParam
+        from app.models.sales_history import SalesHistory
+        from app.models.replenishment import ReplenishmentRecommendation
+
+        has_inventory = db.query(Inventory).filter(Inventory.item_id == item_id).first()
+        if has_inventory:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa sản phẩm '{item_id}' vì đang có dữ liệu tồn kho liên kết.",
+            )
+
+        has_params = db.query(InventoryParam).filter(InventoryParam.item_id == item_id).first()
+        if has_params:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa sản phẩm '{item_id}' vì đang có cấu hình tham số tồn kho (ROP/SS).",
+            )
+
+        has_recommendations = db.query(ReplenishmentRecommendation).filter(ReplenishmentRecommendation.item_id == item_id).first()
+        if has_recommendations:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa sản phẩm '{item_id}' vì đang có đề xuất nhập hàng liên kết.",
+            )
+
+        has_sales = db.query(SalesHistory).filter(SalesHistory.item_id == item_id).first()
+        if has_sales:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Không thể xóa sản phẩm '{item_id}' vì có lịch sử bán hàng.",
+            )
+
         product_repository.delete_by_item_id(db, item_id)
 
         audit_service.log(

@@ -99,6 +99,7 @@ def get_user(
 def update_user(
     user_id: str,
     req_body: UserUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -106,7 +107,15 @@ def update_user(
     **UC06 - Update User & Role Assignment (Admin only)**:
     Admin chỉnh sửa thông tin tài khoản và thay đổi vai trò (role) của người dùng.
     """
-    return user_service.update_user(db, user_id, req_body)
+    ip = get_client_ip(request)
+    return user_service.update_user(
+        db,
+        user_id=user_id,
+        request=req_body,
+        current_admin=admin,
+        admin_email=admin.email,
+        ip_address=ip,
+    )
 
 
 @router.patch("/{user_id}/status", response_model=UserResponse, summary="UC06 - Kích hoạt / Vô hiệu hóa tài khoản")

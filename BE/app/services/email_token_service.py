@@ -119,10 +119,11 @@ class EmailTokenService:
 
         token_hash = hash_token(raw_token.strip())
 
+        # Khóa hàng nguyên tử để chống race-condition tiêu thụ cùng một token (B-22)
         token_record = db.query(EmailToken).filter(
             EmailToken.token_hash == token_hash,
             EmailToken.purpose == expected_purpose,
-        ).first()
+        ).with_for_update().first()
 
         if not token_record:
             raise HTTPException(

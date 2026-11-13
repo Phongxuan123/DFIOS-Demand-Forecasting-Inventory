@@ -4,7 +4,7 @@ from app.schemas.user import UserResponse
 
 class LoginRequest(BaseModel):
     email: str = Field(..., description="Email đăng nhập")
-    password: str = Field(..., description="Mật khẩu")
+    password: str = Field(..., max_length=72, description="Mật khẩu (tối đa 72 ký tự)")
 
 class LoginResponse(BaseModel):
     access_token: str
@@ -12,15 +12,15 @@ class LoginResponse(BaseModel):
     user: UserResponse
 
 class ChangePasswordRequest(BaseModel):
-    old_password: str = Field(..., description="Mật khẩu hiện tại")
-    new_password: str = Field(..., min_length=6, description="Mật khẩu mới (tối thiểu 6 ký tự)")
+    old_password: str = Field(..., max_length=72, description="Mật khẩu hiện tại")
+    new_password: str = Field(..., min_length=6, max_length=72, description="Mật khẩu mới (6 đến 72 ký tự)")
 
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(..., description="Email tài khoản cần đặt lại mật khẩu")
 
 class ResetPasswordRequest(BaseModel):
     token: str = Field(..., description="Mã token đặt lại mật khẩu")
-    new_password: str = Field(..., min_length=6, description="Mật khẩu mới (tối thiểu 6 ký tự)")
+    new_password: str = Field(..., min_length=6, max_length=72, description="Mật khẩu mới (6 đến 72 ký tự)")
 
 class UpdateProfileRequest(BaseModel):
     display_name: Optional[str] = Field(None, description="Tên hiển thị mới")
@@ -28,11 +28,11 @@ class UpdateProfileRequest(BaseModel):
 
 class ActivateAccountRequest(BaseModel):
     token: str = Field(..., description="Token kích hoạt tài khoản")
-    password: str = Field(..., min_length=6, description="Mật khẩu thiết lập lần đầu (tối thiểu 6 ký tự)")
+    password: str = Field(..., min_length=6, max_length=72, description="Mật khẩu thiết lập lần đầu (6 đến 72 ký tự)")
 
 class ChangeEmailRequest(BaseModel):
     new_email: str = Field(..., description="Địa chỉ email mới muốn thay đổi")
-    current_password: str = Field(..., description="Mật khẩu hiện tại để xác thực")
+    current_password: str = Field(..., max_length=72, description="Mật khẩu hiện tại để xác thực")
 
 class ConfirmChangeEmailRequest(BaseModel):
     token: str = Field(..., description="Token xác nhận đổi email gửi trong hòm thư mới")

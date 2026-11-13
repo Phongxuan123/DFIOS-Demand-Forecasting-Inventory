@@ -1,7 +1,7 @@
 import csv
 from datetime import date
 import io
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,13 @@ from app.schemas.reports import (
     ForecastAccuracyReportResponse,
     InventoryPerformanceReportResponse,
 )
+
+
+def sanitize_csv_cell(val: Any) -> Any:
+    """Chống CSV Formula Injection (CWE-1236, R-42)"""
+    if isinstance(val, str) and val.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{val}"
+    return val
 
 
 class ReportsService:
@@ -129,11 +136,11 @@ class ReportsService:
                 writer.writerow([f"Class {grp}", m.mae, m.rmse, m.mase, m.wrmsse, m.sample_count])
 
         elif rtype in ("inventory", "inventory-performance"):
-            rep = self.get_inventory_performance(db, store_id=store_id, limit=500)
+            rep = self.get_inventory_performance(db, store_id=store_id, limit=5000)
             filename = f"Inventory_Performance_Report_{timestamp}.csv"
             writer.writerow(["SKU_ID", "PRODUCT_NAME", "CATEGORY", "STORE", "ON_HAND", "DAILY_DEMAND", "DAYS_OF_SUPPLY", "INVENTORY_VALUE", "TURNOVER_RATIO"])
             for it in rep.items:
-                writer.writerow([
+                writer.writerow([sanitize_csv_cell(c) for c in [
                     it.item_id,
                     it.product_name,
                     it.category,
@@ -143,7 +150,7 @@ class ReportsService:
                     it.days_of_supply,
                     it.inventory_value,
                     it.turnover_ratio,
-                ])
+                ]])
 
         elif rtype in ("cost", "cost-comparison"):
             rep = self.get_cost_comparison(db, store_id=store_id)

@@ -132,16 +132,18 @@ class ClassificationService:
             total_qty = sum(quantities)
             mean_d = total_qty / n if n > 0 else 0.0
 
-            if n > 1 and mean_d > 0:
+            if n > 1 and mean_d > 0.05:
                 variance = sum((q - mean_d) ** 2 for q in quantities) / (n - 1)
                 std_d = math.sqrt(variance)
                 cv_val = std_d / mean_d
             else:
                 std_d = 0.0
-                cv_val = 0.0
+                # SKU ít bán / cầu gián đoạn (intermittent/lumpy) thuộc nhóm bất định cao Z
+                cv_val = 2.0
 
-            # Giả định đơn giá tiêu chuẩn $10.0 cho sản lượng (hoặc tính theo tổng số lượng bán)
-            revenue = round(total_qty * 10.0, 2)
+            # Sử dụng giá bán thực tế của sản phẩm
+            unit_price = float(p.price) if p.price and float(p.price) > 0 else 1.0
+            revenue = round(total_qty * unit_price, 2)
 
             sku_stats.append({
                 "item_id": item_id,

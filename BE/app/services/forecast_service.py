@@ -280,15 +280,21 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
+        target_store = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
+
         sales = forecast_repository.get_historical_sales(
-            db, item_id=sku, store_id=store_id, start_date=start_date, end_date=end_date
+            db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
         )
         forecasts = forecast_repository.get_forecasts_for_sku(
-            db, item_id=sku, store_id=store_id, start_date=start_date, end_date=end_date
+            db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
         )
 
         overrides = forecast_repository.get_active_overrides_dict(
-            db, item_id=sku, store_id=store_id
+            db, item_id=sku, store_id=target_store
         )
 
         # Lập dict actual theo ngày
@@ -422,12 +428,28 @@ class ForecastService:
                 )
             )
 
-        # Tính phân bố sai số (Error distribution)
+        # Truy vấn doanh số thực tế để tính sai số dự báo thực nghiệm r = y - y_hat (B-06)
+        target_store = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
+        sales_recs = forecast_repository.get_historical_sales(
+            db, item_id=sku, store_id=target_store
+        )
+        sales_map = {s.sale_date: float(s.quantity) for s in sales_recs}
+        residuals: List[float] = []
+        for fc in forecasts:
+            if fc.forecast_date in sales_map:
+                residuals.append(round(sales_map[fc.forecast_date] - fc.y_pred, 2))
+
+        # UC22: Phân bố độ rộng khoảng bất định dự báo (p90 - p10)
+        eval_metrics = spreads
         err_dist: Optional[ErrorDistribution] = None
-        if spreads:
-            sorted_spreads = sorted(spreads)
-            m = sum(sorted_spreads) / len(sorted_spreads)
-            variance = sum((x - m) ** 2 for x in sorted_spreads) / len(sorted_spreads)
+        if eval_metrics:
+            sorted_vals = sorted(eval_metrics)
+            m = sum(sorted_vals) / len(sorted_vals)
+            variance = sum((x - m) ** 2 for x in sorted_vals) / len(sorted_vals)
             std = math.sqrt(variance)
 
             def get_percentile(arr: List[float], p: float) -> float:
@@ -437,13 +459,13 @@ class ForecastService:
             err_dist = ErrorDistribution(
                 mean=round(m, 2),
                 std=round(std, 2),
-                min=round(sorted_spreads[0], 2),
-                max=round(sorted_spreads[-1], 2),
-                p10=round(get_percentile(sorted_spreads, 0.10), 2),
-                p25=round(get_percentile(sorted_spreads, 0.25), 2),
-                p50=round(get_percentile(sorted_spreads, 0.50), 2),
-                p75=round(get_percentile(sorted_spreads, 0.75), 2),
-                p90=round(get_percentile(sorted_spreads, 0.90), 2),
+                min=round(sorted_vals[0], 2),
+                max=round(sorted_vals[-1], 2),
+                p10=round(get_percentile(sorted_vals, 0.10), 2),
+                p25=round(get_percentile(sorted_vals, 0.25), 2),
+                p50=round(get_percentile(sorted_vals, 0.50), 2),
+                p75=round(get_percentile(sorted_vals, 0.75), 2),
+                p90=round(get_percentile(sorted_vals, 0.90), 2),
             )
 
         return ForecastUncertaintyResponse(
@@ -626,6 +648,19 @@ class ForecastService:
         )
         db.commit()
 
+        # Tự động đồng bộ và tính lại ROP theo dự báo mới (B-01)
+        try:
+            from app.models.forecast_window_quantile import ForecastWindowQuantile
+            from app.services.optimization_service import optimization_service
+            db.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.store_id == target_store,
+                ForecastWindowQuantile.item_id == sku,
+            ).delete()
+            optimization_service.recompute_parameters(db, store_id=target_store, item_id=sku)
+            db.commit()
+        except Exception:
+            pass
+
         return ForecastOverrideResponse.model_validate(saved)
 
     def revert_override(
@@ -658,6 +693,19 @@ class ForecastService:
             details=f"Hoàn tác can thiệp dự báo ID '{override_id}' cho SKU '{sku}'. Khôi phục giá trị gốc={orig_val}.",
         )
         db.commit()
+
+        # Tự động đồng bộ và tính lại ROP sau khi hoàn tác can thiệp (B-01)
+        try:
+            from app.models.forecast_window_quantile import ForecastWindowQuantile
+            from app.services.optimization_service import optimization_service
+            db.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.store_id == override.store_id,
+                ForecastWindowQuantile.item_id == sku,
+            ).delete()
+            optimization_service.recompute_parameters(db, store_id=override.store_id, item_id=sku)
+            db.commit()
+        except Exception:
+            pass
 
         return ForecastOverrideRevertResponse(
             success=True,
@@ -767,6 +815,21 @@ class ForecastService:
                 details=f"Can thiệp dự báo hàng loạt: thành công={created_count}, bỏ qua={skipped_count}",
             )
             db.commit()
+
+            # Tự động đồng bộ và tính lại ROP cho toàn bộ các SKU bị can thiệp (B-01)
+            try:
+                from app.models.forecast_window_quantile import ForecastWindowQuantile
+                from app.services.optimization_service import optimization_service
+                affected_keys = {(it.item_id, it.store_id) for it in request.items}
+                for affected_sku, affected_store in affected_keys:
+                    db.query(ForecastWindowQuantile).filter(
+                        ForecastWindowQuantile.store_id == affected_store,
+                        ForecastWindowQuantile.item_id == affected_sku,
+                    ).delete()
+                    optimization_service.recompute_parameters(db, store_id=affected_store, item_id=affected_sku)
+                db.commit()
+            except Exception:
+                pass
 
         return BulkOverrideResponse(
             success=True,

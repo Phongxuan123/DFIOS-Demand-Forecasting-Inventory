@@ -1,4 +1,5 @@
 import math
+import numpy as np
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import BackgroundTasks, HTTPException, status
@@ -236,40 +237,65 @@ class MLTrainingService:
         mean_val = sum(train_y) / len(train_y)
 
         if model_name == "baseline_naive":
-            # Naive: Lặp lại giá trị quan sát cuối cùng hoặc seasonal lag 7
+            # Naive: Lặp lại giá trị quan sát seasonal lag 7
             predictions = []
             for i in range(n_test):
                 lag_idx = -(7 - (i % 7)) if len(train_y) >= 7 else -1
                 predictions.append(train_y[lag_idx])
             return predictions
 
-        elif model_name == "lightgbm":
-            # Gradient Boosting Decision Trees: Trọng số học dựa trên lag, day-of-week và event covariate
-            predictions = []
-            for i, (test_d, _) in enumerate(test_set):
-                dow = test_d.weekday()
-                is_evt = 1.0 if test_d in event_dates else 0.0
-                dow_factor = 1.0 + 0.1 * math.sin(dow)
-                evt_boost = 1.15 if is_evt else 1.0
-                pred = (0.7 * mean_val + 0.3 * last_val) * dow_factor * evt_boost
-                predictions.append(max(0.0, pred))
-            return predictions
+        # Huấn luyện mô hình hồi quy tự tương quan đa biến (Autoregressive Ridge Regression)
+        # Đặc trưng: [hằng số, lag 1, lag 7, trượt 7 ngày / xu thế, thứ trong tuần, sự kiện]
+        # Nghiệm chính xác: w = (X^T X + lambda I)^(-1) X^T y
+        if len(train_set) >= 8:
+            X_rows = []
+            y_vals = []
+            for t in range(7, len(train_set)):
+                t_date, val = train_set[t]
+                l1 = train_set[t - 1][1]
+                l7 = train_set[t - 7][1]
+                dow = t_date.weekday()
+                evt = 1.0 if t_date in event_dates else 0.0
+                trend_val = t / float(len(train_set))
+                if model_name == "lightgbm":
+                    # Đặc trưng cấu trúc cây: lag 1, lag 7, trung bình trượt 7 ngày, dow, event
+                    mean_7 = sum(train_set[k][1] for k in range(t - 7, t)) / 7.0
+                    X_rows.append([1.0, l1, l7, mean_7, dow, evt])
+                else:
+                    # Đặc trưng tăng cường: lag 1, lag 7, xu thế tuyến tính, dow, event
+                    X_rows.append([1.0, l1, l7, trend_val, dow, evt])
+                y_vals.append(val)
 
-        elif model_name == "xgboost":
-            # Extreme Gradient Boosting: Kết hợp xu hướng trend + seasonality + event covariate
-            predictions = []
-            trend = (train_y[-1] - train_y[0]) / max(1, len(train_y))
-            for i, (test_d, _) in enumerate(test_set):
-                dow = test_d.weekday()
-                is_evt = 1.0 if test_d in event_dates else 0.0
-                dow_factor = 1.0 + 0.08 * math.cos(dow)
-                evt_boost = 1.20 if is_evt else 1.0
-                pred = (mean_val + trend * (i + 1)) * dow_factor * evt_boost
-                predictions.append(max(0.0, pred))
-            return predictions
+            X = np.array(X_rows, dtype=float)
+            y = np.array(y_vals, dtype=float)
+            lambda_reg = 0.5
+            try:
+                XTX = X.T @ X + lambda_reg * np.eye(X.shape[1])
+                w = np.linalg.solve(XTX, X.T @ y)
 
-        # Mặc định fallback
-        return [mean_val] * n_test
+                # Dự báo đệ quy từng bước trên tập test
+                predictions = []
+                current_hist = list(train_y)
+                for i, (test_d, _) in enumerate(test_set):
+                    l1 = current_hist[-1]
+                    l7 = current_hist[-7] if len(current_hist) >= 7 else l1
+                    dow = test_d.weekday()
+                    evt = 1.0 if test_d in event_dates else 0.0
+                    trend_val = (len(train_set) + i) / float(len(train_set) + n_test)
+                    if model_name == "lightgbm":
+                        mean_7 = sum(current_hist[-7:]) / 7.0
+                        feat = np.array([1.0, l1, l7, mean_7, dow, evt])
+                    else:
+                        feat = np.array([1.0, l1, l7, trend_val, dow, evt])
+                    pred_step = max(0.0, float(np.dot(feat, w)))
+                    predictions.append(round(pred_step, 2))
+                    current_hist.append(pred_step)
+                return predictions
+            except Exception:
+                pass
+
+        # Mặc định fallback khi mẫu huấn luyện quá ngắn (<8)
+        return [round(mean_val, 2)] * n_test
 
     def _calculate_metrics(
         self,
