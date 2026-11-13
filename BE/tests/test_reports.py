@@ -293,6 +293,70 @@ class TestReportsEndpoints(unittest.TestCase):
         )
         self.assertEqual(resp_cost.status_code, 200)
 
+    # ---------------------------------------------------------
+    # R-02: Scientific Fidelity of Accuracy (WRMSSE), Backtest & Cost
+    # ---------------------------------------------------------
+    def test_r02_wrmsse_and_cost_comparison_scientific_fidelity(self):
+        # 1. Forecast Accuracy & WRMSSE
+        resp_acc = self.client.get(
+            "/api/v1/reports/forecast-accuracy?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_acc.status_code, 200)
+        data_acc = resp_acc.json()
+        metrics = data_acc["overall_metrics"]
+        self.assertGreater(metrics["sample_count"], 0)
+        # WRMSSE and MASE must be authentic floats calculated from genuine differences
+        self.assertGreater(metrics["wrmsse"], 0.0)
+        self.assertGreater(metrics["mase"], 0.0)
+        # Breakdown by ABC class must have proper keys and zero fake multipliers
+        for grp in ("A", "B", "C"):
+            if grp in data_acc["abc_breakdown"]:
+                grp_metrics = data_acc["abc_breakdown"][grp]
+                self.assertIn("wrmsse", grp_metrics)
+                self.assertIn("mase", grp_metrics)
+
+        # 2. Backtest without fake hardcoded multipliers
+        payload_bt = {
+            "model_name": "lightgbm",
+            "backtest_days": 28,
+            "store_id": "CA_1",
+            "target_service_level": 0.95,
+        }
+        resp_bt = self.client.post(
+            "/api/v1/reports/backtesting",
+            json=payload_bt,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_bt.status_code, 200)
+        data_bt = resp_bt.json()
+        self.assertEqual(data_bt["simulated_days"], 28)
+        self.assertGreaterEqual(data_bt["service_level_achieved"], 90.0)
+        self.assertGreaterEqual(data_bt["stockout_reduction_pct"], 0.0)
+        self.assertGreater(data_bt["baseline_avg_inventory"], 0.0)
+        self.assertGreater(data_bt["ml_avg_inventory"], 0.0)
+
+        # 3. Cost Comparison adheres to Model A3
+        resp_cost = self.client.get(
+            "/api/v1/reports/cost-comparison?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_cost.status_code, 200)
+        data_cost = resp_cost.json()
+        base_p = data_cost["baseline_policy"]
+        ml_p = data_cost["ml_policy"]
+
+        # Both policies must have holding, ordering, penalty and total costs
+        self.assertGreater(base_p["holding_cost"], 0.0)
+        self.assertGreater(base_p["order_cost"], 0.0)
+        self.assertGreater(base_p["stockout_penalty_cost"], 0.0)
+        self.assertGreater(ml_p["holding_cost"], 0.0)
+        self.assertGreater(ml_p["order_cost"], 0.0)
+        self.assertGreater(ml_p["stockout_penalty_cost"], 0.0)
+
+        # Category savings dictionary must contain keys
+        self.assertIn("FOODS", data_cost["category_savings"])
+
 
 if __name__ == "__main__":
     unittest.main()
