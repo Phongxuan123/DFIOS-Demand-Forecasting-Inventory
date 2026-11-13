@@ -114,9 +114,10 @@ class PipelineService:
         started_at = datetime.now(timezone.utc).isoformat()
         run_id = f"pipe-{uuid.uuid4().hex[:8]}"
 
-        # 1. Dự báo: đếm số SKU hiện có
+        # 1. Dự báo: đếm số lượng dự báo thực tế trong cơ sở dữ liệu
+        fc_count = db.query(Forecast).filter(Forecast.store_id == request.store_id).count()
         sku_count = db.query(Product).count() or 3
-        forecasts_generated = sku_count * request.horizon
+        forecasts_generated = fc_count if fc_count > 0 else (sku_count * request.horizon)
 
         # 2. Tự động tính lại SS, ROP, EOQ (UC30, UC50)
         existing_params_count = db.query(InventoryParam).filter(InventoryParam.store_id == request.store_id).count()

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.calibration_state import CalibrationState
+from app.models.inventory import Inventory
 from app.models.service_outcomes import ServiceOutcome
 from app.models.classification import SKUClassification
 from app.models.inventory_daily import InventoryDaily
