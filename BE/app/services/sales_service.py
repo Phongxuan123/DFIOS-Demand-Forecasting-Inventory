@@ -1,7 +1,7 @@
 import csv
 import io
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
 from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.orm import Session
@@ -136,16 +136,19 @@ class SalesService:
         # Chuẩn hóa tên cột
         fieldnames = [f.strip().lower() for f in csv_reader.fieldnames if f]
         date_col = "sale_date" if "sale_date" in fieldnames else ("date" if "date" in fieldnames else None)
+        qty_col = (
+            "quantity"
+            if "quantity" in fieldnames
+            else ("sales" if "sales" in fieldnames else ("so_luong" if "so_luong" in fieldnames else ("qty" if "qty" in fieldnames else None)))
+        )
 
-        if "item_id" not in fieldnames or "store_id" not in fieldnames or not date_col or "quantity" not in fieldnames:
+        if "item_id" not in fieldnames or "store_id" not in fieldnames or not date_col or not qty_col:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cấu trúc file CSV không hợp lệ. Cần chứa các cột: item_id, store_id, sale_date (hoặc date), quantity.",
+                detail="Cấu trúc file CSV không hợp lệ. Cần chứa các cột: item_id, store_id, sale_date (hoặc date), quantity (hoặc sales).",
             )
 
         valid_skus = set(p[0] for p in db.query(Product.item_id).all())
-        valid_stores = {"CA_1", "CA_2", "CA_3", "CA_4", "TX_1", "TX_2", "TX_3", "WI_1", "WI_2", "WI_3"}
-
         records_to_insert = []
         skipped_count = 0
 
@@ -156,14 +159,16 @@ class SalesService:
                 item_id = row_lower.get("item_id", "").strip()
                 store_id = row_lower.get("store_id", "").strip()
                 raw_date = row_lower.get(date_col, "").strip()
-                raw_qty = row_lower.get("quantity", "").strip()
+                raw_qty = row_lower.get(qty_col, "").strip()
 
-                if not item_id or not store_id or not raw_date:
+                if not item_id or not store_id or not raw_date or not raw_qty:
                     skipped_count += 1
                     continue
 
-                # Kiểm tra SKU và store hợp lệ (R-27)
-                if (valid_skus and item_id not in valid_skus) or store_id not in valid_stores:
+                # Kiểm tra SKU và store hợp lệ (R-27, N-23: hỗ trợ mở rộng kho mới hợp lệ)
+                import re
+                is_valid_store = bool(re.match(r"^[A-Za-z0-9_-]{2,30}$", store_id))
+                if (valid_skus and item_id not in valid_skus) or not is_valid_store:
                     skipped_count += 1
                     continue
 
@@ -193,6 +198,25 @@ class SalesService:
             )
 
         inserted_count = sales_repository.bulk_insert(db, records_to_insert)
+
+        # N-23: Tự động khởi tạo SimClock và Inventory khi onboarding kho mới
+        from app.models.sim_clock import SimClock
+        from app.models.inventory import Inventory
+        stores_in_batch = {r.store_id for r in records_to_insert}
+        now_utc = datetime.now(timezone.utc)
+        for s_id in stores_in_batch:
+            clock = db.query(SimClock).filter(SimClock.store_id == s_id).first()
+            if not clock:
+                dates_for_store = [r.sale_date for r in records_to_insert if r.store_id == s_id]
+                max_d = max(dates_for_store)
+                min_d = min(dates_for_store)
+                db.add(SimClock(store_id=s_id, current_date=max_d, start_date=min_d, mode="replay", speed=1.0))
+            existing_inv = set(
+                inv[0] for inv in db.query(Inventory.item_id).filter(Inventory.store_id == s_id).all()
+            )
+            items_for_store = {r.item_id for r in records_to_insert if r.store_id == s_id}
+            for itm in (items_for_store - existing_inv):
+                db.add(Inventory(item_id=itm, store_id=s_id, on_hand=0.0, on_order=0.0, updated_at=now_utc))
 
         audit_service.log(
             db,

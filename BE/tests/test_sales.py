@@ -174,6 +174,44 @@ class TestSalesEndpoints(unittest.TestCase):
         self.assertEqual(check_res.status_code, 200)
         self.assertEqual(check_res.json()["total"], 2)
 
+    def test_import_sales_csv_with_sales_header_and_new_store_onboarding(self):
+        # UC15/N-23: Test import CSV using 'sales' column header and onboarding new store (STORE_VN_01)
+        csv_content = "item_id,store_id,sale_date,sales,price\nFOODS_1_001,STORE_VN_01,2016-03-01,25.0,3.5\nFOODS_1_001,STORE_VN_01,2016-03-02,30.0,3.5\n"
+        csv_file = io.BytesIO(csv_content.encode("utf-8"))
+
+        res = self.client.post(
+            "/api/v1/sales/import",
+            files={"file": ("sales_vn.csv", csv_file, "text/csv")},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["imported_count"], 2)
+        self.assertEqual(data["skipped_count"], 0)
+
+        # Assert SimClock and Inventory were onboarded
+        from app.models.sim_clock import SimClock
+        from app.models.inventory import Inventory
+        with self.TestingSessionLocal() as session:
+            clock = session.query(SimClock).filter(SimClock.store_id == "STORE_VN_01").first()
+            self.assertIsNotNone(clock)
+            self.assertEqual(clock.current_date, date(2016, 3, 2))
+
+            inv = session.query(Inventory).filter(
+                Inventory.store_id == "STORE_VN_01",
+                Inventory.item_id == "FOODS_1_001",
+            ).first()
+            self.assertIsNotNone(inv)
+
+    def test_download_import_template_headers(self):
+        # UC-Import/N-23: Template endpoint /data/template has consistent headers matching FE
+        res = self.client.get(
+            "/api/v1/data/template",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("item_id,store_id,sale_date,quantity,sell_price", res.text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -129,6 +129,21 @@ def upload_store_data(
                 db.add(new_h)
                 hist_map[hist_id] = new_h
 
+        # N-23: Tự động khởi tạo SimClock và Inventory khi onboarding kho mới qua /imports
+        from app.models.sim_clock import SimClock
+        from app.models.inventory import Inventory
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        if not clock:
+            dates = [pd.to_datetime(d).date() for d in clean_df["sale_date"].unique()]
+            max_d = max(dates)
+            min_d = min(dates)
+            db.add(SimClock(store_id=store_id, current_date=max_d, start_date=min_d, mode="replay", speed=1.0))
+        existing_inv = set(
+            inv[0] for inv in db.query(Inventory.item_id).filter(Inventory.store_id == store_id).all()
+        )
+        for itm in set(clean_df["item_id"]) - existing_inv:
+            db.add(Inventory(item_id=itm, store_id=store_id, on_hand=0.0, on_order=0.0, updated_at=now))
+
     db.commit()
 
     return {
@@ -151,13 +166,13 @@ def download_import_template(
 ):
     """
     **Task API.2 - Get Import Template**:
-    Tải file CSV template chuẩn (cột: sale_date, store_id, item_id, sales, price).
+    Tải file CSV template chuẩn (cột: item_id, store_id, sale_date, quantity, sell_price).
     """
     if os.path.exists(TEMPLATE_PATH):
         with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
             csv_content = f.read()
     else:
-        csv_content = "sale_date,store_id,item_id,sales,price\n2026-01-01,CA_1,FOODS_1_001,15,2.50\n"
+        csv_content = "item_id,store_id,sale_date,quantity,sell_price\nFOODS_1_001,STORE_01,2026-01-01,15,2.50\n"
 
     return Response(
         content=csv_content,
