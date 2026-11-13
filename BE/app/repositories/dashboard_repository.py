@@ -42,8 +42,9 @@ class DashboardRepository:
             & (Inventory.store_id == InventoryParam.store_id),
         )
 
-        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
-        inv_query = inv_query.filter(Inventory.store_id == target_store)
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
+        if not is_global:
+            inv_query = inv_query.filter(Inventory.store_id == store_id.strip())
 
         rows = inv_query.all()
         total_monitored = len(rows)
@@ -72,9 +73,10 @@ class DashboardRepository:
         rep_query = db.query(ReplenishmentRecommendation).filter(
             ReplenishmentRecommendation.status == "PENDING"
         )
-        rep_query = rep_query.filter(
-            ReplenishmentRecommendation.store_id == target_store
-        )
+        if not is_global:
+            rep_query = rep_query.filter(
+                ReplenishmentRecommendation.store_id == store_id.strip()
+            )
         pending_replenishments = rep_query.count()
 
         # Lấy chỉ số chính xác thực nghiệm từ Model Registry (BUG-14, N-16)
@@ -119,25 +121,32 @@ class DashboardRepository:
         """
         UC08: Tổng hợp chuỗi xu hướng nhu cầu thực tế và dự báo theo ngày/tuần/tháng.
         """
-        target_store = (
-            store_id.strip()
-            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
-            else "CA_1"
-        )
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
 
-        # Xác định mốc thời gian căn cứ theo sim_clock của cửa hàng
-        clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
-        clock_date = clock.current_date if clock and clock.current_date else None
-        if not clock_date:
-            max_sale = db.query(func.max(SalesHistory.sale_date)).filter(SalesHistory.store_id == target_store).scalar()
-            clock_date = max_sale if max_sale else date(2016, 5, 23)
+        # Xác định mốc thời gian căn cứ theo sim_clock
+        if not is_global:
+            target_store = store_id.strip()
+            clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+            clock_date = clock.current_date if clock and clock.current_date else None
+            if not clock_date:
+                max_sale = db.query(func.max(SalesHistory.sale_date)).filter(SalesHistory.store_id == target_store).scalar()
+                clock_date = max_sale if max_sale else date(2016, 5, 23)
+        else:
+            clock_max = db.query(func.max(SimClock.current_date)).scalar()
+            clock_date = clock_max if clock_max else None
+            if not clock_date:
+                max_sale = db.query(func.max(SalesHistory.sale_date)).scalar()
+                clock_date = max_sale if max_sale else date(2016, 5, 23)
 
         # 1. Truy vấn lịch sử bán hàng thực tế gần nhất (đến mốc clock_date)
         sales_q = db.query(
             SalesHistory.sale_date,
             func.sum(SalesHistory.quantity).label("total_qty"),
         )
-        sales_q = sales_q.filter(SalesHistory.store_id == target_store, SalesHistory.sale_date <= clock_date)
+        if not is_global:
+            sales_q = sales_q.filter(SalesHistory.store_id == target_store, SalesHistory.sale_date <= clock_date)
+        else:
+            sales_q = sales_q.filter(SalesHistory.sale_date <= clock_date)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             sales_q = sales_q.join(Product, SalesHistory.item_id == Product.item_id).filter(
@@ -164,7 +173,10 @@ class DashboardRepository:
             Forecast.forecast_date,
             func.sum(Forecast.y_pred).label("total_pred"),
         )
-        fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
+        if not is_global:
+            fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
+        else:
+            fc_q = fc_q.filter(Forecast.forecast_date >= clock_date)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             fc_q = fc_q.join(Product, Forecast.item_id == Product.item_id).filter(

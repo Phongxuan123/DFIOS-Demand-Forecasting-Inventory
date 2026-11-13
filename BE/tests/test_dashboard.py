@@ -420,6 +420,67 @@ class TestDashboardEndpoints(unittest.TestCase):
         self.assertEqual(resp_with_model.status_code, 200)
         self.assertEqual(resp_with_model.json()["avg_forecast_accuracy"], "WRMSSE 0.4935")
 
+    def test_kpis_and_demand_trend_multi_store_global(self):
+        # UC07/UC08/N-17: Test that global KPI & Demand Trend aggregate across all stores
+        with self.TestingSessionLocal() as session:
+            inv_tx = Inventory(item_id="FOODS_1_001", store_id="TX_1", on_hand=50.0, on_order=0.0)
+            param_tx = InventoryParam(
+                id="param-tx-02",
+                item_id="FOODS_1_001",
+                store_id="TX_1",
+                safety_stock=10.0,
+                reorder_point=20.0,
+                unit_price=10.0,
+                eoq=30.0,
+            )
+            rep_tx = ReplenishmentRecommendation(
+                id="rec-tx-01",
+                item_id="FOODS_1_001",
+                store_id="TX_1",
+                recommended_qty=30.0,
+                final_qty=30.0,
+                priority="HIGH",
+                status="PENDING",
+                reason="Stock <= ROP",
+            )
+            sale_tx = SalesHistory(
+                id="sh-tx-01",
+                item_id="FOODS_1_001",
+                store_id="TX_1",
+                sale_date=date.today() - timedelta(days=2),
+                quantity=15.0,
+            )
+            session.add_all([inv_tx, param_tx, rep_tx, sale_tx])
+            session.commit()
+
+        # 1. Global KPIs (no store_id) - sums CA_1 (550.0) + TX_1 (500.0) = 1050.0
+        resp_global_kpi = self.client.get(
+            "/api/v1/dashboard/kpis",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_global_kpi.status_code, 200)
+        global_kpis = resp_global_kpi.json()
+        self.assertEqual(global_kpis["total_inventory_value"], 1050.0)
+        self.assertEqual(global_kpis["pending_replenishments_count"], 2)
+
+        # 2. Specific store CA_1 KPIs - only CA_1 value 550.0 and 1 pending rec
+        resp_ca_kpi = self.client.get(
+            "/api/v1/dashboard/kpis?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_ca_kpi.status_code, 200)
+        ca_kpis = resp_ca_kpi.json()
+        self.assertEqual(ca_kpis["total_inventory_value"], 550.0)
+        self.assertEqual(ca_kpis["pending_replenishments_count"], 1)
+
+        # 3. Demand trend: global includes both stores
+        resp_trend_global = self.client.get(
+            "/api/v1/dashboard/demand-trend",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_trend_global.status_code, 200)
+        self.assertTrue(len(resp_trend_global.json()["data"]) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
