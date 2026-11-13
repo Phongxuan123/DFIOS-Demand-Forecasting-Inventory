@@ -22,15 +22,16 @@ with engine.begin() as conn:
     """))
 
 STORES = ["CA_1", "TX_1", "WI_1"]
-START_DATE = "2015-05-24"
+STORE_START_DATES = {"CA_1": "2016-04-25", "TX_1": "2016-04-25", "WI_1": "2016-04-25"}
 now = datetime.now(timezone.utc)
 
 records = []
 for s in STORES:
+    s_date = STORE_START_DATES.get(s, "2016-04-25")
     records.append({
         "store_id": s,
-        "current_date": START_DATE,
-        "start_date": START_DATE,
+        "current_date": s_date,
+        "start_date": s_date,
         "mode": "replay",
         "speed": 1.0,
         "updated_at": now

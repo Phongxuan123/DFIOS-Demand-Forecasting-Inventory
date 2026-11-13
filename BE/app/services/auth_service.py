@@ -34,14 +34,16 @@ from app.core.config import settings
 
 
 class AuthService:
-    def login(self, db: Session, login_data: LoginRequest) -> LoginResponse:
+    def login(self, db: Session, login_data: LoginRequest, client_ip: Optional[str] = None) -> LoginResponse:
         """
-        UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration)
+        UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration, N-12)
         """
         email_clean = login_data.email.strip().lower()
+        ip_part = client_ip.strip() if client_ip else "unknown"
+        rate_key = f"login:{email_clean}:{ip_part}"
 
-        # Chống brute-force: tối đa 10 lần sai trong 5 phút (R-24)
-        if rate_limiter.is_rate_limited(f"login:{email_clean}", max_requests=10, window_seconds=300):
+        # Chống brute-force: tối đa 10 lần sai trong 5 phút trên cặp (email, ip) (N-12)
+        if rate_limiter.check_limit(rate_key, max_requests=10, window_seconds=300):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
@@ -49,6 +51,7 @@ class AuthService:
 
         user = user_repository.get_by_email(db, email_clean)
         if not user:
+            rate_limiter.record_attempt(rate_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
@@ -62,10 +65,14 @@ class AuthService:
             )
 
         if not verify_password(login_data.password, user.password_hash):
+            rate_limiter.record_attempt(rate_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
+
+        # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
+        rate_limiter.clear(rate_key)
 
         access_token = create_access_token(
             data={

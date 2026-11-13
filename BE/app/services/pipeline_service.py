@@ -139,9 +139,11 @@ class PipelineService:
             classifications_updated = existing_class_count
 
         # 4. Tự động sinh đề xuất đặt hàng mới (UC33)
+        sim_clock = self.get_sim_clock(db, store_id=request.store_id)
         replenishments_generated = replenishment_service.generate_recommendations(
             db,
             store_id=request.store_id,
+            review_date=sim_clock.current_date if sim_clock else None,
         )
 
         duration = round(time.time() - start_time, 2)
@@ -166,7 +168,7 @@ class PipelineService:
     def get_sim_clock(self, db: Session, store_id: str = "CA_1") -> SimClock:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
         if not clock:
-            base_date = date(2015, 5, 24)
+            base_date = date(2016, 4, 25)
             clock = SimClock(
                 store_id=store_id,
                 current_date=base_date,
@@ -219,6 +221,12 @@ class PipelineService:
             )
 
         total_days = (target_date - prev_date).days
+        if total_days > 90:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Khoảng thời gian tua ({total_days} ngày) vượt quá giới hạn tối đa cho phép (90 ngày).",
+            )
+
         job_events: List[str] = []
         reviews_executed = 0
         stockouts_recorded = 0
@@ -242,11 +250,17 @@ class PipelineService:
                 .filter(
                     ReplenishmentRecommendation.store_id == store_id,
                     ReplenishmentRecommendation.review_date == order_arrival_date,
-                    ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED"]),
+                    ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED", "PENDING"]),
                 )
                 .all()
             )
-            arrived_map = {o.item_id: float(o.final_qty) for o in arrived_orders}
+            arrived_map: Dict[str, float] = {}
+            for o in arrived_orders:
+                qty = float(o.final_qty or o.recommended_qty or 0.0)
+                arrived_map[o.item_id] = arrived_map.get(o.item_id, 0.0) + qty
+                if o.status in ["PENDING", "APPROVED"]:
+                    o.status = "COMPLETED"
+                    o.decided_at = datetime.combine(t, datetime.min.time(), tzinfo=timezone.utc)
 
             sales_today = (
                 db.query(SalesHistory)
@@ -262,12 +276,23 @@ class PipelineService:
             )
             inv_map = {inv.item_id: inv for inv in inv_records}
 
+            # Bulk query để tránh N+1 network queries sang database (N-08 / N-11)
+            existing_dailies = (
+                db.query(InventoryDaily)
+                .filter(
+                    InventoryDaily.store_id == store_id,
+                    InventoryDaily.date == t,
+                )
+                .all()
+            )
+            daily_map = {d.item_id: d for d in existing_dailies}
+
             day_stockouts = 0
 
             for item_id in item_ids:
                 inv = inv_map.get(item_id)
                 if not inv:
-                    inv = Inventory(item_id=item_id, store_id=store_id, on_hand=50.0, on_order=0.0)
+                    inv = Inventory(item_id=item_id, store_id=store_id, on_hand=0.0, on_order=0.0)
                     db.add(inv)
                     inv_map[item_id] = inv
 
@@ -292,21 +317,14 @@ class PipelineService:
 
                 inv.updated_at = now
 
-                inv_daily = (
-                    db.query(InventoryDaily)
-                    .filter(
-                        InventoryDaily.store_id == store_id,
-                        InventoryDaily.item_id == item_id,
-                        InventoryDaily.date == t,
-                    )
-                    .first()
-                )
+                inv_daily = daily_map.get(item_id)
                 if inv_daily:
                     inv_daily.on_hand_end = inv.on_hand
                     inv_daily.on_order = inv.on_order
                     inv_daily.sales = actual_sales
                     inv_daily.lost_sales = lost_sales
                     inv_daily.stockout = stockout
+                    inv_daily.updated_at = now
                 else:
                     inv_daily = InventoryDaily(
                         store_id=store_id,
@@ -320,13 +338,14 @@ class PipelineService:
                         created_at=now,
                     )
                     db.add(inv_daily)
+                    daily_map[item_id] = inv_daily
 
             stockouts_recorded += day_stockouts
 
             # --- Job J6: Đóng chu kỳ phục vụ nếu chạm mốc chu kỳ (delta_days % R == 0 và delta_days > 0) ---
             if delta_days > 0 and delta_days % review_period_days == 0:
                 cycle_idx = (delta_days // review_period_days) - 1
-                cycle_start = t - timedelta(days=review_period_days)
+                cycle_start = t - timedelta(days=review_period_days - 1)
                 calibrator_service.record_cycle_outcome(
                     db=db,
                     store_id=store_id,
@@ -342,7 +361,9 @@ class PipelineService:
                 reviews_executed += 1
 
                 # Job J3: Window Quantile Route (c)
-                for item_id in item_ids[:10]:
+                # Tính toán và lưu trữ phân phối cửa sổ cho các SKU có doanh số
+                active_skus = [iid for iid in item_ids if iid in sales_map or iid in arrived_map]
+                for item_id in active_skus:
                     window_quantile_service.get_or_create_window_quantile(
                         db=db,
                         store_id=store_id,
@@ -362,7 +383,12 @@ class PipelineService:
                 )
 
                 optimization_service.recompute_parameters(db, store_id=store_id)
-                recs_count = replenishment_service.generate_recommendations(db, store_id=store_id)
+                recs_count = replenishment_service.generate_recommendations(
+                    db,
+                    store_id=store_id,
+                    review_date=t,
+                    auto_order=True,
+                )
                 recommendations_generated += recs_count
 
                 job_events.append(

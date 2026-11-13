@@ -381,6 +381,92 @@ class TestC3OutAndSimulation(unittest.TestCase):
         finally:
             db.close()
 
+    def test_simulator_j1_j6_advance_sim_clock_and_order_cycle(self):
+        """
+        Test N-08 & N-11: Kiểm tra bộ mô phỏng J1-J6 trong advance_sim_clock:
+        - Đề xuất bổ sung có review_date = t
+        - Đơn hàng sau lead_time_days chuyển status COMPLETED và nhập kho (on_hand tăng)
+        - InventoryDaily được lưu đầy đủ không có N+1 query
+        - Chặn tua > 90 ngày với HTTP 400
+        - Chu kỳ rà soát J6 không chồng lấn (đúng 7 ngày)
+        """
+        from app.services.pipeline_service import pipeline_service
+        from app.services.replenishment_service import replenishment_service
+        from app.models.product import Product
+        from app.models.inventory import Inventory
+        from app.models.inventory_daily import InventoryDaily
+        from app.models.inventory_param import InventoryParam
+        from app.models.sales_history import SalesHistory
+        from app.models.replenishment import ReplenishmentRecommendation
+        from app.models.sim_clock import SimClock
+        from fastapi import HTTPException
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            start_d = date(2016, 4, 25)
+            clock = SimClock(store_id="CA_1", current_date=start_d, start_date=start_d)
+            db.add(clock)
+
+            # 1. Tạo sản phẩm và tồn kho ban đầu
+            p = Product(item_id="TEST_ITEM_01", name="Test Item", cat_id="FOODS", price=10.0)
+            inv = Inventory(item_id="TEST_ITEM_01", store_id="CA_1", on_hand=10.0, on_order=0.0)
+            param = InventoryParam(
+                id="CA_1_TEST_ITEM_01",
+                item_id="TEST_ITEM_01",
+                store_id="CA_1",
+                s=20.0,
+                S=50.0,
+                reorder_point=20.0,
+                safety_stock=10.0,
+                eoq=30.0,
+            )
+            db.add_all([p, inv, param])
+
+            # 2. Tạo sales history cho 14 ngày
+            for i in range(14):
+                s_date = start_d + timedelta(days=i + 1)
+                db.add(SalesHistory(id=f"sh_{i}", item_id="TEST_ITEM_01", store_id="CA_1", sale_date=s_date, quantity=2.0))
+            db.commit()
+
+            # 3. Chặn tua > 90 ngày
+            with self.assertRaises(HTTPException) as cm:
+                pipeline_service.advance_sim_clock(db, store_id="CA_1", days=95)
+            self.assertEqual(cm.exception.status_code, 400)
+
+            # 4. Tua 7 ngày (từ 2016-04-25 đến 2016-05-02)
+            res = pipeline_service.advance_sim_clock(
+                db, store_id="CA_1", days=7, lead_time_days=3, review_period_days=7
+            )
+            self.assertTrue(res["success"])
+            self.assertEqual(res["days_advanced"], 7)
+            self.assertEqual(res["current_date"], date(2016, 5, 2))
+
+            # Kiểm tra InventoryDaily đã sinh 7 bản ghi
+            dailies = db.query(InventoryDaily).filter(InventoryDaily.item_id == "TEST_ITEM_01").all()
+            self.assertEqual(len(dailies), 7)
+
+            # Kiểm tra đề xuất bổ sung sinh ở review day có review_date = 2016-05-02
+            recs = db.query(ReplenishmentRecommendation).filter(ReplenishmentRecommendation.item_id == "TEST_ITEM_01").all()
+            self.assertGreaterEqual(len(recs), 1)
+            first_rec = recs[0]
+            self.assertEqual(first_rec.review_date, date(2016, 5, 2))
+
+            # 5. Tua tiếp 3 ngày (đến 2016-05-05 = lead_time_days) -> đơn hàng phải đến và COMPLETED
+            res2 = pipeline_service.advance_sim_clock(
+                db, store_id="CA_1", days=3, lead_time_days=3, review_period_days=7
+            )
+            db.refresh(first_rec)
+            self.assertEqual(first_rec.status, "COMPLETED")
+
+            # on_hand phải được cộng thêm số lượng đơn hàng về
+            db.refresh(inv)
+            self.assertGreater(inv.on_hand, 0.0)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

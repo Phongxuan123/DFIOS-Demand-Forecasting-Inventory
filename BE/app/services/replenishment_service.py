@@ -1,7 +1,7 @@
 import csv
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -40,11 +40,18 @@ class ReplenishmentService:
     Sinh, điều chỉnh, phê duyệt, từ chối và xuất báo cáo đề xuất đặt hàng bổ sung tồn kho.
     """
 
-    def generate_recommendations(self, db: Session, store_id: str = "CA_1") -> int:
+    def generate_recommendations(
+        self,
+        db: Session,
+        store_id: str = "CA_1",
+        review_date: Optional[date] = None,
+        auto_order: bool = False,
+    ) -> int:
         """
         UC33 - Tự động sinh đề xuất đặt hàng khi On_hand + On_order <= ROP.
         Số lượng đề xuất = EOQ, gán mức ưu tiên (CRITICAL, HIGH, MEDIUM, LOW).
         Chống sinh trùng đề xuất PENDING cho cùng SKU/kho.
+        Hỗ trợ tham số review_date và auto_order cho môi trường mô phỏng (J1 - J6, N-08 & N-11).
         """
         products = db.query(Product).all()
         if not products:
@@ -56,6 +63,7 @@ class ReplenishmentService:
 
         generated_count = 0
         now = datetime.now(timezone.utc)
+        effective_review_date = review_date if review_date is not None else now.date()
 
         # Bulk query để tránh N+1 network queries sang database
         inv_records = db.query(Inventory).filter(Inventory.store_id == store_id).all()
@@ -115,6 +123,12 @@ class ReplenishmentService:
                 else:
                     priority = "LOW"
 
+                created_timestamp = (
+                    datetime.combine(effective_review_date, datetime.min.time(), tzinfo=timezone.utc)
+                    if review_date
+                    else now
+                )
+
                 rec = ReplenishmentRecommendation(
                     id=str(uuid.uuid4()),
                     item_id=item_id,
@@ -130,14 +144,22 @@ class ReplenishmentService:
                     inventory_position=ip,
                     eoq_quantity=eoq,
                     policy_applied=policy_name,
-                    review_date=now.date(),
+                    review_date=effective_review_date,
                     decided_by=None,
-                    created_at=now,
+                    created_at=created_timestamp,
                     decided_at=None,
                 )
                 db.add(rec)
                 pending_set.add(item_id)
                 generated_count += 1
+
+                if auto_order:
+                    if not inv:
+                        inv = Inventory(item_id=item_id, store_id=store_id, on_hand=0.0, on_order=recommended_qty)
+                        db.add(inv)
+                        inv_map[item_id] = inv
+                    else:
+                        inv.on_order += recommended_qty
 
         if generated_count > 0:
             db.commit()

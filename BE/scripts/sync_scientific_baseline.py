@@ -22,15 +22,15 @@ from sqlalchemy import text
 def run_sync():
     db = SessionLocal()
     try:
-        print("=== 1. ALIGNING SIM_CLOCK TO 2016-05-23 ===")
+        print("=== 1. ALIGNING SIM_CLOCK TO 2016-04-25 ===")
         db.execute(text("""
             UPDATE sim_clock 
-            SET "current_date" = '2016-05-23', 
+            SET "current_date" = '2016-04-25', 
                 start_date = '2016-04-25',
                 updated_at = NOW()
             WHERE store_id = 'CA_1'
         """))
-        print("Updated sim_clock for CA_1 -> current_date = 2016-05-23")
+        print("Updated sim_clock for CA_1 -> current_date = 2016-04-25, start_date = 2016-04-25")
 
         print("\n=== 2. ALIGNING FORECAST_WINDOW_QUANTILE ORIGIN_DATE TO 2016-05-23 ===")
         res = db.execute(text("""

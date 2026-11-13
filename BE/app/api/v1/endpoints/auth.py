@@ -29,12 +29,17 @@ def get_client_ip(request: Request) -> str | None:
 
 
 @router.post("/login", response_model=LoginResponse, summary="UC01 - Đăng nhập tài khoản")
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    login_data: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """
     **UC01 - Login**:
     Người dùng nhập email và mật khẩu; hệ thống xác thực và cấp phiên làm việc (JWT) tương ứng với role.
     """
-    return auth_service.login(db, request)
+    client_ip = get_client_ip(request)
+    return auth_service.login(db, login_data, client_ip=client_ip)
 
 
 @router.post("/logout", response_model=MessageResponse, summary="UC02 - Đăng xuất tài khoản")

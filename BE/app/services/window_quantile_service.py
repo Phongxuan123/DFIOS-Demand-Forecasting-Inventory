@@ -46,7 +46,8 @@ class WindowQuantileService:
         """
         Tính tổng dự báo điểm trên cửa sổ bảo vệ H ngày: F_hat(H) = sum_{h=1}^H y_hat_h
         """
-        # 1. Thử lấy từ bảng forecast kết hợp overrides hiệu dụng (B-01)
+        # 1. Thử lấy từ bảng forecast kết hợp overrides hiệu dụng (B-01, N-10 & N-13)
+        # Cô lập hoàn toàn khỏi fast-inference-sba
         fc_records = (
             db.query(Forecast.forecast_date, Forecast.y_pred)
             .filter(
@@ -54,6 +55,7 @@ class WindowQuantileService:
                 Forecast.store_id == store_id,
                 Forecast.forecast_date >= origin_date,
                 Forecast.h <= horizon_days,
+                (Forecast.model_version != "fast-inference-sba") | (Forecast.model_version.is_(None)),
             )
             .order_by(Forecast.h.asc())
             .all()
@@ -99,22 +101,25 @@ class WindowQuantileService:
         """
         Thu thập sai số lịch sử trên cửa sổ H ngày từ các mốc thời gian đã chín (s + H <= origin_date).
         Đảm bảo tính nhân quả tuyệt đối (Zero lookahead bias).
+        Loại bỏ hoàn toàn cơ chế coalesce(y_pred, quantity) làm triệt tiêu sai số về 0 (N-10 & N-13).
         """
         cutoff_date = origin_date - timedelta(days=horizon_days)
 
         # 1. Thu thập dữ liệu thực tế và dự báo Ensemble đồng thời trên các mốc thời gian đã chín
         # Sai số cửa sổ thực nghiệm chuẩn tắc: r(H) = D(H) - F_hat(H) (Route c, research.md §7.2, R-06)
+        # Chỉ ghép các bản ghi có cả dự báo hợp lệ (không thuộc fast-inference-sba)
         merged_query = (
             db.query(
                 SalesHistory.sale_date,
                 SalesHistory.quantity,
-                func.coalesce(Forecast.y_pred, SalesHistory.quantity).label("y_pred"),
+                Forecast.y_pred,
             )
-            .outerjoin(
+            .join(
                 Forecast,
                 (SalesHistory.item_id == Forecast.item_id)
                 & (SalesHistory.store_id == Forecast.store_id)
-                & (SalesHistory.sale_date == Forecast.forecast_date),
+                & (SalesHistory.sale_date == Forecast.forecast_date)
+                & ((Forecast.model_version != "fast-inference-sba") | (Forecast.model_version.is_(None))),
             )
             .filter(
                 SalesHistory.item_id == item_id,
@@ -129,8 +134,12 @@ class WindowQuantileService:
             return np.array([])
 
         df = pd.DataFrame(merged_query, columns=["sale_date", "quantity", "y_pred"])
-        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
-        df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce").fillna(df["quantity"])
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").dropna()
+        df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce").dropna()
+        df = df.dropna(subset=["quantity", "y_pred"])
+
+        if len(df) < horizon_days:
+            return np.array([])
 
         # Tổng nhu cầu thực tế và tổng dự báo trượt trên cửa sổ bảo vệ H ngày
         rolling_actual = df["quantity"].rolling(window=horizon_days).sum().dropna().values
@@ -139,7 +148,7 @@ class WindowQuantileService:
         if len(rolling_actual) < 3:
             return np.array([])
 
-        # Sai số dự báo thực nghiệm r(H) = D(H) - F_hat(H) (Loại bỏ hoàn toàn EMA heuristic)
+        # Sai số dự báo thực nghiệm r(H) = D(H) - F_hat(H)
         residuals = rolling_actual - rolling_pred
         return residuals[-max_origins:]
 

@@ -31,6 +31,28 @@ class InMemoryRateLimiter:
         self._requests[key].append(now)
         return False
 
+    def check_limit(self, key: str, max_requests: int = 5, window_seconds: int = 3600) -> bool:
+        """Kiểm tra xem key đã chạm ngưỡng giới hạn hay chưa mà không tự động tăng bộ đếm."""
+        now = datetime.now(timezone.utc).timestamp()
+        if key not in self._requests:
+            return False
+        cutoff = now - window_seconds
+        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
+        return len(self._requests[key]) >= max_requests
+
+    def record_attempt(self, key: str, window_seconds: int = 3600) -> None:
+        """Ghi nhận một lần thử (ví dụ thất bại xác thực) vào lịch sử."""
+        now = datetime.now(timezone.utc).timestamp()
+        if key not in self._requests:
+            self._requests[key] = []
+        cutoff = now - window_seconds
+        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
+        self._requests[key].append(now)
+
+    def clear(self, key: str) -> None:
+        """Xóa toàn bộ lịch sử của key (ví dụ khi đăng nhập thành công)."""
+        self._requests.pop(key, None)
+
 
 rate_limiter = InMemoryRateLimiter()
 

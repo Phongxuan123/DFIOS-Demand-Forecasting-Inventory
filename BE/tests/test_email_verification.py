@@ -351,6 +351,32 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
             self.assertIn("admin.create_user", actions)
             self.assertIn("admin.resend_activation", actions)
 
+    # 7. Kiểm tra Rate Limiting Đăng nhập (N-12): Chỉ đếm thất bại và phân tách theo (email, ip)
+    def test_login_rate_limiting_only_on_failures_and_keyed_on_ip(self):
+        # 1. Đăng nhập đúng 12 lần liên tiếp không bị chặn 429
+        for _ in range(12):
+            res_ok = self.client.post(
+                "/api/v1/auth/login",
+                json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+            )
+            self.assertEqual(res_ok.status_code, 200)
+
+        # 2. Thử sai mật khẩu 10 lần
+        for _ in range(10):
+            res_fail = self.client.post(
+                "/api/v1/auth/login",
+                json={"email": "sarah.jenkins@dfios.com", "password": "WrongPassword"},
+            )
+            self.assertEqual(res_fail.status_code, 401)
+
+        # 3. Lần thứ 11 bị chặn 429 Too Many Requests
+        res_blocked = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+        )
+        self.assertEqual(res_blocked.status_code, 429)
+        self.assertIn("10 lần trong 5 phút", res_blocked.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()
