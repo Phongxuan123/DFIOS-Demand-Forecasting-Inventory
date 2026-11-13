@@ -1,32 +1,98 @@
-import math
-from datetime import date, timedelta
+import csv
+import os
 from typing import Dict, List, Optional, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.product import Product
-from app.models.sales_history import SalesHistory
 from app.models.inventory_param import InventoryParam
-from app.models.classification import SKUClassification
-from app.models.calibration_state import CalibrationState
+from app.models.system_setting import SystemSetting
 from app.schemas.simulation import PolicySimulationMetric, PolicyComparisonResponse
-from app.services.optimization_service import optimization_service
-from app.services.calibrator_service import calibrator_service
 
 
 class SimulationService:
     """
     Module What-If Simulation Đối đầu Chính sách Tồn kho (Task API.5):
-    Mô phỏng song song 4 chính sách tồn kho trên cùng chuỗi nhu cầu thực tế:
-    - P0: Cổ điển (Gaussian SS + ROP + EOQ)
-    - P1: Raw Route (c) Quantile (khong co shift m_g, theta=0)
-    - P4/B2: Tinh dong bang (REFIT-RSS-EOQ-G dong bang, theta=0)
-    - P6: C³-OUT vong kin (REFIT-RSS-EOQ-G + Bo dieu khien tich phan mot phia C³-OUT)
+    Đối chiếu 4 chính sách tồn kho dựa trên kiểm nghiệm thực nghiệm M5 Walmart (72 chu kỳ review):
+    - P0: Cổ điển (Gaussian SS + ROP + EOQ / B0 Baseline)
+    - P1: Raw Route (c) Quantile (B2 Tĩnh đóng băng, không guard band)
+    - P4: Tối ưu Chi phí Phân lớp (P-CR Cost-optimal Setpoint, REFIT-RSS-EOQ-G)
+    - P6: C³-OUT Vòng kín (Adaptive Closed-Loop Control)
+
+    Tuân thủ mô hình chi phí chuẩn A3 (research.md §7.2):
+    - Phí lưu kho h = 0.002 * sell_price / ngày
+    - Phí đặt hàng c = 2.0 $ / đơn
+    - Phí phạt hết hàng b = 0.35 * sell_price / đơn vị thiếu
     """
 
-    HOLDING_COST_RATE = 2.0   # $/unit/year
-    ORDERING_COST = 50.0      # $/order
-    STOCKOUT_PENALTY = 15.0   # $/unit lost
+    HOLDING_COST_RATE_PER_DAY = 0.002
+    ORDERING_COST_PER_ORDER = 2.0
+    STOCKOUT_PENALTY_RATE = 0.35
+
+    @staticmethod
+    def _load_c3ok_results() -> Dict[str, Dict[str, float]]:
+        """
+        Đọc dữ liệu kiểm định thực nghiệm chuẩn từ c3ok_results.csv.
+        Dữ liệu gốc trên 3.049 SKU qua 72 chu kỳ review (504 ngày).
+        """
+        base_dir = os.path.dirname(__file__)
+        candidates = [
+            os.path.abspath(os.path.join(base_dir, "..", "..", "MODEL", "c3ok_results.csv")),
+            os.path.abspath(os.path.join(base_dir, "..", "..", "..", "c3ok_artifacts", "c3ok_artifacts", "c3ok_results.csv")),
+            os.path.abspath(os.path.join(base_dir, "..", "..", "..", "BE", "MODEL", "c3ok_results.csv")),
+        ]
+
+        csv_path = None
+        for p in candidates:
+            if os.path.isfile(p):
+                csv_path = p
+                break
+
+        results: Dict[str, Dict[str, float]] = {}
+        if csv_path:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    name = row.get("policy", "")
+                    try:
+                        results[name] = {
+                            "tau": float(row.get("tau", 0.0)),
+                            "csl": float(row.get("CSL", 0.0)),
+                            "fill_rate": float(row.get("fill_rate", 0.0)),
+                            "hold_bikip": float(row.get("hold_BIKIP", 0.0)),
+                            "lost_bikip": float(row.get("lost_BIKIP", 0.0)),
+                            "order_bikip": float(row.get("order_BIKIP", 0.0)),
+                            "cost_bikip": float(row.get("cost_BIKIP", 0.0)),
+                            "cost_paper": float(row.get("cost_PAPER", 0.0)),
+                        }
+                    except (ValueError, TypeError):
+                        continue
+
+        # Fallback dữ liệu chuẩn từ c3ok_results.csv nếu không đọc được file
+        if not results:
+            results = {
+                "B0 DFIOS τ=0.95": {
+                    "tau": 0.95, "csl": 0.90709, "fill_rate": 0.94050,
+                    "hold_bikip": 714598.98, "lost_bikip": 773751.84, "order_bikip": 1923694.0,
+                    "cost_bikip": 3412044.82, "cost_paper": 767052.47
+                },
+                "B2 DFIOS τ*=0.99 [BIKIP]": {
+                    "tau": 0.99, "csl": 0.93362, "fill_rate": 0.95560,
+                    "hold_bikip": 852948.76, "lost_bikip": 575342.87, "order_bikip": 1928790.0,
+                    "cost_bikip": 3357081.62, "cost_paper": 699361.32
+                },
+                "P-CR C³-OUT τ=0.9615 [BIKIP]": {
+                    "tau": 0.9615, "csl": 0.96054, "fill_rate": 0.97498,
+                    "hold_bikip": 984863.21, "lost_bikip": 307251.18, "order_bikip": 1902784.0,
+                    "cost_bikip": 3194898.39, "cost_paper": 598919.84
+                },
+                "P C³-OUT τ=0.95": {
+                    "tau": 0.95, "csl": 0.94895, "fill_rate": 0.96833,
+                    "hold_bikip": 900606.68, "lost_bikip": 391639.43, "order_bikip": 1908706.0,
+                    "cost_bikip": 3200952.10, "cost_paper": 629384.80
+                },
+            }
+        return results
 
     def compare_policies(
         self,
@@ -36,162 +102,143 @@ class SimulationService:
         target_service_level: float = 0.96,
     ) -> PolicyComparisonResponse:
         """
-        Chạy mô phỏng đối đầu 4 chính sách tồn kho và so sánh chi phí & mức phục vụ.
+        Chạy mô phỏng đối đầu 4 chính sách tồn kho dựa trên số liệu thực nghiệm M5 (c3ok_results.csv)
+        theo mô hình chi phí chuẩn A3.
         """
+        benchmark_results = self._load_c3ok_results()
+
+        # Xác định số lượng SKU và đơn giá trung bình từ DB (nếu có)
         if db is not None:
             products = db.query(Product).all()
-            sku_count = len(products) if products else 10
-
-            # Lấy tham số trung bình từ inventory_params & classifications
-            avg_annual_demand = (
-                db.query(func.avg(InventoryParam.annual_demand))
-                .filter(InventoryParam.store_id == store_id)
-                .scalar()
-            )
-            avg_d = float(avg_annual_demand) if avg_annual_demand and avg_annual_demand > 0 else 1200.0
-            thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
+            sku_count = len(products) if products else 3049
+            avg_price_scalar = db.query(func.avg(Product.sell_price)).scalar()
+            avg_price = float(avg_price_scalar) if avg_price_scalar and avg_price_scalar > 0 else 3.50
         else:
-            sku_count = 10
-            avg_d = 1200.0
-            thetas = {}
+            sku_count = 3049
+            avg_price = 3.50
 
-        avg_daily = avg_d / 365.0
-        lead_time = 3
-        review_period = 7
-        window_h = lead_time + review_period  # 10 days
+        # Hệ số quy đổi theo quy mô SKU và số ngày mô phỏng (chuẩn M5: 3.049 SKU, 504 ngày)
+        ref_skus = 3049.0
+        ref_days = 504.0
+        scale = (sku_count / ref_skus) * (horizon_days / ref_days)
 
-        # Nhu cầu trong thời gian mô phỏng
-        sim_demand = avg_daily * horizon_days * sku_count
-        avg_theta = float(sum(thetas.values()) / max(1, len(thetas)))
-
-        # Lấy trung bình m_g từ optimal policies
-        avg_m = float(sum(v["m_g"] for v in optimization_service.DEFAULT_OPTIMAL_POLICIES.values()) / 9.0)
-
-        # -------------------------------------------------------------------------
-        # P0: Cổ điển (Classical Gaussian)
-        # Giả định phân phối chuẩn dẫn đến thiếu phủ trên nhu cầu gián đoạn (Availability ~89%)
-        # -------------------------------------------------------------------------
-        p0_avail = 0.892
-        p0_orders = max(1, int(round((avg_d * horizon_days / 365.0) / 45.0 * sku_count)))
-        p0_holding = round(sku_count * 22.0 * self.HOLDING_COST_RATE * (horizon_days / 365.0), 2)
-        p0_ordering = round(p0_orders * self.ORDERING_COST, 2)
-        p0_stockouts = int(round(sim_demand * (1.0 - p0_avail)))
-        p0_stockout_cost = round(p0_stockouts * self.STOCKOUT_PENALTY, 2)
-        p0_total = round(p0_holding + p0_ordering + p0_stockout_cost, 2)
-
-        # -------------------------------------------------------------------------
-        # P1: Raw Route (c) Quantile (Không shift m_g, theta=0)
-        # Khắc phục phân phối chuẩn nhưng không có guard band, đạt ~94.1% (< 96%)
-        # -------------------------------------------------------------------------
-        p1_avail = 0.941
-        p1_orders = max(1, int(round((avg_d * horizon_days / 365.0) / 55.0 * sku_count)))
-        p1_holding = round(sku_count * 31.0 * self.HOLDING_COST_RATE * (horizon_days / 365.0), 2)
-        p1_ordering = round(p1_orders * self.ORDERING_COST, 2)
-        p1_stockouts = int(round(sim_demand * (1.0 - p1_avail)))
-        p1_stockout_cost = round(p1_stockouts * self.STOCKOUT_PENALTY, 2)
-        p1_total = round(p1_holding + p1_ordering + p1_stockout_cost, 2)
-
-        # -------------------------------------------------------------------------
-        # P4 / B2: Tĩnh đóng băng (REFIT-RSS-EOQ-G đóng băng từ đầu năm, theta=0)
-        # Đạt gần tiệm cận 95.6% nhưng khi gặp biến động không tự bù đắp được
-        # -------------------------------------------------------------------------
-        p4_avail = 0.955
-        p4_orders = max(1, int(round((avg_d * horizon_days / 365.0) / 60.0 * sku_count)))
-        p4_holding = round(sku_count * 38.0 * self.HOLDING_COST_RATE * (horizon_days / 365.0), 2)
-        p4_ordering = round(p4_orders * self.ORDERING_COST, 2)
-        p4_stockouts = int(round(sim_demand * (1.0 - p4_avail)))
-        p4_stockout_cost = round(p4_stockouts * self.STOCKOUT_PENALTY, 2)
-        p4_total = round(p4_holding + p4_ordering + p4_stockout_cost, 2)
-
-        # -------------------------------------------------------------------------
-        # P6: C³-OUT Vòng kín (REFIT-RSS-EOQ-G + One-Sided Integral Calibrator)
-        # Tự động thích nghi hệ số theta_g, giữ vững Availability >= 96% với chi phí tối ưu nhất
-        # -------------------------------------------------------------------------
-        p6_avail = 0.968
-        p6_orders = max(1, int(round((avg_d * horizon_days / 365.0) / 62.0 * sku_count)))
-        p6_holding = round(sku_count * 42.0 * self.HOLDING_COST_RATE * (horizon_days / 365.0), 2)
-        p6_ordering = round(p6_orders * self.ORDERING_COST, 2)
-        p6_stockouts = int(round(sim_demand * (1.0 - p6_avail)))
-        p6_stockout_cost = round(p6_stockouts * self.STOCKOUT_PENALTY, 2)
-        p6_total = round(p6_holding + p6_ordering + p6_stockout_cost, 2)
-
-        # Tính chênh lệch chi phí so với P6
-        p0_diff = round(max(0.0, p0_total - p6_total), 2)
-        p1_diff = round(max(0.0, p1_total - p6_total), 2)
-        p4_diff = round(max(0.0, p4_total - p6_total), 2)
-
-        policies = [
-            PolicySimulationMetric(
-                policy_id="P0_classical",
-                policy_name="P0 - Cổ điển (Gaussian SS + ROP)",
-                description="Công thức tĩnh truyền thống Z*sigma_L và EOQ. Mắc lỗi nghiêm trọng thiếu phủ khi nhu cầu gián đoạn.",
-                total_cost=p0_total,
-                holding_cost=p0_holding,
-                ordering_cost=p0_ordering,
-                stockout_cost=p0_stockout_cost,
-                availability=round(p0_avail * 100.0, 1),
-                total_orders=p0_orders,
-                total_stockouts=p0_stockouts,
-                is_feasible=bool(p0_avail >= target_service_level),
-                cost_increase_vs_best=p0_diff,
+        # Định nghĩa 4 chính sách tương ứng từ bảng thực nghiệm c3ok
+        policy_configs = [
+            (
+                "P0_classical",
+                "P0 - Cổ điển (Gaussian SS + ROP)",
+                "B0 DFIOS τ=0.95",
+                "Baseline tĩnh công thức truyền thống Z*sigma_L ở mức quantile τ=0.95. Bị thiếu phủ nghiêm trọng trên chuỗi nhu cầu gián đoạn.",
             ),
-            PolicySimulationMetric(
-                policy_id="P1_raw_quantile",
-                policy_name="P1 - Raw Route (c) Quantile",
-                description="Dùng phân phối thực nghiệm Q_hat(0.95) nhưng không dịch chuyển an toàn m_g, chưa đạt SLA cam kết 96%.",
-                total_cost=p1_total,
-                holding_cost=p1_holding,
-                ordering_cost=p1_ordering,
-                stockout_cost=p1_stockout_cost,
-                availability=round(p1_avail * 100.0, 1),
-                total_orders=p1_orders,
-                total_stockouts=p1_stockouts,
-                is_feasible=bool(p1_avail >= target_service_level),
-                cost_increase_vs_best=p1_diff,
+            (
+                "P1_raw_quantile",
+                "P1 - Raw Route (c) Quantile",
+                "B2 DFIOS τ*=0.99 [BIKIP]",
+                "Dùng phân phối thực nghiệm không có guard band và không bù sai số động theo chu kỳ.",
             ),
-            PolicySimulationMetric(
-                policy_id="P4_frozen_refit",
-                policy_name="P4/B2 - Tĩnh Đóng Băng (Frozen Shift)",
-                description="Áp dụng tối ưu REFIT-RSS-EOQ-G nhưng đóng băng tham số từ đầu năm (theta=0), không tự sửa sai khi drift.",
-                total_cost=p4_total,
-                holding_cost=p4_holding,
-                ordering_cost=p4_ordering,
-                stockout_cost=p4_stockout_cost,
-                availability=round(p4_avail * 100.0, 1),
-                total_orders=p4_orders,
-                total_stockouts=p4_stockouts,
-                is_feasible=bool(p4_avail >= target_service_level),
-                cost_increase_vs_best=p4_diff,
+            (
+                "P4_frozen_refit",
+                "P4/P-CR - Tối ưu Chi phí Phân lớp",
+                "P-CR C³-OUT τ=0.9615 [BIKIP]",
+                "Tối ưu hóa setpoint quantile theo từng phân lớp ABC/XYZ (lưới mịn), đạt chi phí tối thiểu theo mô hình A3.",
             ),
-            PolicySimulationMetric(
-                policy_id="P6_c3out_closed_loop",
-                policy_name="P6 - C³-OUT Vòng Kín (Đề xuất)",
-                description="Tối ưu REFIT-RSS-EOQ-G kết hợp bộ điều khiển tích phân một phía C³-OUT, tự động bù trừ khi có lỗi phục vụ.",
-                total_cost=p6_total,
-                holding_cost=p6_holding,
-                ordering_cost=p6_ordering,
-                stockout_cost=p6_stockout_cost,
-                availability=round(p6_avail * 100.0, 1),
-                total_orders=p6_orders,
-                total_stockouts=p6_stockouts,
-                is_feasible=True,
-                cost_increase_vs_best=0.0,
+            (
+                "P6_c3out_closed_loop",
+                "P6 - C³-OUT Vòng kín",
+                "P C³-OUT τ=0.95",
+                "Bộ điều khiển tích phân một phía C³-OUT tự động hiệu chỉnh hệ số an toàn θ_g theo từng chu kỳ để ổn định mức phục vụ.",
             ),
         ]
 
-        insights = [
-            f"Chính sách P6 (C³-OUT) là chính sách duy nhất đạt vững chắc cam kết SLA >= {target_service_level*100:.0f}% ({p6_avail*100:.1f}%) với tổng chi phí thấp nhất ({p6_total:,.0f} $).",
-            f"Chính sách cổ điển P0 làm tăng {p0_diff:,.0f} $ chi phí phạt do tỷ lệ thiếu hàng cao ({p0_stockouts} đơn vị thiếu).",
-            f"Sự kết hợp giữa lô kinh tế EOQ và mức trần S giúp P6 giảm {(1 - p6_orders/max(1, p0_orders*1.8))*100:.0f}% tần suất đặt hàng so với đặt hàng nhỏ lẻ.",
+        policies: List[PolicySimulationMetric] = []
+        for policy_id, policy_name, benchmark_key, desc in policy_configs:
+            row = benchmark_results.get(benchmark_key)
+            if not row:
+                continue
+
+            hold_cost = round(row["hold_bikip"] * scale, 2)
+            lost_cost = round(row["lost_bikip"] * scale, 2)
+            ord_cost = round(row["order_bikip"] * scale, 2)
+            tot_cost = round(hold_cost + lost_cost + ord_cost, 2)
+
+            csl = row["csl"]
+            avail_pct = round(csl * 100.0, 1)
+
+            # Tính số đơn hàng và số đơn vị thiếu theo mô hình A3
+            total_orders = max(1, int(round((row["order_bikip"] / self.ORDERING_COST_PER_ORDER) * scale)))
+            stockout_unit_cost = max(0.5, self.STOCKOUT_PENALTY_RATE * avg_price)
+            total_stockouts = max(0, int(round((row["lost_bikip"] / stockout_unit_cost) * scale)))
+
+            # Kiểm tra tính khả thi: CSL thực nghiệm phải >= target_service_level
+            is_feasible = bool(csl >= target_service_level)
+
+            policies.append(
+                PolicySimulationMetric(
+                    policy_id=policy_id,
+                    policy_name=policy_name,
+                    description=desc,
+                    total_cost=tot_cost,
+                    holding_cost=hold_cost,
+                    ordering_cost=ord_cost,
+                    stockout_cost=lost_cost,
+                    availability=avail_pct,
+                    total_orders=total_orders,
+                    total_stockouts=total_stockouts,
+                    is_feasible=is_feasible,
+                    cost_increase_vs_best=0.0,
+                )
+            )
+
+        # Quyết định chính sách đề xuất:
+        # 1. Trong các chính sách khả thi (đạt SLA), chọn chính sách có tổng chi phí thấp nhất.
+        # 2. Nếu không có chính sách nào đạt SLA, chọn chính sách có availability cao nhất (theo research.md §7.4).
+        feasible_policies = [p for p in policies if p.is_feasible]
+        if feasible_policies:
+            best_feasible = min(feasible_policies, key=lambda p: p.total_cost)
+            recommended_policy = best_feasible.policy_id
+            best_cost = best_feasible.total_cost
+        else:
+            best_service = max(policies, key=lambda p: p.availability)
+            recommended_policy = best_service.policy_id
+            best_cost = min(p.total_cost for p in policies)
+
+        for p in policies:
+            p.cost_increase_vs_best = round(max(0.0, p.total_cost - best_cost), 2)
+
+        # Tổng hợp insight trung thực khoa học
+        insights: List[List[str]] = []
+        rec_policy = next((p for p in policies if p.policy_id == recommended_policy), policies[0])
+
+        if feasible_policies:
+            insight_rec = (
+                f"Chính sách đề xuất {rec_policy.policy_name} đáp ứng yêu cầu SLA >= {target_service_level*100:.1f}% "
+                f"(đạt CSL {rec_policy.availability:.1f}%) với tổng chi phí tối ưu ({rec_policy.total_cost:,.2f} $)."
+            )
+        else:
+            insight_rec = (
+                f"Cảnh báo: Không có chính sách nào đạt SLA cam kết {target_service_level*100:.1f}%. "
+                f"Chính sách tiệm cận tốt nhất là {rec_policy.policy_name} (đạt CSL {rec_policy.availability:.1f}%)."
+            )
+
+        insights_list = [
+            insight_rec,
+            (
+                "Chi phí tính theo chuẩn A3 (research.md §7.2): h = 0.002 * giá/ngày, c = 2.0 $/đơn, b = 0.35 * giá. "
+                "Thực nghiệm cho thấy P4 (P-CR) đạt chi phí thấp hơn P6 khi cùng thỏa mãn SLA nhờ tối ưu hóa setpoint phân lớp tĩnh."
+            ),
+            (
+                "Chính sách P6 (C³-OUT) đóng vai trò bộ điều khiển thích nghi bù trừ sai lệch theo chu kỳ "
+                "nhằm đảm bảo mức phục vụ trước biến động nhu cầu, không phải là bộ giảm chi phí vô điều kiện."
+            ),
         ]
 
         return PolicyComparisonResponse(
             store_id=store_id,
             simulation_horizon_days=horizon_days,
             sku_count=sku_count,
-            recommended_policy="P6_c3out_closed_loop",
+            recommended_policy=recommended_policy,
             policies=policies,
-            insights=insights,
+            insights=insights_list,
         )
 
 
