@@ -446,7 +446,9 @@ export const api = {
         ]);
 
         const forecastItems = unwrapItems(forecastsRes);
-        const historyPoints = historyRes?.data_points || [];
+        const historyPoints = Array.isArray(historyRes?.history)
+          ? historyRes.history
+          : (Array.isArray(historyRes?.data_points) ? historyRes.data_points : []);
 
         // Build uncertainty lookup map by forecast date
         const uncPoints = Array.isArray(uncertaintyRes?.points) ? uncertaintyRes.points : [];
