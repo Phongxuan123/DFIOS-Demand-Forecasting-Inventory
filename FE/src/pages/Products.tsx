@@ -269,17 +269,20 @@ export const Products: React.FC = () => {
     }
   };
 
-  const loadSalesData = async () => {
+  const loadSalesData = async (page: number = salesPage, size: number = salesPageSize) => {
     setIsLoadingSales(true);
     try {
-      const params: any = {};
+      const params: any = {
+        skip: (page - 1) * size,
+        limit: size,
+      };
       if (salesFilterSku.trim()) params.item_id = salesFilterSku.trim();
       if (salesFilterStore) params.store_id = salesFilterStore;
       if (salesStartDate) params.start_date = salesStartDate;
       if (salesEndDate) params.end_date = salesEndDate;
 
       const [salesRes, summaryRes] = await Promise.all([
-        api.sales.queryAllSales(params),
+        api.sales.querySales(params),
         api.sales
           .getSummary({
             item_id: salesFilterSku.trim() || undefined,
@@ -288,7 +291,7 @@ export const Products: React.FC = () => {
           .catch(() => null),
       ]);
       setSalesList(salesRes.list || []);
-      setSalesTotal(salesRes.total || (salesRes.list || []).length);
+      setSalesTotal(salesRes.total || 0);
       setSalesSummary(summaryRes);
     } catch (e) {
       console.error('Failed to load sales data', e);
@@ -326,11 +329,11 @@ export const Products: React.FC = () => {
 
   useEffect(() => {
     if (activeTab === 'Sales Data') {
-      loadSalesData();
+      loadSalesData(salesPage, salesPageSize);
     } else if (activeTab === 'Events & Promotions') {
       loadEventsData();
     }
-  }, [activeTab]);
+  }, [activeTab, salesPage, salesPageSize]);
 
   const getSkuRssMetrics = (prod: any): SkuRssMetrics => {
     const itemId = String(prod?.item_id || 'FOODS_1_001');
@@ -840,10 +843,7 @@ export const Products: React.FC = () => {
     adjPage * adjPageSize
   );
 
-  const paginatedSales = salesList.slice(
-    (salesPage - 1) * salesPageSize,
-    salesPage * salesPageSize
-  );
+  const paginatedSales = salesList;
 
   // Ultra-short badge for table cells (details in tooltip)
   const renderDemandRegimeBadge = (metrics: SkuRssMetrics) => {
@@ -1720,7 +1720,7 @@ export const Products: React.FC = () => {
           </div>
         </div>
         <div className="prod-filter-actions">
-          <button className="prod-btn-outline" onClick={loadSalesData}>
+          <button className="prod-btn-outline" onClick={() => loadSalesData(1, salesPageSize)}>
             {isVi ? 'Lọc' : 'Filter'}
           </button>
           {isAdmin && (
