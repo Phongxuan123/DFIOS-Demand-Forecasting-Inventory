@@ -52,7 +52,7 @@ suppliers = [
 ]
 
 with Session() as session:
-    existing = session.query(Supplier).all()
+    existing = session.query(Supplier).order_by(Supplier.id).all()
     if existing:
         for idx, s in enumerate(existing):
             if idx < len(suppliers):

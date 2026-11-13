@@ -25,22 +25,30 @@ with engine.begin() as conn:
             event_type_1 VARCHAR(50),
             event_name_2 VARCHAR(100),
             event_type_2 VARCHAR(50),
-            snap_CA INTEGER DEFAULT 0,
-            snap_TX INTEGER DEFAULT 0,
-            snap_WI INTEGER DEFAULT 0
+            "snap_CA" INTEGER DEFAULT 0,
+            "snap_TX" INTEGER DEFAULT 0,
+            "snap_WI" INTEGER DEFAULT 0
         );
     """))
 
 CALENDAR_PATH = os.getenv("M5_CALENDAR_CSV_PATH")
 if not CALENDAR_PATH or not os.path.exists(CALENDAR_PATH):
-    CALENDAR_PATH = r"C:\m5-forecasting-accuracy\calendar.csv"
-
-if not os.path.exists(CALENDAR_PATH):
-    raise SystemExit(f"calendar.csv not found at {CALENDAR_PATH}")
+    for candidate in [
+        os.path.join(SCRIPT_DIR, "calendar.csv"),
+        os.path.join(SCRIPT_DIR, "sample_data", "calendar.csv"),
+        os.path.join(SCRIPT_DIR, "..", "data", "calendar.csv"),
+    ]:
+        if os.path.exists(candidate):
+            CALENDAR_PATH = candidate
+            break
 
 existing_count = pd.read_sql("SELECT COUNT(*) AS c FROM calendar", engine)["c"][0]
 if existing_count > 0:
     print(f"Calendar already seeded ({existing_count} records), nothing to do.")
+    sys.exit(0)
+
+if not CALENDAR_PATH or not os.path.exists(CALENDAR_PATH):
+    raise SystemExit("calendar.csv not found. Please set M5_CALENDAR_CSV_PATH in BE/.env or place calendar.csv into BE/scripts/sample_data/")
 else:
     df = pd.read_csv(CALENDAR_PATH)
     df["date"] = pd.to_datetime(df["date"]).dt.date

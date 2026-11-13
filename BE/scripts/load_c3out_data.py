@@ -27,7 +27,7 @@ TIER2_INPUT_FILE = os.path.join(SCRIPT_DIR, "tier2_input.parquet")
 STORE_ID = "CA_1"
 LEAD_TIME = 7
 TAU = 0.95
-ORDER_COST = 50.0
+ORDER_COST = 2.0
 HOLDING_COST = 2.0
 
 C3_EXP_THETA = {
@@ -153,7 +153,6 @@ def main():
         ss = row["safety_stock"]
         eoq = row["eoq"]
 
-        # Deterministic trigger: SKU cần đặt hàng khi tồn kho chạm điểm ROP (demo.md §6.1)
         needs_reorder = (idx % 4 == 0) or row["class"].endswith("Z")
 
         if needs_reorder:
@@ -180,7 +179,6 @@ def main():
                 "decided_at": None
             })
         else:
-            # Tồn kho ban đầu đạt mức S = rop + eoq của kỳ mô phỏng (demo.md line 250)
             on_hand = float(round(rop + eoq * 0.6))
             on_order = 0.0
 

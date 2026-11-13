@@ -49,7 +49,7 @@ for _, row in reorder_items.iterrows():
         "recommended_qty": order_qty,
         "final_qty": order_qty,
         "priority": priority,
-        "status": "PROPOSED",
+        "status": "PENDING",
         "reason": "REFIT-RSS-EOQ-G trigger: Inventory position below reorder point (s)",
         "order_up_to_S": round(float(row["order_up_to_S"]), 2),
         "reorder_point_s": round(float(row["reorder_point_s"]), 2),
