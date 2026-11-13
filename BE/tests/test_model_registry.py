@@ -237,6 +237,92 @@ class TestModelRegistryEndpoints(unittest.TestCase):
         self.assertEqual(res_filter_scope.json()["total"], 1)
         self.assertEqual(res_filter_scope.json()["items"][0]["name"], "M1")
 
+    def test_validate_model_rbac(self):
+        # Unauthenticated -> 401
+        res_unauth = self.client.post("/api/v1/ml/models/m1/validate")
+        self.assertEqual(res_unauth.status_code, 401)
+
+        # Viewer / Manager -> 403
+        res_viewer = self.client.post(
+            "/api/v1/ml/models/m1/validate",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_viewer.status_code, 403)
+
+        res_mgr = self.client.post(
+            "/api/v1/ml/models/m1/validate",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_mgr.status_code, 403)
+
+    def test_validate_model_not_found_returns_404(self):
+        res = self.client.post(
+            "/api/v1/ml/models/non-existent-id/validate",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 404)
+
+    def test_validate_model_with_real_artifact_and_no_fake_constants(self):
+        # 1. Đăng ký model TFT v1
+        res_reg = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "TFT-Production",
+                "version": "v1.0.0",
+                "algorithm": "tft",
+                "scope": "global",
+                "parameters": {"hidden_size": 64},
+                "metrics": {"wrmsse": 0.5004, "mae": 0.948},
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_reg.status_code, 201)
+        model_id = res_reg.json()["id"]
+
+        # 2. Gọi validate
+        res_val = self.client.post(
+            f"/api/v1/ml/models/{model_id}/validate",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_val.status_code, 200)
+        data = res_val.json()
+        self.assertTrue(data["success"])
+        self.assertTrue(data["validation_passed"])
+        self.assertEqual(data["model_id"], model_id)
+        # Trong DB rỗng test không có Product nào -> sample_skus_tested == 0, tuyệt đối không bịa 200
+        self.assertEqual(data["sample_skus_tested"], 0)
+        self.assertTrue(data["artifact_integrity"]["file_exists"])
+        self.assertIsNotNone(data["artifact_integrity"]["sha256"])
+        self.assertGreater(data["artifact_integrity"]["file_size_bytes"], 0)
+        self.assertEqual(data["metrics"]["wrmsse"], 0.5004)
+
+    def test_validate_model_with_missing_artifact_fails_authentically(self):
+        # Đăng ký một model thuật toán lạ hoặc file không tồn tại
+        res_reg = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "Nonexistent-Deep-Net",
+                "version": "v9.9.9",
+                "algorithm": "unknown_deep_net",
+                "scope": "global",
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_reg.status_code, 201)
+        model_id = res_reg.json()["id"]
+
+        # Gọi validate -> phải trả validation_passed = False và lý do thực tế
+        res_val = self.client.post(
+            f"/api/v1/ml/models/{model_id}/validate",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_val.status_code, 200)
+        data = res_val.json()
+        self.assertTrue(data["success"])
+        self.assertFalse(data["validation_passed"])
+        self.assertFalse(data["artifact_integrity"]["file_exists"])
+        self.assertIn("KHÔNG đạt kiểm định", data["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
