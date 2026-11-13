@@ -243,14 +243,14 @@ export const ForecastExplorer: React.FC = () => {
     return fullScheduleMatrix.slice(start, start + matrixPageSize);
   }, [fullScheduleMatrix, matrixPage, matrixPageSize]);
 
-  const fetchForecast = async (sku?: string, h: number = horizon, store?: string) => {
+  const fetchForecast = async (sku?: string, h: number = horizon, store?: string, engine: string = selectedEngine) => {
     setIsLoading(true);
     try {
       const targetSku = (sku || skuSearch || 'FOODS_1_001').trim();
       const targetStore = store !== undefined && store !== '' ? store : selectedStore || 'CA_1';
       const [forecast, explRes, overRes, uncRes, cmpRes, modelsRes, wqRes, calRes, clsSkuRes] = await Promise.all([
-        api.forecasting.getExplorerData(targetSku, h, targetStore),
-        api.forecasting.getExplanation(targetSku, { store_id: targetStore }).catch(() => null),
+        api.forecasting.getExplorerData(targetSku, h, targetStore, engine),
+        api.forecasting.getExplanation(targetSku, { store_id: targetStore, model_name: engine.toLowerCase() }).catch(() => null),
         api.forecasting.getOverrides(targetSku, { store_id: targetStore }).catch(() => []),
         api.forecasting.getUncertainty(targetSku, { store_id: targetStore, horizon: h }).catch(() => null),
         api.forecasting.compare(targetSku, { store_id: targetStore }).catch(() => null),
@@ -958,10 +958,12 @@ export const ForecastExplorer: React.FC = () => {
                 className="ml-engine-select"
                 value={selectedEngine}
                 onChange={(e) => {
-                  setSelectedEngine(e.target.value);
+                  const newEngine = e.target.value;
+                  setSelectedEngine(newEngine);
+                  fetchForecast(skuSearch, horizon, selectedStore, newEngine);
                   setToast({
                     type: 'success',
-                    message: isVi ? `Đã chuyển sang mô hình ${e.target.value}` : `Switched active engine to ${e.target.value}`,
+                    message: isVi ? `Đã chuyển sang mô hình ${newEngine}` : `Switched active engine to ${newEngine}`,
                   });
                 }}
               >

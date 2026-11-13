@@ -439,7 +439,7 @@ export const api = {
       const res = await cachedGet(`/forecasts/${sku}/overrides`, params, 30000);
       return Array.isArray(res) ? res : [];
     },
-    getExplorerData: async (skuParam?: string, horizon: number = 28, storeId?: string) => {
+    getExplorerData: async (skuParam?: string, horizon: number = 28, storeId?: string, engine?: string) => {
       try {
         let sku = skuParam;
         if (!sku) {
@@ -448,8 +448,9 @@ export const api = {
           sku = items[0]?.item_id || 'FOODS_1_001';
         }
 
+        const modelParam = engine ? engine.toLowerCase() : undefined;
         const [forecastsRes, compareRes, uncertaintyRes, historyRes] = await Promise.all([
-          cachedGet('/forecasts', { item_id: sku, horizon, store_id: storeId, limit: horizon }, 60000).catch(() => ({ items: [] })),
+          cachedGet('/forecasts', { item_id: sku, horizon, store_id: storeId, limit: horizon, model_name: modelParam }, 60000).catch(() => ({ items: [] })),
           cachedGet(`/forecasts/${sku}/compare`, { store_id: storeId }, 60000).catch(() => null),
           cachedGet(`/forecasts/${sku}/uncertainty`, { store_id: storeId, horizon }, 60000).catch(() => null),
           cachedGet(`/forecasts/${sku}/history`, { store_id: storeId, granularity: 'daily' }, 60000).catch(() => null),
