@@ -1,7 +1,10 @@
 import json
+import logging
 import math
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional, Tuple, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -648,18 +651,29 @@ class ForecastService:
         )
         db.commit()
 
-        # Tự động đồng bộ và tính lại ROP theo dự báo mới (B-01)
+        # Tự động đồng bộ và tính lại ROP theo dự báo mới (B-01, N-20)
         try:
             from app.models.forecast_window_quantile import ForecastWindowQuantile
+            from app.models.sim_clock import SimClock
             from app.services.optimization_service import optimization_service
+            # N-20: Chỉ xóa quantile của origin bị ảnh hưởng bởi forecast_date này
+            affected_origin = request.forecast_date - timedelta(days=original_fc.h if original_fc and original_fc.h else 1)
             db.query(ForecastWindowQuantile).filter(
                 ForecastWindowQuantile.store_id == target_store,
                 ForecastWindowQuantile.item_id == sku,
+                ForecastWindowQuantile.origin_date == affected_origin,
             ).delete()
+            clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+            if clock and clock.current_date and clock.current_date != affected_origin:
+                db.query(ForecastWindowQuantile).filter(
+                    ForecastWindowQuantile.store_id == target_store,
+                    ForecastWindowQuantile.item_id == sku,
+                    ForecastWindowQuantile.origin_date == clock.current_date,
+                ).delete()
             optimization_service.recompute_parameters(db, store_id=target_store, item_id=sku)
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error recomputing quantiles/params on override: {e}")
 
         return ForecastOverrideResponse.model_validate(saved)
 
@@ -694,18 +708,28 @@ class ForecastService:
         )
         db.commit()
 
-        # Tự động đồng bộ và tính lại ROP sau khi hoàn tác can thiệp (B-01)
+        # Tự động đồng bộ và tính lại ROP sau khi hoàn tác can thiệp (B-01, N-20)
         try:
             from app.models.forecast_window_quantile import ForecastWindowQuantile
+            from app.models.sim_clock import SimClock
             from app.services.optimization_service import optimization_service
+            affected_origin = override.forecast_date - timedelta(days=override.h if override.h else 1)
             db.query(ForecastWindowQuantile).filter(
                 ForecastWindowQuantile.store_id == override.store_id,
                 ForecastWindowQuantile.item_id == sku,
+                ForecastWindowQuantile.origin_date == affected_origin,
             ).delete()
+            clock = db.query(SimClock).filter(SimClock.store_id == override.store_id).first()
+            if clock and clock.current_date and clock.current_date != affected_origin:
+                db.query(ForecastWindowQuantile).filter(
+                    ForecastWindowQuantile.store_id == override.store_id,
+                    ForecastWindowQuantile.item_id == sku,
+                    ForecastWindowQuantile.origin_date == clock.current_date,
+                ).delete()
             optimization_service.recompute_parameters(db, store_id=override.store_id, item_id=sku)
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error recomputing quantiles/params on revert: {e}")
 
         return ForecastOverrideRevertResponse(
             success=True,
@@ -816,20 +840,35 @@ class ForecastService:
             )
             db.commit()
 
-            # Tự động đồng bộ và tính lại ROP cho toàn bộ các SKU bị can thiệp (B-01)
+            # Tự động đồng bộ và tính lại ROP cho toàn bộ các SKU bị can thiệp (B-01, N-20)
             try:
                 from app.models.forecast_window_quantile import ForecastWindowQuantile
+                from app.models.sim_clock import SimClock
                 from app.services.optimization_service import optimization_service
+                for it in request.items:
+                    fc_rec = forecast_repository.get_single_forecast(
+                        db, item_id=it.item_id, forecast_date=it.date, store_id=it.store_id
+                    )
+                    h_val = fc_rec.h if fc_rec and fc_rec.h else 1
+                    affected_origin = it.date - timedelta(days=h_val)
+                    db.query(ForecastWindowQuantile).filter(
+                        ForecastWindowQuantile.store_id == it.store_id,
+                        ForecastWindowQuantile.item_id == it.item_id,
+                        ForecastWindowQuantile.origin_date == affected_origin,
+                    ).delete()
                 affected_keys = {(it.item_id, it.store_id) for it in request.items}
                 for affected_sku, affected_store in affected_keys:
-                    db.query(ForecastWindowQuantile).filter(
-                        ForecastWindowQuantile.store_id == affected_store,
-                        ForecastWindowQuantile.item_id == affected_sku,
-                    ).delete()
+                    clock = db.query(SimClock).filter(SimClock.store_id == affected_store).first()
+                    if clock and clock.current_date:
+                        db.query(ForecastWindowQuantile).filter(
+                            ForecastWindowQuantile.store_id == affected_store,
+                            ForecastWindowQuantile.item_id == affected_sku,
+                            ForecastWindowQuantile.origin_date == clock.current_date,
+                        ).delete()
                     optimization_service.recompute_parameters(db, store_id=affected_store, item_id=affected_sku)
                 db.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error recomputing quantiles/params on bulk_override: {e}")
 
         return BulkOverrideResponse(
             success=True,

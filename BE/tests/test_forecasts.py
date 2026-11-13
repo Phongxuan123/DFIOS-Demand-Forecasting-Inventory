@@ -10,6 +10,7 @@ from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
 from app.models.forecast import Forecast, ForecastSigma, ForecastOverride, ForecastExplanation
+from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.sales_history import SalesHistory
 from app.models.audit_log import AuditLog
 from app.core.security import get_password_hash, create_access_token
@@ -606,3 +607,58 @@ class TestForecastEndpoints(unittest.TestCase):
             self.assertIsNotNone(created)
             self.assertEqual(created.override_value, 40.0)
             self.assertTrue(created.is_active)
+
+    def test_override_targeted_quantile_invalidation_preserves_history(self):
+        # UC24/N-20: Test that override only invalidates quantile for the affected origin, preserving historical quantiles
+        with self.TestingSessionLocal() as session:
+            # 1. Historical quantile at 2016-01-01 (should NOT be deleted)
+            fwq_hist = ForecastWindowQuantile(
+                id="fwq-hist-01",
+                model_run_id="run-01",
+                store_id="CA_1",
+                item_id="FOODS_1_001",
+                origin_date=date(2016, 1, 1),
+                horizon_days=10,
+                point_window=50.0,
+                q_levels={"0.95": 60.0},
+            )
+            # 2. Quantile for 2026-09-30 (corresponding to forecast_date 2026-10-01 with h=1)
+            fwq_target = ForecastWindowQuantile(
+                id="fwq-target-01",
+                model_run_id="run-01",
+                store_id="CA_1",
+                item_id="FOODS_1_001",
+                origin_date=date(2026, 9, 30),
+                horizon_days=10,
+                point_window=50.0,
+                q_levels={"0.95": 65.0},
+            )
+            session.add_all([fwq_hist, fwq_target])
+            session.commit()
+
+        payload = {
+            "forecast_date": "2026-10-01",
+            "override_value": 35.0,
+            "reason": "Khuyến mãi flash sale",
+            "store_id": "CA_1",
+        }
+        resp = self.client.post(
+            "/api/v1/forecasts/FOODS_1_001/override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        # Kiểm tra: fwq_target (2026-09-30) đã bị xóa để recompute
+        # NHƯNG fwq_hist (2016-01-01) VẪN CÒN NGUYÊN (không bị xóa trắng toàn bộ lịch sử)
+        with self.TestingSessionLocal() as session:
+            hist_record = session.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.id == "fwq-hist-01"
+            ).first()
+            self.assertIsNotNone(hist_record)
+            self.assertEqual(hist_record.origin_date, date(2016, 1, 1))
+
+            target_record = session.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.id == "fwq-target-01"
+            ).first()
+            self.assertIsNone(target_record)
