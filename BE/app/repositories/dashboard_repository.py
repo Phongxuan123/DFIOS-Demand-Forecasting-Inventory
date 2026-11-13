@@ -77,7 +77,7 @@ class DashboardRepository:
         )
         pending_replenishments = rep_query.count()
 
-        # Lấy chỉ số chính xác thực nghiệm từ Model Registry (BUG-14)
+        # Lấy chỉ số chính xác thực nghiệm từ Model Registry (BUG-14, N-16)
         from app.models.model_registry import ModelRegistry
         prod_model = (
             db.query(ModelRegistry)
@@ -85,11 +85,17 @@ class DashboardRepository:
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
-        if prod_model and prod_model.metrics and "wrmsse" in prod_model.metrics:
-            wrmsse_val = prod_model.metrics["wrmsse"]
-            accuracy_display = f"WRMSSE {float(wrmsse_val):.4f}"
+        if prod_model and prod_model.metrics:
+            if "accuracy" in prod_model.metrics:
+                accuracy_display = f"{float(prod_model.metrics['accuracy']) * 100:.1f}%"
+            elif "wrmsse" in prod_model.metrics:
+                accuracy_display = f"WRMSSE {float(prod_model.metrics['wrmsse']):.4f}"
+            elif "mae" in prod_model.metrics:
+                accuracy_display = f"MAE {float(prod_model.metrics['mae']):.4f}"
+            else:
+                accuracy_display = "N/A"
         else:
-            accuracy_display = "WRMSSE 0.4935"
+            accuracy_display = "N/A"
 
         return {
             "total_skus": total_skus,

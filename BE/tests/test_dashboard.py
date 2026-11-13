@@ -16,6 +16,7 @@ from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
 from app.models.supplier import Supplier
 from app.models.user import User
+from app.models.model_registry import ModelRegistry
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
 
@@ -389,6 +390,35 @@ class TestDashboardEndpoints(unittest.TestCase):
     def test_unauthenticated_request_fails(self):
         resp = self.client.get("/api/v1/dashboard/kpis")
         self.assertEqual(resp.status_code, 401)
+
+    def test_kpi_forecast_accuracy_authentic_metrics_and_no_fake_fallback(self):
+        # UC07/N-16: When no production model exists, avg_forecast_accuracy is 'N/A' (no fake fallback)
+        resp = self.client.get(
+            "/api/v1/dashboard/kpis",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["avg_forecast_accuracy"], "N/A")
+
+        # When a production model with wrmsse exists
+        with self.TestingSessionLocal() as session:
+            model = ModelRegistry(
+                id="model-ensemble-test",
+                name="Ensemble Production",
+                version="v1.0",
+                algorithm="ensemble",
+                is_production=True,
+                metrics={"wrmsse": 0.4935, "mase": 0.975},
+            )
+            session.add(model)
+            session.commit()
+
+        resp_with_model = self.client.get(
+            "/api/v1/dashboard/kpis",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_with_model.status_code, 200)
+        self.assertEqual(resp_with_model.json()["avg_forecast_accuracy"], "WRMSSE 0.4935")
 
 
 if __name__ == "__main__":
