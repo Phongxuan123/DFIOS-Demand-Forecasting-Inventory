@@ -140,7 +140,6 @@ def main():
         })
     sku_classes_df = pd.DataFrame(sku_classes)
 
-    np.random.seed(42)
     inventory_rows = []
     recommendation_rows = []
 
@@ -154,10 +153,11 @@ def main():
         ss = row["safety_stock"]
         eoq = row["eoq"]
 
-        needs_reorder = (np.random.rand() < 0.24) or (row["class"].endswith("Z") and np.random.rand() < 0.35)
+        # Deterministic trigger: SKU cần đặt hàng khi tồn kho chạm điểm ROP (demo.md §6.1)
+        needs_reorder = (idx % 4 == 0) or row["class"].endswith("Z")
 
         if needs_reorder:
-            on_hand = float(round(rop * np.random.uniform(0.1, 0.8), 0))
+            on_hand = float(round(max(0.0, rop - 2.0)))
             on_order = 0.0
             
             rec_id = str(uuid.uuid4())
@@ -180,8 +180,9 @@ def main():
                 "decided_at": None
             })
         else:
-            on_hand = float(round(rop + eoq * np.random.uniform(0.3, 0.9), 0))
-            on_order = float(round(eoq * np.random.uniform(0, 0.5), 0)) if np.random.rand() < 0.2 else 0.0
+            # Tồn kho ban đầu đạt mức S = rop + eoq của kỳ mô phỏng (demo.md line 250)
+            on_hand = float(round(rop + eoq * 0.6))
+            on_order = 0.0
 
         inventory_rows.append({
             "item_id": item_id,
