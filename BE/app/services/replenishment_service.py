@@ -253,7 +253,7 @@ class ReplenishmentService:
         if auto_generate:
             total_pending = (
                 db.query(ReplenishmentRecommendation)
-                .filter(ReplenishmentRecommendation.status == "PENDING")
+                .filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]))
                 .count()
             )
             if total_pending == 0:
@@ -272,7 +272,7 @@ class ReplenishmentService:
 
         pending_count = (
             db.query(ReplenishmentRecommendation)
-            .filter(ReplenishmentRecommendation.status == "PENDING")
+            .filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]))
             .count()
         )
         approved_count = (
@@ -324,10 +324,10 @@ class ReplenishmentService:
                 detail=f"Không tìm thấy đề xuất nhập hàng với mã '{rec_id}'.",
             )
 
-        if rec.status != "PENDING":
+        if rec.status not in ("PENDING", "PROPOSED"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ được phép điều chỉnh đề xuất đang ở trạng thái 'PENDING' (Trạng thái hiện tại: {rec.status}).",
+                detail=f"Chỉ được phép điều chỉnh đề xuất đang ở trạng thái 'PENDING' hoặc 'PROPOSED' (Trạng thái hiện tại: {rec.status}).",
             )
 
         if not request.reason or len(request.reason.strip()) < 3:
@@ -380,10 +380,10 @@ class ReplenishmentService:
                 detail="Đề xuất này đã được phê duyệt trước đó, không thể phê duyệt lần 2.",
             )
 
-        if rec.status != "PENDING":
+        if rec.status not in ("PENDING", "PROPOSED"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ có thể phê duyệt đề xuất đang ở trạng thái 'PENDING' (Hiện tại: {rec.status}).",
+                detail=f"Chỉ có thể phê duyệt đề xuất đang ở trạng thái 'PENDING' hoặc 'PROPOSED' (Hiện tại: {rec.status}).",
             )
 
         # 1. Cập nhật trạng thái đề xuất
@@ -441,10 +441,10 @@ class ReplenishmentService:
                 detail=f"Không tìm thấy đề xuất nhập hàng với mã '{rec_id}'.",
             )
 
-        if rec.status != "PENDING":
+        if rec.status not in ("PENDING", "PROPOSED"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ có thể từ chối đề xuất đang ở trạng thái 'PENDING' (Hiện tại: {rec.status}).",
+                detail=f"Chỉ có thể từ chối đề xuất đang ở trạng thái 'PENDING' hoặc 'PROPOSED' (Hiện tại: {rec.status}).",
             )
 
         if not reason or not reason.strip():

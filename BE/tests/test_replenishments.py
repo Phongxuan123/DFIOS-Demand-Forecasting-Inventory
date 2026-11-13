@@ -443,3 +443,76 @@ class TestReplenishmentEndpoints(unittest.TestCase):
             self.assertEqual(rec.priority, "CRITICAL")
             self.assertGreater(rec.recommended_qty, 0.0)
             self.assertNotEqual(rec.recommended_qty, 60.0)
+
+    def test_proposed_status_compatibility_for_adjust_approve_reject(self):
+        # UC33-UC36/R-16: Harmonize PROPOSED and PENDING statuses, ensuring backward compatibility
+        with self.TestingSessionLocal() as session:
+            rec_proposed = ReplenishmentRecommendation(
+                id="rec-proposed-01",
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                recommended_qty=50.0,
+                final_qty=50.0,
+                priority="HIGH",
+                status="PROPOSED",
+                reason="Legacy loader proposed order",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(rec_proposed)
+            session.commit()
+
+        # 1. Query with status=PENDING should return the PROPOSED recommendation too
+        res_list = self.client.get(
+            "/api/v1/replenishments?status=PENDING",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_list.status_code, 200)
+        items = res_list.json()["items"]
+        rec_ids = [it["id"] for it in items]
+        self.assertIn("rec-proposed-01", rec_ids)
+
+        # 2. Adjust PROPOSED recommendation
+        res_adj = self.client.put(
+            "/api/v1/replenishments/rec-proposed-01/adjust",
+            json={"final_qty": 75.0, "reason": "Adjusting legacy proposed order"},
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_adj.status_code, 200)
+        self.assertEqual(res_adj.json()["final_qty"], 75.0)
+
+        # 3. Approve PROPOSED recommendation (transitions to APPROVED)
+        res_app = self.client.post(
+            "/api/v1/replenishments/rec-proposed-01/approve",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_app.status_code, 200)
+        self.assertEqual(res_app.json()["status"], "APPROVED")
+
+        # Verify on_order was updated
+        with self.TestingSessionLocal() as session:
+            inv = session.query(Inventory).filter(Inventory.item_id == "FOODS_1_001", Inventory.store_id == "CA_1").first()
+            self.assertEqual(inv.on_order, 75.0)
+
+        # 4. Reject another PROPOSED recommendation
+        with self.TestingSessionLocal() as session:
+            rec_proposed_2 = ReplenishmentRecommendation(
+                id="rec-proposed-02",
+                item_id="HOBBIES_1_001",
+                store_id="CA_1",
+                recommended_qty=20.0,
+                final_qty=20.0,
+                priority="LOW",
+                status="PROPOSED",
+                reason="Second legacy proposed order",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(rec_proposed_2)
+            session.commit()
+
+        res_rej = self.client.post(
+            "/api/v1/replenishments/rec-proposed-02/reject",
+            json={"reason": "Rejecting legacy proposed order"},
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_rej.status_code, 200)
+        self.assertEqual(res_rej.json()["status"], "REJECTED")

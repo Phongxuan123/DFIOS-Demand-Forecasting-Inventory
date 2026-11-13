@@ -18,14 +18,14 @@ class ReplenishmentRepository:
         self, db: Session, item_id: str, store_id: str = "CA_1"
     ) -> Optional[ReplenishmentRecommendation]:
         """
-        Tìm đề xuất đang ở trạng thái PENDING của SKU tại store để chống sinh trùng lặp.
+        Tìm đề xuất đang ở trạng thái PENDING hoặc PROPOSED của SKU tại store để chống sinh trùng lặp.
         """
         return (
             db.query(ReplenishmentRecommendation)
             .filter(
                 ReplenishmentRecommendation.item_id == item_id,
                 ReplenishmentRecommendation.store_id == store_id,
-                ReplenishmentRecommendation.status == "PENDING",
+                ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]),
             )
             .first()
         )
@@ -46,7 +46,10 @@ class ReplenishmentRepository:
         if store_id:
             query = query.filter(ReplenishmentRecommendation.store_id == store_id)
         if status:
-            query = query.filter(ReplenishmentRecommendation.status == status)
+            if status == "PENDING":
+                query = query.filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]))
+            else:
+                query = query.filter(ReplenishmentRecommendation.status == status)
         if priority:
             query = query.filter(ReplenishmentRecommendation.priority == priority)
         if item_id:
