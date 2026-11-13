@@ -12,6 +12,7 @@ from app.services.calibrator_service import calibrator_service
 from app.services.optimization_service import optimization_service
 from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
 from app.services.simulation_service import simulation_service
+from app.services.dashboard_service import dashboard_service
 from app.services.data_preprocessing_service import data_preprocessing_service
 
 
@@ -276,6 +277,47 @@ class TestC3OutAndSimulation(unittest.TestCase):
         self.assertEqual(day1_row["price"], 40000.0)
         self.assertEqual(day1_row["item_id"], "BOT01")
         self.assertEqual(day1_row["store_id"], "STORE_TEST")
+
+    def test_shadow_baseline_kpi_dashboard_no_fake_constants(self):
+        """
+        Test TEST.1 - Kiểm định sửa dứt điểm lỗi N-03 (KPI shadow dashboard):
+        - Khi không có giao dịch/sự kiện nào phát sinh, chi phí và tiết kiệm phải là 0.0,
+          TUYỆT ĐỐI không được cộng tĩnh +120, +45, +18 hay báo "tiết kiệm $735".
+        - B0 availability phải khớp số liệu thực nghiệm c3ok_csl_by_class.csv (ví dụ AZ=82.8%, AX=91.5%),
+          TUYỆT ĐỐI không dùng công thức tự chế err * 2.8.
+        """
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+
+        try:
+            clock = SimClock(store_id="CA_1", current_date=date(2016, 5, 23), start_date=date(2016, 4, 25))
+            db.add(clock)
+            db.commit()
+
+            res = dashboard_service.get_shadow_baseline_dashboard(db, store_id="CA_1")
+
+            # 1. Khi 0 sự kiện: chi phí và tiết kiệm phải bằng 0.0
+            self.assertEqual(res.c3out_total_cost, 0.0)
+            self.assertEqual(res.b0_total_cost, 0.0)
+            self.assertEqual(res.total_cost_savings, 0.0)
+            for pt in res.cost_curves:
+                self.assertEqual(pt.c3out_total_cost, 0.0)
+                self.assertEqual(pt.b0_total_cost, 0.0)
+                self.assertEqual(pt.cost_savings, 0.0)
+
+            # 2. B0 availability phải lấy từ c3ok_csl_by_class.csv
+            seg_map = {s.class_id: s for s in res.segment_availabilities}
+            self.assertEqual(seg_map["AZ"].b0_availability, 82.8)
+            self.assertEqual(seg_map["AX"].b0_availability, 91.5)
+            self.assertEqual(seg_map["BY"].b0_availability, 92.0)
+            self.assertNotEqual(seg_map["AZ"].b0_availability, round((1.0 - 0.032 * 2.8) * 100, 1))
+
+            # 3. Cảnh báo đúng chuẩn nếu chưa có sự kiện
+            self.assertIn("chưa ghi nhận giao dịch", res.summary_insights[1])
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":
