@@ -48,6 +48,7 @@ class InMemoryEventBus(BaseEventBus):
         self._subscribers: Dict[str, List[asyncio.Queue]] = {}
         self._event_counter: int = 0
         self._lock: Optional[asyncio.Lock] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -55,6 +56,8 @@ class InMemoryEventBus(BaseEventBus):
         return self._lock
 
     async def subscribe(self, user_id: str) -> asyncio.Queue:
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.get_running_loop()
         lock = self._get_lock()
         async with lock:
             if user_id not in self._subscribers:
@@ -102,30 +105,52 @@ class InMemoryEventBus(BaseEventBus):
         """
         self.publish_nowait(event)
 
+    @staticmethod
+    def _push_to_queue(queue: asyncio.Queue, event: Optional[SystemEvent]) -> None:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            # Discard oldest event from queue to avoid blocking publisher
+            try:
+                queue.get_nowait()
+            except (asyncio.QueueEmpty, Exception):
+                pass
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
     def publish_nowait(self, event: SystemEvent) -> None:
         """
-        Synchronous-safe publishing method.
-        Can be invoked directly from sync DB hooks, service functions post-commit,
-        or async handlers without blocking.
+        Synchronous-safe and thread-safe publishing method.
+        When invoked from worker threads (e.g. FastAPI threadpool), dispatches safely
+        to the event loop via loop.call_soon_threadsafe.
         """
         self._event_counter += 1
         if event.id is None:
             event.id = self._event_counter
 
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            try:
+                loop = asyncio.get_running_loop()
+                self._loop = loop
+            except RuntimeError:
+                loop = None
+
+        is_same_thread = False
+        if loop and not loop.is_closed():
+            try:
+                is_same_thread = (asyncio.get_running_loop() is loop)
+            except RuntimeError:
+                is_same_thread = False
+
         for user_id, queues in list(self._subscribers.items()):
             for queue in list(queues):
-                try:
-                    queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    # Discard oldest event from queue to avoid blocking publisher
-                    try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                    try:
-                        queue.put_nowait(event)
-                    except asyncio.QueueFull:
-                        pass
+                if loop and not loop.is_closed() and not is_same_thread:
+                    loop.call_soon_threadsafe(self._push_to_queue, queue, event)
+                else:
+                    self._push_to_queue(queue, event)
 
     def get_subscriber_count(self) -> int:
         """Total active subscriber queues across all users."""

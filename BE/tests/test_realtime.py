@@ -243,6 +243,26 @@ class TestRealtimeSSE(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SKU-TEST-999", data["message"])
         self.assertIsNotNone(data["event_id"])
 
+    # 11. UC10/N-18: Kiểm tra tính thread-safe khi gọi publish_nowait từ threadpool worker thread
+    async def test_threadsafe_publish_nowait_from_worker_thread(self):
+        import concurrent.futures
+        bus = InMemoryEventBus()
+        user_email = "thread.user@dfios.com"
+        q = await bus.subscribe(user_email)
+
+        event = create_inventory_updated_event("SKU-THREAD-01", user_email)
+
+        # Gọi publish_nowait từ một thread riêng biệt (mô phỏng FastAPI threadpool)
+        loop = asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            await loop.run_in_executor(executor, bus.publish_nowait, event)
+
+        # Đọc sự kiện ra từ hàng đợi trong event loop chính
+        received = await asyncio.wait_for(q.get(), timeout=2.0)
+        self.assertIsNotNone(received)
+        self.assertEqual(received.data["sku_id"], "SKU-THREAD-01")
+        await bus.unsubscribe(user_email, q)
+
 
 if __name__ == "__main__":
     unittest.main()
