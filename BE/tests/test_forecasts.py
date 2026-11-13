@@ -268,8 +268,13 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertEqual(data["horizon"], 28)
         self.assertEqual(data["sigma_h"], 3.8)
         self.assertEqual(len(data["points"]), 28)
+        # points[i].uncertainty_range là độ rộng khoảng p90 - p10 = 4.0
+        self.assertEqual(data["points"][0]["uncertainty_range"], 4.0)
         self.assertIsNotNone(data["error_distribution"])
-        self.assertEqual(data["error_distribution"]["mean"], 4.0)
+        # B-06: error_distribution tính chuẩn sai số dự báo thực tế r = actual - y_pred = (9+i) - (10+i) = -1.0
+        self.assertEqual(data["error_distribution"]["mean"], -1.0)
+        self.assertEqual(data["error_distribution"]["min"], -1.0)
+        self.assertEqual(data["error_distribution"]["max"], -1.0)
 
     # --- UC23: View Forecast Explanation (SHAP) ---
 
