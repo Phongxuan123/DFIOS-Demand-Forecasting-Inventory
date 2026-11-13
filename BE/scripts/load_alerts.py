@@ -21,7 +21,7 @@ reorder_items = joined[(joined["on_hand"] + joined["on_order"]) <= joined["reord
 
 alerts = []
 for _, row in reorder_items.iterrows():
-    alert_type = "CRITICAL_OUT_OF_STOCK" if row["on_hand"] == 0 else "WARNING_LOW_STOCK"
+    alert_type = "STOCK_CRITICAL" if row["on_hand"] == 0 else "STOCK_WARNING"
     alerts.append({
         "id": str(uuid.uuid4()),
         "item_id": row["item_id"],

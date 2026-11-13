@@ -113,7 +113,7 @@ class DashboardService:
             db,
             store_id=store_id,
             severity=None,
-            limit=3500,
+            limit=None,
             offset=0,
         )
 
@@ -139,7 +139,15 @@ class DashboardService:
             )
             .all()
         )
-        existing_set = {(a.item_id, a.store_id, a.type) for a in existing_alerts}
+        existing_set = set()
+        for a in existing_alerts:
+            existing_set.add((a.item_id, a.store_id, a.type))
+            if a.type in ("CRITICAL_OUT_OF_STOCK", "STOCK_CRITICAL"):
+                existing_set.add((a.item_id, a.store_id, "STOCK_CRITICAL"))
+                existing_set.add((a.item_id, a.store_id, "CRITICAL_OUT_OF_STOCK"))
+            elif a.type in ("WARNING_LOW_STOCK", "STOCK_WARNING"):
+                existing_set.add((a.item_id, a.store_id, "STOCK_WARNING"))
+                existing_set.add((a.item_id, a.store_id, "WARNING_LOW_STOCK"))
 
         # 2. Gom các alert mới và sự kiện broadcast
         new_alerts: List[Alert] = []

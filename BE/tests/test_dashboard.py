@@ -481,6 +481,53 @@ class TestDashboardEndpoints(unittest.TestCase):
         self.assertEqual(resp_trend_global.status_code, 200)
         self.assertTrue(len(resp_trend_global.json()["data"]) > 0)
 
+    def test_b21_and_b10_alert_enum_harmonization_and_deduplication(self):
+        # UC10/B-21 & B-10: Harmonize alert enums and ensure cross-alias deduplication
+        from app.repositories.dashboard_repository import dashboard_repository
+
+        with self.TestingSessionLocal() as session:
+            # 1. Seed alert with legacy type "CRITICAL_OUT_OF_STOCK"
+            legacy_alert = Alert(
+                id="alert-legacy-01",
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                type="CRITICAL_OUT_OF_STOCK",
+                message="Legacy out of stock alert",
+                is_read=False,
+            )
+            session.add(legacy_alert)
+            session.commit()
+
+            # 2. find_or_create_alert with canonical "STOCK_CRITICAL" should deduplicate against legacy alias
+            alert_obj, created = dashboard_repository.find_or_create_alert(
+                session,
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                alert_type="STOCK_CRITICAL",
+                message="New alert message",
+            )
+            self.assertFalse(created)
+            self.assertEqual(alert_obj.id, "alert-legacy-01")
+
+            # 3. Test get_stock_alerts with limit=None (B-10: no truncation at 3500)
+            items, summary, total = dashboard_repository.get_stock_alerts(
+                session,
+                store_id="CA_1",
+                limit=None,
+            )
+            self.assertGreaterEqual(total, 1)
+            self.assertEqual(len(items), total)
+
+        # 4. API check-alerts should deduplicate against both aliases
+        resp = self.client.post(
+            "/api/v1/dashboard/check-alerts?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("alerts_generated", data)
+        self.assertIn("broadcast_count", data)
+
 
 if __name__ == "__main__":
     unittest.main()

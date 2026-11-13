@@ -219,7 +219,7 @@ class DashboardRepository:
         db: Session,
         store_id: Optional[str] = None,
         severity: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
         """
@@ -317,7 +317,7 @@ class DashboardRepository:
             combined = critical_items + warning_items + healthy_items
 
         total = len(combined)
-        paginated_items = combined[offset : offset + limit]
+        paginated_items = combined[offset : offset + limit] if limit is not None else combined[offset:]
         return paginated_items, summary_counts, total
 
     def find_or_create_alert(
@@ -330,13 +330,23 @@ class DashboardRepository:
     ) -> Tuple[Alert, bool]:
         """
         UC10: Tạo cảnh báo trong bảng alerts nếu chưa tồn tại cảnh báo chưa đọc (deduplication).
+        B-21: Đồng bộ enum alert (STOCK_CRITICAL/STOCK_WARNING) và hỗ trợ alias cũ.
         """
+        canonical_type = "STOCK_CRITICAL" if alert_type in ("CRITICAL_OUT_OF_STOCK", "STOCK_CRITICAL") else (
+            "STOCK_WARNING" if alert_type in ("WARNING_LOW_STOCK", "STOCK_WARNING") else alert_type
+        )
+        alias_types = {alert_type, canonical_type}
+        if canonical_type == "STOCK_CRITICAL":
+            alias_types.add("CRITICAL_OUT_OF_STOCK")
+        elif canonical_type == "STOCK_WARNING":
+            alias_types.add("WARNING_LOW_STOCK")
+
         existing = (
             db.query(Alert)
             .filter(
                 Alert.item_id == item_id,
                 Alert.store_id == store_id,
-                Alert.type == alert_type,
+                Alert.type.in_(list(alias_types)),
                 Alert.is_read == False,
             )
             .first()
@@ -347,7 +357,7 @@ class DashboardRepository:
         new_alert = Alert(
             item_id=item_id,
             store_id=store_id,
-            type=alert_type,
+            type=canonical_type,
             message=message,
             is_read=False,
             created_at=datetime.now(timezone.utc),
