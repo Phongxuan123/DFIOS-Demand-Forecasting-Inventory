@@ -47,15 +47,15 @@ class OptimizationService:
     DEFAULT_REVIEW_PERIOD = 7  # R = 7 ngày => H = L + R = 10 ngày (research.md §3)
 
     DEFAULT_OPTIMAL_POLICIES = {
-        "AX": {"m_g": 0.091, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
-        "AY": {"m_g": 0.183, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
-        "AZ": {"m_g": 0.393, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
-        "BX": {"m_g": 0.090, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
-        "BY": {"m_g": 0.159, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
-        "BZ": {"m_g": 0.384, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
-        "CX": {"m_g": 0.139, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
-        "CY": {"m_g": 0.125, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
-        "CZ": {"m_g": 0.334, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
+        "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
+        "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
+        "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
+        "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
+        "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
+        "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
+        "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
+        "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
+        "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
     }
 
     # --- UC29: Target Service Level Configuration ---
@@ -216,7 +216,7 @@ class OptimizationService:
             m_g = policy.m_g
             kappa_g = policy.kappa_g
         else:
-            def_policy = self.DEFAULT_OPTIMAL_POLICIES.get(segment, {"m_g": 0.15, "kappa_g": 1.0})
+            def_policy = self.DEFAULT_OPTIMAL_POLICIES.get(segment, {"m_g": 0.0, "kappa_g": 1.0})
             m_g = def_policy["m_g"]
             kappa_g = def_policy["kappa_g"]
 
@@ -763,7 +763,7 @@ class OptimizationService:
         for class_id in all_classes:
             default_spec = self.DEFAULT_OPTIMAL_POLICIES.get(
                 class_id,
-                {"m_g": 0.15, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.965},
+                {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.965},
             )
 
             # Tìm các SKU thuộc phân nhóm này
@@ -794,7 +794,7 @@ class OptimizationService:
 
                 # Tối ưu theo đặc tả Tier 2 REFIT-RSS-EOQ-G (research.md §7)
                 # Sử dụng bộ tham số thực nghiệm gốc từ c3ok_artifacts (kappa=1.0)
-                base_policy = self.DEFAULT_OPTIMAL_POLICIES.get(class_id, {"m_g": 0.15, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.96})
+                base_policy = self.DEFAULT_OPTIMAL_POLICIES.get(class_id, {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.96})
                 
                 # Điều chỉnh m_g theo mức phục vụ mục tiêu tau (Chuẩn log-odds scaling)
                 if target_availability != 0.95 and target_availability > 0:

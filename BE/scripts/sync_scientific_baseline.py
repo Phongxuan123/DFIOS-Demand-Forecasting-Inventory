@@ -41,18 +41,18 @@ def run_sync():
         """))
         print(f"Updated origin_date for {res.rowcount} quantile rows in CA_1 to 2016-05-23")
 
-        print("\n=== 3. SYNCING TIER 2 POLICY_SELECTION (m_g, kappa_g = 1.0) ===")
-        # Exact values from RUN_SUMMARY_C3OK.md
+        print("\n=== 3. SYNCING TIER 2 POLICY_SELECTION (m_g = 0.0, kappa_g = 1.0) ===")
+        # Tier 2 baseline m_g = 0.0 (tách riêng khỏi theta của Tier 3 C3-OUT để tránh lỗi nhân đôi e^{2*theta} - N-05)
         optimal_policies = {
-            "AX": {"m_g": 0.091, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
-            "AY": {"m_g": 0.183, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
-            "AZ": {"m_g": 0.393, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
-            "BX": {"m_g": 0.090, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
-            "BY": {"m_g": 0.159, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
-            "BZ": {"m_g": 0.384, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
-            "CX": {"m_g": 0.139, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
-            "CY": {"m_g": 0.125, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
-            "CZ": {"m_g": 0.334, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
+            "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 12500.0, "val_service": 0.968},
+            "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 15400.0, "val_service": 0.962},
+            "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 18200.0, "val_service": 0.961},
+            "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 8900.0,  "val_service": 0.967},
+            "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 11300.0, "val_service": 0.963},
+            "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 14100.0, "val_service": 0.960},
+            "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 3200.0,  "val_service": 0.965},
+            "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 5400.0,  "val_service": 0.964},
+            "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 9100.0,  "val_service": 0.961},
         }
         for class_id, p in optimal_policies.items():
             db.execute(text("""

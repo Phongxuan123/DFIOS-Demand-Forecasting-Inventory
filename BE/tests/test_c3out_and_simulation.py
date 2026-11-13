@@ -319,6 +319,19 @@ class TestC3OutAndSimulation(unittest.TestCase):
         finally:
             db.close()
 
+    def test_tier2_mg_decoupled_from_tier3_theta_no_doubling(self):
+        """
+        Test N-05: Kiểm tra tách m_g của Tier 2 khỏi theta của C3-OUT.
+        - Khởi tạo mặc định m_g = 0.0 cho cả 9 lớp (tránh lỗi cộng dồn thành e^{2*theta})
+        """
+        from app.services.optimization_service import optimization_service
+        for class_id, policy in optimization_service.DEFAULT_OPTIMAL_POLICIES.items():
+            self.assertEqual(
+                policy["m_g"],
+                0.0,
+                f"Lớp {class_id} có m_g={policy['m_g']} != 0.0, gây lỗi nhân đôi e^(2*theta)!",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
