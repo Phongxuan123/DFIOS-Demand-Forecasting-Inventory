@@ -323,6 +323,15 @@ class TestModelRegistryEndpoints(unittest.TestCase):
         self.assertFalse(data["artifact_integrity"]["file_exists"])
         self.assertIn("KHÔNG đạt kiểm định", data["message"])
 
+    def test_no_duplicate_model_registry_mounting(self):
+        # UC48/N-24: Ensure model_registry_router is only mounted once under /ml prefix, avoiding duplicate operationIds
+        schema = app.openapi()
+        paths = schema.get("paths", {})
+        # /api/v1/ml/models must exist
+        self.assertIn("/api/v1/ml/models", paths)
+        # /api/v1/models (unprefixed duplicate) must NOT exist
+        self.assertNotIn("/api/v1/models", paths)
+
 
 if __name__ == "__main__":
     unittest.main()
