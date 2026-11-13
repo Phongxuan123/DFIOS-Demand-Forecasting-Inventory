@@ -499,6 +499,76 @@ class TestC3OutAndSimulation(unittest.TestCase):
         finally:
             db.close()
 
+    def test_route_c_lookahead_bias_prevention_and_causal_invariance(self):
+        """
+        Test N-25 / R-15 / R-47: Kiểm định tính nhân quả (Causality) và Zero Lookahead Bias của Route (c).
+        Toàn bộ dữ liệu doanh số/dự báo trong tương lai (sau origin_date hoặc sau cutoff_date)
+        tuyệt đối không được rò rỉ vào việc tính sai số lịch sử và phân vị cửa sổ Q_H(tau).
+        """
+        import numpy as np
+        from app.services.window_quantile_service import window_quantile_service
+        from app.models.sales_history import SalesHistory
+        from app.models.forecast import Forecast
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            store = "CA_1"
+            item = "FOODS_1_001"
+            origin = date(2016, 4, 25)
+            H = 10
+
+            # 1. Nạp 40 ngày dữ liệu lịch sử trước origin (đảm bảo <= cutoff = origin - 10)
+            base_date = date(2016, 3, 1)
+            for i in range(40):
+                d = base_date + timedelta(days=i)
+                # Chỉ nạp đến ngày 2016-04-10 (trước cutoff 2016-04-15)
+                if d <= date(2016, 4, 10):
+                    sh = SalesHistory(id=f"sh_past_{i}", item_id=item, store_id=store, sale_date=d, quantity=10.0 + (i % 3))
+                    fc = Forecast(
+                        id=f"fc_past_{i}", item_id=item, store_id=store, forecast_date=d,
+                        h=1, y_pred=10.0, p10=8.0, p50=10.0, p90=12.0, available=True, model_version="ensemble_v1"
+                    )
+                    db.add_all([sh, fc])
+            db.commit()
+
+            # Thu thập sai số và giá trị quantile tại origin trước khi có dữ liệu tương lai
+            res_before = window_quantile_service.collect_historical_residuals(
+                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H
+            )
+            q_val_before = window_quantile_service.get_tau_quantile_value(
+                db, store_id=store, item_id=item, origin_date=origin, tau=0.95, horizon_days=H
+            )
+            self.assertGreater(len(res_before), 0)
+            self.assertGreater(q_val_before, 0.0)
+
+            # 2. Bơm dữ liệu TƯƠNG LAI đột biến (sau origin_date: ngày 2016-04-26 đến 2016-05-10) với doanh số cực lớn (999.0)
+            for i in range(15):
+                future_d = origin + timedelta(days=i + 1)
+                sh_future = SalesHistory(id=f"sh_future_{i}", item_id=item, store_id=store, sale_date=future_d, quantity=999.0)
+                fc_future = Forecast(
+                    id=f"fc_future_{i}", item_id=item, store_id=store, forecast_date=future_d,
+                    h=1, y_pred=5.0, p10=2.0, p50=5.0, p90=8.0, available=True, model_version="ensemble_v1"
+                )
+                db.add_all([sh_future, fc_future])
+            db.commit()
+
+            # 3. Thu thập lại sai số và quantile tại origin
+            res_after = window_quantile_service.collect_historical_residuals(
+                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H
+            )
+            q_val_after = window_quantile_service.get_tau_quantile_value(
+                db, store_id=store, item_id=item, origin_date=origin, tau=0.95, horizon_days=H
+            )
+
+            # Khẳng định tính nhân quả tuyệt đối: Dữ liệu tương lai không ảnh hưởng gì tới sai số và quantile ở quá khứ
+            np.testing.assert_array_almost_equal(res_before, res_after)
+            self.assertEqual(q_val_before, q_val_after)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()
