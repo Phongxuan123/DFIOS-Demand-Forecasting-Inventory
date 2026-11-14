@@ -473,3 +473,43 @@ class TestOptimizationEndpoints(unittest.TestCase):
             should_reorder_below = ip_below <= rop
             self.assertTrue(should_reorder_below)
 
+    def test_r18_bulk_recompute_parameters(self):
+        """
+        R-18: Kiểm tra tối ưu hóa tính toán hàng loạt (Bulk Vectorized Recompute)
+        khi danh mục có > 10 SKU, tính toán in-memory và lưu hàng loạt.
+        """
+        with self.TestingSessionLocal() as session:
+            # Tạo thêm 12 SKU để tổng số SKU > 10
+            extra_products = [
+                Product(
+                    item_id=f"TEST_ITEM_{i:03d}",
+                    name=f"Bulk Test Item {i}",
+                    dept_id="FOODS_1",
+                    cat_id="FOODS",
+                    price=2.5 + i * 0.5,
+                )
+                for i in range(1, 13)
+            ]
+            session.add_all(extra_products)
+            session.commit()
+
+            # Gọi recompute_parameters cho toàn kho (item_id=None)
+            count = optimization_service.recompute_parameters(session, store_id="CA_1")
+            self.assertGreaterEqual(count, 12)
+
+            # Rà soát dữ liệu đã ghi vào inventory_params
+            records = session.query(InventoryParam).filter(InventoryParam.store_id == "CA_1").all()
+            self.assertGreaterEqual(len(records), 12)
+
+            sample = session.query(InventoryParam).filter(
+                InventoryParam.store_id == "CA_1",
+                InventoryParam.item_id == "TEST_ITEM_001"
+            ).first()
+            self.assertIsNotNone(sample)
+            self.assertGreater(sample.s, 0)
+            self.assertGreaterEqual(sample.S, sample.s)
+            self.assertGreater(sample.eoq, 0)
+            self.assertEqual(sample.order_cost, 2.0)
+            self.assertAlmostEqual(sample.holding_cost, round(0.002 * 365.0 * 3.0, 3), places=2)
+
+
