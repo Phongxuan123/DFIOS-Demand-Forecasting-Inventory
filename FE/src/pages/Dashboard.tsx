@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Activity, Boxes, CircleDollarSign, ClipboardList, PackageX, Target } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import {
   Alert,
   Badge,
@@ -26,6 +26,7 @@ import { useApi } from '../hooks/useApi.ts';
 import { useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
+import { useBe } from '../i18n/useBe.ts';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
   getAlerts,
@@ -220,16 +221,24 @@ const SegmentChart: React.FC<{ rows: SegmentAvailability[] }> = ({ rows }) => {
   );
 };
 
-const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; predicted: number | null }> }> = ({ rows }) => {
+const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; predicted: number | null }>; clockDate: string | null }> = ({ rows, clockDate }) => {
   const c = useChartTheme();
   const fmt = useFormat();
   const t = useT();
+  const afterStart = clockDate ? rows.find((r) => r.date > clockDate)?.date : undefined;
+  const inRange = !!clockDate && rows.length > 0 && rows[0].date <= clockDate && !!afterStart;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <CartesianGrid stroke={c.grid} vertical={false} />
-        <XAxis dataKey="date" {...c.axis} tickFormatter={(v: string) => fmt.date(v, 'short')} minTickGap={24} />
+        <XAxis dataKey="date" {...c.axis} tickFormatter={(v: string) => fmt.date(v, 'axis')} minTickGap={32} />
         <YAxis {...c.axis} width={48} tickFormatter={(v: number) => fmt.compact(v)} />
+        {inRange && afterStart && (
+          <ReferenceArea x1={afterStart} x2={rows[rows.length - 1].date} fill={c.reference} fillOpacity={0.12} stroke="none" label={{ value: t('dashboard.charts.after_clock'), fill: c.tick, fontSize: 11, position: 'insideTopRight' }} />
+        )}
+        {clockDate && rows.some((r) => r.date === clockDate) && (
+          <ReferenceLine x={clockDate} stroke={c.series[2]} label={{ value: t('dashboard.charts.clock_line', { date: fmt.date(clockDate, 'axis') }), fill: c.tick, fontSize: 11, position: 'insideTopLeft' }} />
+        )}
         <RTooltip content={<ChartTooltip formatLabel={(l) => fmt.date(String(l))} format={(v) => fmt.number(v, { digits: 0 })} />} cursor={c.cursor} />
         <Line type="monotone" dataKey="actual" name={t('dashboard.charts.actual')} stroke={c.series[0]} strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="predicted" name={t('dashboard.charts.predicted')} stroke={c.series[1]} strokeWidth={2} strokeDasharray="5 3" dot={false} />
@@ -242,6 +251,7 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
 export const Dashboard: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
   const { storeId, concreteStoreId, isGlobal } = useStore();
   const clock = useClock();
   const enabled = !!storeId;
@@ -287,7 +297,7 @@ export const Dashboard: React.FC = () => {
     { key: 'ss', header: t('dashboard.alerts.col_ss'), align: 'right', value: (r) => r.safety_stock, cell: (r) => fmt.number(r.safety_stock, { digits: 1 }), sortable: true },
     { key: 'rop', header: t('dashboard.alerts.col_rop'), align: 'right', value: (r) => r.reorder_point, cell: (r) => fmt.number(r.reorder_point, { digits: 1 }), sortable: true },
     { key: 'sev', header: t('dashboard.alerts.col_severity'), value: (r) => r.severity, cell: (r) => <Badge tone={sevTone(r.severity)}>{sevLabel(r.severity)}</Badge>, sortable: true },
-    { key: 'action', header: t('dashboard.alerts.col_action'), value: (r) => r.suggested_action },
+    { key: 'action', header: t('dashboard.alerts.col_action'), value: (r) => r.suggested_action, cell: (r) => be(r.suggested_action) },
   ];
 
   const segCols: Column<SegmentAvailability>[] = [
@@ -315,11 +325,19 @@ export const Dashboard: React.FC = () => {
   }
 
   const asOf = sh?.as_of ? fmt.date(sh.as_of) : undefined;
-  const availabilityReason = sh ? sh.availability_reason ?? t('dashboard.reason.availability') : undefined;
+  const availabilityReason = sh ? (sh.availability_reason ? be(sh.availability_reason) : t('dashboard.reason.availability')) : undefined;
   const costDelta = sh?.total_cost_savings;
   const tabs = ['A', 'B', 'C'].map((id) => ({ id, label: id }));
   const trendRows = trend.data?.data ?? [];
   const trendHasData = trendRows.some((r) => r.actual !== null || r.predicted !== null);
+  // U-04: the sim clock is the demo's "today"; data dated after it is marked in the trend chart.
+  const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : null;
+  const trendBeyondClock = !!clockDate && trendRows.some((r) => r.actual !== null && r.date > clockDate);
+  // U-05: say plainly when the simulator misses the availability target.
+  const availMiss =
+    sh && sh.c3out_overall_availability != null && sh.target_availability != null && sh.c3out_overall_availability < sh.target_availability;
+  const segAllNull = !!sh && sh.segment_availabilities.length > 0 && sh.segment_availabilities.every((r) => r.c3out_availability == null && r.b0_availability == null);
+  const thetaSingle = !!theta.data && thetaView.rows.length === 1;
 
   return (
     <>
@@ -345,6 +363,18 @@ export const Dashboard: React.FC = () => {
       <Section>
         <ClockPanel />
       </Section>
+
+      {availMiss && sh && (
+        <Section>
+          <Alert tone="info" title={t('dashboard.availability_miss.title')}>
+            {t('dashboard.availability_miss.body', {
+              value: fmt.percent(sh.c3out_overall_availability, { scale: 'percent', digits: 1 }),
+              target: fmt.percent(sh.target_availability, { scale: 'percent', digits: 1 }),
+              days: fmt.integer(sh.days_elapsed),
+            })}
+          </Alert>
+        </Section>
+      )}
 
       <Section>
         <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
@@ -392,11 +422,11 @@ export const Dashboard: React.FC = () => {
             label={t('dashboard.kpi.cost')}
             loading={shadow.loading && !sh}
             value={sh?.c3out_total_cost != null ? fmt.currency(sh.c3out_total_cost, { compact: true }) : null}
-            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? sh?.cost_reason ?? t('dashboard.reason.cost') : undefined}
+            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? (sh?.cost_reason ? be(sh.cost_reason) : t('dashboard.reason.cost')) : undefined}
             hint={
               sh
                 ? t('dashboard.kpi.cost_hint', {
-                    b0: sh.b0_total_cost != null ? fmt.currency(sh.b0_total_cost, { compact: true }) : (sh.b0_reason ?? '—'),
+                    b0: sh.b0_total_cost != null ? fmt.currency(sh.b0_total_cost, { compact: true }) : (be(sh.b0_reason) || '—'),
                     delta: costDelta != null ? fmt.currency(costDelta, { compact: true }) : '—',
                   })
                 : undefined
@@ -422,7 +452,7 @@ export const Dashboard: React.FC = () => {
             error={shadow.error}
             onRetry={shadow.refetch}
             empty={!!sh && sh.cost_curves.length === 0}
-            unavailableReason={sh && sh.cost_curves.length === 0 ? sh.cost_reason ?? undefined : undefined}
+            unavailableReason={sh && sh.cost_curves.length === 0 && sh.cost_reason ? be(sh.cost_reason) : undefined}
             source="/dashboard/kpi-dashboard"
             asOf={asOf}
             footer={<ChartLegend items={[{ label: t('dashboard.charts.cost_c3'), color: 'var(--chart-1)' }, { label: t('dashboard.charts.cost_b0'), color: 'var(--chart-2)' }]} />}
@@ -437,7 +467,7 @@ export const Dashboard: React.FC = () => {
             loading={theta.loading && !theta.data}
             error={theta.error?.kind === 'forbidden' ? undefined : theta.error}
             onRetry={theta.refetch}
-            unavailableReason={theta.error?.kind === 'forbidden' ? t('dashboard.charts.theta_unavailable_forbidden') : undefined}
+            unavailableReason={theta.error?.kind === 'forbidden' ? t('dashboard.charts.theta_unavailable_forbidden') : thetaSingle ? t('dashboard.charts.theta_single') : undefined}
             empty={!!theta.data && thetaView.rows.length === 0}
             source="/calibration/history"
           >
@@ -451,6 +481,7 @@ export const Dashboard: React.FC = () => {
             error={shadow.error}
             onRetry={shadow.refetch}
             empty={!!sh && sh.segment_availabilities.length === 0}
+            unavailableReason={segAllNull ? availabilityReason : undefined}
             source="/dashboard/kpi-dashboard"
             asOf={asOf}
             footer={
@@ -474,9 +505,14 @@ export const Dashboard: React.FC = () => {
             onRetry={trend.refetch}
             empty={!!trend.data && !trendHasData}
             source="/dashboard/demand-trend"
-            footer={<ChartLegend items={[{ label: t('dashboard.charts.actual'), color: 'var(--chart-1)' }, { label: t('dashboard.charts.predicted'), color: 'var(--chart-2)' }]} />}
+            footer={
+              <>
+                <ChartLegend items={[{ label: t('dashboard.charts.actual'), color: 'var(--chart-1)' }, { label: t('dashboard.charts.predicted'), color: 'var(--chart-2)' }]} />
+                {trendBeyondClock && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_beyond_clock')}</p>}
+              </>
+            }
           >
-            <TrendChart rows={trendRows} />
+            <TrendChart rows={trendRows} clockDate={clockDate} />
           </ChartFrame>
         </div>
       </Section>

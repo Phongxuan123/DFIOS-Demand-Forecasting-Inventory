@@ -60,6 +60,9 @@ export const shell: typeof ViShell = {
   notifications: {
     title: 'Stock alerts',
     empty: 'No open alerts.',
+    critical: '{count} critical',
+    more: '+{count} more critical alerts in this store.',
+    pending: '{count} pending replenishment orders',
     unread: '{count} unread',
     view: 'View replenishment',
     mark_all: 'Mark all as read',

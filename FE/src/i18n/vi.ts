@@ -14,6 +14,7 @@ import { products } from './vi/products.ts';
 import { replenishment } from './vi/replenishment.ts';
 import { abcxyz } from './vi/abcxyz.ts';
 import { settings } from './vi/settings.ts';
+import { be } from './vi/be.ts';
 
 export const vi = {
   common,
@@ -28,6 +29,7 @@ export const vi = {
   replenishment,
   abcxyz,
   settings,
+  be,
 };
 
 export type Dictionary = typeof vi;

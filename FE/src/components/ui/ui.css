@@ -226,6 +226,16 @@
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
+.ui-kpi__value--text {
+  font-size: var(--text-md);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .ui-kpi__value--na {
   color: var(--color-text-disabled);
 }

@@ -59,6 +59,9 @@ export const shell = {
   notifications: {
     title: 'Cảnh báo tồn kho',
     empty: 'Không có cảnh báo nào đang mở.',
+    critical: '{count} nghiêm trọng',
+    more: '+{count} cảnh báo nghiêm trọng khác trong kho này.',
+    pending: '{count} đề xuất bổ sung đang chờ duyệt',
     unread: '{count} chưa đọc',
     view: 'Xem đề xuất bổ sung',
     mark_all: 'Đánh dấu đã đọc',

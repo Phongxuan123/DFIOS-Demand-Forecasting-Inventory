@@ -42,7 +42,15 @@ export const dashboard: typeof Vi = {
     wrmsse_hint: 'Forecast error metric (lower is better), not accuracy. Source: model registry.',
     wrmsse_unavailable: 'The model registry has no WRMSSE for the production model',
   },
+  availability_miss: {
+    title: 'Availability below target',
+    body: 'Availability {value} is below the {target} target after {days} simulated days. This is the simulator result for the current state, not a display problem. More review cycles (advance the clock) let the controller adapt before judging it.',
+  },
   charts: {
+    after_clock: 'After simulation clock',
+    clock_line: 'Sim clock {date}',
+    theta_single: 'Only one review so far, so there is no trajectory to draw. Advance the clock to see θ change.',
+    trend_beyond_clock: 'Actuals dated after the simulation clock are historical M5 data and are shaded.',
     cost_title: 'Cumulative cost: C³-OUT vs B0',
     cost_desc: 'A3 cost per review cycle. B0 runs in parallel on the same demand.',
     cost_c3: 'C³-OUT',

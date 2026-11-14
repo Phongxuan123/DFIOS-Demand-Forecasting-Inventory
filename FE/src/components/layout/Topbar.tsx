@@ -136,11 +136,9 @@ const ClockChip: React.FC = () => {
 /* --------------------------- Notification bell ----------------------------- */
 const NotificationBell: React.FC = () => {
   const { t, fmt } = useI18n();
-  const { active, failed } = useAlertFeed();
+  const { total: count, rows, pending, failed } = useAlertFeed();
   const { withStore } = useStore();
   const [open, setOpen] = useState(false);
-  const count = active.length;
-  const shown = active.slice(0, 8);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -152,13 +150,13 @@ const NotificationBell: React.FC = () => {
         <div className="shell-popover shell-popover--alerts" role="dialog" aria-label={t('shell.notifications.title')}>
           <div className="shell-popover__title">
             {t('shell.notifications.title')}
-            {count > 0 && <Badge tone="danger">{t('shell.notifications.unread', { count })}</Badge>}
+            {count > 0 && <Badge tone="danger">{t('shell.notifications.critical', { count: fmt.integer(count) })}</Badge>}
           </div>
           {failed && <p className="shell-popover__muted">{t('shell.notifications.unavailable')}</p>}
-          {!failed && shown.length === 0 && <p className="shell-popover__muted">{t('shell.notifications.empty')}</p>}
+          {!failed && rows.length === 0 && <p className="shell-popover__muted">{t('shell.notifications.empty')}</p>}
           <ul className="shell-alert-list">
-            {shown.map((a) => (
-              <li key={a.key}>
+            {rows.map((a) => (
+              <li key={`${a.item_id}__${a.store_id}`}>
                 <Link to={withStore(`/replenishment?sku=${encodeURIComponent(a.item_id)}`)} onClick={() => setOpen(false)}>
                   <span className="shell-alert-list__name">{a.product_name || a.item_id}</span>
                   <span className="shell-alert-list__meta">
@@ -168,6 +166,14 @@ const NotificationBell: React.FC = () => {
               </li>
             ))}
           </ul>
+          {count > rows.length && <p className="shell-popover__muted">{t('shell.notifications.more', { count: fmt.integer(count - rows.length) })}</p>}
+          {pending !== null && (
+            <div className="shell-popover__actions">
+              <Link to={withStore('/replenishment')} onClick={() => setOpen(false)}>
+                {t('shell.notifications.pending', { count: fmt.integer(pending) })}
+              </Link>
+            </div>
+          )}
         </div>
       )}
     </Popover>

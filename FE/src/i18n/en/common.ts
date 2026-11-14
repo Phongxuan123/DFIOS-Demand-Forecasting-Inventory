@@ -131,7 +131,7 @@ export const common: typeof Vi = {
     artifact_help: 'coverage_q95: out-of-sample coverage of the tau=0.95 quantile from the c3ok artifact (7-day backtest). It has a different definition from the neighbouring figure; the two are never merged.',
     db_label: 'Q0.95 coverage (DB causal windows)',
     db_help: 'coverage_q95_db_causal: coverage computed from the forecast_window_quantile table in the DB over matured (causal) windows. Its definition and sample differ from the artifact coverage_q95, so the two numbers can differ.',
-    db_n: 'Over {n} SKUs, DB source',
+    db_n: 'Over {n} causal windows (SKU × origin), DB source',
     db_source: 'DB source',
     target: 'O2 target: {low}–{high}',
     in: 'In band',

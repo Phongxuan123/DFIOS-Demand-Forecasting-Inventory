@@ -2,6 +2,7 @@ import React from 'react';
 import { Alert, Badge, Card, DataSourceNote, Table, type Column } from '../../components/ui/index.ts';
 import { NoPermission } from '../../auth/RequireRole.tsx';
 import { useFormat, useT } from '../../i18n/index.tsx';
+import { useBe } from '../../i18n/useBe.ts';
 import { toApiError, apiErrorMessage } from '../../services/apiClient.ts';
 import type { ClassificationMatrix, Recommendation, ServiceLevelConfig } from '../../services/abcxyzApi.ts';
 
@@ -20,14 +21,15 @@ interface Props {
 export const PolicyCard: React.FC<Props> = ({ allowed, recs, recsLoading, recsError, onRetry, matrix, serviceLevel, serviceLevelError, selected }) => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
 
   const columns: Column<Recommendation>[] = [
     { key: 'segment', header: t('abcxyz.policy.segment'), cell: (r) => <Badge tone={r.segment === selected ? 'accent' : 'neutral'}>{r.segment}</Badge>, value: (r) => r.segment, sortable: true, width: 96 },
     { key: 'skus', header: t('abcxyz.policy.skus'), align: 'right', value: (r) => matrix?.matrix?.[r.segment]?.sku_count ?? null, cell: (r) => fmt.integer(matrix?.matrix?.[r.segment]?.sku_count), sortable: true, width: 80 },
-    { key: 'review', header: t('abcxyz.policy.review'), value: (r) => r.review_frequency, cell: (r) => <span className="abc-policy-text">{r.review_frequency}</span> },
-    { key: 'policy', header: t('abcxyz.policy.policy'), value: (r) => r.replenishment_policy, cell: (r) => <span className="abc-policy-text">{r.replenishment_policy}</span> },
-    { key: 'safety', header: t('abcxyz.policy.safety'), value: (r) => r.safety_stock_level, cell: (r) => <span className="abc-policy-text">{r.safety_stock_level}</span> },
-    { key: 'priority', header: t('abcxyz.policy.priority'), value: (r) => r.priority, cell: (r) => <span className="abc-policy-text">{r.priority}</span> },
+    { key: 'review', header: t('abcxyz.policy.review'), value: (r) => r.review_frequency, cell: (r) => <span className="abc-policy-text">{be(r.review_frequency)}</span> },
+    { key: 'policy', header: t('abcxyz.policy.policy'), value: (r) => r.replenishment_policy, cell: (r) => <span className="abc-policy-text">{be(r.replenishment_policy)}</span> },
+    { key: 'safety', header: t('abcxyz.policy.safety'), value: (r) => r.safety_stock_level, cell: (r) => <span className="abc-policy-text">{be(r.safety_stock_level)}</span> },
+    { key: 'priority', header: t('abcxyz.policy.priority'), value: (r) => r.priority, cell: (r) => <span className="abc-policy-text">{be(r.priority)}</span> },
   ];
 
   let slNote: React.ReactNode = null;

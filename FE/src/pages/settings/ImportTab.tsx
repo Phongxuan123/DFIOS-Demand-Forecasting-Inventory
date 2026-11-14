@@ -100,7 +100,9 @@ export const ImportTab: React.FC = () => {
   const rejected = result ? (result.rejected ?? result.skipped_count ?? 0) : 0;
   const inserted = result ? (result.inserted ?? null) : null;
   const updated = result ? (result.updated ?? null) : null;
-  const imported = (inserted ?? 0) + (updated ?? 0);
+  // R-38: when the BE only reports a total (imported_count), show it as "inserted" instead of an empty tile.
+  const onlyTotal = result && inserted === null && updated === null && typeof result.imported_count === 'number' ? result.imported_count : null;
+  const imported = (inserted ?? 0) + (updated ?? 0) + (onlyTotal ?? 0);
   const rows: RejectedRow[] = result?.rejected_rows ?? (result?.quality_report?.rejected_rows as RejectedRow[] | undefined) ?? [];
   const warnings = result?.quality_report?.warnings ?? [];
 
@@ -148,7 +150,7 @@ export const ImportTab: React.FC = () => {
               <Alert tone="danger">{t('settings.import.outcome_none', { rejected: fmt.integer(rejected) })}</Alert>
             )}
             <div className="ui-grid ui-grid--kpi">
-              <KpiTile label={t('settings.import.inserted')} value={inserted === null ? null : fmt.integer(inserted)} unavailableReason="—" />
+              <KpiTile label={t('settings.import.inserted')} value={inserted !== null ? fmt.integer(inserted) : onlyTotal !== null ? fmt.integer(onlyTotal) : null} unavailableReason="—" />
               <KpiTile label={t('settings.import.updated')} value={updated === null ? null : fmt.integer(updated)} unavailableReason="—" />
               <KpiTile label={t('settings.import.rejected')} value={fmt.integer(rejected)} />
             </div>

@@ -211,11 +211,11 @@ export const KpiTile: React.FC<KpiTileProps> = ({ label, value, unit, delta, hin
         </>
       ) : (
         <>
-          <div className={cx('ui-kpi__value', na && 'ui-kpi__value--na')}>
+          <div className={cx('ui-kpi__value', na && 'ui-kpi__value--na', !na && typeof value === 'string' && value.length > 14 && 'ui-kpi__value--text')} title={!na && typeof value === 'string' && value.length > 14 ? value : undefined}>
             {na ? '—' : value}
             {!na && unit && <span className="ui-kpi__unit">{unit}</span>}
           </div>
-          <div className="ui-kpi__foot">
+          <div className="ui-kpi__foot" aria-live="polite">
             {na ? (
               <span>{unavailableReason ? t('common.state.unavailable_reason', { reason: String(unavailableReason) }) : t('common.state.unavailable')}</span>
             ) : (

@@ -1,124 +1,101 @@
 /**
- * Active critical stock alerts for the topbar bell.
- * Reuses utils/alertTracker (per-account persisted history + reconciliation) and refreshes on
- *  - `dfios:alerts-updated` (pages call emitAlertsSyncEvent after approving / adjusting),
- *  - the single backend SSE stream (/events), debounced leading + trailing (P-42),
- *  - the tab becoming visible again after 15 s.
+ * Stock-alert summary for the topbar bell (U-01, N-14, F-17).
+ * Two small, store-scoped, server-side requests per refresh:
+ *   GET /dashboard/alerts?severity=CRITICAL&limit=5   -> top rows + summary.critical_count
+ *   GET /replenishments?status=PENDING&limit=1        -> `total` = number of pending orders (manager+ only)
+ * Refreshes on store / sim-clock change, `dfios:alerts-updated`, the single SSE stream (debounced leading +
+ * trailing) and when the tab becomes visible again after 15 s. Never downloads full lists.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { clearApiCache } from '../../services/api.ts';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { useStore } from '../../context/StoreContext.tsx';
+import { useClock } from '../../context/ClockContext.tsx';
 import { can } from '../../auth/permissions.ts';
 import { useSSE } from '../../hooks/useSSE.ts';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback.ts';
-import {
-  ALERTS_SYNC_EVENT,
-  applyOptimisticAlertSync,
-  fetchCriticalDashboardAlerts,
-  fetchRecommendationsForAlerts,
-  getAlertStorageKey,
-  loadTrackedAlerts,
-  reconcileTrackedAlerts,
-  saveTrackedAlerts,
-  type AlertsSyncDetail,
-  type TrackedAlertItem,
-} from '../../utils/alertTracker.ts';
+import { getAlerts, type AlertItem } from '../../services/dashboardApi.ts';
+import { listReplenishments } from '../../services/replenishmentApi.ts';
+import { ALERTS_SYNC_EVENT } from '../../utils/alertTracker.ts';
 
-export function useAlertFeed() {
-  const { user, isAuthenticated } = useAuth();
-  const storageKey = getAlertStorageKey(user);
+export const BELL_ROWS = 5;
+
+export interface AlertFeed {
+  /** Total CRITICAL alerts in the selected store (server count). */
+  total: number;
+  rows: AlertItem[];
+  /** Pending replenishment orders in the selected store (null: unknown or not allowed). */
+  pending: number | null;
+  loading: boolean;
+  failed: boolean;
+}
+
+export function useAlertFeed(): AlertFeed {
+  const { isAuthenticated, user } = useAuth();
+  const { concreteStoreId: storeId } = useStore();
+  const { version } = useClock();
   const canSeeReplenishment = can(user?.role, 'view:replenishment');
-  const [state, setState] = useState<{ key: string; items: TrackedAlertItem[] }>(() => ({ key: storageKey, items: loadTrackedAlerts(storageKey) }));
-  // Account switch: fall back to that account's stored history until the first sync lands.
-  const items = useMemo(() => (state.key === storageKey ? state.items : loadTrackedAlerts(storageKey)), [state, storageKey]);
-  const [failed, setFailed] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const itemsRef = useRef(items);
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-  const busy = useRef(false);
-  const again = useRef(false);
+  const [feed, setFeed] = useState<AlertFeed>({ total: 0, rows: [], pending: null, loading: false, failed: false });
+  const controller = useRef<AbortController | null>(null);
   const lastSync = useRef(0);
 
-  const sync = useCallback(
-    async (fresh: boolean) => {
-      if (busy.current) {
-        again.current = true;
-        return;
-      }
-      busy.current = true;
-      setLoading(true);
-      try {
-        if (fresh) {
-          clearApiCache('/dashboard/alerts');
-          if (canSeeReplenishment) clearApiCache('/replenishments');
-        }
-        const [crit, rec] = await Promise.all([
-          fetchCriticalDashboardAlerts(),
-          canSeeReplenishment ? fetchRecommendationsForAlerts() : Promise.resolve(null),
-        ]);
-        if (!crit.fetchSuccess) {
-          setFailed(true);
-          return;
-        }
-        const next = reconcileTrackedAlerts({
-          previousTracked: itemsRef.current,
-          criticalAlerts: crit.items,
-          totalCriticalInDb: crit.totalCriticalInDb,
-          recommendations: rec,
-        });
-        itemsRef.current = next;
-        setState({ key: storageKey, items: next });
-        setFailed(false);
-        saveTrackedAlerts(storageKey, next);
+  const sync = useCallback(() => {
+    if (!storeId) return;
+    controller.current?.abort();
+    const ctl = new AbortController();
+    controller.current = ctl;
+    setFeed((f) => ({ ...f, loading: true }));
+    const alerts = getAlerts(storeId, 'CRITICAL', BELL_ROWS, ctl.signal);
+    const pending = canSeeReplenishment
+      ? listReplenishments({ skip: 0, limit: 1, store_id: storeId, status: 'PENDING' }, ctl.signal).then(
+          (r) => r.total,
+          () => null,
+        )
+      : Promise.resolve(null);
+    Promise.all([alerts, pending]).then(
+      ([a, p]) => {
+        if (ctl.signal.aborted) return;
         lastSync.current = Date.now();
-      } finally {
-        busy.current = false;
-        setLoading(false);
-        if (again.current) {
-          again.current = false;
-          void sync(true);
-        }
-      }
-    },
-    [storageKey, canSeeReplenishment],
-  );
+        const items = Array.isArray(a.items) ? a.items : [];
+        setFeed({
+          total: Number(a.summary?.critical_count ?? a.total ?? items.length),
+          rows: items.slice(0, BELL_ROWS),
+          pending: p,
+          loading: false,
+          failed: false,
+        });
+      },
+      () => {
+        if (ctl.signal.aborted) return;
+        setFeed((f) => ({ ...f, loading: false, failed: true }));
+      },
+    );
+  }, [storeId, canSeeReplenishment]);
 
-  // Initial load / account switch.
+  // Initial load, store change, clock advance (version).
   useEffect(() => {
     if (!isAuthenticated) return;
-    void sync(false);
-  }, [isAuthenticated, storageKey, sync]);
+    sync();
+    return () => controller.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, sync, version]);
 
-  // Same-tab actions + tab focus.
+  const debouncedSync = useDebouncedCallback(sync, 1000);
+
   useEffect(() => {
     if (!isAuthenticated) return;
-    const onSync = (event: Event) => {
-      const detail = (event as CustomEvent<AlertsSyncDetail | undefined>).detail;
-      if (detail) {
-        const optimistic = applyOptimisticAlertSync(itemsRef.current, detail);
-        itemsRef.current = optimistic;
-        setState({ key: storageKey, items: optimistic });
-        saveTrackedAlerts(storageKey, optimistic);
-      }
-      void sync(true);
-    };
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastSync.current > 15000) void sync(true);
+      if (document.visibilityState === 'visible' && Date.now() - lastSync.current > 15000) debouncedSync();
     };
-    window.addEventListener(ALERTS_SYNC_EVENT, onSync);
+    window.addEventListener(ALERTS_SYNC_EVENT, debouncedSync);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      window.removeEventListener(ALERTS_SYNC_EVENT, onSync);
+      window.removeEventListener(ALERTS_SYNC_EVENT, debouncedSync);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [isAuthenticated, storageKey, sync]);
+  }, [isAuthenticated, debouncedSync]);
 
   // One SSE connection for the whole shell.
-  const onServerEvent = useDebouncedCallback(() => void sync(true), 500);
-  useSSE('/events', { enabled: isAuthenticated, onEvent: onServerEvent });
+  useSSE('/events', { enabled: isAuthenticated, onEvent: () => debouncedSync() });
 
-  const active = useMemo(() => items.filter((i) => i.alertState === 'unread'), [items]);
-  return { active, loading, failed };
+  return feed;
 }

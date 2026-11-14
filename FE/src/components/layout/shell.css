@@ -476,3 +476,13 @@
     width: auto;
   }
 }
+
+/* U-13: nothing inside the page may widen the document; wide tables scroll inside .ui-table-wrap */
+.shell-content__inner {
+  min-width: 0;
+  overflow-x: clip;
+}
+.shell-content__inner > * {
+  min-width: 0;
+  max-width: 100%;
+}

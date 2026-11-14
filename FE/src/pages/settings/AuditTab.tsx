@@ -2,11 +2,14 @@ import React, { useState } from 'react';
 import { Badge, Card, DataSourceNote, Tooltip, Input, SearchInput, Select, Table, usePagination, type Column } from '../../components/ui/index.ts';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
+import { useAuditLabel, useBe } from '../../i18n/useBe.ts';
 import { listAuditActions, listAuditLogs, type AuditLog } from '../../services/settingsApi.ts';
 
 export const AuditTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
+  const auditLabel = useAuditLabel();
   const pg = usePagination(25);
   const [action, setAction] = useState('');
   const [actor, setActor] = useState('');
@@ -40,7 +43,7 @@ export const AuditTab: React.FC = () => {
   const columns: Column<AuditLog>[] = [
     { key: 'time', header: t('settings.audit.col_time'), cell: (r) => fmt.dateTime(r.created_at), width: 170 },
     { key: 'actor', header: t('settings.audit.col_actor'), cell: (r) => r.actor_email || <span className="set-note">{t('settings.audit.actor_unknown')}</span> },
-    { key: 'action', header: t('settings.audit.col_action'), value: (r) => r.action },
+    { key: 'action', header: t('settings.audit.col_action'), value: (r) => r.action, cell: (r) => <span title={r.action}>{auditLabel(r.action)}</span> },
     {
       key: 'result',
       header: <Tooltip content={t('settings.audit.result_help')}><span>{t('settings.audit.col_result')}</span></Tooltip>,
@@ -48,7 +51,7 @@ export const AuditTab: React.FC = () => {
       cell: (r) => (r.result ? <Badge tone={r.result === 'FAILURE' ? 'danger' : 'success'}>{r.result === 'FAILURE' ? t('settings.audit.result_failure') : t('settings.audit.result_success')}</Badge> : <span className="set-note">—</span>),
       width: 110,
     },
-    { key: 'details', header: t('settings.audit.col_details'), value: (r) => r.details },
+    { key: 'details', header: t('settings.audit.col_details'), value: (r) => r.details, cell: (r) => be(r.details) },
     { key: 'ip', header: t('settings.audit.col_ip'), value: (r) => r.ip_address, width: 130 },
   ];
 
@@ -60,7 +63,7 @@ export const AuditTab: React.FC = () => {
           label={t('settings.audit.action_filter')}
           value={action}
           onChange={reset(setAction)}
-          options={[{ value: '', label: t('settings.audit.all_actions') }, ...(actions.data ?? []).map((a) => ({ value: a, label: a }))]}
+          options={[{ value: '', label: t('settings.audit.all_actions') }, ...(actions.data ?? []).map((a) => ({ value: a, label: auditLabel(a) }))]}
         />
         <div>
           <div className="set-label">{t('settings.audit.actor_filter')}</div>

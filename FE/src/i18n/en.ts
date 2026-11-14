@@ -11,6 +11,7 @@ import { products } from './en/products.ts';
 import { replenishment } from './en/replenishment.ts';
 import { abcxyz } from './en/abcxyz.ts';
 import { settings } from './en/settings.ts';
+import { be } from './en/be.ts';
 
 export const en: Dictionary = {
   common,
@@ -25,4 +26,5 @@ export const en: Dictionary = {
   replenishment,
   abcxyz,
   settings,
+  be,
 };

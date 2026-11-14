@@ -7,6 +7,13 @@ export type Locale = 'vi' | 'en';
 
 export const NOT_AVAILABLE = '—';
 
+let activeLocale: Locale = 'vi';
+/** Set by I18nProvider so non-React code (error mapping) can translate backend text. */
+export const setActiveLocale = (l: Locale): void => {
+  activeLocale = l;
+};
+export const getActiveLocale = (): Locale => activeLocale;
+
 const INTL_LOCALE: Record<Locale, string> = { vi: 'vi-VN', en: 'en-US' };
 
 type Num = number | null | undefined;
@@ -51,7 +58,7 @@ export interface Formatters {
   /** Currency, USD by default (M5 prices are in USD). */
   currency: (value: Num, options?: { currency?: string; digits?: number; compact?: boolean }) => string;
   /** 30/05/2016 (vi) / May 30, 2016 (en). */
-  date: (value: DateInput, style?: 'short' | 'medium' | 'long') => string;
+  date: (value: DateInput, style?: 'axis' | 'short' | 'medium' | 'long') => string;
   dateTime: (value: DateInput) => string;
   time: (value: DateInput) => string;
   /** ISO calendar date YYYY-MM-DD, locale independent. Use for API params and for sim dates in tables. */
@@ -109,7 +116,9 @@ export function createFormatters(locale: Locale): Formatters {
     const d = parseDate(value);
     if (!d) return NOT_AVAILABLE;
     const opts: Intl.DateTimeFormatOptions =
-      style === 'short'
+      style === 'axis'
+        ? { day: 'numeric', month: 'short' }
+        : style === 'short'
         ? { day: '2-digit', month: '2-digit', year: 'numeric' }
         : style === 'long'
           ? { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }

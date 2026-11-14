@@ -76,6 +76,12 @@ export interface ExplanationResponse {
   model_version: string;
   base_value: number;
   features: ShapFeature[];
+  /** U-03: true only when the BE computed real per-SKU SHAP values. Absent/false = do not present as real. */
+  available?: boolean;
+  /** Where the values come from (e.g. 'shap_tree_explainer'). */
+  source?: string | null;
+  /** Why the explanation is unavailable (BE text, may be Vietnamese). */
+  reason?: string | null;
 }
 
 export interface WindowQuantileResponse {

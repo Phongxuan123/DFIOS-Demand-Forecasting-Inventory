@@ -5,6 +5,7 @@ import { useStore } from '../context/StoreContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
 import { useApi } from '../hooks/useApi.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
+import { useBe } from '../i18n/useBe.ts';
 import { can } from '../auth/permissions.ts';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
@@ -529,6 +530,7 @@ const ActionDialog: React.FC<{
 /* ------------------------------ policy details drawer ------------------------------ */
 const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => void }> = ({ rec, onClose }) => {
   const t = useT();
+  const be = useBe();
   const fmt = useFormat();
   const param = useApi((signal) => getPolicyParam(rec!.item_id, rec!.store_id, signal), [rec?.item_id, rec?.store_id], { enabled: !!rec });
   const calib = useApi((signal) => getCalibrationStatus(rec!.store_id, signal), [rec?.store_id], { enabled: !!rec });
@@ -626,7 +628,7 @@ const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => voi
           {rec.reason && (
             <div>
               <div className="rep-note">{t('replenishment.drawer.reason')}</div>
-              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>{rec.reason}</p>
+              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>{be(rec.reason)}</p>
             </div>
           )}
         </div>

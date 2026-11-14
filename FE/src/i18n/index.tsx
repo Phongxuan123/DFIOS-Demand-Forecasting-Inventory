@@ -14,7 +14,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { vi, type Dictionary } from './vi.ts';
 import { en } from './en.ts';
-import { createFormatters, type Formatters, type Locale } from './format.ts';
+import { createFormatters, setActiveLocale, type Formatters, type Locale } from './format.ts';
 
 export type { Locale, Formatters } from './format.ts';
 export { NOT_AVAILABLE, createFormatters, parseDate } from './format.ts';
@@ -109,6 +109,7 @@ export const I18nProvider: React.FC<{ children: React.ReactNode; initialLocale?:
 
   useEffect(() => {
     document.documentElement.lang = locale;
+    setActiveLocale(locale);
   }, [locale]);
 
   const value = useMemo<I18nContextValue>(

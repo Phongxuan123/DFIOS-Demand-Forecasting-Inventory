@@ -133,4 +133,4 @@ DON'T hard-code colours, px radii, shadows, fonts.
 DON'T use window.confirm/alert, emoji as icons, gradients, glassmorphism, more than 8 chart series.
 DON'T read the theme from JS for charts: use useChartTheme() (works in both themes).
 DON'T open your own SSE connection: the shell has one (/events); use window events / refetch.
-DON'T cache per-account data outside services/api.ts caches or registerCacheClearer().
+DON'T cache per-account data outside registerCacheClearer() (services/session.ts).

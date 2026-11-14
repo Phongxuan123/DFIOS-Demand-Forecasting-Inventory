@@ -29,7 +29,9 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
+import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
+import { useBe } from '../i18n/useBe.ts';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
   getCostComparison,
@@ -46,27 +48,6 @@ import {
   type SimPolicyMetric,
 } from '../services/reportsApi.ts';
 
-/* --------------------------------- CSV export ------------------------------ */
-/** Neutralise spreadsheet formulas: a cell starting with = + - @ (or tab/CR) gets a leading quote. */
-function csvCell(value: unknown): string {
-  let s = value === null || value === undefined ? '' : String(value);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-function downloadCsv(filename: string, header: string[], rows: Array<Array<unknown>>) {
-  const text = [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
-  const blob = new Blob(['﻿', text], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 type Objective = 'cost' | 'sla';
 
 /* --------------------------------- Chart ----------------------------------- */
@@ -74,7 +55,8 @@ const CostStack: React.FC<{ rows: PolicyRow[] }> = ({ rows }) => {
   const c = useChartTheme();
   const fmt = useFormat();
   const t = useT();
-  const data = rows.map((r) => ({ name: r.label || r.policy, holding: r.holding_cost, shortage: r.shortage_cost, ordering: r.ordering_cost }));
+  const be = useBe();
+  const data = rows.map((r) => ({ name: be(r.label) || r.policy, holding: r.holding_cost, shortage: r.shortage_cost, ordering: r.ordering_cost }));
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
@@ -94,6 +76,7 @@ const CostStack: React.FC<{ rows: PolicyRow[] }> = ({ rows }) => {
 const PoliciesTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
   const { storeId } = useStore();
   const { user } = useAuth();
   const { version } = useClock();
@@ -110,7 +93,7 @@ const PoliciesTab: React.FC = () => {
   const topCsl = withCsl.length ? withCsl.reduce((a, b) => ((a.csl as number) >= (b.csl as number) ? a : b)) : null;
   const best = objective === 'cost' ? cheapest : topCsl;
   const hasP6 = rows.some((r) => /p6/i.test(r.policy) || /p6/i.test(r.label));
-  const name = (r: PolicyRow) => r.label || r.policy;
+  const name = (r: PolicyRow) => be(r.label) || r.policy;
 
   const cols: Column<PolicyRow>[] = [
     {
@@ -153,7 +136,7 @@ const PoliciesTab: React.FC = () => {
   const b = bench.data;
   const missing = b?.status === 'artifact_missing';
   const simCols: Column<SimPolicyMetric>[] = [
-    { key: 'name', header: t('reports.policy.col_policy'), value: (r) => r.policy_name, cell: (r) => <span>{r.policy_name} {sim.data?.recommended_policy === r.policy_id && <Badge tone="accent">{t('reports.sim.recommended_short')}</Badge>}</span> },
+    { key: 'name', header: t('reports.policy.col_policy'), value: (r) => r.policy_name, cell: (r) => <span>{be(r.policy_name)} {sim.data?.recommended_policy === r.policy_id && <Badge tone="accent">{t('reports.sim.recommended_short')}</Badge>}</span> },
     { key: 'av', header: t('reports.sim.col_availability'), align: 'right', value: (r) => r.availability, cell: (r) => fmt.percent(r.availability, { scale: 'percent', digits: 1 }) },
     { key: 'cost', header: t('reports.policy.col_total'), align: 'right', value: (r) => r.total_cost, cell: (r) => fmt.number(r.total_cost, { digits: 0 }) },
     { key: 'orders', header: t('reports.sim.col_orders'), align: 'right', value: (r) => r.total_orders, cell: (r) => fmt.integer(r.total_orders) },
@@ -176,7 +159,7 @@ const PoliciesTab: React.FC = () => {
           <ErrorState error={bench.error} onRetry={bench.refetch} />
         ) : missing ? (
           <Alert tone="warning" title={t('reports.policy.missing')}>
-            {b?.reason ?? '—'}
+            {b?.reason ? be(b.reason) : '—'}
           </Alert>
         ) : (
           <>
@@ -294,11 +277,11 @@ const PoliciesTab: React.FC = () => {
                 <p className="ui-muted">
                   {sim.data.simulated ? t('reports.sim.origin_sim') : t('reports.sim.origin_artifact', { scale: fmt.number(sim.data.scale_factor, { digits: 3 }) })}
                 </p>
-                {sim.data.status !== 'ok' && <Alert tone="warning">{sim.data.reason ?? sim.data.status}</Alert>}
+                {sim.data.status !== 'ok' && <Alert tone="warning">{sim.data.reason ? be(sim.data.reason) : sim.data.status}</Alert>}
                 {sim.data.insights.length > 0 && (
                   <ul style={{ paddingLeft: 'var(--space-5)' }}>
                     {sim.data.insights.map((i) => (
-                      <li key={i}>{i}</li>
+                      <li key={i}>{be(i)}</li>
                     ))}
                   </ul>
                 )}

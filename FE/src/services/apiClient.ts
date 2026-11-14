@@ -13,6 +13,8 @@
  *    (use `toApiError(err).kind === 'forbidden'`), never an empty list.
  */
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
+import { getActiveLocale } from '../i18n/format.ts';
+import { localizeBe } from '../i18n/beText.ts';
 import {
   AUTH_FORBIDDEN_EVENT,
   AUTH_UNAUTHORIZED_EVENT,
@@ -190,13 +192,13 @@ export function apiErrorMessage(err: unknown, t: ErrorTranslator): string {
     case 'forbidden':
       return t('common.errors.forbidden');
     case 'not_found':
-      return e.detail ?? t('common.errors.not_found');
+      return e.detail ? localizeBe(getActiveLocale(), e.detail) : t('common.errors.not_found');
     case 'validation':
-      return e.detail ?? t('common.errors.validation');
+      return e.detail ? localizeBe(getActiveLocale(), e.detail) : t('common.errors.validation');
     case 'server':
-      return e.detail ? `${t('common.errors.server')} (${e.detail})` : t('common.errors.server');
+      return e.detail ? `${t('common.errors.server')} (${localizeBe(getActiveLocale(), e.detail)})` : t('common.errors.server');
     default:
-      return e.detail ?? t('common.errors.unknown');
+      return e.detail ? localizeBe(getActiveLocale(), e.detail) : t('common.errors.unknown');
   }
 }
 

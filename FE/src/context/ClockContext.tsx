@@ -12,7 +12,6 @@ import { useAuth } from './AuthContext.tsx';
 import { useStore } from './StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { apiClient, getJson, toApiError } from '../services/apiClient.ts';
-import { clearApiCache } from '../services/api.ts';
 
 export interface SimClock {
   store_id: string;
@@ -122,7 +121,6 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           { store_id: storeId, days },
           { timeout: 600000 }, // the batch chain can take minutes
         );
-        clearApiCache(); // every cached dashboard/forecast/replenishment response is now stale
         setVersion((v) => v + 1);
         refresh();
         return res.data;

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Download, Layers, Pencil, Sparkles } from 'lucide-react';
-import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, CartesianGrid, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   Alert,
   Badge,
@@ -35,7 +35,9 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useApi } from '../hooks/useApi.ts';
+import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT, type TKey } from '../i18n/index.tsx';
+import { useBe } from '../i18n/useBe.ts';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
   bulkOverride,
@@ -90,22 +92,6 @@ function rowQuality(r: ForecastRow): RowQuality {
 function shiftIso(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   return new Date(d.getTime() + days * DAY_MS).toISOString().slice(0, 10);
-}
-
-function csvCell(v: unknown): string {
-  return `"${String(v ?? '').replace(/"/g, '""')}"`;
-}
-
-function downloadCsv(filename: string, header: string[], rows: unknown[][]) {
-  const body = [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
-  const url = URL.createObjectURL(new Blob([`﻿${body}`], { type: 'text/csv;charset=utf-8;' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)' };
@@ -180,6 +166,7 @@ const QuantileChart: React.FC<{ levels: Record<string, number>; title: string; s
 
 export const ForecastExplorer: React.FC = () => {
   const t = useT();
+  const be = useBe();
   const fmt = useFormat();
   const toast = useToast();
   const chart = useChartTheme();
@@ -198,6 +185,18 @@ export const ForecastExplorer: React.FC = () => {
     const p = searchParams.get('tab');
     return p === 'route_c' || p === 'schedule' ? p : 'forecast';
   });
+  // U-15: keep the page height while a tab swaps its content, so the browser does not clamp the scroll to the top.
+  const tabBodyRef = useRef<HTMLDivElement>(null);
+  const [holdHeight, setHoldHeight] = useState<number | null>(null);
+  useEffect(() => {
+    if (holdHeight === null) return;
+    const id = window.setTimeout(() => setHoldHeight(null), 1500);
+    return () => window.clearTimeout(id);
+  }, [holdHeight, tab]);
+  const switchTab = (next: PageTab) => {
+    setHoldHeight(tabBodyRef.current?.offsetHeight ?? null);
+    setTab(next);
+  };
   const [horizon, setHorizon] = useState<number>(28);
   const [modelVersion, setModelVersion] = useState('');
   const [query, setQuery] = useState('');
@@ -297,6 +296,13 @@ export const ForecastExplorer: React.FC = () => {
     }
     return Array.from(m.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }, [historyPoints, rows]);
+
+  // U-04: the simulation clock is the "today" of the demo. Anything dated after it is shown, but marked.
+  const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : null;
+  const afterClockStart = clockDate ? chartData.find((p) => p.date > clockDate)?.date ?? null : null;
+  const afterClockEnd = chartData.length ? chartData[chartData.length - 1].date : null;
+  const actualsBeyondClock = clockDate && lastActualDate ? lastActualDate > clockDate : false;
+  const clockInRange = clockDate && chartData.length > 0 && chartData[0].date <= clockDate && afterClockStart !== null;
 
   const crossing = rows.filter((r) => r.quality === 'crossing');
   const missingQ = rows.filter((r) => r.quality === 'missing');
@@ -587,6 +593,11 @@ export const ForecastExplorer: React.FC = () => {
           {t('forecast.dq.crossing', { n: crossing.length, steps: crossing.slice(0, 8).map((r) => r.h).join(', ') + (crossing.length > 8 ? '…' : '') })}
         </Alert>
       )}
+      {actualsBeyondClock && clockDate && lastActualDate && (
+        <Alert tone="info" title={t('forecast.dq.beyond_clock_title')}>
+          {t('forecast.dq.beyond_clock', { clock: fmt.date(clockDate), last: fmt.date(lastActualDate) })}
+        </Alert>
+      )}
       {missingQ.length > 0 && <Alert tone="info">{t('forecast.dq.missing_q', { n: missingQ.length })}</Alert>}
       {missingP50.length > 0 && <Alert tone="info">{t('forecast.dq.missing_p50', { n: missingP50.length })}</Alert>}
       {processed.versions.length > 1 && <Alert tone="warning">{t('forecast.dq.mixed', { versions: processed.versions.join(', '), version: processed.version ?? '' })}</Alert>}
@@ -685,7 +696,7 @@ export const ForecastExplorer: React.FC = () => {
         <Tabs
           aria-label={t('forecast.page.title')}
           value={tab}
-          onChange={setTab}
+          onChange={switchTab}
           items={[
             { id: 'forecast', label: t('forecast.tabs.forecast') },
             { id: 'route_c', label: t('forecast.tabs.route_c') },
@@ -693,6 +704,7 @@ export const ForecastExplorer: React.FC = () => {
           ]}
         />
 
+        <div ref={tabBodyRef} style={holdHeight ? { minHeight: holdHeight } : undefined}>
         {tab === 'forecast' && (
           <>
             {kind === 'backtest' && (
@@ -724,9 +736,27 @@ export const ForecastExplorer: React.FC = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={chartData} margin={{ top: 12, right: 12, bottom: 4, left: 0 }}>
                   <CartesianGrid vertical={false} stroke={chart.grid} />
-                  <XAxis dataKey="date" {...chart.axis} minTickGap={28} tickFormatter={(d: string) => fmt.date(d, 'short')} />
+                  <XAxis dataKey="date" {...chart.axis} minTickGap={28} tickFormatter={(d: string) => fmt.date(d, 'axis')} />
                   <YAxis {...chart.axis} width={44} domain={[0, 'auto']} />
                   <Tooltip cursor={chart.cursor} content={<ForecastTooltip />} />
+                  {clockInRange && afterClockStart && afterClockEnd && (
+                    <ReferenceArea
+                      x1={afterClockStart}
+                      x2={afterClockEnd}
+                      fill={chart.reference}
+                      fillOpacity={0.12}
+                      stroke="none"
+                      label={{ value: t('forecast.chart.after_clock'), fill: chart.tick, fontSize: 11, position: 'insideTopRight' }}
+                    />
+                  )}
+                  {clockDate && chartData.some((p) => p.date === clockDate) && (
+                    <ReferenceLine
+                      x={clockDate}
+                      stroke={chart.series[2]}
+                      strokeWidth={1.5}
+                      label={{ value: t('forecast.chart.clock_line', { date: fmt.date(clockDate, 'short') }), fill: chart.tick, fontSize: 11, position: 'insideTopRight' }}
+                    />
+                  )}
                   {lastActualDate && chartData.some((p) => p.date === lastActualDate) && (
                     <ReferenceLine
                       x={lastActualDate}
@@ -750,7 +780,13 @@ export const ForecastExplorer: React.FC = () => {
                 <Skeleton height={120} />
               ) : explanation.error ? (
                 <ErrorState compact error={explanation.error} onRetry={explanation.refetch} />
-              ) : !explanation.data || explanation.data.features.length === 0 ? (
+              ) : !explanation.data || explanation.data.available !== true ? (
+                <EmptyState
+                  compact
+                  title={t('forecast.shap.unavailable_title')}
+                  description={explanation.data?.reason ? `${t('forecast.shap.unavailable_body')} ${explanation.data.reason}` : t('forecast.shap.unavailable_body')}
+                />
+              ) : explanation.data.features.length === 0 ? (
                 <EmptyState compact title={t('forecast.shap.empty_title')} />
               ) : (
                 <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
@@ -770,10 +806,10 @@ export const ForecastExplorer: React.FC = () => {
                       <div style={{ height: 6, borderRadius: 'var(--radius-full)', background: 'var(--color-surface-sunken)' }}>
                         <div style={{ height: '100%', width: `${(Math.abs(f.importance_score) / maxShap) * 100}%`, borderRadius: 'var(--radius-full)', background: chart.series[0] }} />
                       </div>
-                      {f.description && <span style={muted}>{f.description}</span>}
+                      {f.description && <span style={muted}>{be(f.description)}</span>}
                     </div>
                   ))}
-                  <DataSourceNote source={t('forecast.shap.source')} />
+                  <DataSourceNote source={explanation.data.source ? `${t('forecast.shap.source')} · ${explanation.data.source}` : t('forecast.shap.source')} />
                 </div>
               )}
             </Card>
@@ -870,6 +906,7 @@ export const ForecastExplorer: React.FC = () => {
             </Card>
           </>
         )}
+        </div>
       </>
     );
   })();

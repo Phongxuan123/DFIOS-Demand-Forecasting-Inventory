@@ -40,7 +40,15 @@ export const dashboard = {
     wrmsse_hint: 'Chỉ số sai số dự báo (thấp hơn là tốt hơn), không phải độ chính xác. Nguồn: model registry.',
     wrmsse_unavailable: 'Model registry chưa có WRMSSE cho mô hình sản xuất',
   },
+  availability_miss: {
+    title: 'Mức sẵn có dưới mục tiêu',
+    body: 'Mức sẵn có {value} thấp hơn mục tiêu {target} sau {days} ngày mô phỏng. Đây là kết quả của trình mô phỏng ở trạng thái hiện tại, không phải lỗi hiển thị. Hãy chạy thêm các chu kỳ review (tua đồng hồ) để bộ điều khiển thích nghi trước khi đánh giá.',
+  },
   charts: {
+    after_clock: 'Sau đồng hồ mô phỏng',
+    clock_line: 'Đồng hồ {date}',
+    theta_single: 'Mới có một lần review nên chưa có quỹ đạo để vẽ. Hãy tua đồng hồ để thấy θ thay đổi.',
+    trend_beyond_clock: 'Số thực tế sau đồng hồ mô phỏng là dữ liệu lịch sử M5 và được tô bóng.',
     cost_title: 'Chi phí lũy kế: C³-OUT và B0',
     cost_desc: 'Chi phí A3 theo chu kỳ review. B0 là chính sách chạy song song trên cùng nhu cầu.',
     cost_c3: 'C³-OUT',
