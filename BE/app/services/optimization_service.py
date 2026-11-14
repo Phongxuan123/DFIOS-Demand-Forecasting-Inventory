@@ -588,8 +588,9 @@ class OptimizationService:
             ml_ss = float(p.safety_stock or 0.0)
             ml_rop = float(p.reorder_point or 0.0)
             ml_eoq = float(p.eoq or 1.0)
-            h_cost = float(p.holding_cost or self.DEFAULT_HOLDING_COST)
-            o_cost = float(p.order_cost or self.DEFAULT_ORDER_COST)
+            prod_price = float(prod.price) if prod and prod.price and prod.price > 0 else 3.5
+            h_cost = float(p.holding_cost or round(self.HOLDING_RATE_DAILY * 365.0 * prod_price, 3))
+            o_cost = float(p.order_cost or self.ORDER_COST_C)
             lt_days = int(p.lead_time_days or self.DEFAULT_LEAD_TIME)
             tau = float(p.service_level or 0.95)
             tau_safe = min(max(tau, 0.50), 0.999)

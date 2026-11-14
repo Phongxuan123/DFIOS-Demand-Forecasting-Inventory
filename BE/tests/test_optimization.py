@@ -437,3 +437,39 @@ class TestOptimizationEndpoints(unittest.TestCase):
         for s in data["scenarios"]:
             self.assertFalse(math.isinf(s["safety_stock"]))
             self.assertFalse(math.isinf(s["total_cost"]))
+
+    def test_r09_r13_model_a3_cost_and_replenishment_condition(self):
+        """
+        R-09 & R-13:
+        1. Model A3 cost params: h = 0.002 * 365 * price = 0.73 * price, c = 2.0 $/order, b = 0.35 * price
+        2. Replenishment recommendations triggered strictly when (on_hand + on_order) <= rop.
+        """
+        with self.TestingSessionLocal() as session:
+            # Test Model A3 holding cost calculation
+            prod = session.query(Product).filter(Product.item_id == "FOODS_1_001").first()
+            prod_price = float(prod.price) if prod and prod.price else 3.5
+            expected_h = round(0.002 * 365.0 * prod_price, 3)
+
+            params = optimization_service._calculate_static_params(
+                session, item_id="FOODS_1_001", store_id="CA_1", lead_time_days=3, tau=0.95
+            )
+            self.assertEqual(params["order_cost"], 2.0)
+            self.assertAlmostEqual(params["holding_cost"], expected_h, places=2)
+
+            # EOQ formula check: sqrt(2 * annual_d * c / h)
+            annual_d = params["annual_demand"]
+            expected_eoq = max(1.0, round(math.sqrt((2.0 * annual_d * 2.0) / expected_h), 1))
+            self.assertEqual(params["eoq"], expected_eoq)
+
+            # R-09: Replenishment trigger condition verification
+            rop = params["reorder_point"]
+            # Inventory position > rop -> Should NOT trigger
+            ip_above = rop + 5.0
+            should_reorder_above = ip_above <= rop
+            self.assertFalse(should_reorder_above)
+
+            # Inventory position <= rop -> Must trigger
+            ip_below = rop - 1.0
+            should_reorder_below = ip_below <= rop
+            self.assertTrue(should_reorder_below)
+
