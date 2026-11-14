@@ -1,6 +1,6 @@
 from datetime import date, datetime
-from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 SUPPORTED_MODELS = ["lightgbm", "xgboost", "baseline_naive"]
 ROADMAP_MODELS = ["arima", "lstm", "tft"]
@@ -16,6 +16,25 @@ class TrainJobRequest(BaseModel):
     start_date: Optional[date] = Field(None, description="Ngày bắt đầu khoảng thời gian huấn luyện")
     end_date: Optional[date] = Field(None, description="Ngày kết thúc khoảng thời gian huấn luyện")
     horizon: int = Field(default=28, ge=1, le=28, description="Số ngày dự báo để đánh giá sai số (tối đa 28 ngày)")
+
+    # Trường tương thích FE và điều khiển đăng ký model candidate
+    algorithm: Optional[str] = Field(None, description="Tên thuật toán đơn lẻ (tương thích FE)")
+    sku_list: Optional[List[str]] = Field(None, description="Danh sách SKU (tương thích FE)")
+    test_days: Optional[int] = Field(None, description="Số ngày test (tương thích FE)")
+    hyperparameters: Optional[dict] = Field(None, description="Siêu tham số mô hình")
+    register_candidate: bool = Field(default=False, description="Chỉ tự động đăng ký candidate vào ModelRegistry khi bật True")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reconcile_compat_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "algorithm" in data and data["algorithm"] and ("models" not in data or not data["models"]):
+                data["models"] = [data["algorithm"]]
+            if "sku_list" in data and data["sku_list"] and ("item_ids" not in data or not data["item_ids"]):
+                data["item_ids"] = data["sku_list"]
+            if "test_days" in data and data["test_days"] and ("horizon" not in data or not data["horizon"]):
+                data["horizon"] = data["test_days"]
+        return data
 
 
 class ModelBenchmarkMetrics(BaseModel):

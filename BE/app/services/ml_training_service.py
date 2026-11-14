@@ -1,8 +1,10 @@
 import math
+import logging
 import numpy as np
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import BackgroundTasks, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.ml_training import MLTrainingJob
@@ -20,6 +22,118 @@ from app.schemas.ml_training import (
 )
 from app.repositories.ml_training_repository import ml_training_repository
 from app.services.audit_service import audit_service
+
+logger = logging.getLogger(__name__)
+
+
+class TinyDecisionTreeRegressor:
+    """
+    Cây quyết định hồi quy thuần túy (Decision Tree Regressor) không phụ thuộc thư viện ngoài.
+    Hỗ trợ chia tách giảm MSE và phạt L2 lá (chuẩn XGBoost/LightGBM).
+    """
+    def __init__(self, max_depth: int = 3, min_samples_split: int = 4, l2_reg: float = 1.0):
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.l2_reg = l2_reg
+        self.tree: Optional[dict] = None
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        self.tree = self._build_tree(X, y, depth=0)
+        return self
+
+    def _build_tree(self, X: np.ndarray, y: np.ndarray, depth: int) -> dict:
+        n_samples, n_features = X.shape
+        if depth >= self.max_depth or n_samples < self.min_samples_split:
+            leaf_val = float(np.sum(y) / (n_samples + self.l2_reg))
+            return {"leaf": True, "value": leaf_val}
+
+        best_feat = None
+        best_thresh = None
+        best_gain = -float("inf")
+        parent_var = float(np.var(y) * n_samples)
+
+        for f in range(n_features):
+            vals = np.unique(X[:, f])
+            if len(vals) <= 1:
+                continue
+            thresholds = (vals[:-1] + vals[1:]) / 2.0
+            if len(thresholds) > 10:
+                thresholds = np.quantile(thresholds, np.linspace(0.05, 0.95, 10))
+            for th in thresholds:
+                left_mask = X[:, f] <= th
+                right_mask = ~left_mask
+                n_l, n_r = int(np.sum(left_mask)), int(np.sum(right_mask))
+                if n_l < 2 or n_r < 2:
+                    continue
+                gain = parent_var - (float(np.var(y[left_mask])) * n_l + float(np.var(y[right_mask])) * n_r)
+                if gain > best_gain:
+                    best_gain = gain
+                    best_feat = f
+                    best_thresh = float(th)
+
+        if best_feat is None or best_gain <= 1e-6:
+            leaf_val = float(np.sum(y) / (n_samples + self.l2_reg))
+            return {"leaf": True, "value": leaf_val}
+
+        left_mask = X[:, best_feat] <= best_thresh
+        right_mask = ~left_mask
+        left_child = self._build_tree(X[left_mask], y[left_mask], depth + 1)
+        right_child = self._build_tree(X[right_mask], y[right_mask], depth + 1)
+        return {
+            "leaf": False,
+            "feature": best_feat,
+            "threshold": best_thresh,
+            "left": left_child,
+            "right": right_child,
+        }
+
+    def _predict_one(self, node: dict, x: np.ndarray) -> float:
+        if node["leaf"]:
+            return node["value"]
+        if x[node["feature"]] <= node["threshold"]:
+            return self._predict_one(node["left"], x)
+        return self._predict_one(node["right"], x)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if self.tree is None:
+            return np.zeros(len(X))
+        return np.array([self._predict_one(self.tree, row) for row in X], dtype=float)
+
+
+class TinyGBDTRegressor:
+    """
+    Gradient Boosted Decision Trees (GBDT) - nền tảng thuật toán thực sự của LightGBM & XGBoost.
+    """
+    def __init__(self, n_estimators: int = 20, learning_rate: float = 0.1, max_depth: int = 3, l2_reg: float = 1.0):
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.l2_reg = l2_reg
+        self.base_pred = 0.0
+        self.trees: List[TinyDecisionTreeRegressor] = []
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        self.base_pred = float(np.mean(y)) if len(y) > 0 else 0.0
+        y_curr = np.full_like(y, self.base_pred, dtype=float)
+        self.trees = []
+        for _ in range(self.n_estimators):
+            residual = y - y_curr
+            tree = TinyDecisionTreeRegressor(
+                max_depth=self.max_depth,
+                min_samples_split=4,
+                l2_reg=self.l2_reg,
+            )
+            tree.fit(X, residual)
+            step_preds = tree.predict(X)
+            y_curr += self.learning_rate * step_preds
+            self.trees.append(tree)
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        preds = np.full(len(X), self.base_pred, dtype=float)
+        for tree in self.trees:
+            preds += self.learning_rate * tree.predict(X)
+        return np.maximum(0.0, preds)
 
 
 class MLTrainingService:
@@ -109,24 +223,35 @@ class MLTrainingService:
             store_id = params.get("store_id")
 
             # 1. Trích xuất chuỗi dữ liệu (từ sales_history hoặc forecast nếu chưa có sales)
-            query = db.query(SalesHistory.sale_date, SalesHistory.quantity)
+            # R-03: Nhóm theo sale_date (group_by) để gom tổng cầu mỗi ngày theo SKU/Kho/Toàn hệ thống,
+            # loại bỏ triệt để hiện tượng trộn xen kẽ các SKU khác nhau trên cùng một mốc thời gian.
+            query = db.query(SalesHistory.sale_date, func.sum(SalesHistory.quantity).label("quantity"))
             if item_ids:
                 query = query.filter(SalesHistory.item_id.in_(item_ids))
             if store_id:
                 query = query.filter(SalesHistory.store_id == store_id)
+            if params.get("start_date"):
+                query = query.filter(SalesHistory.sale_date >= params["start_date"])
+            if params.get("end_date"):
+                query = query.filter(SalesHistory.sale_date <= params["end_date"])
 
-            sales_rows = query.order_by(SalesHistory.sale_date.asc()).all()
+            sales_rows = query.group_by(SalesHistory.sale_date).order_by(SalesHistory.sale_date.asc()).all()
 
             if len(sales_rows) >= 14:
                 series = [(row[0], float(row[1])) for row in sales_rows]
             else:
-                # Fallback sang chuỗi từ bảng forecast kết hợp base để benchmark luôn có kết quả thực
-                fc_query = db.query(Forecast.forecast_date, Forecast.p50)
+                # Fallback sang chuỗi từ bảng forecast (cũng gom theo ngày) nếu chưa đủ lịch sử bán
+                fc_query = db.query(Forecast.forecast_date, func.sum(Forecast.p50).label("p50"))
                 if item_ids:
                     fc_query = fc_query.filter(Forecast.item_id.in_(item_ids))
                 if store_id:
                     fc_query = fc_query.filter(Forecast.store_id == store_id)
-                fc_rows = fc_query.order_by(Forecast.forecast_date.asc()).limit(60).all()
+                fc_rows = (
+                    fc_query.group_by(Forecast.forecast_date)
+                    .order_by(Forecast.forecast_date.asc())
+                    .limit(60)
+                    .all()
+                )
 
                 if fc_rows:
                     series = [(row[0], float(row[1])) for row in fc_rows]
@@ -172,20 +297,22 @@ class MLTrainingService:
                 best_model=best_model_name,
             )
 
-            # Tự động ghi nhận phiên bản mô hình vào ModelRegistry (UC48)
-            from app.models.model_registry import ModelRegistry
-            model_ver_entry = ModelRegistry(
-                name=f"{best_model_name.upper()}-Production-Candidate",
-                version=f"v{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
-                algorithm=best_model_name,
-                scope=store_id or "global",
-                is_production=False,
-                parameters=params,
-                metrics=metrics_result.get(best_model_name),
-                trained_by=job.triggered_by,
-                job_id=job.id,
-            )
-            db.add(model_ver_entry)
+            # R-03: Chỉ tự động ghi nhận phiên bản mô hình vào ModelRegistry khi người dùng
+            # yêu cầu rõ ràng (register_candidate = True), tránh làm ô nhiễm bảng ModelRegistry chính thức
+            if params.get("register_candidate", False) and best_model_name:
+                from app.models.model_registry import ModelRegistry
+                model_ver_entry = ModelRegistry(
+                    name=f"{best_model_name.upper()}-Candidate",
+                    version=f"v{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
+                    algorithm=best_model_name,
+                    scope=store_id or "global",
+                    is_production=False,
+                    parameters=params,
+                    metrics=metrics_result.get(best_model_name),
+                    trained_by=job.triggered_by,
+                    job_id=job.id,
+                )
+                db.add(model_ver_entry)
 
             audit_service.log(
                 db,
@@ -225,7 +352,10 @@ class MLTrainingService:
         event_dates: set,
     ) -> List[float]:
         """
-        Dự báo trên tập test dựa trên phương pháp đã chọn.
+        R-03: Dự báo trên tập test dựa trên mô hình thật:
+        - baseline_naive: Seasonal lag 7 naive persistence.
+        - lightgbm: Thuật toán GBDT đa cây quyết định (histogram-style binning, l2 lá 0.5, lr=0.10, depth 4).
+        - xgboost: Thuật toán GBDT đa cây quyết định với phạt l2 1.5, độ sâu 3, lr=0.08, đặc trưng chênh lệch và xu thế.
         """
         n_test = len(test_set)
         train_y = [item[1] for item in train_set]
@@ -244,9 +374,6 @@ class MLTrainingService:
                 predictions.append(train_y[lag_idx])
             return predictions
 
-        # Huấn luyện mô hình hồi quy tự tương quan đa biến (Autoregressive Ridge Regression)
-        # Đặc trưng: [hằng số, lag 1, lag 7, trượt 7 ngày / xu thế, thứ trong tuần, sự kiện]
-        # Nghiệm chính xác: w = (X^T X + lambda I)^(-1) X^T y
         if len(train_set) >= 8:
             X_rows = []
             y_vals = []
@@ -254,24 +381,40 @@ class MLTrainingService:
                 t_date, val = train_set[t]
                 l1 = train_set[t - 1][1]
                 l7 = train_set[t - 7][1]
-                dow = t_date.weekday()
+                dow = float(t_date.weekday())
                 evt = 1.0 if t_date in event_dates else 0.0
                 trend_val = t / float(len(train_set))
+                mean_7 = sum(train_set[k][1] for k in range(t - 7, t)) / 7.0
+
                 if model_name == "lightgbm":
-                    # Đặc trưng cấu trúc cây: lag 1, lag 7, trung bình trượt 7 ngày, dow, event
-                    mean_7 = sum(train_set[k][1] for k in range(t - 7, t)) / 7.0
-                    X_rows.append([1.0, l1, l7, mean_7, dow, evt])
+                    # LightGBM style: Tree GBDT lag 1, lag 7, lag 14, mean 7, dow, evt
+                    l14 = train_set[t - 14][1] if t >= 14 else l7
+                    X_rows.append([l1, l7, l14, mean_7, dow, evt])
                 else:
-                    # Đặc trưng tăng cường: lag 1, lag 7, xu thế tuyến tính, dow, event
-                    X_rows.append([1.0, l1, l7, trend_val, dow, evt])
+                    # XGBoost style: Tree GBDT lag 1, lag 7, diff 7, mean 7, trend, dow, evt
+                    diff_7 = l1 - l7
+                    X_rows.append([l1, l7, diff_7, mean_7, trend_val, dow, evt])
                 y_vals.append(val)
 
             X = np.array(X_rows, dtype=float)
             y = np.array(y_vals, dtype=float)
-            lambda_reg = 0.5
+
             try:
-                XTX = X.T @ X + lambda_reg * np.eye(X.shape[1])
-                w = np.linalg.solve(XTX, X.T @ y)
+                if model_name == "lightgbm":
+                    gbdt = TinyGBDTRegressor(
+                        n_estimators=25,
+                        learning_rate=0.10,
+                        max_depth=4,
+                        l2_reg=0.5,
+                    )
+                else:  # xgboost
+                    gbdt = TinyGBDTRegressor(
+                        n_estimators=25,
+                        learning_rate=0.08,
+                        max_depth=3,
+                        l2_reg=1.5,
+                    )
+                gbdt.fit(X, y)
 
                 # Dự báo đệ quy từng bước trên tập test
                 predictions = []
@@ -279,20 +422,24 @@ class MLTrainingService:
                 for i, (test_d, _) in enumerate(test_set):
                     l1 = current_hist[-1]
                     l7 = current_hist[-7] if len(current_hist) >= 7 else l1
-                    dow = test_d.weekday()
+                    dow = float(test_d.weekday())
                     evt = 1.0 if test_d in event_dates else 0.0
                     trend_val = (len(train_set) + i) / float(len(train_set) + n_test)
+                    mean_7 = sum(current_hist[-7:]) / 7.0
+
                     if model_name == "lightgbm":
-                        mean_7 = sum(current_hist[-7:]) / 7.0
-                        feat = np.array([1.0, l1, l7, mean_7, dow, evt])
+                        l14 = current_hist[-14] if len(current_hist) >= 14 else l7
+                        feat = np.array([[l1, l7, l14, mean_7, dow, evt]])
                     else:
-                        feat = np.array([1.0, l1, l7, trend_val, dow, evt])
-                    pred_step = max(0.0, float(np.dot(feat, w)))
+                        diff_7 = l1 - l7
+                        feat = np.array([[l1, l7, diff_7, mean_7, trend_val, dow, evt]])
+
+                    pred_step = max(0.0, float(gbdt.predict(feat)[0]))
                     predictions.append(round(pred_step, 2))
                     current_hist.append(pred_step)
                 return predictions
-            except Exception:
-                pass
+            except Exception as ex:
+                logger.warning(f"MLTraining: GBDT failed for {model_name}: {ex}")
 
         # Mặc định fallback khi mẫu huấn luyện quá ngắn (<8)
         return [round(mean_val, 2)] * n_test
