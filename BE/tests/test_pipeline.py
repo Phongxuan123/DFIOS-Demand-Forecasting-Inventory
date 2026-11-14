@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,6 +12,7 @@ from app.models.inventory_param import InventoryParam
 from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.user import User
+from app.models.sim_clock import SimClock
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
 
@@ -130,6 +132,22 @@ class TestPipelineEndpoints(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
+    def test_b26_batch_schedule_invalid_cron_rejected(self):
+        """B-26: Kiểm tra từ chối biểu thức cron không đúng chuẩn 5 trường."""
+        payload = {
+            "name": "Invalid Cron Task",
+            "cron_expression": "invalid-cron-format",
+            "model_name": "lightgbm",
+            "horizon": 28,
+            "store_id": "CA_1",
+        }
+        resp = self.client.post(
+            "/api/v1/ml/schedule",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
     # ---------------------------------------------------------
     # UC50: Auto-compute SS/ROP/EOQ & ABC-XYZ after Forecast Run
     # ---------------------------------------------------------
@@ -159,6 +177,101 @@ class TestPipelineEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.viewer_token}"},
         )
         self.assertEqual(resp.status_code, 403)
+
+    # ---------------------------------------------------------
+    # UC51/N-19: SimClock Endpoints (no side-effect INSERT on GET)
+    # ---------------------------------------------------------
+    def test_get_clock_404_when_store_not_found_no_side_effect(self):
+        # 1. GET /clock với store không tồn tại -> 404
+        resp = self.client.get(
+            "/api/v1/clock?store_id=STORE_XYZ_999",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+        # 2. Đảm bảo KHÔNG có bản ghi nào bị INSERT lén vào DB
+        with self.TestingSessionLocal() as session:
+            count = session.query(SimClock).filter(SimClock.store_id == "STORE_XYZ_999").count()
+            self.assertEqual(count, 0)
+
+    def test_get_clock_success_when_store_exists(self):
+        with self.TestingSessionLocal() as session:
+            clock = SimClock(
+                store_id="CA_1",
+                current_date=date(2016, 4, 25),
+                start_date=date(2016, 4, 25),
+                mode="replay",
+                speed=1.0,
+            )
+            session.add(clock)
+            session.commit()
+
+        resp = self.client.get(
+            "/api/v1/clock?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["store_id"], "CA_1")
+        self.assertEqual(data["current_date"], "2016-04-25")
+
+    def test_advance_clock_404_when_store_not_found(self):
+        payload = {"store_id": "UNKNOWN_STORE", "days": 7}
+        resp = self.client.post(
+            "/api/v1/clock/advance",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_r19_schedule_persistence_in_database(self):
+        """
+        R-19:
+        Kiểm tra tính bền vững của cấu hình lập lịch cron batch forecast:
+        - Lưu vào bảng system_settings trong cơ sở dữ liệu.
+        - Khôi phục nguyên vẹn sau khi RAM cache bị reset.
+        """
+        from app.models.system_setting import SystemSetting
+        from app.services.pipeline_service import pipeline_service
+
+        payload = {
+            "name": "Persisted Nightly Schedule",
+            "cron_expression": "30 3 * * *",
+            "model_name": "lightgbm",
+            "horizon": 28,
+            "store_id": "CA_1",
+            "auto_trigger_optimization": True,
+        }
+        resp = self.client.post(
+            "/api/v1/ml/schedule",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        sched_id = data["id"]
+
+        # Kiểm tra dữ liệu đã được ghi vào bảng system_settings
+        with self.TestingSessionLocal() as session:
+            setting = session.query(SystemSetting).filter(
+                SystemSetting.key == "batch_pipeline_schedules"
+            ).first()
+            self.assertIsNotNone(setting)
+            self.assertIn(sched_id, setting.value)
+            self.assertEqual(setting.value[sched_id]["cron_expression"], "30 3 * * *")
+
+        # Giả lập server khởi động lại (xóa sạch RAM cache của pipeline_service)
+        pipeline_service._schedules = {}
+
+        # Gọi GET /schedule, hệ thống phải tự động phục hồi từ DB
+        resp_list = self.client.get(
+            "/api/v1/ml/schedule",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_list.status_code, 200)
+        items = resp_list.json()["items"]
+        ids = [item["id"] for item in items]
+        self.assertIn(sched_id, ids)
 
 
 if __name__ == "__main__":

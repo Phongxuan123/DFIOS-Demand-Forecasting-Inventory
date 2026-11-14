@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_admin
+from app.api.deps import get_db, get_current_user, require_admin, get_client_ip
 from app.models.user import User
 from app.schemas.supplier import (
     SupplierCreate,
@@ -13,13 +13,6 @@ from app.schemas.supplier import (
 from app.services.supplier_service import supplier_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 @router.get("", response_model=SupplierListResponse, summary="UC12 - Danh sách nhà cung cấp & Lead Time")

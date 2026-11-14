@@ -16,19 +16,20 @@ from app.models.sim_clock import SimClock
 class CalibratorService:
     """
     Module C³-OUT (Closed-Loop Continuous Calibrator) – Giai đoạn 5 (Task C3.1):
-    Bộ điều khiển tích phân một phía (One-Sided C³-OUT Integral Control):
+    Bộ điều khiển tích phân chuẩn bounded integral control (research.md §8.1):
       theta_{g, k} = theta_{g, k-1} + eta * ( e~_{g, k-d} - (1 - setpoint_g) )
     - Setpoint chuẩn: 0.96 (Target 0.95 + Guard 0.01)
     - Hệ số khuếch đại: eta = 1.0
     - Trễ thông tin chu kỳ: d = ceil((L + R) / R)
-    - Kẹp biên một phía: theta_g in [0.0, 2.0]
+    - Kẹp biên hai phía chuẩn: theta_g in [-2.0, 2.0] (research.md §8.1)
+    - Quy ước biên chống bão hòa (Anti-windup): e~ = 0 khi theta >= 2.0, e~ = 1 khi theta <= -2.0
     """
 
     ALL_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
     DEFAULT_SETPOINT = 0.96
     DEFAULT_ETA = 1.0
     MAX_THETA = 2.0
-    MIN_THETA = 0.0
+    MIN_THETA = -2.0
 
     def get_current_thetas(self, db: Session, store_id: str = "CA_1") -> Dict[str, float]:
         """
@@ -204,24 +205,45 @@ class CalibratorService:
         updated_states: List[CalibrationState] = []
         warnings: List[str] = []
 
-        for class_id in self.ALL_CLASSES:
-            # Lấy setpoint & eta từ policy_selection theo store_id nếu có (R-30)
-            policy = (
-                db.query(PolicySelection)
-                .filter(
-                    PolicySelection.class_id == class_id,
-                    PolicySelection.selection_id.like(f"%{store_id}%"),
-                )
-                .order_by(PolicySelection.created_at.desc())
-                .first()
+        # 4. Truy vấn policy_selection (R-30): ưu tiên store-specific selection, fallback sang global
+        store_policies = (
+            db.query(PolicySelection)
+            .filter(
+                (PolicySelection.selection_id.like(f"{store_id}_%"))
+                | (PolicySelection.selection_id.like(f"%_{store_id}"))
+                | (PolicySelection.selection_id == store_id)
             )
-            if not policy:
-                policy = (
-                    db.query(PolicySelection)
-                    .filter(PolicySelection.class_id == class_id)
-                    .order_by(PolicySelection.created_at.desc())
-                    .first()
-                )
+            .order_by(PolicySelection.created_at.desc())
+            .all()
+        )
+        store_policy_map = {p.class_id: p for p in store_policies}
+
+        missing_classes = [c for c in self.ALL_CLASSES if c not in store_policy_map]
+        if missing_classes:
+            all_candidate_policies = (
+                db.query(PolicySelection)
+                .filter(PolicySelection.class_id.in_(missing_classes))
+                .order_by(PolicySelection.created_at.desc())
+                .all()
+            )
+            for p in all_candidate_policies:
+                sid = p.selection_id or ""
+                # Bỏ qua nếu selection_id mang nhãn của một cửa hàng khác
+                if any(
+                    s in sid
+                    for s in [
+                        "CA_1", "CA_2", "CA_3", "CA_4",
+                        "TX_1", "TX_2", "TX_3",
+                        "WI_1", "WI_2", "WI_3",
+                    ]
+                    if s != store_id
+                ):
+                    continue
+                if p.class_id not in store_policy_map:
+                    store_policy_map[p.class_id] = p
+
+        for class_id in self.ALL_CLASSES:
+            policy = store_policy_map.get(class_id)
             setpoint = float(policy.setpoint) if policy and policy.setpoint else self.DEFAULT_SETPOINT
             eta = float(policy.gain_eta) if policy and policy.gain_eta else self.DEFAULT_ETA
             target_error_rate = 1.0 - setpoint
@@ -255,7 +277,7 @@ class CalibratorService:
                     observed_error = float(outcome.error_rate)
                     outcome.consumed_at_review = review_index
 
-            # Quy ước biên C³-OUT theo research.md §8.1:
+            # Quy ước biên C³-OUT chống bão hòa tích phân (Anti-windup theo research.md §8.1):
             # ẽ = 0 khi prev_theta >= 2.0 (ngăn chặn windup khi kẹp trần trên)
             # ẽ = 1 khi prev_theta <= -2.0 (ngăn chặn windup khi kẹp sàn dưới)
             if prev_theta >= self.MAX_THETA:
@@ -263,18 +285,22 @@ class CalibratorService:
             elif prev_theta <= self.MIN_THETA:
                 observed_error = 1.0
 
-            # Công thức cập nhật tích phân một phía C³-OUT
+            # Công thức cập nhật tích phân C³-OUT (research.md §8.1)
             error_signal = observed_error - target_error_rate
             delta_theta = eta * error_signal
             raw_theta = prev_theta + delta_theta
 
-            # Kẹp biên một phía [0.0, 2.0]
+            # Kẹp biên hai phía [-2.0, 2.0]
             new_theta = max(self.MIN_THETA, min(self.MAX_THETA, raw_theta))
-            at_boundary = bool(new_theta >= self.MAX_THETA)
+            at_boundary = bool(new_theta >= self.MAX_THETA or new_theta <= self.MIN_THETA)
 
-            if at_boundary:
+            if new_theta >= self.MAX_THETA:
                 warnings.append(
                     f"Nhóm {class_id}: Hệ số theta đạt trần tối đa 2.0 tại review {review_index} - Mô hình dự báo có thể đã xuống cấp!"
+                )
+            elif new_theta <= self.MIN_THETA:
+                warnings.append(
+                    f"Nhóm {class_id}: Hệ số theta chạm sàn tối thiểu -2.0 tại review {review_index} - Tồn kho an toàn đã giảm tối đa."
                 )
 
             multiplier = round(math.exp(new_theta), 4)

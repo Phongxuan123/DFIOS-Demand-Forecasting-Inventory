@@ -98,7 +98,7 @@ class DataPreprocessingService:
         """
         Đọc file CSV tự động nhận dạng bảng mã và dấu phân cách linh hoạt.
         """
-        encodings = ["utf-8", "utf-8-sig", "latin1", "cp1252", "windows-1258"]
+        encodings = ["utf-8-sig", "utf-8", "cp1258", "windows-1258", "cp1252", "latin1"]
         for enc in encodings:
             try:
                 text_data = file_content.decode(enc)
@@ -206,8 +206,13 @@ class DataPreprocessingService:
             df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(1.0)
 
         # Chuẩn hóa kiểu dữ liệu
+        # N-22: dropna trước khi convert sang str để tránh biến null/NaN thành chuỗi 'nan'
+        df = df.dropna(subset=["item_id", "sale_date"])
         df["item_id"] = df["item_id"].astype(str).str.strip()
-        df["sale_date"] = pd.to_datetime(df["sale_date"], errors="coerce")
+        df = df[~df["item_id"].str.lower().isin(["nan", "none", "null", ""])]
+
+        # N-22: parse ngày hỗ trợ định dạng dd/mm/yyyy với dayfirst=True và format='mixed'
+        df["sale_date"] = pd.to_datetime(df["sale_date"], format="mixed", dayfirst=True, errors="coerce")
         df = df.dropna(subset=["sale_date", "item_id"])
         # Chuẩn hóa về mức ngày (loại bỏ giờ:phút:giây của transactional log)
         df["sale_date"] = df["sale_date"].dt.normalize()

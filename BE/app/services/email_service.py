@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from collections import deque
+from datetime import datetime, timezone
 import email.mime.multipart
 import email.mime.text
 import logging
@@ -69,10 +71,16 @@ class SmtpEmailSender(BaseEmailSender):
 class MockEmailSender(BaseEmailSender):
     """
     Dịch vụ email giả lập (Mock) cho môi trường Dev/Test.
-    Ghi thông tin ra log và lưu trong bộ nhớ để kiểm tra.
+    Ghi thông tin cảnh báo ra log và lưu trong bộ nhớ đệm an toàn (FIFO ring buffer) để kiểm tra.
+    B-28: Giới hạn bộ nhớ đệm (mặc định 100 email) ngăn chặn rò rỉ RAM và cảnh báo rõ ràng.
     """
-    def __init__(self):
-        self.sent_emails: List[Dict[str, Any]] = []
+    def __init__(self, max_records: int = 100):
+        self._max_records = max_records
+        self.sent_emails: deque = deque(maxlen=max_records)
+        logger.warning(
+            f"[MOCK EMAIL SENDER ENABLED] Đang sử dụng MockEmailSender. "
+            f"Bộ nhớ đệm giới hạn tối đa {max_records} email gần nhất (FIFO) để đảm bảo an toàn RAM."
+        )
 
     def send_email(self, to_email: str, subject: str, html_body: str, text_body: str) -> None:
         record = {
@@ -80,15 +88,27 @@ class MockEmailSender(BaseEmailSender):
             "subject": subject,
             "html_body": html_body,
             "text_body": text_body,
+            "sent_at": datetime.now(timezone.utc),
         }
         self.sent_emails.append(record)
-        logger.info(f"[MOCK EMAIL] Gửi tới: {to_email} | Tiêu đề: {subject}")
+        logger.warning(
+            f"[MOCK EMAIL - NOT DELIVERED OVER INTERNET] Email giả lập gửi tới: {to_email} | "
+            f"Tiêu đề: '{subject}'. Chỉ lưu trong RAM phục vụ môi trường kiểm thử/dev."
+        )
+
+    def clear(self) -> None:
+        """Xóa toàn bộ email giả lập trong bộ nhớ đệm."""
+        self.sent_emails.clear()
 
 
 # Khởi tạo instance email sender phù hợp
 if settings.SMTP_USER and settings.SMTP_PASSWORD:
     email_sender: BaseEmailSender = SmtpEmailSender()
 else:
+    logger.warning(
+        "[MOCK EMAIL SENDER ACTIVATED] Thiếu cấu hình SMTP (SMTP_USER/SMTP_PASSWORD). "
+        "DFIOS đang chạy với MockEmailSender trong RAM. Email thực tế sẽ KHÔNG được gửi ra Internet."
+    )
     email_sender: BaseEmailSender = MockEmailSender()
 
 

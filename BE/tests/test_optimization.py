@@ -385,6 +385,27 @@ class TestOptimizationEndpoints(unittest.TestCase):
         )
         self.assertEqual(res_viewer.status_code, 403)
 
+    def test_resolve_lead_time_aligns_with_category_and_research_standard(self):
+        # UC30/R-28: Lead time should resolve according to product category and match research standard L=3
+        from app.services.optimization_service import optimization_service
+        with self.TestingSessionLocal() as session:
+            supp_foods = Supplier(id="SUP_FOODS", name="Nhà cung cấp A (Thực phẩm)", lead_time_days=3)
+            supp_hobbies = Supplier(id="SUP_HOBBIES", name="Nhà cung cấp C (Sở thích)", lead_time_days=10)
+            session.add_all([supp_foods, supp_hobbies])
+            session.commit()
+
+            # FOODS_1_001 belongs to FOODS -> resolves to 3 days (Nhà cung cấp A)
+            lt_foods = optimization_service._resolve_lead_time(session, "FOODS_1_001")
+            self.assertEqual(lt_foods, 3)
+
+            # HOBBIES_1_001 belongs to HOBBIES -> resolves to 10 days (Nhà cung cấp C)
+            lt_hobbies = optimization_service._resolve_lead_time(session, "HOBBIES_1_001")
+            self.assertEqual(lt_hobbies, 10)
+
+            # Unknown item with no category -> defaults to DEFAULT_LEAD_TIME = 3
+            lt_default = optimization_service._resolve_lead_time(session, "UNKNOWN_SKU")
+            self.assertEqual(lt_default, 3)
+
     def test_service_level_boundary_clamping_prevents_inf(self):
         with self.TestingSessionLocal() as session:
             res_1 = optimization_service._calculate_static_params(
@@ -416,3 +437,79 @@ class TestOptimizationEndpoints(unittest.TestCase):
         for s in data["scenarios"]:
             self.assertFalse(math.isinf(s["safety_stock"]))
             self.assertFalse(math.isinf(s["total_cost"]))
+
+    def test_r09_r13_model_a3_cost_and_replenishment_condition(self):
+        """
+        R-09 & R-13:
+        1. Model A3 cost params: h = 0.002 * 365 * price = 0.73 * price, c = 2.0 $/order, b = 0.35 * price
+        2. Replenishment recommendations triggered strictly when (on_hand + on_order) <= rop.
+        """
+        with self.TestingSessionLocal() as session:
+            # Test Model A3 holding cost calculation
+            prod = session.query(Product).filter(Product.item_id == "FOODS_1_001").first()
+            prod_price = float(prod.price) if prod and prod.price else 3.5
+            expected_h = round(0.002 * 365.0 * prod_price, 3)
+
+            params = optimization_service._calculate_static_params(
+                session, item_id="FOODS_1_001", store_id="CA_1", lead_time_days=3, tau=0.95
+            )
+            self.assertEqual(params["order_cost"], 2.0)
+            self.assertAlmostEqual(params["holding_cost"], expected_h, places=2)
+
+            # EOQ formula check: sqrt(2 * annual_d * c / h)
+            annual_d = params["annual_demand"]
+            expected_eoq = max(1.0, round(math.sqrt((2.0 * annual_d * 2.0) / expected_h), 1))
+            self.assertEqual(params["eoq"], expected_eoq)
+
+            # R-09: Replenishment trigger condition verification
+            rop = params["reorder_point"]
+            # Inventory position > rop -> Should NOT trigger
+            ip_above = rop + 5.0
+            should_reorder_above = ip_above <= rop
+            self.assertFalse(should_reorder_above)
+
+            # Inventory position <= rop -> Must trigger
+            ip_below = rop - 1.0
+            should_reorder_below = ip_below <= rop
+            self.assertTrue(should_reorder_below)
+
+    def test_r18_bulk_recompute_parameters(self):
+        """
+        R-18: Kiểm tra tối ưu hóa tính toán hàng loạt (Bulk Vectorized Recompute)
+        khi danh mục có > 10 SKU, tính toán in-memory và lưu hàng loạt.
+        """
+        with self.TestingSessionLocal() as session:
+            # Tạo thêm 12 SKU để tổng số SKU > 10
+            extra_products = [
+                Product(
+                    item_id=f"TEST_ITEM_{i:03d}",
+                    name=f"Bulk Test Item {i}",
+                    dept_id="FOODS_1",
+                    cat_id="FOODS",
+                    price=2.5 + i * 0.5,
+                )
+                for i in range(1, 13)
+            ]
+            session.add_all(extra_products)
+            session.commit()
+
+            # Gọi recompute_parameters cho toàn kho (item_id=None)
+            count = optimization_service.recompute_parameters(session, store_id="CA_1")
+            self.assertGreaterEqual(count, 12)
+
+            # Rà soát dữ liệu đã ghi vào inventory_params
+            records = session.query(InventoryParam).filter(InventoryParam.store_id == "CA_1").all()
+            self.assertGreaterEqual(len(records), 12)
+
+            sample = session.query(InventoryParam).filter(
+                InventoryParam.store_id == "CA_1",
+                InventoryParam.item_id == "TEST_ITEM_001"
+            ).first()
+            self.assertIsNotNone(sample)
+            self.assertGreater(sample.s, 0)
+            self.assertGreaterEqual(sample.S, sample.s)
+            self.assertGreater(sample.eoq, 0)
+            self.assertEqual(sample.order_cost, 2.0)
+            self.assertAlmostEqual(sample.holding_cost, round(0.002 * 365.0 * 3.0, 3), places=2)
+
+

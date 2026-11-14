@@ -83,6 +83,7 @@ class InventoryService:
         background_tasks: Optional[BackgroundTasks] = None,
         user_email: Optional[str] = None,
         ip_address: Optional[str] = None,
+        commit: bool = True,
     ) -> InventoryResponse:
         """
         UC13: Cập nhật tồn kho On-hand / On-order và phát sự kiện Realtime SSE.
@@ -142,9 +143,12 @@ class InventoryService:
             ip_address=ip_address,
             details=f"Cập nhật tồn kho SKU '{item_id}' tại '{store_id}': on_hand ({old_on_hand} -> {inv.on_hand}), on_order ({old_on_order} -> {inv.on_order})",
         )
-        # Commit nguyên tử toàn bộ thay đổi (tồn kho + adjustment + audit)
-        db.commit()
-        db.refresh(inv)
+        # Commit hoặc flush nguyên tử toàn bộ thay đổi (tồn kho + adjustment + audit)
+        if commit:
+            db.commit()
+            db.refresh(inv)
+        else:
+            db.flush()
 
         # Phát sự kiện Realtime Server-Sent Events (SSE)
         sse_event = create_inventory_updated_event(

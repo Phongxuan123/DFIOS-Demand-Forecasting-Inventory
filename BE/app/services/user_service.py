@@ -227,6 +227,9 @@ class UserService:
             user.role = request.role
         if request.is_active is not None:
             user.is_active = request.is_active
+            if not request.is_active:
+                user.token_version = getattr(user, "token_version", 1) + 1
+                email_token_service.revoke_all_user_tokens(db, user.id)
 
         updated_user = user_repository.update(db, user)
 
@@ -260,6 +263,9 @@ class UserService:
             )
 
         user.is_active = request.is_active
+        if not request.is_active:
+            user.token_version = getattr(user, "token_version", 1) + 1
+            email_token_service.revoke_all_user_tokens(db, user.id)
         updated_user = user_repository.update(db, user)
         return UserResponse.model_validate(updated_user)
 

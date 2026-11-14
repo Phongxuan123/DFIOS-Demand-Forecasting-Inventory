@@ -237,6 +237,189 @@ class TestModelRegistryEndpoints(unittest.TestCase):
         self.assertEqual(res_filter_scope.json()["total"], 1)
         self.assertEqual(res_filter_scope.json()["items"][0]["name"], "M1")
 
+    def test_validate_model_rbac(self):
+        # Unauthenticated -> 401
+        res_unauth = self.client.post("/api/v1/ml/models/m1/validate")
+        self.assertEqual(res_unauth.status_code, 401)
+
+        # Viewer / Manager -> 403
+        res_viewer = self.client.post(
+            "/api/v1/ml/models/m1/validate",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_viewer.status_code, 403)
+
+        res_mgr = self.client.post(
+            "/api/v1/ml/models/m1/validate",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_mgr.status_code, 403)
+
+    def test_validate_model_not_found_returns_404(self):
+        res = self.client.post(
+            "/api/v1/ml/models/non-existent-id/validate",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 404)
+
+    def test_validate_model_with_real_artifact_and_no_fake_constants(self):
+        # 1. Đăng ký model TFT v1
+        res_reg = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "TFT-Production",
+                "version": "v1.0.0",
+                "algorithm": "tft",
+                "scope": "global",
+                "parameters": {"hidden_size": 64},
+                "metrics": {"wrmsse": 0.5004, "mae": 0.948},
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_reg.status_code, 201)
+        model_id = res_reg.json()["id"]
+
+        # 2. Gọi validate
+        res_val = self.client.post(
+            f"/api/v1/ml/models/{model_id}/validate",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_val.status_code, 200)
+        data = res_val.json()
+        self.assertTrue(data["success"])
+        self.assertTrue(data["validation_passed"])
+        self.assertEqual(data["model_id"], model_id)
+        # Trong DB rỗng test không có Product nào -> sample_skus_tested == 0, tuyệt đối không bịa 200
+        self.assertEqual(data["sample_skus_tested"], 0)
+        self.assertTrue(data["artifact_integrity"]["file_exists"])
+        self.assertIsNotNone(data["artifact_integrity"]["sha256"])
+        self.assertGreater(data["artifact_integrity"]["file_size_bytes"], 0)
+        self.assertEqual(data["metrics"]["wrmsse"], 0.5004)
+
+    def test_validate_model_with_missing_artifact_fails_authentically(self):
+        # Đăng ký một model thuật toán lạ hoặc file không tồn tại
+        res_reg = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "Nonexistent-Deep-Net",
+                "version": "v9.9.9",
+                "algorithm": "unknown_deep_net",
+                "scope": "global",
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_reg.status_code, 201)
+        model_id = res_reg.json()["id"]
+
+        # Gọi validate -> phải trả validation_passed = False và lý do thực tế
+        res_val = self.client.post(
+            f"/api/v1/ml/models/{model_id}/validate",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_val.status_code, 200)
+        data = res_val.json()
+        self.assertTrue(data["success"])
+        self.assertFalse(data["validation_passed"])
+        self.assertFalse(data["artifact_integrity"]["file_exists"])
+        self.assertIn("KHÔNG đạt kiểm định", data["message"])
+
+    def test_no_duplicate_model_registry_mounting(self):
+        # UC48/N-24: Ensure model_registry_router is only mounted once under /ml prefix, avoiding duplicate operationIds
+        schema = app.openapi()
+        paths = schema.get("paths", {})
+        # /api/v1/ml/models must exist
+        self.assertIn("/api/v1/ml/models", paths)
+        # /api/v1/models (unprefixed duplicate) must NOT exist
+        self.assertNotIn("/api/v1/models", paths)
+
+    def test_register_model_with_is_production_sets_promoted_at(self):
+        # UC48/N-27: Registering a model directly with is_production=True must set promoted_at timestamp
+        from app.repositories.model_registry_repository import model_registry_repository
+        res = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "Direct-Production-Ensemble",
+                "version": "v3.0.0",
+                "algorithm": "ensemble",
+                "scope": "store_test_scope",
+                "is_production": True,
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.assertTrue(data["is_production"])
+        self.assertIsNotNone(data["promoted_at"])
+
+        with self.TestingSessionLocal() as session:
+            prod_model = model_registry_repository.get_production_model(session, scope="store_test_scope")
+            self.assertIsNotNone(prod_model)
+            self.assertEqual(prod_model.id, data["id"])
+            self.assertIsNotNone(prod_model.promoted_at)
+
+    def test_r04_m5_evaluation_metrics_benchmark_integrity(self):
+        """
+        R-04:
+        Kiểm định tính chính xác của các chỉ số đánh giá mô hình (WRMSSE, MASE, MAE, RMSE)
+        khớp 100% với artifact thực nghiệm M5 Walmart (RUN_SUMMARY_C3OK.md):
+        - Ensemble: WRMSSE = 0.4935, MASE = 0.975 (không phải 0.58)
+        - TFT: WRMSSE = 0.5004, MAE = 0.948 (không phải 3.92)
+        - LightGBM: WRMSSE = 0.5083, MASE = 0.991
+        - SARIMA: WRMSSE = 1.05, MASE = 1.12
+        """
+        # Đăng ký Ensemble với chuẩn M5
+        res_ens = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "Production Ensemble Bundle",
+                "version": "v1.0",
+                "algorithm": "ensemble",
+                "scope": "global",
+                "is_production": True,
+                "parameters": {
+                    "components": ["LightGBM", "XGBoost", "LSTM", "TFT"],
+                    "weights": {"LightGBM": 0.441, "XGBoost": 0.078, "LSTM": 0.0, "TFT": 0.481},
+                },
+                "metrics": {
+                    "wrmsse": 0.4935,
+                    "mase": 0.975,
+                    "mae": 0.885,
+                    "rmse": 1.42,
+                },
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_ens.status_code, 201)
+        data_ens = res_ens.json()
+        self.assertEqual(data_ens["metrics"]["wrmsse"], 0.4935)
+        self.assertEqual(data_ens["metrics"]["mase"], 0.975)
+        self.assertNotEqual(data_ens["metrics"]["mase"], 0.58)
+
+        # Đăng ký TFT với chuẩn M5
+        res_tft = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "TFT Seasonal Model",
+                "version": "v1.0",
+                "algorithm": "tft",
+                "scope": "global",
+                "is_production": False,
+                "parameters": {"hidden_size": 64},
+                "metrics": {
+                    "wrmsse": 0.5004,
+                    "mae": 0.948,
+                    "mase": 0.982,
+                    "rmse": 1.51,
+                },
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_tft.status_code, 201)
+        data_tft = res_tft.json()
+        self.assertEqual(data_tft["metrics"]["mae"], 0.948)
+        self.assertNotEqual(data_tft["metrics"]["mae"], 3.92)
+
 
 if __name__ == "__main__":
     unittest.main()
+

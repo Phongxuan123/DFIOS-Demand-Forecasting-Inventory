@@ -295,6 +295,86 @@ class TestDataQualityEndpoints(unittest.TestCase):
             self.assertGreaterEqual(len(logs), 1)
             self.assertEqual(logs[0].actor_email, "admin@dfios.com")
 
+    def test_preprocessing_encoding_dayfirst_and_null_skus(self):
+        # UC-Import/N-22: Verify encoding priority (cp1258 before latin1), dayfirst date parsing, and null item_id dropping
+        from app.services.data_preprocessing_service import data_preprocessing_service
+        import pandas as pd
+
+        # 1. Null / NaN item_id is dropped, does not become literal 'nan'
+        csv_with_null = (
+            "item_id,sale_date,sales,price\n"
+            "FOODS_1_001,2016-04-25,10,2.5\n"
+            ",2016-04-26,5,2.5\n"
+            "nan,2016-04-27,8,2.5\n"
+            "FOODS_1_001,2016-04-28,12,2.5\n"
+        ).encode("utf-8")
+        clean_df, report = data_preprocessing_service.preprocess_sales_data(csv_with_null, default_store_id="CA_1")
+        unique_items = set(clean_df["item_id"].unique())
+        self.assertIn("FOODS_1_001", unique_items)
+        self.assertNotIn("nan", unique_items)
+        self.assertNotIn("", unique_items)
+
+        # 2. Dayfirst DD/MM/YYYY date parsing
+        csv_dayfirst = (
+            "item_id,sale_date,sales,price\n"
+            "FOODS_1_001,05/04/2016,10,2.5\n"
+            "FOODS_1_001,25/04/2016,15,2.5\n"
+        ).encode("utf-8")
+        clean_df_dates, _ = data_preprocessing_service.preprocess_sales_data(csv_dayfirst, default_store_id="CA_1")
+        # 05/04/2016 must be April 5th, not May 4th
+        april_5_rows = clean_df_dates[clean_df_dates["sale_date"] == pd.Timestamp("2016-04-05")]
+        self.assertFalse(april_5_rows.empty)
+        may_4_rows = clean_df_dates[clean_df_dates["sale_date"] == pd.Timestamp("2016-05-04")]
+        self.assertTrue(may_4_rows.empty)
+
+        # 3. CP1258 encoding priority
+        raw_cp1258 = "mã_sku;ngày_bán;doanh_số;đơn_giá\nFOODS_1_001;2016-04-25;10;2.5\n".encode("utf-8-sig")
+        df_cp = data_preprocessing_service.read_csv_safely(raw_cp1258)
+        self.assertGreaterEqual(df_cp.shape[1], 2)
+
+    def test_b02_memory_efficient_sql_aggregations_and_large_scale_handling(self):
+        """B-02: Kiểm tra tổng hợp chỉ số chất lượng dữ liệu bằng SQL aggregation trực tiếp, không load toàn bộ record vào RAM."""
+        base_date = date(2026, 5, 1)
+        with self.TestingSessionLocal() as session:
+            # Tạo 50 records cho FOODS_1_001
+            sales_batch = []
+            for d in range(25):
+                sales_batch.append(
+                    SalesHistory(
+                        id=f"scale_rec_{d}",
+                        item_id="FOODS_1_001",
+                        store_id="CA_1",
+                        sale_date=base_date + timedelta(days=d),
+                        quantity=20.0 + (d % 5),
+                    )
+                )
+            # Thêm 1 bản ghi số lượng âm
+            sales_batch.append(
+                SalesHistory(
+                    id="scale_rec_neg",
+                    item_id="FOODS_1_001",
+                    store_id="CA_1",
+                    sale_date=base_date + timedelta(days=26),
+                    quantity=-8.0,
+                )
+            )
+            session.add_all(sales_batch)
+            session.commit()
+
+        res = self.client.post(
+            "/api/v1/ml/data-quality/run",
+            json={"item_ids": ["FOODS_1_001"], "store_id": "CA_1"},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.assertEqual(data["summary"]["total_records"], 26)
+        self.assertEqual(data["summary"]["negative_values_count"], 1)
+        self.assertEqual(data["summary"]["invalid_sku_count"], 0)
+        self.assertFalse(data["passed"])
+        self.assertEqual(data["status"], "FAILED")
+
+
 
 if __name__ == "__main__":
     unittest.main()

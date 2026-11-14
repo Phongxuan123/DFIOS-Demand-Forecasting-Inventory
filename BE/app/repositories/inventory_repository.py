@@ -66,7 +66,13 @@ class InventoryRepository:
         return obj
 
     def get_distinct_stores(self, db: Session) -> List[str]:
-        return ["CA_1"]
+        stores = (
+            db.query(Inventory.store_id)
+            .distinct()
+            .order_by(Inventory.store_id.asc())
+            .all()
+        )
+        return [s[0] for s in stores if s[0]]
 
     def record_adjustment(self, db: Session, adjustment: InventoryAdjustment) -> InventoryAdjustment:
         db.add(adjustment)

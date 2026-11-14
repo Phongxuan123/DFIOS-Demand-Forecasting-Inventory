@@ -88,9 +88,6 @@ api_router.include_router(pipeline_router, prefix="/ml", tags=["ML Pipeline & Mo
 from app.api.v1.endpoints.imports import router as imports_router
 api_router.include_router(imports_router, tags=["Data Ingestion & Fast Inference (Task API.2)"])
 
-# Stage 7 / Task API.3: Model Operations Alias (/models)
-api_router.include_router(model_registry_router, tags=["Model Operations & Activation (Task API.3)"])
-
 # Stage 7 / Task API.5: What-If Policy Simulation (/simulation/compare-policies)
 from app.api.v1.endpoints.simulation import router as simulation_router
 api_router.include_router(simulation_router, prefix="/simulation", tags=["What-If Policy Simulation (Task API.5)"])

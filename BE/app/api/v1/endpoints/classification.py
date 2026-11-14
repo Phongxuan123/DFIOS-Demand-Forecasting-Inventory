@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_admin, require_manager_or_admin
+from app.api.deps import get_db, get_current_user, require_admin, require_manager_or_admin, get_client_ip
 from app.models.user import User
 from app.schemas.classification import (
     ClassificationThresholds,
@@ -16,13 +16,6 @@ from app.schemas.classification import (
 from app.services.classification_service import classification_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> Optional[str]:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 @router.get("/thresholds", response_model=ClassificationThresholds, summary="UC25 - Xem cấu hình ngưỡng phân loại ABC/XYZ")
@@ -60,6 +53,7 @@ def update_classification_thresholds(
 
 @router.post("/recompute", response_model=ClassificationRecomputeResponse, summary="UC25 - Kích hoạt tính lại phân loại toàn bộ SKU (Manager & Admin only)")
 def trigger_recompute_classification(
+    store_id: Optional[str] = Query("CA_1", description="Mã cửa hàng phân loại"),
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ):
@@ -67,11 +61,11 @@ def trigger_recompute_classification(
     **UC25 - Recompute Classification**:
     Chủ động chạy lại thuật toán phân loại Pareto ABC & CV XYZ cho toàn bộ SKU theo dữ liệu mới nhất.
     """
-    count = classification_service.recompute_classification(db)
+    count = classification_service.recompute_classification(db, store_id=store_id)
     thresholds = classification_service.get_thresholds(db)
     return ClassificationRecomputeResponse(
         success=True,
-        message=f"Đã phân loại lại thành công cho {count} SKU sản phẩm.",
+        message=f"Đã phân loại lại thành công cho {count} SKU sản phẩm ({store_id}).",
         total_skus_classified=count,
         thresholds=thresholds,
         recomputed_at=datetime.now(timezone.utc),

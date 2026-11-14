@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from sqlalchemy import text
 from app.core.database import engine
+from app.core.db_bulk import psql_insert_copy
 ARTIFACTS_DIR = os.getenv("DFIOS_ARTIFACTS_DIR")
 if not ARTIFACTS_DIR or not os.path.exists(ARTIFACTS_DIR):
     for candidate in [
@@ -93,10 +94,10 @@ def main():
         )
 
     print("Seeding sales_history table into database...")
-    sales_df.to_sql("sales_history", engine, if_exists="append", index=False, chunksize=5000, method="multi")
+    sales_df.to_sql("sales_history", engine, if_exists="append", index=False, method=psql_insert_copy)
 
     print("Seeding forecast table into database...")
-    forecast_df.to_sql("forecast", engine, if_exists="append", index=False, chunksize=5000, method="multi")
+    forecast_df.to_sql("forecast", engine, if_exists="append", index=False, method=psql_insert_copy)
 
     print("Sales evaluation data seeded successfully!")
 

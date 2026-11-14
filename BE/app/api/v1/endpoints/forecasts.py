@@ -1,10 +1,12 @@
 from datetime import date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_manager_or_admin
+from app.api.deps import get_db, get_current_user, require_manager_or_admin, get_client_ip
 from app.models.user import User
+from app.models.product import Product
+from app.models.sim_clock import SimClock
 from app.schemas.forecast import (
     ForecastListResponse,
     HistoricalDemandResponse,
@@ -18,23 +20,15 @@ from app.schemas.forecast import (
     BulkOverrideResponse,
 )
 from app.schemas.window_quantile import WindowQuantileResponse
-from app.models.sim_clock import SimClock
 from app.services.forecast_service import forecast_service
 from app.services.window_quantile_service import window_quantile_service
 
 router = APIRouter()
 
 
-def get_client_ip(request: Request) -> Optional[str]:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
-
-
 @router.get("", response_model=ForecastListResponse, summary="UC17 / UC18 / UC19 - Tra cứu danh sách dự báo nhu cầu")
 def get_forecasts(
-    horizon: Optional[int] = Query(None, description="Khoảng ngày dự báo (7, 14, 28). Mặc định theo cấu hình hệ thống"),
+    horizon: Optional[int] = Query(None, ge=1, le=28, description="Khoảng ngày dự báo (7, 14, 28). Mặc định theo cấu hình hệ thống"),
     item_id: Optional[str] = Query(None, description="Lọc theo mã SKU sản phẩm"),
     category: Optional[str] = Query(None, description="Lọc theo ngành hàng (category / cat_id)"),
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng / kho"),
@@ -119,6 +113,7 @@ def get_historical_demand(
 def compare_actual_vs_predicted(
     sku: str,
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng"),
+    model_version: Optional[str] = Query(None, description="Lọc theo phiên bản mô hình dự báo"),
     start_date: Optional[date] = Query(None, description="Ngày bắt đầu (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Ngày kết thúc (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
@@ -133,6 +128,7 @@ def compare_actual_vs_predicted(
         db,
         sku=sku,
         store_id=store_id,
+        model_version=model_version,
         start_date=start_date,
         end_date=end_date,
     )
@@ -142,7 +138,7 @@ def compare_actual_vs_predicted(
 def get_uncertainty_band(
     sku: str,
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng"),
-    horizon: Optional[int] = Query(None, description="Khoảng ngày dự báo (7, 14, 28)"),
+    horizon: Optional[int] = Query(None, ge=1, le=28, description="Khoảng ngày dự báo (7, 14, 28)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -273,6 +269,7 @@ def get_sku_window_quantiles(
         item_id=sku,
         origin_date=target_date,
         horizon_days=horizon_days,
+        persist=False,
     )
 
     q_dict = record.q_levels or {}
@@ -290,4 +287,26 @@ def get_sku_window_quantiles(
         tau_95=tau_95,
         route=record.route or "c",
     )
+
+
+@router.get(
+    "/{sku}/future",
+    summary="Task PRE.1 - Dự báo 28 ngày tương lai (Production Ensemble Engine)",
+    description="Tra cứu dự báo 28 ngày tương lai (h=1..28) kèm khoảng tin cậy p10, p50, p90 từ Ensemble Production Bundle.",
+)
+def get_sku_future_forecast(
+    sku: str,
+    store_id: str = Query("CA_1", description="Mã cửa hàng"),
+    horizon: int = Query(28, ge=1, le=28, description="Khoảng dự báo"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.predictor_service import dfios_predictor
+    return dfios_predictor.predict_sku_future(
+        item_id=sku,
+        store_id=store_id,
+        horizon=horizon,
+        db=db,
+    )
+
 

@@ -1,7 +1,10 @@
 import json
+import logging
 import math
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional, Tuple, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -128,8 +131,9 @@ class ForecastService:
 
         items: List[ForecastItemResponse] = []
         for fc, p_name, p_cat in records:
-            key = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}"
-            override = active_overrides.get(key)
+            key_h = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
+            key_base = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}"
+            override = active_overrides.get(key_h) or active_overrides.get(key_base)
 
             if override:
                 display_pred = override.override_value
@@ -142,9 +146,11 @@ class ForecastService:
                 orig_val = None
                 ov_reason = None
 
+            # B-29: Đảm bảo id duy nhất cho từng bản ghi theo từng bước dự báo h thay vì lặp lại chuỗi series id
+            unique_item_id = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
             items.append(
                 ForecastItemResponse(
-                    id=fc.id,
+                    id=unique_item_id,
                     item_id=fc.item_id,
                     store_id=fc.store_id,
                     forecast_date=fc.forecast_date,
@@ -266,6 +272,7 @@ class ForecastService:
         db: Session,
         sku: str,
         store_id: Optional[str] = None,
+        model_version: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> ForecastCompareResponse:
@@ -286,12 +293,39 @@ class ForecastService:
             else "CA_1"
         )
 
+        active_version = model_version
+        if not active_version:
+            prod_model = (
+                db.query(model_registry_repository.model)
+                .filter(model_registry_repository.model.is_production.is_(True))
+                .first()
+            )
+            if prod_model and prod_model.version:
+                active_version = prod_model.version
+            else:
+                active_version = forecast_repository.get_latest_model_version(db)
+
         sales = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
         )
         forecasts = forecast_repository.get_forecasts_for_sku(
-            db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
+            db,
+            item_id=sku,
+            store_id=target_store,
+            start_date=start_date,
+            end_date=end_date,
+            model_version=active_version,
         )
+
+        if not forecasts and model_version is None:
+            forecasts = forecast_repository.get_forecasts_for_sku(
+                db,
+                item_id=sku,
+                store_id=target_store,
+                start_date=start_date,
+                end_date=end_date,
+                model_version=None,
+            )
 
         overrides = forecast_repository.get_active_overrides_dict(
             db, item_id=sku, store_id=target_store
@@ -303,7 +337,19 @@ class ForecastService:
             actual_map[s.sale_date] = actual_map.get(s.sale_date, 0.0) + float(s.quantity)
 
         # Ghép cặp chỉ những ngày có cả actual và forecast
-        forecast_by_date: Dict[date, Forecast] = {f.forecast_date: f for f in forecasts}
+        forecast_by_date: Dict[date, Forecast] = {}
+        for f in forecasts:
+            if f.forecast_date not in forecast_by_date:
+                forecast_by_date[f.forecast_date] = f
+            else:
+                curr = forecast_by_date[f.forecast_date]
+                if (f.h and curr.h and f.h < curr.h) or (f.generated_at and curr.generated_at and f.generated_at > curr.generated_at):
+                    forecast_by_date[f.forecast_date] = f
+
+        selected_model_version = (
+            model_version
+            or (next(iter(forecast_by_date.values())).model_version if forecast_by_date else active_version)
+        )
 
         comparison: List[ComparePoint] = []
         errors: List[float] = []
@@ -315,8 +361,10 @@ class ForecastService:
         for f_date, actual_val in sorted(actual_map.items()):
             if f_date in forecast_by_date:
                 fc = forecast_by_date[f_date]
-                ov_key = f"{sku}_{fc.store_id}_{f_date}"
-                pred_val = overrides[ov_key].override_value if ov_key in overrides else fc.y_pred
+                ov_key_h = f"{sku}_{fc.store_id}_{f_date}_{fc.h}"
+                ov_key_base = f"{sku}_{fc.store_id}_{f_date}"
+                ov = overrides.get(ov_key_h) or overrides.get(ov_key_base)
+                pred_val = ov.override_value if ov else fc.y_pred
 
                 err = actual_val - pred_val
                 abs_err = abs(err)
@@ -361,6 +409,7 @@ class ForecastService:
         return ForecastCompareResponse(
             item_id=sku,
             store_id=store_id,
+            model_version=selected_model_version,
             metrics=metrics,
             comparison=comparison,
         )
@@ -411,7 +460,21 @@ class ForecastService:
         points: List[UncertaintyPoint] = []
         spreads: List[float] = []
 
+        target_store = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
+        active_overrides = forecast_repository.get_active_overrides_dict(
+            db, item_id=sku, store_id=target_store
+        )
+
         for fc in forecasts:
+            ov_key_h = f"{sku}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
+            ov_key_base = f"{sku}_{fc.store_id}_{fc.forecast_date}"
+            ov = active_overrides.get(ov_key_h) or active_overrides.get(ov_key_base)
+            effective_pred = float(ov.override_value) if ov else fc.y_pred
+
             rng = round(fc.p90 - fc.p10, 2) if (fc.p90 is not None and fc.p10 is not None) else None
             if rng is not None:
                 spreads.append(rng)
@@ -420,7 +483,7 @@ class ForecastService:
                 UncertaintyPoint(
                     forecast_date=fc.forecast_date,
                     h=fc.h,
-                    y_pred=fc.y_pred,
+                    y_pred=effective_pred,
                     p10=fc.p10,
                     p50=fc.p50,
                     p90=fc.p90,
@@ -428,12 +491,7 @@ class ForecastService:
                 )
             )
 
-        # Truy vấn doanh số thực tế để tính sai số dự báo thực nghiệm r = y - y_hat (B-06)
-        target_store = (
-            store_id.strip()
-            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
-            else "CA_1"
-        )
+        # Truy vấn doanh số thực tế để tính sai số dự báo thực nghiệm r = y - y_hat (B-06, B-01)
         sales_recs = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store
         )
@@ -441,10 +499,16 @@ class ForecastService:
         residuals: List[float] = []
         for fc in forecasts:
             if fc.forecast_date in sales_map:
-                residuals.append(round(sales_map[fc.forecast_date] - fc.y_pred, 2))
+                ov_key_h = f"{sku}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
+                ov_key_base = f"{sku}_{fc.store_id}_{fc.forecast_date}"
+                ov = active_overrides.get(ov_key_h) or active_overrides.get(ov_key_base)
+                effective_pred = float(ov.override_value) if ov else fc.y_pred
+                residuals.append(round(sales_map[fc.forecast_date] - effective_pred, 2))
 
-        # UC22: Phân bố độ rộng khoảng bất định dự báo (p90 - p10)
-        eval_metrics = spreads
+        # UC22: Phân bố sai số dự báo thực nghiệm r = y - y_hat (B-06)
+        # Khi có dữ liệu thực tế trùng với ngày dự báo, tính chuẩn xác trên residual thực tế.
+        # Khi toàn bộ horizon nằm ở tương lai (chưa có actual), dùng độ rộng dải bất định (p90 - p10) làm fallback.
+        eval_metrics = residuals if residuals else spreads
         err_dist: Optional[ErrorDistribution] = None
         if eval_metrics:
             sorted_vals = sorted(eval_metrics)
@@ -648,18 +712,33 @@ class ForecastService:
         )
         db.commit()
 
-        # Tự động đồng bộ và tính lại ROP theo dự báo mới (B-01)
+        # Tự động đồng bộ và tính lại ROP theo dự báo mới (B-01, N-20)
         try:
             from app.models.forecast_window_quantile import ForecastWindowQuantile
+            from app.models.sim_clock import SimClock
             from app.services.optimization_service import optimization_service
+            # N-20: Chỉ xóa quantile của origin bị ảnh hưởng bởi forecast_date này
+            affected_origin = request.forecast_date - timedelta(days=original_fc.h if original_fc and original_fc.h else 1)
             db.query(ForecastWindowQuantile).filter(
                 ForecastWindowQuantile.store_id == target_store,
                 ForecastWindowQuantile.item_id == sku,
+                ForecastWindowQuantile.origin_date == affected_origin,
             ).delete()
+            clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+            if clock and clock.current_date and clock.current_date != affected_origin:
+                db.query(ForecastWindowQuantile).filter(
+                    ForecastWindowQuantile.store_id == target_store,
+                    ForecastWindowQuantile.item_id == sku,
+                    ForecastWindowQuantile.origin_date == clock.current_date,
+                ).delete()
             optimization_service.recompute_parameters(db, store_id=target_store, item_id=sku)
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                f"Error recomputing quantiles/params on override for {sku} in {target_store}: {e}",
+                exc_info=True,
+            )
 
         return ForecastOverrideResponse.model_validate(saved)
 
@@ -694,18 +773,32 @@ class ForecastService:
         )
         db.commit()
 
-        # Tự động đồng bộ và tính lại ROP sau khi hoàn tác can thiệp (B-01)
+        # Tự động đồng bộ và tính lại ROP sau khi hoàn tác can thiệp (B-01, N-20)
         try:
             from app.models.forecast_window_quantile import ForecastWindowQuantile
+            from app.models.sim_clock import SimClock
             from app.services.optimization_service import optimization_service
+            affected_origin = override.forecast_date - timedelta(days=override.h if override.h else 1)
             db.query(ForecastWindowQuantile).filter(
                 ForecastWindowQuantile.store_id == override.store_id,
                 ForecastWindowQuantile.item_id == sku,
+                ForecastWindowQuantile.origin_date == affected_origin,
             ).delete()
+            clock = db.query(SimClock).filter(SimClock.store_id == override.store_id).first()
+            if clock and clock.current_date and clock.current_date != affected_origin:
+                db.query(ForecastWindowQuantile).filter(
+                    ForecastWindowQuantile.store_id == override.store_id,
+                    ForecastWindowQuantile.item_id == sku,
+                    ForecastWindowQuantile.origin_date == clock.current_date,
+                ).delete()
             optimization_service.recompute_parameters(db, store_id=override.store_id, item_id=sku)
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                f"Error recomputing quantiles/params on revert for {sku} in {override.store_id}: {e}",
+                exc_info=True,
+            )
 
         return ForecastOverrideRevertResponse(
             success=True,
@@ -781,6 +874,7 @@ class ForecastService:
                 item_id=item.item_id,
                 forecast_date=item.date,
                 store_id=item.store_id,
+                h=item.h,
             )
             if not fc:
                 errors.append({
@@ -796,7 +890,7 @@ class ForecastService:
                 item_id=item.item_id,
                 store_id=item.store_id,
                 forecast_date=item.date,
-                h=fc.h,
+                h=item.h or fc.h,
                 original_value=fc.y_pred,
                 override_value=item.value,
                 reason=item.reason.strip(),
@@ -816,20 +910,39 @@ class ForecastService:
             )
             db.commit()
 
-            # Tự động đồng bộ và tính lại ROP cho toàn bộ các SKU bị can thiệp (B-01)
+            # Tự động đồng bộ và tính lại ROP cho toàn bộ các SKU bị can thiệp (B-01, N-20)
             try:
                 from app.models.forecast_window_quantile import ForecastWindowQuantile
+                from app.models.sim_clock import SimClock
                 from app.services.optimization_service import optimization_service
+                for it in request.items:
+                    fc_rec = forecast_repository.get_single_forecast(
+                        db, item_id=it.item_id, forecast_date=it.date, store_id=it.store_id
+                    )
+                    h_val = fc_rec.h if fc_rec and fc_rec.h else 1
+                    affected_origin = it.date - timedelta(days=h_val)
+                    db.query(ForecastWindowQuantile).filter(
+                        ForecastWindowQuantile.store_id == it.store_id,
+                        ForecastWindowQuantile.item_id == it.item_id,
+                        ForecastWindowQuantile.origin_date == affected_origin,
+                    ).delete()
                 affected_keys = {(it.item_id, it.store_id) for it in request.items}
                 for affected_sku, affected_store in affected_keys:
-                    db.query(ForecastWindowQuantile).filter(
-                        ForecastWindowQuantile.store_id == affected_store,
-                        ForecastWindowQuantile.item_id == affected_sku,
-                    ).delete()
+                    clock = db.query(SimClock).filter(SimClock.store_id == affected_store).first()
+                    if clock and clock.current_date:
+                        db.query(ForecastWindowQuantile).filter(
+                            ForecastWindowQuantile.store_id == affected_store,
+                            ForecastWindowQuantile.item_id == affected_sku,
+                            ForecastWindowQuantile.origin_date == clock.current_date,
+                        ).delete()
                     optimization_service.recompute_parameters(db, store_id=affected_store, item_id=affected_sku)
                 db.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                db.rollback()
+                logger.error(
+                    f"Error recomputing quantiles/params on bulk_override: {e}",
+                    exc_info=True,
+                )
 
         return BulkOverrideResponse(
             success=True,

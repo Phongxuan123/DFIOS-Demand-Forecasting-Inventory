@@ -34,14 +34,16 @@ from app.core.config import settings
 
 
 class AuthService:
-    def login(self, db: Session, login_data: LoginRequest) -> LoginResponse:
+    def login(self, db: Session, login_data: LoginRequest, client_ip: Optional[str] = None) -> LoginResponse:
         """
-        UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration)
+        UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration, N-12)
         """
         email_clean = login_data.email.strip().lower()
+        ip_part = client_ip.strip() if client_ip else "unknown"
+        rate_key = f"login:{email_clean}:{ip_part}"
 
-        # Chống brute-force: tối đa 10 lần sai trong 5 phút (R-24)
-        if rate_limiter.is_rate_limited(f"login:{email_clean}", max_requests=10, window_seconds=300):
+        # Chống brute-force: tối đa 10 lần sai trong 5 phút trên cặp (email, ip) (N-12)
+        if rate_limiter.check_limit(rate_key, max_requests=10, window_seconds=300):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
@@ -49,29 +51,44 @@ class AuthService:
 
         user = user_repository.get_by_email(db, email_clean)
         if not user:
+            rate_limiter.record_attempt(rate_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
 
-        # Kiểm tra tài khoản có bị vô hiệu hóa hoặc chưa kích hoạt không
+        # Nếu tài khoản chưa kích hoạt lần đầu (chưa verify), thông báo cần kích hoạt qua link email
+        if not getattr(user, "is_verified", True):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
+            )
+
+        # Với tài khoản đã xác thực: kiểm tra mật khẩu TRƯỚC khi kiểm tra trạng thái active (chống account enumeration và leak trạng thái user, R-24 & B-13)
+        if not verify_password(login_data.password, user.password_hash):
+            rate_limiter.record_attempt(rate_key, window_seconds=300)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Email hoặc mật khẩu không chính xác",
+            )
+
+        # Kiểm tra tài khoản có bị vô hiệu hóa không (chỉ trả 403 khi mật khẩu đã đúng)
         if not getattr(user, "is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
             )
 
-        if not verify_password(login_data.password, user.password_hash):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Email hoặc mật khẩu không chính xác",
-            )
+        # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
+        rate_limiter.clear(rate_key)
 
+        # B-12: sub được chuẩn hóa thành str(user.id) theo RFC 7519, kèm email và user_id
         access_token = create_access_token(
             data={
-                "sub": user.email,
+                "sub": str(user.id),
+                "user_id": str(user.id),
+                "email": user.email,
                 "role": user.role,
-                "user_id": user.id,
                 "token_version": getattr(user, "token_version", 1),
             }
         )
@@ -110,6 +127,14 @@ class AuthService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Link không hợp lệ hoặc đã hết hạn",
+            )
+
+        # B-13: Nếu tài khoản đã xác thực trước đó nhưng bị quản trị viên khóa (is_active=False),
+        # chặn tuyệt đối không cho phép dùng link kích hoạt cũ để tự mở khóa tài khoản
+        if user.is_verified and not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tài khoản này đã bị quản trị viên khóa, không thể tự kích hoạt lại.",
             )
 
         user.password_hash = get_password_hash(request.password)

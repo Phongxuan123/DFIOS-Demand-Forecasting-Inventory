@@ -169,6 +169,25 @@ class TestInventoryEndpoints(unittest.TestCase):
         self.assertEqual(adj["reason"], "Kiểm kê định kỳ tháng 10")
         self.assertEqual(adj["adjusted_by"], "manager@dfios.com")
 
+    def test_get_stores_dynamic_distinct(self):
+        # UC11/N-17: Ensure /inventory/stores queries distinct stores from DB rather than hardcoded ["CA_1"]
+        with self.TestingSessionLocal() as session:
+            inv_tx = Inventory(item_id="FOODS_1_001", store_id="TX_1", on_hand=10.0, on_order=0.0)
+            inv_wi = Inventory(item_id="FOODS_1_001", store_id="WI_1", on_hand=20.0, on_order=0.0)
+            session.add_all([inv_tx, inv_wi])
+            session.commit()
+
+        res = self.client.get(
+            "/api/v1/inventory/stores",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        stores = res.json()
+        self.assertIn("CA_1", stores)
+        self.assertIn("TX_1", stores)
+        self.assertIn("WI_1", stores)
+        self.assertEqual(len(stores), len(set(stores)))  # distinct
+
 
 if __name__ == "__main__":
     unittest.main()

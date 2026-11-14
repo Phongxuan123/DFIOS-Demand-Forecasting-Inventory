@@ -10,6 +10,7 @@ from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
 from app.models.forecast import Forecast, ForecastSigma, ForecastOverride, ForecastExplanation
+from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.sales_history import SalesHistory
 from app.models.audit_log import AuditLog
 from app.core.security import get_password_hash, create_access_token
@@ -254,6 +255,48 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertEqual(data["metrics"]["rmse"], 1.0)
         self.assertEqual(len(data["comparison"]), 14)
 
+    def test_b05_compare_filter_by_model_version(self):
+        # UC21 / B-05: Ensure compare filters by model_version without collision
+        base_date = date(2026, 10, 1)
+        with self.TestingSessionLocal() as session:
+            for h in range(1, 15):
+                fc_date = base_date + timedelta(days=h - 1)
+                fc = Forecast(
+                    id=f"fc_v2_{h}",
+                    item_id="FOODS_1_001",
+                    store_id="CA_1",
+                    forecast_date=fc_date,
+                    h=h,
+                    y_pred=20.0 + h,
+                    p10=18.0 + h,
+                    p50=20.0 + h,
+                    p90=22.0 + h,
+                    available=True,
+                    model_version="v2.0.0",
+                )
+                session.add(fc)
+            session.commit()
+
+        # 1. Compare specifying model_version="v1.0.0" -> mae should be 1.0
+        res_v1 = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/compare?model_version=v1.0.0",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_v1.status_code, 200)
+        data_v1 = res_v1.json()
+        self.assertEqual(data_v1["model_version"], "v1.0.0")
+        self.assertEqual(data_v1["metrics"]["mae"], 1.0)
+
+        # 2. Compare specifying model_version="v2.0.0" -> mae should be 11.0 (actual is 9+h, pred is 20+h)
+        res_v2 = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/compare?model_version=v2.0.0",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_v2.status_code, 200)
+        data_v2 = res_v2.json()
+        self.assertEqual(data_v2["model_version"], "v2.0.0")
+        self.assertEqual(data_v2["metrics"]["mae"], 11.0)
+
     # --- UC22: Prediction Uncertainty Band ---
 
     def test_uncertainty_band(self):
@@ -267,8 +310,13 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertEqual(data["horizon"], 28)
         self.assertEqual(data["sigma_h"], 3.8)
         self.assertEqual(len(data["points"]), 28)
+        # points[i].uncertainty_range là độ rộng khoảng p90 - p10 = 4.0
+        self.assertEqual(data["points"][0]["uncertainty_range"], 4.0)
         self.assertIsNotNone(data["error_distribution"])
-        self.assertEqual(data["error_distribution"]["mean"], 4.0)
+        # B-06: error_distribution tính chuẩn sai số dự báo thực tế r = actual - y_pred = (9+i) - (10+i) = -1.0
+        self.assertEqual(data["error_distribution"]["mean"], -1.0)
+        self.assertEqual(data["error_distribution"]["min"], -1.0)
+        self.assertEqual(data["error_distribution"]["max"], -1.0)
 
     # --- UC23: View Forecast Explanation (SHAP) ---
 
@@ -606,3 +654,227 @@ class TestForecastEndpoints(unittest.TestCase):
             self.assertIsNotNone(created)
             self.assertEqual(created.override_value, 40.0)
             self.assertTrue(created.is_active)
+
+    def test_override_targeted_quantile_invalidation_preserves_history(self):
+        # UC24/N-20: Test that override only invalidates quantile for the affected origin, preserving historical quantiles
+        with self.TestingSessionLocal() as session:
+            # 1. Historical quantile at 2016-01-01 (should NOT be deleted)
+            fwq_hist = ForecastWindowQuantile(
+                id="fwq-hist-01",
+                model_run_id="run-01",
+                store_id="CA_1",
+                item_id="FOODS_1_001",
+                origin_date=date(2016, 1, 1),
+                horizon_days=10,
+                point_window=50.0,
+                q_levels={"0.95": 60.0},
+            )
+            # 2. Quantile for 2026-09-30 (corresponding to forecast_date 2026-10-01 with h=1)
+            fwq_target = ForecastWindowQuantile(
+                id="fwq-target-01",
+                model_run_id="run-01",
+                store_id="CA_1",
+                item_id="FOODS_1_001",
+                origin_date=date(2026, 9, 30),
+                horizon_days=10,
+                point_window=50.0,
+                q_levels={"0.95": 65.0},
+            )
+            session.add_all([fwq_hist, fwq_target])
+            session.commit()
+
+        payload = {
+            "forecast_date": "2026-10-01",
+            "override_value": 35.0,
+            "reason": "Khuyến mãi flash sale",
+            "store_id": "CA_1",
+        }
+        resp = self.client.post(
+            "/api/v1/forecasts/FOODS_1_001/override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        # Kiểm tra: fwq_target (2026-09-30) đã bị xóa để recompute
+        # NHƯNG fwq_hist (2016-01-01) VẪN CÒN NGUYÊN (không bị xóa trắng toàn bộ lịch sử)
+        with self.TestingSessionLocal() as session:
+            hist_record = session.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.id == "fwq-hist-01"
+            ).first()
+            self.assertIsNotNone(hist_record)
+            self.assertEqual(hist_record.origin_date, date(2016, 1, 1))
+
+            target_record = session.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.id == "fwq-target-01"
+            ).first()
+            self.assertIsNone(target_record)
+
+    def test_override_keyed_with_horizon_and_bulk_override_horizon_support(self):
+        # UC24/B-04: Ensure override is correctly keyed by horizon h and bulk override supports h
+        payload = {
+            "items": [
+                {
+                    "item_id": "FOODS_1_001",
+                    "store_id": "CA_1",
+                    "date": "2026-10-01",
+                    "h": 1,
+                    "value": 42.0,
+                    "reason": "Điều chỉnh riêng cho h=1"
+                }
+            ]
+        }
+        res = self.client.post(
+            "/api/v1/forecasts/bulk-override",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.json()["created_count"], 1)
+
+        with self.TestingSessionLocal() as session:
+            ov = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_001",
+                ForecastOverride.forecast_date == date(2026, 10, 1),
+                ForecastOverride.h == 1,
+            ).first()
+            self.assertIsNotNone(ov)
+            self.assertEqual(ov.override_value, 42.0)
+            self.assertEqual(ov.h, 1)
+
+        # GET forecasts should show the override applied
+        res_fc = self.client.get(
+            "/api/v1/forecasts?item_id=FOODS_1_001&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.admin_token}"}
+        )
+        self.assertEqual(res_fc.status_code, 200)
+        items = res_fc.json()["items"]
+        h1_items = [it for it in items if it["h"] == 1 and it["forecast_date"] == "2026-10-01"]
+        self.assertTrue(len(h1_items) > 0)
+        self.assertEqual(h1_items[0]["y_pred"], 42.0)
+        self.assertTrue(h1_items[0]["is_overridden"])
+
+    def test_b01_override_recompute_rollback_on_failure(self):
+        """B-01: Kiểm tra rollback khi recompute_parameters gặp lỗi trong override, không làm hỏng session."""
+        from unittest.mock import patch
+
+        payload = {
+            "forecast_date": "2026-10-01",
+            "override_value": 77.0,
+            "reason": "Test exception rollback",
+        }
+
+        with patch("app.services.optimization_service.optimization_service.recompute_parameters", side_effect=RuntimeError("Simulated optimization failure")):
+            res = self.client.post(
+                "/api/v1/forecasts/FOODS_1_001/override?store_id=CA_1",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.admin_token}"},
+            )
+            self.assertEqual(res.status_code, 201)
+            self.assertEqual(res.json()["override_value"], 77.0)
+
+        # Kiểm tra session vẫn khỏe mạnh và đọc/ghi bình thường
+        with self.TestingSessionLocal() as session:
+            ov = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_001",
+                ForecastOverride.forecast_date == date(2026, 10, 1),
+                ForecastOverride.is_active.is_(True),
+            ).first()
+            self.assertIsNotNone(ov)
+            self.assertEqual(ov.override_value, 77.0)
+
+    def test_b01_uncertainty_band_reflects_active_override(self):
+        """B-01: get_uncertainty_band phản ánh giá trị override hiệu dụng cho cả y_pred và residuals."""
+        # Tạo override cho FOODS_1_001 ngày 2026-10-01
+        payload = {
+            "forecast_date": "2026-10-01",
+            "override_value": 99.0,
+            "reason": "Uncertainty band test override",
+        }
+        res_ov = self.client.post(
+            "/api/v1/forecasts/FOODS_1_001/override?store_id=CA_1",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_ov.status_code, 201)
+
+        # GET uncertainty band
+        res = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/uncertainty?store_id=CA_1&horizon=28",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        p_oct1 = [p for p in data["points"] if p["forecast_date"] == "2026-10-01"]
+        self.assertTrue(len(p_oct1) > 0)
+        self.assertEqual(p_oct1[0]["y_pred"], 99.0)
+
+    def test_b29_forecast_items_have_unique_ids(self):
+        """B-29: Kiểm tra tất cả các phần tử trong danh sách dự báo có id duy nhất cho từng bước h."""
+        res = self.client.get(
+            "/api/v1/forecasts?item_id=FOODS_1_001&store_id=CA_1&horizon=28",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        items = data["items"]
+        self.assertEqual(len(items), 28)
+
+        # Kiểm tra tập id không có phần tử trùng lặp
+        ids = [item["id"] for item in items]
+        self.assertEqual(len(ids), len(set(ids)), "Tồn tại id trùng lặp giữa các bước dự báo h!")
+
+        # Kiểm tra cấu trúc id mang tính duy nhất xác định: {item_id}_{store_id}_{forecast_date}_{h}
+        for item in items:
+            expected_prefix = f"FOODS_1_001_CA_1_{item['forecast_date']}_{item['h']}"
+            self.assertEqual(item["id"], expected_prefix)
+
+    def test_r17_get_window_quantiles_has_no_database_side_effects(self):
+        """R-17: Đảm bảo GET window-quantiles trả về phân phối hợp lệ nhưng không gây tác dụng phụ ghi/tạo bản ghi vào DB."""
+        with self.TestingSessionLocal() as session:
+            count_before = session.query(ForecastWindowQuantile).count()
+
+        res = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/window-quantiles?store_id=CA_1&origin_date=2016-05-23&horizon_days=10",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["item_id"], "FOODS_1_001")
+        self.assertGreater(data["point_window"], 0.0)
+        self.assertIn("0.95", data["q_levels"])
+
+        with self.TestingSessionLocal() as session:
+            count_after = session.query(ForecastWindowQuantile).count()
+
+        self.assertEqual(count_before, count_after, "GET /window-quantiles không được gây tác dụng phụ ghi vào database!")
+
+    def test_r14_predict_sku_future_endpoint_and_service(self):
+        """R-14: Kiểm tra GET /{sku}/future và logic predict_sku_future không hardcode 1.5, nạp từ parquet/sba."""
+        # 1. Test endpoint GET /{sku}/future for FOODS_1_001
+        res = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/future?store_id=CA_1&horizon=28",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        items = res.json()
+        self.assertEqual(len(items), 28)
+        self.assertEqual(items[0]["item_id"], "FOODS_1_001")
+        self.assertEqual(items[0]["h"], 1)
+        self.assertEqual(items[-1]["h"], 28)
+        self.assertIn("p10", items[0])
+        self.assertIn("p50", items[0])
+        self.assertIn("p90", items[0])
+
+        # 2. Test non-existent SKU fallback (honest 0.0, available=False)
+        res_empty = self.client.get(
+            "/api/v1/forecasts/NON_EXISTENT_SKU/future?store_id=CA_1&horizon=14",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_empty.status_code, 200)
+        empty_items = res_empty.json()
+        self.assertEqual(len(empty_items), 14)
+        self.assertEqual(empty_items[0]["y_pred"], 0.0)
+        self.assertFalse(empty_items[0]["available"])
+
+

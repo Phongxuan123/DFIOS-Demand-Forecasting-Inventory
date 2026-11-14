@@ -54,10 +54,28 @@ class TestRealtimeSSE(unittest.IsolatedAsyncioTestCase):
                 display_name="Warehouse Manager",
                 is_active=True,
             )
-            session.add(self.test_user)
+            self.admin_user = User(
+                id="user-admin-01",
+                email="admin@dfios.com",
+                password_hash=get_password_hash("password123"),
+                role="Admin",
+                display_name="Admin User",
+                is_active=True,
+            )
+            self.viewer_user = User(
+                id="user-viewer-01",
+                email="viewer@dfios.com",
+                password_hash=get_password_hash("password123"),
+                role="Viewer",
+                display_name="Viewer User",
+                is_active=True,
+            )
+            session.add_all([self.test_user, self.admin_user, self.viewer_user])
             session.commit()
 
-        self.valid_token = create_access_token(data={"sub": "warehouse.manager@dfios.com"})
+        self.valid_token = create_access_token(data={"sub": "warehouse.manager@dfios.com", "user_id": "user-wm-01"})
+        self.admin_token = create_access_token(data={"sub": "admin@dfios.com", "user_id": "user-admin-01"})
+        self.viewer_token = create_access_token(data={"sub": "viewer@dfios.com", "user_id": "user-viewer-01"})
         self.client = TestClient(app)
 
     def tearDown(self):
@@ -231,17 +249,109 @@ class TestRealtimeSSE(unittest.IsolatedAsyncioTestCase):
         await iterator.aclose()
         self.assertEqual(event_bus.get_subscriber_count(), 0)
 
-    # 10. Kiểm tra API hỗ trợ bắn thử sự kiện POST /api/events/publish-test
+    # 10. B-25: Kiểm tra API hỗ trợ bắn thử sự kiện POST /api/events/publish-test
     def test_publish_test_endpoint(self):
-        response = self.client.post(
+        from app.core.config import settings
+
+        # 10a. Warehouse Manager không có quyền -> 403 Forbidden (chỉ Admin mới được phép)
+        resp_manager = self.client.post(
             "/api/events/publish-test?sku_id=SKU-TEST-999",
             headers={"Authorization": f"Bearer {self.valid_token}"},
         )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
+        self.assertEqual(resp_manager.status_code, 403)
+        self.assertIn("Quyền yêu cầu: Admin", resp_manager.json()["detail"])
+
+        # 10b. Admin gọi khi ENABLE_TEST_ENDPOINTS = True -> 200 OK
+        resp_admin = self.client.post(
+            "/api/events/publish-test?sku_id=SKU-TEST-999",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_admin.status_code, 200)
+        data = resp_admin.json()
         self.assertEqual(data["status"], "success")
         self.assertIn("SKU-TEST-999", data["message"])
         self.assertIsNotNone(data["event_id"])
+
+        # 10c. Khi ENABLE_TEST_ENDPOINTS = False -> 403 Forbidden ngay cả với Admin
+        old_val = settings.ENABLE_TEST_ENDPOINTS
+        try:
+            settings.ENABLE_TEST_ENDPOINTS = False
+            resp_disabled = self.client.post(
+                "/api/events/publish-test?sku_id=SKU-TEST-999",
+                headers={"Authorization": f"Bearer {self.admin_token}"},
+            )
+            self.assertEqual(resp_disabled.status_code, 403)
+            self.assertIn("vô hiệu hóa", resp_disabled.json()["detail"])
+        finally:
+            settings.ENABLE_TEST_ENDPOINTS = old_val
+
+    # 10d. B-25: Kiểm tra lọc sự kiện SSE theo target_roles
+    async def test_b25_sse_role_filtering(self):
+        bus = InMemoryEventBus()
+        admin_q = await bus.subscribe("admin@dfios.com", role="Admin")
+        viewer_q = await bus.subscribe("viewer@dfios.com", role="Viewer")
+
+        # Sự kiện chỉ dành riêng cho Admin và Warehouse Manager
+        event_restricted = create_inventory_updated_event(
+            sku_id="SKU-RESTRICTED-01",
+            actor_id="admin@dfios.com",
+            target_roles=["Admin", "Warehouse Manager"],
+        )
+        bus.publish_nowait(event_restricted)
+
+        # Admin nhận được sự kiện
+        rec_admin = await asyncio.wait_for(admin_q.get(), timeout=1.0)
+        self.assertEqual(rec_admin.data["sku_id"], "SKU-RESTRICTED-01")
+
+        # Viewer không nhận được sự kiện (queue trống)
+        self.assertTrue(viewer_q.empty())
+
+        await bus.unsubscribe("admin@dfios.com", admin_q)
+        await bus.unsubscribe("viewer@dfios.com", viewer_q)
+
+    # 10e. B-25: Kiểm tra làm sạch (mask) email trong payload khi phát cho Viewer
+    async def test_b25_sse_payload_sanitization_masks_email_for_viewers(self):
+        bus = InMemoryEventBus()
+        admin_q = await bus.subscribe("admin@dfios.com", role="Admin")
+        viewer_q = await bus.subscribe("viewer@dfios.com", role="Viewer")
+
+        # Sự kiện phát chung không giới hạn target_roles
+        event_public = create_inventory_updated_event(
+            sku_id="SKU-PUBLIC-01",
+            actor_id="warehouse.manager@dfios.com",
+        )
+        bus.publish_nowait(event_public)
+
+        # Admin nhận được nguyên vẹn actor_id
+        rec_admin = await asyncio.wait_for(admin_q.get(), timeout=1.0)
+        self.assertEqual(rec_admin.data["actor_id"], "warehouse.manager@dfios.com")
+
+        # Viewer nhận được actor_id đã được che giấu (mask email)
+        rec_viewer = await asyncio.wait_for(viewer_q.get(), timeout=1.0)
+        self.assertEqual(rec_viewer.data["actor_id"], "w***r@dfios.com")
+
+        await bus.unsubscribe("admin@dfios.com", admin_q)
+        await bus.unsubscribe("viewer@dfios.com", viewer_q)
+
+    # 11. UC10/N-18: Kiểm tra tính thread-safe khi gọi publish_nowait từ threadpool worker thread
+    async def test_threadsafe_publish_nowait_from_worker_thread(self):
+        import concurrent.futures
+        bus = InMemoryEventBus()
+        user_email = "thread.user@dfios.com"
+        q = await bus.subscribe(user_email)
+
+        event = create_inventory_updated_event("SKU-THREAD-01", user_email)
+
+        # Gọi publish_nowait từ một thread riêng biệt (mô phỏng FastAPI threadpool)
+        loop = asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            await loop.run_in_executor(executor, bus.publish_nowait, event)
+
+        # Đọc sự kiện ra từ hàng đợi trong event loop chính
+        received = await asyncio.wait_for(q.get(), timeout=2.0)
+        self.assertIsNotNone(received)
+        self.assertEqual(received.data["sku_id"], "SKU-THREAD-01")
+        await bus.unsubscribe(user_email, q)
 
 
 if __name__ == "__main__":

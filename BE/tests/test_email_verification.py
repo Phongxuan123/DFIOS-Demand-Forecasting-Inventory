@@ -351,6 +351,175 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
             self.assertIn("admin.create_user", actions)
             self.assertIn("admin.resend_activation", actions)
 
+    # 7. Kiểm tra Rate Limiting Đăng nhập (N-12): Chỉ đếm thất bại và phân tách theo (email, ip)
+    def test_login_rate_limiting_only_on_failures_and_keyed_on_ip(self):
+        # 1. Đăng nhập đúng 12 lần liên tiếp không bị chặn 429
+        for _ in range(12):
+            res_ok = self.client.post(
+                "/api/v1/auth/login",
+                json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+            )
+            self.assertEqual(res_ok.status_code, 200)
+
+        # 2. Thử sai mật khẩu 10 lần
+        for _ in range(10):
+            res_fail = self.client.post(
+                "/api/v1/auth/login",
+                json={"email": "sarah.jenkins@dfios.com", "password": "WrongPassword"},
+            )
+            self.assertEqual(res_fail.status_code, 401)
+
+        # 3. Lần thứ 11 bị chặn 429 Too Many Requests
+        res_blocked = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+        )
+        self.assertEqual(res_blocked.status_code, 429)
+        self.assertIn("10 lần trong 5 phút", res_blocked.json()["detail"])
+
+    # 8. Kiểm tra B-13 & R-24: Khóa user hủy toàn bộ token, chặn tự mở khóa, và check pass trước khi trả 403
+    def test_locked_user_token_revocation_and_password_checked_before_status(self):
+        # 1. Tạo token kích hoạt cho user-01 (Sarah Jenkins)
+        with self.TestingSessionLocal() as session:
+            tok_rec, raw_tok = email_token_service.create_token(session, user_id="user-01", purpose="activate")
+            session.commit()
+            self.assertIsNone(tok_rec.used_at)
+
+        # 2. Thử đăng nhập user-01 với mật khẩu SAI khi user còn active -> 401
+        res_wrong_pw = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "BadPassword999"},
+        )
+        self.assertEqual(res_wrong_pw.status_code, 401)
+
+        # 3. Admin khóa tài khoản user-01 (is_active = False)
+        lock_res = self.client.put(
+            "/api/v1/users/user-01",
+            json={"is_active": False},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(lock_res.status_code, 200)
+        self.assertFalse(lock_res.json()["is_active"])
+
+        # 4. Xác nhận token kích hoạt của user-01 đã tự động bị revoke khi khóa (B-13)
+        with self.TestingSessionLocal() as session:
+            refreshed_tok = session.query(EmailToken).filter(EmailToken.user_id == "user-01").first()
+            self.assertIsNotNone(refreshed_tok.used_at)
+
+        # 5. R-24: Thử đăng nhập user bị khóa với mật khẩu SAI -> VẪN TRẢ 401 (chống account enumeration)
+        res_locked_wrong_pw = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "BadPassword999"},
+        )
+        self.assertEqual(res_locked_wrong_pw.status_code, 401)
+        self.assertIn("Email hoặc mật khẩu không chính xác", res_locked_wrong_pw.json()["detail"])
+
+        # 6. R-24: Đăng nhập user bị khóa với mật khẩu ĐÚNG -> trả 403 Forbidden
+        res_locked_correct_pw = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+        )
+        self.assertEqual(res_locked_correct_pw.status_code, 403)
+        self.assertIn("vô hiệu hóa", res_locked_correct_pw.json()["detail"])
+
+        # 7. B-13: Tạo token activate thủ công cho user bị khóa và thử kích hoạt -> BỊ CHẶN 403
+        with self.TestingSessionLocal() as session:
+            tok_rec_2, raw_tok_2 = email_token_service.create_token(session, user_id="user-01", purpose="activate")
+            session.commit()
+
+        res_activate_blocked = self.client.post(
+            "/api/v1/auth/activate",
+            json={"token": raw_tok_2, "password": "NewSecretPassword123"},
+        )
+        self.assertEqual(res_activate_blocked.status_code, 403)
+        self.assertIn("đã bị quản trị viên khóa", res_activate_blocked.json()["detail"])
+
+    def test_b24_password_max_bytes_limit(self):
+        # B-24: Password with <= 72 characters but > 72 bytes (e.g., Vietnamese 3-byte characters) must be rejected with 422
+        pw_over_bytes = "TiếngViệt" * 6  # 54 chars (< 72), 78 bytes (> 72)
+        self.assertLess(len(pw_over_bytes), 72)
+        self.assertGreater(len(pw_over_bytes.encode("utf-8")), 72)
+
+        # 1. Login with password > 72 bytes -> 422 Unprocessable Entity
+        res_login = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@dfios.com", "password": pw_over_bytes},
+        )
+        self.assertEqual(res_login.status_code, 422)
+
+        # 2. Reset password with password > 72 bytes -> 422
+        res_reset = self.client.post(
+            "/api/v1/auth/reset-password",
+            json={"token": "some-token", "new_password": pw_over_bytes},
+        )
+        self.assertEqual(res_reset.status_code, 422)
+
+        # 3. get_password_hash directly raises ValueError when > 72 bytes
+        from app.core.security import get_password_hash
+        with self.assertRaises(ValueError):
+            get_password_hash(pw_over_bytes)
+
+    def test_b12_jwt_sub_uses_user_id_and_resolves_across_email_changes(self):
+        """B-12: JWT subject payload sub = str(user.id), bảo đảm tính nhất quán định danh và tương thích ngược."""
+        from app.core.security import decode_access_token, create_access_token
+
+        # 1. Login trả JWT có sub là user.id
+        res_login = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+        )
+        self.assertEqual(res_login.status_code, 200)
+        token = res_login.json()["access_token"]
+        payload = decode_access_token(token)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["sub"], "user-01")
+        self.assertEqual(payload["user_id"], "user-01")
+        self.assertEqual(payload["email"], "sarah.jenkins@dfios.com")
+
+        # 2. Truy cập /auth/me thành công bằng token này
+        res_me = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(res_me.status_code, 200)
+        self.assertEqual(res_me.json()["id"], "user-01")
+
+        # 3. Token cũ (legacy token) với sub là email vẫn tương thích ngược thành công
+        legacy_token = create_access_token(
+            data={"sub": "sarah.jenkins@dfios.com", "role": "Warehouse Manager", "token_version": 1}
+        )
+        res_legacy = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {legacy_token}"},
+        )
+        self.assertEqual(res_legacy.status_code, 200)
+        self.assertEqual(res_legacy.json()["email"], "sarah.jenkins@dfios.com")
+
+    def test_b28_mock_email_sender_bounded_memory_safety(self):
+        """B-28: MockEmailSender có giới hạn hàng đợi tối đa FIFO ngăn tràn bộ nhớ RAM."""
+        from app.services.email_service import MockEmailSender
+
+        bounded_sender = MockEmailSender(max_records=5)
+        for i in range(10):
+            bounded_sender.send_email(
+                to_email=f"user{i}@test.com",
+                subject=f"Subject {i}",
+                html_body=f"<p>{i}</p>",
+                text_body=str(i),
+            )
+
+        # Số lượng bản ghi lưu trữ không được vượt quá max_records
+        self.assertEqual(len(bounded_sender.sent_emails), 5)
+        # Các bản ghi cũ nhất (0..4) đã bị đẩy ra, chỉ giữ 5..9
+        self.assertEqual(bounded_sender.sent_emails[0]["to_email"], "user5@test.com")
+        self.assertEqual(bounded_sender.sent_emails[-1]["to_email"], "user9@test.com")
+
+        # Xóa đệm
+        bounded_sender.clear()
+        self.assertEqual(len(bounded_sender.sent_emails), 0)
+
+
+
 
 if __name__ == "__main__":
     unittest.main()

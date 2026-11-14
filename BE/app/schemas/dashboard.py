@@ -13,7 +13,7 @@ class DashboardKPIs(BaseModel):
     estimated_service_level: float = Field(..., description="Mức độ phục vụ ước tính (%)")
     reorder_alerts_count: int = Field(..., description="Số SKU có tồn kho <= ROP (cần đặt hàng)")
     pending_replenishments_count: int = Field(..., description="Số đề xuất đặt hàng đang chờ duyệt (PENDING)")
-    avg_forecast_accuracy: str = Field(default="94.2%", description="Độ chính xác dự báo trung bình")
+    avg_forecast_accuracy: str = Field(default="N/A", description="Chỉ số sai số / độ chính xác dự báo mô hình sản xuất (ví dụ: WRMSSE 0.4935)")
     total_suppliers: int = Field(..., description="Tổng số nhà cung cấp đang hợp tác")
 
 

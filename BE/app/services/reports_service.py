@@ -54,7 +54,7 @@ class ReportsService:
         db: Session,
         store_id: Optional[str] = None,
         category: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> InventoryPerformanceReportResponse:
         """
@@ -120,27 +120,31 @@ class ReportsService:
         output.write("\ufeff")
         writer = csv.writer(output)
 
+        def write_sanitized_row(row_cells: list):
+            """Ghi một dòng CSV với tất cả ô được bảo vệ chống Formula Injection (CWE-1236, N-26)"""
+            writer.writerow([sanitize_csv_cell(c) for c in row_cells])
+
         if rtype in ("forecast-accuracy", "accuracy"):
             rep = self.get_forecast_accuracy(db, store_id=store_id)
             filename = f"Forecast_Accuracy_Report_{timestamp}.csv"
-            writer.writerow(["Metric", "Overall Value", "Unit / Notes"])
-            writer.writerow(["Model Name", rep.model_name, "Evaluated Algorithm"])
-            writer.writerow(["Evaluated Period", rep.evaluated_period, "Time Horizon"])
-            writer.writerow(["MAE", rep.overall_metrics.mae, "Mean Absolute Error"])
-            writer.writerow(["RMSE", rep.overall_metrics.rmse, "Root Mean Squared Error"])
-            writer.writerow(["MASE", rep.overall_metrics.mase, "Mean Absolute Scaled Error (< 1 is good)"])
-            writer.writerow(["WRMSSE", rep.overall_metrics.wrmsse, "Weighted RMSSE (M5 metric)"])
-            writer.writerow([])
-            writer.writerow(["ABC Segment", "MAE", "RMSE", "MASE", "WRMSSE", "Sample Points"])
+            write_sanitized_row(["Metric", "Overall Value", "Unit / Notes"])
+            write_sanitized_row(["Model Name", rep.model_name, "Evaluated Algorithm"])
+            write_sanitized_row(["Evaluated Period", rep.evaluated_period, "Time Horizon"])
+            write_sanitized_row(["MAE", rep.overall_metrics.mae, "Mean Absolute Error"])
+            write_sanitized_row(["RMSE", rep.overall_metrics.rmse, "Root Mean Squared Error"])
+            write_sanitized_row(["MASE", rep.overall_metrics.mase, "Mean Absolute Scaled Error (< 1 is good)"])
+            write_sanitized_row(["WRMSSE", rep.overall_metrics.wrmsse, "Weighted RMSSE (M5 metric)"])
+            write_sanitized_row([])
+            write_sanitized_row(["ABC Segment", "MAE", "RMSE", "MASE", "WRMSSE", "Sample Points"])
             for grp, m in rep.abc_breakdown.items():
-                writer.writerow([f"Class {grp}", m.mae, m.rmse, m.mase, m.wrmsse, m.sample_count])
+                write_sanitized_row([f"Class {grp}", m.mae, m.rmse, m.mase, m.wrmsse, m.sample_count])
 
         elif rtype in ("inventory", "inventory-performance"):
-            rep = self.get_inventory_performance(db, store_id=store_id, limit=5000)
+            rep = self.get_inventory_performance(db, store_id=store_id, limit=None)
             filename = f"Inventory_Performance_Report_{timestamp}.csv"
-            writer.writerow(["SKU_ID", "PRODUCT_NAME", "CATEGORY", "STORE", "ON_HAND", "DAILY_DEMAND", "DAYS_OF_SUPPLY", "INVENTORY_VALUE", "TURNOVER_RATIO"])
+            write_sanitized_row(["SKU_ID", "PRODUCT_NAME", "CATEGORY", "STORE", "ON_HAND", "DAILY_DEMAND", "DAYS_OF_SUPPLY", "INVENTORY_VALUE", "TURNOVER_RATIO"])
             for it in rep.items:
-                writer.writerow([sanitize_csv_cell(c) for c in [
+                write_sanitized_row([
                     it.item_id,
                     it.product_name,
                     it.category,
@@ -150,33 +154,33 @@ class ReportsService:
                     it.days_of_supply,
                     it.inventory_value,
                     it.turnover_ratio,
-                ]])
+                ])
 
         elif rtype in ("cost", "cost-comparison"):
             rep = self.get_cost_comparison(db, store_id=store_id)
             filename = f"Cost_Comparison_Report_{timestamp}.csv"
-            writer.writerow(["Cost Component", "Static Baseline ($)", "ML-driven Policy ($)", "Savings ($)"])
-            writer.writerow(["Holding Cost", rep.baseline_policy.holding_cost, rep.ml_policy.holding_cost, round(rep.baseline_policy.holding_cost - rep.ml_policy.holding_cost, 2)])
-            writer.writerow(["Ordering Cost", rep.baseline_policy.order_cost, rep.ml_policy.order_cost, round(rep.baseline_policy.order_cost - rep.ml_policy.order_cost, 2)])
-            writer.writerow(["Stockout Penalty", rep.baseline_policy.stockout_penalty_cost, rep.ml_policy.stockout_penalty_cost, round(rep.baseline_policy.stockout_penalty_cost - rep.ml_policy.stockout_penalty_cost, 2)])
-            writer.writerow(["Total Annual Cost", rep.baseline_policy.total_cost, rep.ml_policy.total_cost, rep.cost_savings_amount])
-            writer.writerow([])
-            writer.writerow(["Total Estimated Savings", f"{rep.savings_percentage}%", f"${rep.cost_savings_amount}"])
+            write_sanitized_row(["Cost Component", "Static Baseline ($)", "ML-driven Policy ($)", "Savings ($)"])
+            write_sanitized_row(["Holding Cost", rep.baseline_policy.holding_cost, rep.ml_policy.holding_cost, round(rep.baseline_policy.holding_cost - rep.ml_policy.holding_cost, 2)])
+            write_sanitized_row(["Ordering Cost", rep.baseline_policy.order_cost, rep.ml_policy.order_cost, round(rep.baseline_policy.order_cost - rep.ml_policy.order_cost, 2)])
+            write_sanitized_row(["Stockout Penalty", rep.baseline_policy.stockout_penalty_cost, rep.ml_policy.stockout_penalty_cost, round(rep.baseline_policy.stockout_penalty_cost - rep.ml_policy.stockout_penalty_cost, 2)])
+            write_sanitized_row(["Total Annual Cost", rep.baseline_policy.total_cost, rep.ml_policy.total_cost, rep.cost_savings_amount])
+            write_sanitized_row([])
+            write_sanitized_row(["Total Estimated Savings", f"{rep.savings_percentage}%", f"${rep.cost_savings_amount}"])
 
         elif rtype in ("backtest", "backtesting"):
             rep = self.run_backtesting(db, BacktestRequest(store_id=store_id or "CA_1"))
             filename = f"Historical_Backtest_Report_{timestamp}.csv"
-            writer.writerow(["Metric", "Value", "Benchmark"])
-            writer.writerow(["Model Name", rep.model_name, "Machine Learning Engine"])
-            writer.writerow(["Store", rep.store_id, "Fulfillment Center"])
-            writer.writerow(["Simulated Days", rep.simulated_days, "Days"])
-            writer.writerow(["Baseline Stockouts", rep.baseline_stockouts, "Incidents"])
-            writer.writerow(["ML Stockouts", rep.ml_stockouts, "Incidents"])
-            writer.writerow(["Stockout Reduction", f"{rep.stockout_reduction_pct}%", "Improvement"])
-            writer.writerow(["Baseline Avg Inventory", rep.baseline_avg_inventory, "Units"])
-            writer.writerow(["ML Avg Inventory", rep.ml_avg_inventory, "Units"])
-            writer.writerow(["Holding Cost Savings", f"${rep.holding_cost_savings}", "USD"])
-            writer.writerow(["Achieved Service Level", f"{rep.service_level_achieved}%", "Target 95%"])
+            write_sanitized_row(["Metric", "Value", "Benchmark"])
+            write_sanitized_row(["Model Name", rep.model_name, "Machine Learning Engine"])
+            write_sanitized_row(["Store", rep.store_id, "Fulfillment Center"])
+            write_sanitized_row(["Simulated Days", rep.simulated_days, "Days"])
+            write_sanitized_row(["Baseline Stockouts", rep.baseline_stockouts, "Incidents"])
+            write_sanitized_row(["ML Stockouts", rep.ml_stockouts, "Incidents"])
+            write_sanitized_row(["Stockout Reduction", f"{rep.stockout_reduction_pct}%", "Improvement"])
+            write_sanitized_row(["Baseline Avg Inventory", rep.baseline_avg_inventory, "Units"])
+            write_sanitized_row(["ML Avg Inventory", rep.ml_avg_inventory, "Units"])
+            write_sanitized_row(["Holding Cost Savings", f"${rep.holding_cost_savings}", "USD"])
+            write_sanitized_row(["Achieved Service Level", f"{rep.service_level_achieved}%", "Target 95%"])
 
         else:
             raise HTTPException(

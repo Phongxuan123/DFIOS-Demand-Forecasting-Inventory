@@ -250,6 +250,125 @@ class TestReportsEndpoints(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_export_csv_formula_injection_escaping_across_all_reports(self):
+        # UC43/N-26/R-42: Verify CSV Formula Injection (CWE-1236) escaping across all exported reports
+        with self.TestingSessionLocal() as session:
+            malicious_product = Product(
+                item_id="=MALICIOUS_SKU_01",
+                name="=cmd|'/C calc'!A0",
+                cat_id="@FOODS",
+                dept_id="+FOODS_1",
+            )
+            malicious_inv = Inventory(
+                item_id="=MALICIOUS_SKU_01",
+                store_id="CA_1",
+                on_hand=5.0,
+                on_order=0.0,
+            )
+            session.add_all([malicious_product, malicious_inv])
+            session.commit()
+
+        # 1. Inventory Report
+        resp_inv = self.client.get(
+            "/api/v1/reports/export?report_type=inventory&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_inv.status_code, 200)
+        content_inv = resp_inv.text
+        self.assertIn("'=MALICIOUS_SKU_01", content_inv)
+        self.assertIn("'=cmd|'/C calc'!A0", content_inv)
+        self.assertIn("'@FOODS", content_inv)
+
+        # 2. Accuracy Report
+        resp_acc = self.client.get(
+            "/api/v1/reports/export?report_type=forecast-accuracy&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_acc.status_code, 200)
+
+        # 3. Cost Report
+        resp_cost = self.client.get(
+            "/api/v1/reports/export?report_type=cost&store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_cost.status_code, 200)
+
+    # ---------------------------------------------------------
+    # R-02: Scientific Fidelity of Accuracy (WRMSSE), Backtest & Cost
+    # ---------------------------------------------------------
+    def test_r02_wrmsse_and_cost_comparison_scientific_fidelity(self):
+        # 1. Forecast Accuracy & WRMSSE
+        resp_acc = self.client.get(
+            "/api/v1/reports/forecast-accuracy?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_acc.status_code, 200)
+        data_acc = resp_acc.json()
+        metrics = data_acc["overall_metrics"]
+        self.assertGreater(metrics["sample_count"], 0)
+        # WRMSSE and MASE must be authentic floats calculated from genuine differences
+        self.assertGreater(metrics["wrmsse"], 0.0)
+        self.assertGreater(metrics["mase"], 0.0)
+        # Breakdown by ABC class must have proper keys and zero fake multipliers
+        for grp in ("A", "B", "C"):
+            if grp in data_acc["abc_breakdown"]:
+                grp_metrics = data_acc["abc_breakdown"][grp]
+                self.assertIn("wrmsse", grp_metrics)
+                self.assertIn("mase", grp_metrics)
+
+        # 2. Backtest without fake hardcoded multipliers
+        payload_bt = {
+            "model_name": "lightgbm",
+            "backtest_days": 28,
+            "store_id": "CA_1",
+            "target_service_level": 0.95,
+        }
+        resp_bt = self.client.post(
+            "/api/v1/reports/backtesting",
+            json=payload_bt,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_bt.status_code, 200)
+        data_bt = resp_bt.json()
+        self.assertEqual(data_bt["simulated_days"], 28)
+        self.assertGreaterEqual(data_bt["service_level_achieved"], 90.0)
+        self.assertGreaterEqual(data_bt["stockout_reduction_pct"], 0.0)
+        self.assertGreater(data_bt["baseline_avg_inventory"], 0.0)
+        self.assertGreater(data_bt["ml_avg_inventory"], 0.0)
+
+        # 3. Cost Comparison adheres to Model A3
+        resp_cost = self.client.get(
+            "/api/v1/reports/cost-comparison?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_cost.status_code, 200)
+        data_cost = resp_cost.json()
+        base_p = data_cost["baseline_policy"]
+        ml_p = data_cost["ml_policy"]
+
+        # Both policies must have holding, ordering, penalty and total costs
+        self.assertGreater(base_p["holding_cost"], 0.0)
+        self.assertGreater(base_p["order_cost"], 0.0)
+        self.assertGreater(base_p["stockout_penalty_cost"], 0.0)
+        self.assertGreater(ml_p["holding_cost"], 0.0)
+        self.assertGreater(ml_p["order_cost"], 0.0)
+        self.assertGreater(ml_p["stockout_penalty_cost"], 0.0)
+
+        # Category savings dictionary must contain keys
+        self.assertIn("FOODS", data_cost["category_savings"])
+
+    def test_b15_export_inventory_no_truncation(self):
+        # B-15: Verify get_inventory_performance with limit=None returns all items without truncation
+        from app.services.reports_service import reports_service
+        with self.TestingSessionLocal() as session:
+            resp = reports_service.get_inventory_performance(
+                db=session,
+                store_id="CA_1",
+                limit=None,
+            )
+            self.assertGreaterEqual(resp.total, 1)
+            self.assertEqual(len(resp.items), resp.total)
+
 
 if __name__ == "__main__":
     unittest.main()

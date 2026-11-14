@@ -1,6 +1,29 @@
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def validate_cron_expression(expr: str) -> bool:
+    """
+    Kiểm tra tính hợp lệ của biểu thức cron 5 trường tiêu chuẩn (phút giờ ngày tháng thứ).
+    """
+    if not isinstance(expr, str):
+        return False
+    parts = expr.strip().split()
+    if len(parts) != 5:
+        return False
+    field_patterns = [
+        r"^(\*|[0-5]?[0-9])([,\-][0-5]?[0-9])*(\/[0-9]+)?$",  # minute (0-59)
+        r"^(\*|1?[0-9]|2[0-3])([,\-](1?[0-9]|2[0-3]))*(\/[0-9]+)?$",  # hour (0-23)
+        r"^(\*|[1-9]|[12][0-9]|3[01])([,\-]([1-9]|[12][0-9]|3[01]))*(\/[0-9]+)?$",  # day of month (1-31)
+        r"^(\*|[1-9]|1[0-2])([,\-]([1-9]|1[0-2]))*(\/[0-9]+)?$",  # month (1-12)
+        r"^(\*|[0-7])([,\-][0-7])*(\/[0-9]+)?$",  # day of week (0-7)
+    ]
+    for part, pattern in zip(parts, field_patterns):
+        if not re.match(pattern, part):
+            return False
+    return True
 
 
 class BatchScheduleCreateRequest(BaseModel):
@@ -13,6 +36,13 @@ class BatchScheduleCreateRequest(BaseModel):
     horizon: int = Field(default=28, ge=7, le=28, description="Số ngày dự báo")
     store_id: Optional[str] = Field(default="CA_1", description="Mã cửa hàng áp dụng")
     auto_trigger_optimization: bool = Field(default=True, description="Tự động tính lại SS/ROP/EOQ và ABC-XYZ sau khi chạy (UC50)")
+
+    @field_validator("cron_expression")
+    @classmethod
+    def check_cron(cls, v: str) -> str:
+        if not validate_cron_expression(v):
+            raise ValueError("Biểu thức cron không hợp lệ. Phải tuân theo chuẩn 5 trường (phút giờ ngày tháng thứ), ví dụ: '0 2 * * *'")
+        return v.strip()
 
 
 class BatchScheduleResponse(BaseModel):

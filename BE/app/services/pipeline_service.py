@@ -33,8 +33,10 @@ class PipelineService:
     Service quản lý lập lịch chạy ngầm (UC49) và tự động hóa cập nhật tồn kho/phân loại sau dự báo (UC50).
     """
 
+    SETTINGS_KEY = "batch_pipeline_schedules"
+
     def __init__(self):
-        # Lưu trữ cấu hình lập lịch cron in-memory (kèm 1 cấu hình mặc định chuẩn)
+        # Cấu hình lập lịch cron mặc định chuẩn
         self._schedules: Dict[str, Dict] = {
             "sched-default-01": {
                 "id": "sched-default-01",
@@ -51,13 +53,49 @@ class PipelineService:
             }
         }
 
+    def _get_schedules_dict(self, db: Optional[Session] = None) -> Dict[str, Dict]:
+        """
+        R-19: Đọc danh sách cấu hình lập lịch cron từ cơ sở dữ liệu (system_settings)
+        để đảm bảo tính bền vững (persistence) khi khởi động lại ứng dụng.
+        """
+        if db:
+            from app.repositories.system_setting_repository import system_setting_repository
+            setting = system_setting_repository.get_by_key(db, self.SETTINGS_KEY)
+            if setting and isinstance(setting.value, dict) and setting.value:
+                self._schedules = dict(setting.value)
+                return self._schedules
+            else:
+                system_setting_repository.upsert_setting(
+                    db,
+                    key=self.SETTINGS_KEY,
+                    value=self._schedules,
+                    description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+                )
+        return self._schedules
+
+    def _save_schedules_dict(self, schedules: Dict[str, Dict], db: Optional[Session] = None) -> None:
+        """
+        R-19: Lưu cấu hình lập lịch cron vào DB (system_settings).
+        """
+        self._schedules = schedules
+        if db:
+            from app.repositories.system_setting_repository import system_setting_repository
+            system_setting_repository.upsert_setting(
+                db,
+                key=self.SETTINGS_KEY,
+                value=schedules,
+                description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+            )
+
     def create_schedule(
         self,
         request: BatchScheduleCreateRequest,
+        db: Optional[Session] = None,
     ) -> BatchScheduleResponse:
         """
-        UC49: Thiết lập một lịch chạy dự báo tự động định kỳ mới.
+        UC49: Thiết lập một lịch chạy dự báo tự động định kỳ mới (lưu bền vững vào DB).
         """
+        schedules = self._get_schedules_dict(db)
         schedule_id = f"sched-{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc)
         next_run = (now + timedelta(days=1)).replace(hour=2, minute=0, second=0, microsecond=0)
@@ -75,26 +113,30 @@ class PipelineService:
             "next_run_at": next_run.isoformat(),
             "created_at": now.isoformat(),
         }
-        self._schedules[schedule_id] = sched_dict
+        schedules[schedule_id] = sched_dict
+        self._save_schedules_dict(schedules, db=db)
         return BatchScheduleResponse(**sched_dict)
 
-    def list_schedules(self) -> BatchScheduleListResponse:
+    def list_schedules(self, db: Optional[Session] = None) -> BatchScheduleListResponse:
         """
         UC49: Lấy danh sách các lịch chạy batch forecast định kỳ.
         """
-        items = [BatchScheduleResponse(**s) for s in self._schedules.values()]
+        schedules = self._get_schedules_dict(db)
+        items = [BatchScheduleResponse(**s) for s in schedules.values()]
         return BatchScheduleListResponse(total=len(items), items=items)
 
-    def delete_schedule(self, schedule_id: str) -> None:
+    def delete_schedule(self, schedule_id: str, db: Optional[Session] = None) -> None:
         """
         UC49: Xóa hoặc vô hiệu hóa lịch chạy.
         """
-        if schedule_id not in self._schedules:
+        schedules = self._get_schedules_dict(db)
+        if schedule_id not in schedules:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy lịch chạy với id '{schedule_id}'",
             )
-        del self._schedules[schedule_id]
+        del schedules[schedule_id]
+        self._save_schedules_dict(schedules, db=db)
 
     def trigger_pipeline_run(
         self,
@@ -105,7 +147,7 @@ class PipelineService:
         """
         UC50: Tự động tính toán lại SS/ROP/EOQ và ma trận ABC-XYZ sau khi chạy dự báo (Full Loop Trigger).
         Quy trình khép kín:
-        1. Ghi nhận số lượng dự báo hoàn tất (28 ngày)
+        1. Thực hiện suy luận dự báo thực tế hoặc đếm số lượng dự báo hoàn tất (28 ngày)
         2. Tự động tính lại Safety Stock, ROP, EOQ cho toàn bộ SKU
         3. Tự động tính lại ma trận phân khúc ABC/XYZ
         4. Tự động quét và sinh đề xuất nhập hàng (Replenishment Recommendations)
@@ -114,10 +156,51 @@ class PipelineService:
         started_at = datetime.now(timezone.utc).isoformat()
         run_id = f"pipe-{uuid.uuid4().hex[:8]}"
 
-        # 1. Dự báo: đếm số lượng dự báo thực tế trong cơ sở dữ liệu
-        fc_count = db.query(Forecast).filter(Forecast.store_id == request.store_id).count()
-        sku_count = db.query(Product).count() or 3
-        forecasts_generated = fc_count if fc_count > 0 else (sku_count * request.horizon)
+        # 1. Dự báo: Kiểm tra hoặc thực hiện suy luận mô hình ML thực tế cho kho hàng
+        existing_fc_query = db.query(Forecast).filter(Forecast.store_id == request.store_id)
+        if request.model_name:
+            existing_fc_query = existing_fc_query.filter(Forecast.model_version.ilike(f"%{request.model_name}%"))
+        fc_count = existing_fc_query.count()
+
+        if fc_count == 0:
+            # Nếu chưa có dự báo cho store/model, chạy suy luận thực tế từ sales_history
+            from app.models.sales_history import SalesHistory
+            import pandas as pd
+            sales_rows = (
+                db.query(SalesHistory.store_id, SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity)
+                .filter(SalesHistory.store_id == request.store_id)
+                .all()
+            )
+            if sales_rows:
+                df_sales = pd.DataFrame(sales_rows, columns=["store_id", "item_id", "sale_date", "sales"])
+                df_sales["sale_date"] = pd.to_datetime(df_sales["sale_date"])
+                from app.services.fast_inference_service import fast_inference_service
+                fc_df = fast_inference_service.generate_fast_forecast(
+                    df_sales, horizon=request.horizon, model_version=request.model_name or "production-lightgbm"
+                )
+                fc_records = [
+                    Forecast(
+                        item_id=r["item_id"],
+                        store_id=r["store_id"],
+                        forecast_date=r["forecast_date"],
+                        h=r["h"],
+                        y_pred=r["y_pred"],
+                        p10=r["p10"],
+                        p50=r["p50"],
+                        p90=r["p90"],
+                        available=r["available"],
+                        model_version=r["model_version"],
+                    )
+                    for _, r in fc_df.iterrows()
+                ]
+                db.bulk_save_objects(fc_records)
+                db.commit()
+                forecasts_generated = len(fc_records)
+            else:
+                sku_count = db.query(Product).count() or 1
+                forecasts_generated = sku_count * request.horizon
+        else:
+            forecasts_generated = fc_count
 
         # 2. Tự động tính lại SS, ROP, EOQ (UC30, UC50)
         existing_params_count = db.query(InventoryParam).filter(InventoryParam.store_id == request.store_id).count()
@@ -134,14 +217,17 @@ class PipelineService:
         if existing_class_count == 0:
             classifications_updated = classification_service.recompute_classification(
                 db,
+                store_id=request.store_id,
             )
         else:
             classifications_updated = existing_class_count
 
         # 4. Tự động sinh đề xuất đặt hàng mới (UC33)
+        sim_clock = self.get_sim_clock(db, store_id=request.store_id)
         replenishments_generated = replenishment_service.generate_recommendations(
             db,
             store_id=request.store_id,
+            review_date=sim_clock.current_date if sim_clock else None,
         )
 
         duration = round(time.time() - start_time, 2)
@@ -163,10 +249,10 @@ class PipelineService:
 
     # --- Task PIPE.1 & Task API.1: Sim Clock Control & Batch Orchestration (J1 - J6) ---
 
-    def get_sim_clock(self, db: Session, store_id: str = "CA_1") -> SimClock:
+    def get_sim_clock(self, db: Session, store_id: str = "CA_1", auto_create: bool = False) -> Optional[SimClock]:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-        if not clock:
-            base_date = date(2015, 5, 24)
+        if not clock and auto_create:
+            base_date = date(2016, 4, 25)
             clock = SimClock(
                 store_id=store_id,
                 current_date=base_date,
@@ -199,7 +285,9 @@ class PipelineService:
         - Job J4 (Review Kỳ): Chạy C³-OUT -> recompute params -> sinh đề xuất replenishment.
         - Job J5 (Quarterly Refit): Tái chọn (m_g, kappa_g) đầu Quý.
         """
-        clock = self.get_sim_clock(db, store_id=store_id)
+        clock = self.get_sim_clock(db, store_id=store_id, auto_create=False)
+        if not clock:
+            raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         prev_date = clock.current_date
         t0 = clock.start_date
 
@@ -219,6 +307,12 @@ class PipelineService:
             )
 
         total_days = (target_date - prev_date).days
+        if total_days > 90:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Khoảng thời gian tua ({total_days} ngày) vượt quá giới hạn tối đa cho phép (90 ngày).",
+            )
+
         job_events: List[str] = []
         reviews_executed = 0
         stockouts_recorded = 0
@@ -242,11 +336,17 @@ class PipelineService:
                 .filter(
                     ReplenishmentRecommendation.store_id == store_id,
                     ReplenishmentRecommendation.review_date == order_arrival_date,
-                    ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED"]),
+                    ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED", "PENDING"]),
                 )
                 .all()
             )
-            arrived_map = {o.item_id: float(o.final_qty) for o in arrived_orders}
+            arrived_map: Dict[str, float] = {}
+            for o in arrived_orders:
+                qty = float(o.final_qty or o.recommended_qty or 0.0)
+                arrived_map[o.item_id] = arrived_map.get(o.item_id, 0.0) + qty
+                if o.status in ["PENDING", "APPROVED"]:
+                    o.status = "COMPLETED"
+                    o.decided_at = datetime.combine(t, datetime.min.time(), tzinfo=timezone.utc)
 
             sales_today = (
                 db.query(SalesHistory)
@@ -262,12 +362,23 @@ class PipelineService:
             )
             inv_map = {inv.item_id: inv for inv in inv_records}
 
+            # Bulk query để tránh N+1 network queries sang database (N-08 / N-11)
+            existing_dailies = (
+                db.query(InventoryDaily)
+                .filter(
+                    InventoryDaily.store_id == store_id,
+                    InventoryDaily.date == t,
+                )
+                .all()
+            )
+            daily_map = {d.item_id: d for d in existing_dailies}
+
             day_stockouts = 0
 
             for item_id in item_ids:
                 inv = inv_map.get(item_id)
                 if not inv:
-                    inv = Inventory(item_id=item_id, store_id=store_id, on_hand=50.0, on_order=0.0)
+                    inv = Inventory(item_id=item_id, store_id=store_id, on_hand=0.0, on_order=0.0)
                     db.add(inv)
                     inv_map[item_id] = inv
 
@@ -292,21 +403,14 @@ class PipelineService:
 
                 inv.updated_at = now
 
-                inv_daily = (
-                    db.query(InventoryDaily)
-                    .filter(
-                        InventoryDaily.store_id == store_id,
-                        InventoryDaily.item_id == item_id,
-                        InventoryDaily.date == t,
-                    )
-                    .first()
-                )
+                inv_daily = daily_map.get(item_id)
                 if inv_daily:
                     inv_daily.on_hand_end = inv.on_hand
                     inv_daily.on_order = inv.on_order
                     inv_daily.sales = actual_sales
                     inv_daily.lost_sales = lost_sales
                     inv_daily.stockout = stockout
+                    inv_daily.updated_at = now
                 else:
                     inv_daily = InventoryDaily(
                         store_id=store_id,
@@ -320,13 +424,14 @@ class PipelineService:
                         created_at=now,
                     )
                     db.add(inv_daily)
+                    daily_map[item_id] = inv_daily
 
             stockouts_recorded += day_stockouts
 
             # --- Job J6: Đóng chu kỳ phục vụ nếu chạm mốc chu kỳ (delta_days % R == 0 và delta_days > 0) ---
             if delta_days > 0 and delta_days % review_period_days == 0:
                 cycle_idx = (delta_days // review_period_days) - 1
-                cycle_start = t - timedelta(days=review_period_days)
+                cycle_start = t - timedelta(days=review_period_days - 1)
                 calibrator_service.record_cycle_outcome(
                     db=db,
                     store_id=store_id,
@@ -342,7 +447,9 @@ class PipelineService:
                 reviews_executed += 1
 
                 # Job J3: Window Quantile Route (c)
-                for item_id in item_ids[:10]:
+                # Tính toán và lưu trữ phân phối cửa sổ cho các SKU có doanh số
+                active_skus = [iid for iid in item_ids if iid in sales_map or iid in arrived_map]
+                for item_id in active_skus:
                     window_quantile_service.get_or_create_window_quantile(
                         db=db,
                         store_id=store_id,
@@ -362,7 +469,12 @@ class PipelineService:
                 )
 
                 optimization_service.recompute_parameters(db, store_id=store_id)
-                recs_count = replenishment_service.generate_recommendations(db, store_id=store_id)
+                recs_count = replenishment_service.generate_recommendations(
+                    db,
+                    store_id=store_id,
+                    review_date=t,
+                    auto_order=True,
+                )
                 recommendations_generated += recs_count
 
                 job_events.append(
@@ -399,7 +511,9 @@ class PipelineService:
         store_id: str = "CA_1",
         target_date: Optional[date] = None,
     ) -> SimClock:
-        clock = self.get_sim_clock(db, store_id=store_id)
+        clock = self.get_sim_clock(db, store_id=store_id, auto_create=False)
+        if not clock:
+            raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         clock.current_date = target_date or clock.start_date
         clock.updated_at = datetime.now(timezone.utc)
         db.commit()
@@ -412,7 +526,9 @@ class PipelineService:
         store_id: str = "CA_1",
         speed: float = 1.0,
     ) -> SimClock:
-        clock = self.get_sim_clock(db, store_id=store_id)
+        clock = self.get_sim_clock(db, store_id=store_id, auto_create=False)
+        if not clock:
+            raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         clock.speed = speed
         clock.updated_at = datetime.now(timezone.utc)
         db.commit()

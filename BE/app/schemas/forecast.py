@@ -81,6 +81,7 @@ class CompareMetrics(BaseModel):
 class ForecastCompareResponse(BaseModel):
     item_id: str
     store_id: Optional[str] = None
+    model_version: Optional[str] = None
     metrics: CompareMetrics
     comparison: List[ComparePoint]
 
@@ -176,6 +177,7 @@ class BulkOverrideItem(BaseModel):
     store_id: str = Field("CA_1", description="Mã cửa hàng / kho")
     item_id: str = Field(..., description="Mã SKU")
     date: dt.date = Field(..., description="Ngày dự báo cần điều chỉnh")
+    h: Optional[int] = Field(None, ge=1, le=28, description="Bước dự báo h (1..28)")
     value: float = Field(..., ge=0, le=100000.0, description="Giá trị điều chỉnh (0 <= v <= 100000)")
     reason: str = Field(..., min_length=1, max_length=500, description="Lý do điều chỉnh")
 

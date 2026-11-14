@@ -216,6 +216,66 @@ class TestMLTrainingEndpoints(unittest.TestCase):
         self.assertIn("total", data)
         self.assertGreaterEqual(data["total"], 1)
 
+    def test_r03_ml_training_gbdt_and_no_unwanted_registry_pollution(self):
+        """R-03: Kiểm tra GBDT thật, gom chuỗi không trộn lẫn SKU, và không tự ghi candidate vào ModelRegistry nếu không yêu cầu."""
+        from app.models.model_registry import ModelRegistry
+        from app.services.ml_training_service import TinyGBDTRegressor, TinyDecisionTreeRegressor
+        import numpy as np
+
+        # 1. Kiểm tra thuật toán TinyGBDTRegressor và TinyDecisionTreeRegressor
+        X = np.random.randn(50, 6)
+        y = np.maximum(0.0, 10.0 + 3.0 * X[:, 0] - 2.0 * X[:, 1] + np.random.randn(50))
+        gbdt = TinyGBDTRegressor(n_estimators=10, max_depth=3)
+        gbdt.fit(X, y)
+        preds = gbdt.predict(X)
+        self.assertEqual(len(preds), 50)
+        self.assertTrue(np.all(preds >= 0.0))
+
+        # 2. Chạy train với tham số tương thích FE (algorithm, sku_list, test_days) và register_candidate=False
+        with self.TestingSessionLocal() as session:
+            count_before = session.query(ModelRegistry).count()
+
+        res = self.client.post(
+            "/api/v1/ml/train",
+            json={
+                "algorithm": "lightgbm",
+                "sku_list": ["FOODS_1_001"],
+                "test_days": 7,
+                "register_candidate": False,
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 202)
+        job_id = res.json()["job_id"]
+
+        poll_res = self.client.get(
+            f"/api/v1/ml/train/{job_id}",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(poll_res.status_code, 200)
+        self.assertEqual(poll_res.json()["status"], "done")
+
+        # Kiểm tra ModelRegistry không bị ghi đè/ô nhiễm tự động
+        with self.TestingSessionLocal() as session:
+            count_after = session.query(ModelRegistry).count()
+        self.assertEqual(count_before, count_after, "Mặc định không được tự động ghi candidate vào ModelRegistry!")
+
+        # 3. Chạy train với register_candidate=True -> được ghi nhận
+        res_cand = self.client.post(
+            "/api/v1/ml/train",
+            json={
+                "models": ["xgboost"],
+                "horizon": 7,
+                "item_ids": ["FOODS_1_001"],
+                "register_candidate": True,
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_cand.status_code, 202)
+        with self.TestingSessionLocal() as session:
+            count_with_cand = session.query(ModelRegistry).count()
+        self.assertEqual(count_with_cand, count_before + 1, "Khi bật register_candidate=True thì phải ghi nhận candidate!")
+
 
 if __name__ == "__main__":
     unittest.main()

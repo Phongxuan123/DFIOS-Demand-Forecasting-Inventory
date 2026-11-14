@@ -9,8 +9,20 @@ from app.schemas.system_setting import (
     SettingsListResponse,
     SettingUpdateRequest,
 )
+from app.schemas.pipeline import validate_cron_expression
 from app.repositories.system_setting_repository import system_setting_repository
 from app.services.audit_service import audit_service
+
+ALLOWED_SETTING_KEYS = {
+    "timezone",
+    "currency",
+    "forecast_horizons",
+    "default_alert_thresholds",
+    "auto_approval_threshold",
+    "retrain_schedule_cron",
+    "cron_schedule",
+    "policy_benchmark_results",
+}
 
 
 class SystemSettingService:
@@ -20,8 +32,15 @@ class SystemSettingService:
 
     def validate_setting(self, key: str, value: Any) -> None:
         """
-        Xác thực kiểu dữ liệu và khoảng giá trị hợp lệ cho từng tham số hệ thống.
+        Xác thực kiểu dữ liệu và khoảng giá trị hợp lệ cho từng tham số hệ thống (B-26).
         """
+        # B-26: Chặn nhận key bất kỳ không thuộc whitelist tham số hệ thống
+        if key not in ALLOWED_SETTING_KEYS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Tham số cấu hình '{key}' không được hỗ trợ trong hệ thống. Chỉ cho phép các key: {sorted(list(ALLOWED_SETTING_KEYS))}.",
+            )
+
         if key == "timezone":
             if not isinstance(value, str) or not value.strip():
                 raise HTTPException(
@@ -49,11 +68,20 @@ class SystemSettingService:
                     detail="forecast_horizons phải là danh sách chứa ít nhất một khoảng ngày dự báo.",
                 )
             for h in value:
-                if not isinstance(h, int) or isinstance(h, bool) or h <= 0:
+                # B-26: Giới hạn tối đa 28 ngày tương ứng bài toán M5 Walmart
+                if not isinstance(h, int) or isinstance(h, bool) or h <= 0 or h > 28:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Mỗi khoảng dự báo trong forecast_horizons phải là số nguyên dương (nhận được '{h}').",
+                        detail=f"Mỗi khoảng dự báo trong forecast_horizons phải là số nguyên từ 1 đến 28 ngày (nhận được '{h}').",
                     )
+
+        elif key in ("retrain_schedule_cron", "cron_schedule"):
+            # B-26: Xác thực tính hợp lệ của biểu thức cron
+            if not isinstance(value, str) or not validate_cron_expression(value):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Biểu thức cron '{value}' không hợp lệ. Phải tuân theo chuẩn 5 trường (phút giờ ngày tháng thứ), ví dụ: '0 2 * * *'.",
+                )
 
         elif key == "default_alert_thresholds":
             if not isinstance(value, dict) or len(value) == 0:

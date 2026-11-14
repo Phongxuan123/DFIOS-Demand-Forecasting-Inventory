@@ -151,9 +151,17 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     # ==========================================
 
     def test_list_recommendations_and_auto_generate(self):
-        # Manager truy cập danh sách -> hệ thống tự động quét và sinh đề xuất
-        res = self.client.get(
+        # R-17: GET thuần túy không có tác dụng phụ (auto_generate=False mặc định)
+        res_pure = self.client.get(
             "/api/v1/replenishments",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_pure.status_code, 200)
+        self.assertEqual(res_pure.json()["total"], 0)
+
+        # Manager truy cập danh sách với auto_generate=True -> hệ thống tự động quét và sinh đề xuất
+        res = self.client.get(
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.manager_token}"},
         )
         self.assertEqual(res.status_code, 200)
@@ -203,7 +211,7 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     def test_adjust_quantity_success_and_validation(self):
         # Lấy danh sách để có ID đơn PENDING
         list_res = self.client.get(
-            "/api/v1/replenishments",
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.manager_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]
@@ -248,7 +256,7 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     def test_approve_recommendation_and_update_on_order(self):
         # 1. Lấy đơn PENDING
         list_res = self.client.get(
-            "/api/v1/replenishments",
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]
@@ -314,7 +322,7 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     def test_cancel_approved_recommendation_reverts_on_order(self):
         # Duyệt một đơn trước
         list_res = self.client.get(
-            "/api/v1/replenishments",
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]
@@ -404,3 +412,147 @@ class TestReplenishmentEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.viewer_token}"},
         )
         self.assertEqual(res_viewer.status_code, 403)
+
+    def test_auto_recompute_parameters_when_missing_no_fake_constants(self):
+        # UC33/N-21: When InventoryParam is missing, automatically recompute parameters instead of fake ROP 50 / SS 20 / EOQ 60
+        from app.services.replenishment_service import replenishment_service
+        with self.TestingSessionLocal() as session:
+            p3 = Product(item_id="HOUSEHOLD_1_001", name="Kitchen Towel", dept_id="HOUSEHOLD_1", cat_id="HOUSEHOLD", price=25.0)
+            inv3 = Inventory(item_id="HOUSEHOLD_1_001", store_id="CA_1", on_hand=0.0, on_order=0.0, updated_at=datetime.now(timezone.utc))
+            session.add_all([p3, inv3])
+            session.commit()
+
+            # Ensure NO InventoryParam exists for HOUSEHOLD_1_001 initially
+            param_before = session.query(InventoryParam).filter(
+                InventoryParam.store_id == "CA_1", InventoryParam.item_id == "HOUSEHOLD_1_001"
+            ).first()
+            self.assertIsNone(param_before)
+
+            # Generate recommendations
+            count = replenishment_service.generate_recommendations(session, store_id="CA_1")
+            self.assertGreaterEqual(count, 1)
+
+            # Assert InventoryParam was automatically computed and persisted
+            param_after = session.query(InventoryParam).filter(
+                InventoryParam.store_id == "CA_1", InventoryParam.item_id == "HOUSEHOLD_1_001"
+            ).first()
+            self.assertIsNotNone(param_after)
+            # Verify parameters are scientifically calculated and NOT the old fake constants (50/20/60)
+            self.assertNotEqual((param_after.reorder_point, param_after.safety_stock, param_after.eoq), (50.0, 20.0, 60.0))
+            self.assertGreater(param_after.reorder_point, 0.0)
+            self.assertGreater(param_after.eoq, 0.0)
+
+            # Verify recommendation was created for this SKU
+            rec = session.query(ReplenishmentRecommendation).filter(
+                ReplenishmentRecommendation.store_id == "CA_1",
+                ReplenishmentRecommendation.item_id == "HOUSEHOLD_1_001",
+            ).first()
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.priority, "CRITICAL")
+            self.assertGreater(rec.recommended_qty, 0.0)
+            self.assertNotEqual(rec.recommended_qty, 60.0)
+
+    def test_proposed_status_compatibility_for_adjust_approve_reject(self):
+        # UC33-UC36/R-16: Harmonize PROPOSED and PENDING statuses, ensuring backward compatibility
+        with self.TestingSessionLocal() as session:
+            rec_proposed = ReplenishmentRecommendation(
+                id="rec-proposed-01",
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                recommended_qty=50.0,
+                final_qty=50.0,
+                priority="HIGH",
+                status="PROPOSED",
+                reason="Legacy loader proposed order",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(rec_proposed)
+            session.commit()
+
+        # 1. Query with status=PENDING should return the PROPOSED recommendation too
+        res_list = self.client.get(
+            "/api/v1/replenishments?status=PENDING",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_list.status_code, 200)
+        items = res_list.json()["items"]
+        rec_ids = [it["id"] for it in items]
+        self.assertIn("rec-proposed-01", rec_ids)
+
+        # 2. Adjust PROPOSED recommendation
+        res_adj = self.client.put(
+            "/api/v1/replenishments/rec-proposed-01/adjust",
+            json={"final_qty": 75.0, "reason": "Adjusting legacy proposed order"},
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_adj.status_code, 200)
+        self.assertEqual(res_adj.json()["final_qty"], 75.0)
+
+        # 3. Approve PROPOSED recommendation (transitions to APPROVED)
+        res_app = self.client.post(
+            "/api/v1/replenishments/rec-proposed-01/approve",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_app.status_code, 200)
+        self.assertEqual(res_app.json()["status"], "APPROVED")
+
+        # Verify on_order was updated
+        with self.TestingSessionLocal() as session:
+            inv = session.query(Inventory).filter(Inventory.item_id == "FOODS_1_001", Inventory.store_id == "CA_1").first()
+            self.assertEqual(inv.on_order, 75.0)
+
+        # 4. Reject another PROPOSED recommendation
+        with self.TestingSessionLocal() as session:
+            rec_proposed_2 = ReplenishmentRecommendation(
+                id="rec-proposed-02",
+                item_id="HOBBIES_1_001",
+                store_id="CA_1",
+                recommended_qty=20.0,
+                final_qty=20.0,
+                priority="LOW",
+                status="PROPOSED",
+                reason="Second legacy proposed order",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(rec_proposed_2)
+            session.commit()
+
+        res_rej = self.client.post(
+            "/api/v1/replenishments/rec-proposed-02/reject",
+            json={"reason": "Rejecting legacy proposed order"},
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_rej.status_code, 200)
+        self.assertEqual(res_rej.json()["status"], "REJECTED")
+
+    def test_r34_replenishment_atomic_approval_and_locking(self):
+        # R-34: Ensure approve_recommendation uses row locking and single atomic commit
+        with self.TestingSessionLocal() as session:
+            rec = ReplenishmentRecommendation(
+                id="rec-r34-lock",
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                recommended_qty=30.0,
+                final_qty=30.0,
+                priority="MEDIUM",
+                status="PENDING",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(rec)
+            session.commit()
+
+        # Approve recommendation
+        res_app = self.client.post(
+            "/api/v1/replenishments/rec-r34-lock/approve",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_app.status_code, 200)
+        self.assertEqual(res_app.json()["status"], "APPROVED")
+
+        # Second approval must be rejected with 400
+        res_app_again = self.client.post(
+            "/api/v1/replenishments/rec-r34-lock/approve",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_app_again.status_code, 400)
+        self.assertIn("đã được phê duyệt trước đó", res_app_again.json()["detail"])

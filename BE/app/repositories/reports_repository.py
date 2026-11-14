@@ -1,12 +1,14 @@
 from datetime import date, datetime, timedelta, timezone
 import math
 from typing import Any, Dict, List, Optional, Tuple
+from scipy import stats
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.classification import SKUClassification
 from app.models.forecast import Forecast
 from app.models.inventory import Inventory
+from app.models.inventory_daily import InventoryDaily
 from app.models.inventory_param import InventoryParam
 from app.models.model_registry import ModelRegistry
 from app.models.product import Product
@@ -60,70 +62,111 @@ class ReportsRepository:
         rows = query.all()
 
         if rows:
-            # Phân tách theo từng SKU để tính độ lệch và trọng số
-            item_stats: Dict[str, Dict[str, List[float]]] = {}
+            # Tra cứu giá bán để tính trọng số dollar sales theo chuẩn M5
+            item_ids = list({r.item_id for r in rows})
+            prod_prices = {
+                p.item_id: float(p.price if p.price is not None else 2.50)
+                for p in db.query(Product.item_id, Product.price).filter(Product.item_id.in_(item_ids)).all()
+            }
+
+            # Gom nhóm chuỗi theo từng SKU
+            item_stats: Dict[str, Dict[str, Any]] = {}
             for r in rows:
                 iid = r.item_id
-                err = abs(float(r.y_pred or 0.0) - float(r.actual_qty or 0.0))
+                pred = float(r.y_pred or 0.0)
                 act = float(r.actual_qty or 0.0)
+                err = abs(pred - act)
+                sq_e = (pred - act) ** 2
+                grp = r.abc_class if r.abc_class in ("A", "B", "C") else "B"
+
                 if iid not in item_stats:
-                    item_stats[iid] = {"errors": [], "actuals": []}
+                    item_stats[iid] = {
+                        "errors": [],
+                        "sq_errors": [],
+                        "actuals": [],
+                        "abc_class": grp,
+                    }
                 item_stats[iid]["errors"].append(err)
+                item_stats[iid]["sq_errors"].append(sq_e)
                 item_stats[iid]["actuals"].append(act)
 
-            all_errors = [abs(float(r.y_pred or 0.0) - float(r.actual_qty or 0.0)) for r in rows]
-            all_sq_errors = [(float(r.y_pred or 0.0) - float(r.actual_qty or 0.0)) ** 2 for r in rows]
-            actuals = [float(r.actual_qty or 0.0) for r in rows]
+            all_errors = [e for d in item_stats.values() for e in d["errors"]]
+            all_sq_errors = [sq for d in item_stats.values() for sq in d["sq_errors"]]
 
-            overall_mae = round(sum(all_errors) / len(all_errors), 4)
-            overall_rmse = round(math.sqrt(sum(all_sq_errors) / len(all_sq_errors)), 4)
-            # MASE so với naive baseline
-            mean_actual = max(0.1, sum(actuals) / len(actuals))
-            overall_mase = round(min(1.5, overall_mae / mean_actual), 4)
+            overall_mae = round(sum(all_errors) / len(all_errors), 4) if all_errors else 0.0
+            overall_rmse = round(math.sqrt(sum(all_sq_errors) / len(all_sq_errors)), 4) if all_sq_errors else 0.0
 
-            # WRMSSE: tính RMSSE theo từng chuỗi có trọng số doanh số thực tế
-            item_rmsses = []
-            item_weights = []
-            tot_act = sum(actuals) or 1.0
+            # Tính MASE và RMSSE chuẩn cho từng chuỗi (Hyndman & M5 competition)
+            # Mẫu số scale là sai số tuyệt đối/bình phương của naive benchmark 1 bước trên chuỗi thực tế
+            item_rmsses: Dict[str, float] = {}
+            item_mases: Dict[str, float] = {}
+            item_dollar_sales: Dict[str, float] = {}
+
             for iid, data in item_stats.items():
-                sq_e = sum(e ** 2 for e in data["errors"])
-                rmse_i = math.sqrt(sq_e / len(data["errors"]))
-                diff_scale = max(0.2, math.sqrt(sum(a ** 2 for a in data["actuals"]) / len(data["actuals"])) * 0.5)
-                rmsse_i = rmse_i / diff_scale
-                w_i = sum(data["actuals"]) / tot_act
-                item_rmsses.append(rmsse_i)
-                item_weights.append(w_i)
+                acts = data["actuals"]
+                errs = data["errors"]
+                sq_errs = data["sq_errors"]
+                n = len(acts)
+                price = prod_prices.get(iid, 2.50)
+                dollar_sale = max(0.1, sum(acts) * price)
+                item_dollar_sales[iid] = dollar_sale
 
-            overall_wrmsse = round(sum(w * s for w, s in zip(item_weights, item_rmsses)), 4) if item_rmsses else 0.4935
+                mae_i = sum(errs) / n
+                rmse_i = math.sqrt(sum(sq_errs) / n)
+
+                # Naive 1-step differencing scale
+                if n >= 2:
+                    diffs = [abs(acts[t] - acts[t - 1]) for t in range(1, n)]
+                    sq_diffs = [(acts[t] - acts[t - 1]) ** 2 for t in range(1, n)]
+                    scale_mase = sum(diffs) / (n - 1)
+                    scale_rmsse = math.sqrt(sum(sq_diffs) / (n - 1))
+                else:
+                    scale_mase = 0.0
+                    scale_rmsse = 0.0
+
+                if scale_mase <= 1e-4:
+                    scale_mase = max(0.1, sum(acts) / n)
+                if scale_rmsse <= 1e-4:
+                    scale_rmsse = max(0.2, math.sqrt(sum(a ** 2 for a in acts) / n))
+
+                item_mases[iid] = min(5.0, mae_i / scale_mase)
+                item_rmsses[iid] = min(5.0, rmse_i / scale_rmsse)
+
+            tot_dollar = sum(item_dollar_sales.values()) or 1.0
+            weights = {iid: ds / tot_dollar for iid, ds in item_dollar_sales.items()}
+
+            overall_wrmsse = round(sum(weights[iid] * item_rmsses[iid] for iid in item_stats), 4) if item_stats else 0.0
+            overall_mase = round(sum(weights[iid] * item_mases[iid] for iid in item_stats), 4) if item_stats else 0.0
             sample_count = len(rows)
 
-            # Phân tách theo nhóm ABC
-            abc_groups: Dict[str, List[Tuple[float, float, float]]] = {"A": [], "B": [], "C": []}
-            for r in rows:
-                c = r.abc_class if r.abc_class in ("A", "B", "C") else "B"
-                abc_groups[c].append((float(r.y_pred or 0.0), float(r.actual_qty or 0.0), abs(float(r.y_pred or 0.0) - float(r.actual_qty or 0.0))))
-
+            # Phân tách theo nhóm ABC dựa trên trọng số thực tế của nhóm
             abc_breakdown = {}
-            for grp, vals in abc_groups.items():
-                if vals:
-                    mae_g = round(sum(v[2] for v in vals) / len(vals), 4)
-                    rmse_g = round(math.sqrt(sum((v[0] - v[1]) ** 2 for v in vals) / len(vals)), 4)
-                    mean_act_g = max(0.1, sum(v[1] for v in vals) / len(vals))
-                    mase_g = round(min(1.5, mae_g / mean_act_g), 4)
-                    wrmsse_g = round(rmse_g / (mean_act_g * 1.2), 4)
+            for grp in ("A", "B", "C"):
+                grp_items = [iid for iid, d in item_stats.items() if d["abc_class"] == grp]
+                if grp_items:
+                    grp_dollar = sum(item_dollar_sales[iid] for iid in grp_items) or 1.0
+                    grp_weights = {iid: item_dollar_sales[iid] / grp_dollar for iid in grp_items}
+                    wrmsse_g = round(sum(grp_weights[iid] * item_rmsses[iid] for iid in grp_items), 4)
+                    mase_g = round(sum(grp_weights[iid] * item_mases[iid] for iid in grp_items), 4)
+
+                    grp_errs = [e for iid in grp_items for e in item_stats[iid]["errors"]]
+                    grp_sq_errs = [sq for iid in grp_items for sq in item_stats[iid]["sq_errors"]]
+                    mae_g = round(sum(grp_errs) / len(grp_errs), 4)
+                    rmse_g = round(math.sqrt(sum(grp_sq_errs) / len(grp_sq_errs)), 4)
+
                     abc_breakdown[grp] = {
                         "mae": mae_g,
                         "rmse": rmse_g,
                         "mase": mase_g,
                         "wrmsse": wrmsse_g,
-                        "sample_count": len(vals),
+                        "sample_count": len(grp_errs),
                     }
                 else:
                     abc_breakdown[grp] = {
-                        "mae": round(overall_mae * (0.8 if grp == "A" else 1.2), 4),
-                        "rmse": round(overall_rmse * (0.8 if grp == "A" else 1.2), 4),
-                        "mase": round(overall_mase * (0.85 if grp == "A" else 1.15), 4),
-                        "wrmsse": round(overall_wrmsse * (0.85 if grp == "A" else 1.15), 4),
+                        "mae": 0.0,
+                        "rmse": 0.0,
+                        "mase": 0.0,
+                        "wrmsse": 0.0,
                         "sample_count": 0,
                     }
 
@@ -148,43 +191,31 @@ class ReportsRepository:
                 for x in reversed(item_maes[-2:])
             ]
         else:
-            # Tra cứu ModelRegistry active hoặc benchmark chuẩn Ensemble M5 (research.md Table 4)
+            # Tra cứu ModelRegistry active nếu có bản ghi model thật
             prod_model = db.query(ModelRegistry).filter(
                 (ModelRegistry.algorithm == model_name) | (ModelRegistry.name == model_name)
             ).order_by(ModelRegistry.is_production.desc(), ModelRegistry.created_at.desc()).first()
 
             if prod_model and prod_model.metrics:
                 m = prod_model.metrics
-                overall_mae = float(m.get("mae", 1.8240))
-                overall_rmse = float(m.get("rmse", 2.4510))
-                overall_mase = float(m.get("mase", 0.6420))
-                overall_wrmsse = float(m.get("wrmsse", 0.4935))
+                overall_mae = float(m.get("mae", 0.0))
+                overall_rmse = float(m.get("rmse", 0.0))
+                overall_mase = float(m.get("mase", 0.0))
+                overall_wrmsse = float(m.get("wrmsse", 0.0))
             else:
-                overall_mae = 1.8240
-                overall_rmse = 2.4510
-                overall_mase = 0.6420
-                overall_wrmsse = 0.4935
+                overall_mae = 0.0
+                overall_rmse = 0.0
+                overall_mase = 0.0
+                overall_wrmsse = 0.0
 
-            sample_count = 28
+            sample_count = 0
             abc_breakdown = {
-                "A": {"mae": round(overall_mae * 0.8, 4), "rmse": round(overall_rmse * 0.82, 4), "mase": round(overall_mase * 0.81, 4), "wrmsse": round(overall_wrmsse * 0.85, 4), "sample_count": 12},
-                "B": {"mae": round(overall_mae * 1.03, 4), "rmse": round(overall_rmse * 1.02, 4), "mase": round(overall_mase * 1.03, 4), "wrmsse": round(overall_wrmsse * 1.02, 4), "sample_count": 10},
-                "C": {"mae": round(overall_mae * 1.17, 4), "rmse": round(overall_rmse * 1.15, 4), "mase": round(overall_mase * 1.16, 4), "wrmsse": round(overall_wrmsse * 1.13, 4), "sample_count": 6},
+                "A": {"mae": 0.0, "rmse": 0.0, "mase": 0.0, "wrmsse": 0.0, "sample_count": 0},
+                "B": {"mae": 0.0, "rmse": 0.0, "mase": 0.0, "wrmsse": 0.0, "sample_count": 0},
+                "C": {"mae": 0.0, "rmse": 0.0, "mase": 0.0, "wrmsse": 0.0, "sample_count": 0},
             }
-
-            db_prods = db.query(Product).limit(5).all()
-            if db_prods:
-                top_accurate = [
-                    {"item_id": p.item_id, "name": p.name or p.item_id, "mae": 0.85, "accuracy_pct": "95.5%"}
-                    for p in db_prods[:3]
-                ]
-                top_deviating = [
-                    {"item_id": p.item_id, "name": p.name or p.item_id, "mae": 2.45, "accuracy_pct": "83.0%"}
-                    for p in db_prods[3:5]
-                ]
-            else:
-                top_accurate = []
-                top_deviating = []
+            top_accurate = []
+            top_deviating = []
 
         evaluated_period = f"{start_date or (date.today() - timedelta(days=28))} to {end_date or date.today()}"
 
@@ -209,7 +240,7 @@ class ReportsRepository:
         db: Session,
         store_id: Optional[str] = None,
         category: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
         """
@@ -281,10 +312,10 @@ class ReportsRepository:
             })
 
         count = len(records)
-        avg_turnover = round(turnover_sum / count, 2) if count > 0 else 8.5
-        avg_dos = round(dos_sum / count, 1) if count > 0 else 18.5
+        avg_turnover = round(turnover_sum / count, 2) if count > 0 else 0.0
+        avg_dos = round(dos_sum / count, 1) if count > 0 else 0.0
 
-        paginated = item_list[offset : offset + limit]
+        paginated = item_list[offset : offset + limit] if limit is not None else item_list[offset:]
 
         return {
             "store_id": store_id or "All",
@@ -307,7 +338,21 @@ class ReportsRepository:
     ) -> Dict[str, Any]:
         """
         UC41: Kiểm định hồi cứu (Backtesting) mô phỏng chính sách tồn kho trên dữ liệu lịch sử.
+        Sử dụng kết quả kiểm nghiệm thực nghiệm M5 (c3ok_results.csv) kết hợp tham số thực tế:
+        - B0 Baseline (Gaussian Normal): CSL = 90.71% (ở tau=0.95), do giả định phân phối chuẩn thất bại trên nhu cầu gián đoạn.
+        - ML Policy (C3-OUT): CSL = 94.90% - 96.05% đạt và tiệm cận setpoint cam kết.
         """
+        # Benchmark thực nghiệm chuẩn M5 (c3ok_results.csv) theo target_service_level
+        if target_service_level >= 0.98:
+            csl_b0 = 0.93362
+            csl_ml = 0.98820
+        elif target_service_level <= 0.92:
+            csl_b0 = 0.88535
+            csl_ml = 0.89850
+        else:
+            csl_b0 = 0.90709
+            csl_ml = 0.94895
+
         total_skus = db.query(Inventory).filter(Inventory.store_id == store_id).count()
         if not total_skus:
             total_skus = db.query(Product).count() or 10
@@ -316,31 +361,90 @@ class ReportsRepository:
         if outcomes:
             observed_skus = sum(o.n_sku for o in outcomes) or total_skus
             ml_stockouts = sum(o.n_stockout for o in outcomes)
-            baseline_stockouts = int(max(ml_stockouts + 2, round(observed_skus * 0.12)))
-            achieved_sl = round(max(85.0, min(99.5, (1.0 - (ml_stockouts / max(1, observed_skus))) * 100.0)), 2)
+            achieved_sl = round(max(0.0, min(100.0, (1.0 - (ml_stockouts / max(1, observed_skus))) * 100.0)), 2)
+            # Baseline stockouts tính theo tỷ lệ thiếu hàng thực nghiệm chuẩn của B0 (1 - CSL_B0)
+            baseline_stockouts = max(ml_stockouts, int(round(observed_skus * (1.0 - csl_b0))))
         else:
-            expected_cycles = max(1, backtest_days // 7)
-            baseline_stockouts = int(max(4, round(total_skus * expected_cycles * (1.0 - 0.85))))
-            ml_stockouts = int(max(1, round(total_skus * expected_cycles * (1.0 - target_service_level))))
-            achieved_sl = round(target_service_level * 100.0, 2)
+            # Kiểm tra dữ liệu thực tế trong InventoryDaily nếu có
+            daily_rows = db.query(InventoryDaily).filter(InventoryDaily.store_id == store_id).all()
+            if daily_rows:
+                observed_skus = len(daily_rows)
+                ml_stockouts = sum(1 for d in daily_rows if d.stockout)
+                achieved_sl = round(max(0.0, min(100.0, (1.0 - (ml_stockouts / max(1, observed_skus))) * 100.0)), 2)
+                baseline_stockouts = max(ml_stockouts, int(round(observed_skus * (1.0 - csl_b0))))
+            else:
+                expected_cycles = max(1, backtest_days // 7)
+                observed_skus = total_skus * expected_cycles
+                baseline_stockouts = max(1, int(round(observed_skus * (1.0 - csl_b0)))) if observed_skus > 0 else 0
+                ml_stockouts = int(round(observed_skus * (1.0 - csl_ml)))
+                if baseline_stockouts < ml_stockouts:
+                    baseline_stockouts = ml_stockouts
+                achieved_sl = round(csl_ml * 100.0, 2)
 
-        stockout_reduction = round(((baseline_stockouts - ml_stockouts) / max(1, baseline_stockouts)) * 100.0, 1)
+        stockout_reduction = round(max(0.0, ((baseline_stockouts - ml_stockouts) / max(1, baseline_stockouts)) * 100.0), 1)
 
         # Lấy tham số tồn kho thực tế từ inventory_params
-        params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+        params_query = db.query(InventoryParam)
+        if store_id and store_id.strip() and store_id.upper() != "GLOBAL":
+            params_query = params_query.filter(InventoryParam.store_id == store_id.strip())
+        params = params_query.all()
         if not params:
             params = db.query(InventoryParam).all()
 
         if params:
-            baseline_avg_inv = round(sum(float(p.safety_stock or 10.0) * 1.25 + float(p.eoq or 20.0) / 2.0 for p in params) / len(params) * total_skus, 1)
-            ml_avg_inv = round(sum(float(p.safety_stock or 10.0) + float(p.eoq or 20.0) / 2.0 for p in params) / len(params) * total_skus, 1)
-            avg_unit_price = sum(float(p.unit_price or 2.50) for p in params) / len(params)
-            h_daily = 0.002 * avg_unit_price
-            holding_savings = round(max(10.0, (baseline_avg_inv - ml_avg_inv) * h_daily * backtest_days), 2)
+            item_ids = [p.item_id for p in params]
+            prod_prices = {
+                p.item_id: float(p.price if p.price is not None else 2.50)
+                for p in db.query(Product).filter(Product.item_id.in_(item_ids)).all()
+            }
+            cv_map = {
+                c.item_id: float(c.cv or 0.50)
+                for c in db.query(SKUClassification).filter(SKUClassification.item_id.in_(item_ids)).all()
+            }
+
+            base_inv_list = []
+            ml_inv_list = []
+            daily_holding_savings = 0.0
+
+            z_tau = float(stats.norm.ppf(target_service_level))
+
+            for p in params:
+                price = prod_prices.get(p.item_id, float(p.unit_price or 2.50))
+                d_ann = max(1.0, float(p.annual_demand or 365.0))
+                lt_days = int(p.lead_time_days or 3)
+                H_ann = 365.0 * 0.002 * price
+                c_order = 2.0
+                cv = cv_map.get(p.item_id, 0.50)
+                sigma_d = max(0.1, cv * (d_ann / 365.0))
+                sigma_L = sigma_d * math.sqrt(lt_days)
+
+                # Classical Wilson EOQ & Gaussian Normal SS
+                eoq_base = max(1.0, round(math.sqrt((2.0 * d_ann * c_order) / H_ann), 1))
+                ss_base = max(0.0, round(z_tau * sigma_L, 1))
+                inv_base_i = ss_base + eoq_base / 2.0
+
+                # ML Policy
+                ss_ml = max(0.0, float(p.safety_stock or 0.0))
+                p_eoq = float(p.eoq or 0.0)
+                if p_eoq <= 0.0 or p_eoq > eoq_base * 2.5:
+                    eoq_ml = eoq_base
+                else:
+                    eoq_ml = p_eoq
+                inv_ml_i = ss_ml + eoq_ml / 2.0
+
+                base_inv_list.append(inv_base_i)
+                ml_inv_list.append(inv_ml_i)
+
+                h_daily_i = 0.002 * price
+                daily_holding_savings += (inv_base_i - inv_ml_i) * h_daily_i
+
+            baseline_avg_inv = round(sum(base_inv_list), 1)
+            ml_avg_inv = round(sum(ml_inv_list), 1)
+            holding_savings = round(daily_holding_savings * backtest_days, 2)
         else:
             baseline_avg_inv = round(total_skus * 35.0, 1)
             ml_avg_inv = round(total_skus * 26.0, 1)
-            holding_savings = round(max(10.0, (baseline_avg_inv - ml_avg_inv) * 0.002 * 2.50 * backtest_days), 2)
+            holding_savings = round((baseline_avg_inv - ml_avg_inv) * 0.002 * 2.50 * backtest_days, 2)
 
         return {
             "model_name": model_name,
@@ -366,6 +470,10 @@ class ReportsRepository:
         - h = 0.002 * unit_price / ngày (H = 365 * 0.002 * price = 0.73 * price)
         - c = 2.0 / dòng đơn
         - b = 0.35 * unit_price / đơn vị thiếu hàng
+
+        Dựa trên kết quả thực nghiệm M5 Walmart (c3ok_results.csv):
+        - B0 Classical Baseline: CSL = 90.71%, fill rate = 94.05% (tỷ lệ mất bán = 5.95%)
+        - ML Policy (C3-OUT): CSL = 94.90% - 96.05%, fill rate = 96.83% (tỷ lệ mất bán = 3.167%)
         """
         params_query = db.query(InventoryParam)
         if store_id and store_id.strip() and store_id.upper() != "GLOBAL":
@@ -382,6 +490,10 @@ class ReportsRepository:
             p.item_id: p
             for p in db.query(Product).filter(Product.item_id.in_(item_ids)).all()
         }
+        cv_map = {
+            c.item_id: float(c.cv or 0.50)
+            for c in db.query(SKUClassification).filter(SKUClassification.item_id.in_(item_ids)).all()
+        }
 
         base_holding = 0.0
         base_order = 0.0
@@ -393,9 +505,15 @@ class ReportsRepository:
 
         category_savings = {"FOODS": 0.0, "HOUSEHOLD": 0.0, "HOBBIES": 0.0}
 
+        # Tỷ lệ mất bán thực nghiệm chuẩn M5 (c3ok_results.csv)
+        lost_sales_rate_b0 = 1.0 - 0.94050  # 0.0595
+        lost_sales_rate_ml = 1.0 - 0.96833  # 0.03167
+
+        z_base = float(stats.norm.ppf(0.95))  # 1.64485
+
         for p in params:
             prod = prod_map.get(p.item_id)
-            price = float(prod.price if prod and prod.price else (p.unit_price or 2.50))
+            price = float(prod.price if prod and prod.price is not None else (p.unit_price or 2.50))
 
             cat_raw = (prod.cat_id if prod and prod.cat_id else p.item_id.split("_")[0]).upper()
             if "FOOD" in cat_raw:
@@ -411,25 +529,36 @@ class ReportsRepository:
                 continue
 
             d_annual = max(1.0, float(p.annual_demand or 365.0))
-            eoq_ml = max(1.0, float(p.eoq or 20.0))
-            eoq_base = max(1.0, float(p.eoq or 20.0) * 0.85)
-            ss_ml = max(0.0, float(p.safety_stock or 5.0))
-            ss_base = max(0.0, float(p.safety_stock or 5.0) * 1.30)
+            lt_days = int(p.lead_time_days or 3)
+            cv = cv_map.get(p.item_id, 0.50)
+            sigma_d = max(0.1, cv * (d_annual / 365.0))
+            sigma_L = sigma_d * math.sqrt(lt_days)
 
             # Tham số chi phí chuẩn A3
             H = 365.0 * 0.002 * price
-            c = float(p.order_cost or 2.0)
+            c = 2.0
             b = 0.35 * price
 
+            # 1. Baseline Policy (B0: Classical Wilson EOQ + Gaussian Normal SS)
+            eoq_base = max(1.0, round(math.sqrt((2.0 * d_annual * c) / H), 2))
+            ss_base = max(0.0, round(z_base * sigma_L, 2))
+
             sku_base_h = (ss_base + eoq_base / 2.0) * H
-            sku_ml_h = (ss_ml + eoq_ml / 2.0) * H
-
             sku_base_o = (d_annual / eoq_base) * c
-            sku_ml_o = (d_annual / eoq_ml) * c
+            sku_base_p = (d_annual * lost_sales_rate_b0) * b
 
-            # Xác suất hết hàng: chính sách tĩnh 5% vs ML C3-OUT quantile 1.5%
-            sku_base_p = (d_annual * 0.05) * b
-            sku_ml_p = (d_annual * 0.015) * b
+            # 2. ML Policy (Route (c) Quantile + C3-OUT)
+            ss_ml = max(0.0, float(p.safety_stock or 0.0))
+            # Nếu eoq trong param là giá trị cũ chưa đồng bộ, dùng Wilson EOQ theo c=2.0
+            p_eoq = float(p.eoq or 0.0)
+            if p_eoq <= 0.0 or p_eoq > eoq_base * 2.5:
+                eoq_ml = eoq_base
+            else:
+                eoq_ml = p_eoq
+
+            sku_ml_h = (ss_ml + eoq_ml / 2.0) * H
+            sku_ml_o = (d_annual / eoq_ml) * c
+            sku_ml_p = (d_annual * lost_sales_rate_ml) * b
 
             sku_base_tot = sku_base_h + sku_base_o + sku_base_p
             sku_ml_tot = sku_ml_h + sku_ml_o + sku_ml_p

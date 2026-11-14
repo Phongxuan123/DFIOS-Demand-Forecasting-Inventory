@@ -28,9 +28,9 @@ TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "../../../scripts/sample_data/template_
     "/imports",
     summary="Task API.2 - Tải lên CSV kho hàng mới và trả về báo cáo chất lượng dữ liệu (Data Quality Report)",
 )
-async def upload_store_data(
+def upload_store_data(
     file: UploadFile = File(..., description="File CSV dữ liệu bán hàng"),
-    store_id: str = Query("CA_1", description="Mã kho hàng/cửa hàng"),
+    store_id: str = Query(..., description="Mã kho hàng/cửa hàng (bắt buộc chỉ định mã kho cụ thể)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_admin),
 ):
@@ -41,18 +41,36 @@ async def upload_store_data(
     và xuất Data Quality Report đầy đủ (tỷ lệ missing, zero-rate, số SKU, dải ngày).
     Role: Warehouse Manager, Admin.
     """
-    if not file.filename.endswith(".csv"):
+    if not file.filename.lower().endswith(".csv"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Hệ thống chỉ chấp nhận định dạng file .csv",
         )
 
-    content = await file.read()
-    clean_df, report = data_preprocessing_service.preprocess_sales_data(
-        file_content=content,
-        file_name=file.filename,
-        default_store_id=store_id,
-    )
+    content = file.file.read()
+    max_file_size = 50 * 1024 * 1024  # 50MB
+    if len(content) > max_file_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Kích thước file ({len(content)/(1024*1024):.1f}MB) vượt quá giới hạn tối đa cho phép (50MB).",
+        )
+
+    try:
+        clean_df, report = data_preprocessing_service.preprocess_sales_data(
+            file_content=content,
+            file_name=file.filename,
+            default_store_id=store_id,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Dữ liệu CSV không hợp lệ: {str(e)}",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Lỗi khi đọc file CSV: {str(e)}",
+        )
 
     now = datetime.now(timezone.utc)
     import_id = f"imp_{uuid.uuid4().hex[:12]}"
@@ -70,8 +88,26 @@ async def upload_store_data(
     )
     db.add(record)
 
-    # Nạp dữ liệu sạch vào bảng sales_history
+    # Nạp dữ liệu sạch vào bảng sales_history (bulk mapped để tối ưu hiệu năng)
     if not clean_df.empty:
+        existing_products = {p.item_id for p in db.query(Product.item_id).all()}
+        new_items = set(clean_df["item_id"]) - existing_products
+        for item_id in new_items:
+            db.add(Product(item_id=item_id, name=item_id, cat_id="OTHER", dept_id="OTHER_1", price=1.0))
+        if new_items:
+            db.flush()
+
+        dates_in_file = [pd.to_datetime(d).date() for d in clean_df["sale_date"].unique()]
+        existing_hist = (
+            db.query(SalesHistory)
+            .filter(
+                SalesHistory.store_id == store_id,
+                SalesHistory.sale_date.in_(dates_in_file),
+            )
+            .all()
+        )
+        hist_map = {h.id: h for h in existing_hist}
+
         for _, row in clean_df.iterrows():
             item_id = str(row["item_id"])
             s_id = str(row.get("store_id", store_id))
@@ -79,25 +115,41 @@ async def upload_store_data(
             qty = float(row.get("sales", 0.0))
 
             hist_id = f"{item_id}_{s_id}_{sale_date}"
-            existing = db.query(SalesHistory).filter(SalesHistory.id == hist_id).first()
+            existing = hist_map.get(hist_id)
             if existing:
                 existing.quantity = qty
             else:
-                db.add(
-                    SalesHistory(
-                        id=hist_id,
-                        item_id=item_id,
-                        store_id=s_id,
-                        sale_date=sale_date,
-                        quantity=qty,
-                    )
+                new_h = SalesHistory(
+                    id=hist_id,
+                    item_id=item_id,
+                    store_id=s_id,
+                    sale_date=sale_date,
+                    quantity=qty,
                 )
+                db.add(new_h)
+                hist_map[hist_id] = new_h
+
+        # N-23: Tự động khởi tạo SimClock và Inventory khi onboarding kho mới qua /imports
+        from app.models.sim_clock import SimClock
+        from app.models.inventory import Inventory
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        if not clock:
+            dates = [pd.to_datetime(d).date() for d in clean_df["sale_date"].unique()]
+            max_d = max(dates)
+            min_d = min(dates)
+            db.add(SimClock(store_id=store_id, current_date=max_d, start_date=min_d, mode="replay", speed=1.0))
+        existing_inv = set(
+            inv[0] for inv in db.query(Inventory.item_id).filter(Inventory.store_id == store_id).all()
+        )
+        for itm in set(clean_df["item_id"]) - existing_inv:
+            db.add(Inventory(item_id=itm, store_id=store_id, on_hand=0.0, on_order=0.0, updated_at=now))
 
     db.commit()
 
     return {
         "success": True,
         "import_id": import_id,
+        "store_id": store_id,
         "file_name": file.filename,
         "rows_cleaned": len(clean_df),
         "quality_report": report,
@@ -114,13 +166,13 @@ def download_import_template(
 ):
     """
     **Task API.2 - Get Import Template**:
-    Tải file CSV template chuẩn (cột: sale_date, store_id, item_id, sales, price).
+    Tải file CSV template chuẩn (cột: item_id, store_id, sale_date, quantity, sell_price).
     """
     if os.path.exists(TEMPLATE_PATH):
         with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
             csv_content = f.read()
     else:
-        csv_content = "sale_date,store_id,item_id,sales,price\n2026-01-01,CA_1,FOODS_1_001,15,2.50\n"
+        csv_content = "item_id,store_id,sale_date,quantity,sell_price\nFOODS_1_001,STORE_01,2026-01-01,15,2.50\n"
 
     return Response(
         content=csv_content,

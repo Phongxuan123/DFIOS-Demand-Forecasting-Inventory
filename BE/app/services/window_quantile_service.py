@@ -8,6 +8,7 @@ from sqlalchemy import func
 
 from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.forecast import Forecast, ForecastOverride
+from app.models.forecast_backtest import ForecastBacktest
 from app.models.sales_history import SalesHistory
 from app.models.product import Product
 
@@ -42,39 +43,87 @@ class WindowQuantileService:
         store_id: str,
         origin_date: date,
         horizon_days: int = 10,
+        model_version: Optional[str] = None,
     ) -> float:
         """
         Tính tổng dự báo điểm trên cửa sổ bảo vệ H ngày: F_hat(H) = sum_{h=1}^H y_hat_h
+        Đảm bảo lấy đúng một lượt chạy dự báo (run) xuất phát từ origin_date, tránh trộn lần chạy khác (R-07).
         """
-        # 1. Thử lấy từ bảng forecast kết hợp overrides hiệu dụng (B-01)
-        fc_records = (
-            db.query(Forecast.forecast_date, Forecast.y_pred)
+        # 1. Tìm lượt chạy dự báo (run) xuất phát tại hoặc gần nhất sau origin_date
+        origin_query = (
+            db.query(Forecast.forecast_date)
             .filter(
                 Forecast.item_id == item_id,
                 Forecast.store_id == store_id,
+                Forecast.h == 1,
                 Forecast.forecast_date >= origin_date,
-                Forecast.h <= horizon_days,
+                (Forecast.model_version != "fast-inference-sba") | (Forecast.model_version.is_(None)),
             )
-            .order_by(Forecast.h.asc())
-            .all()
         )
+        if model_version:
+            origin_query = origin_query.filter(Forecast.model_version == model_version)
+        first_origin = origin_query.order_by(Forecast.forecast_date.asc()).first()
 
-        if fc_records and len(fc_records) >= horizon_days:
-            # Tra cứu override đang hoạt động
-            overrides = (
-                db.query(ForecastOverride.forecast_date, ForecastOverride.override_value)
+        if first_origin:
+            run_start_date = first_origin[0]
+            # Lấy chính xác chuỗi dự báo h=1..horizon_days của lượt chạy này
+            fc_query = (
+                db.query(Forecast.forecast_date, Forecast.h, Forecast.y_pred)
                 .filter(
-                    ForecastOverride.item_id == item_id,
-                    ForecastOverride.store_id == store_id,
-                    ForecastOverride.is_active == True,
+                    Forecast.item_id == item_id,
+                    Forecast.store_id == store_id,
+                    Forecast.forecast_date >= run_start_date,
+                    Forecast.forecast_date <= run_start_date + timedelta(days=horizon_days - 1),
+                    Forecast.h >= 1,
+                    Forecast.h <= horizon_days,
+                    (Forecast.model_version != "fast-inference-sba") | (Forecast.model_version.is_(None)),
                 )
-                .all()
             )
-            ov_map = {r.forecast_date: float(r.override_value) for r in overrides}
-            total_val = sum(ov_map.get(r.forecast_date, float(r.y_pred)) for r in fc_records[:horizon_days])
-            return float(total_val)
+            if model_version:
+                fc_query = fc_query.filter(Forecast.model_version == model_version)
+            fc_records = fc_query.order_by(Forecast.h.asc()).all()
 
-        # 2. Nếu thiếu dữ liệu forecast, fallback từ doanh số trung bình gần nhất * H
+            if fc_records and len(fc_records) >= horizon_days:
+                # Tra cứu override đang hoạt động
+                overrides = (
+                    db.query(ForecastOverride.forecast_date, ForecastOverride.h, ForecastOverride.override_value)
+                    .filter(
+                        ForecastOverride.item_id == item_id,
+                        ForecastOverride.store_id == store_id,
+                        ForecastOverride.is_active == True,
+                    )
+                    .all()
+                )
+                ov_map = {}
+                for ov in overrides:
+                    ov_map[ov.forecast_date] = float(ov.override_value)
+                    if ov.h is not None:
+                        ov_map[(ov.forecast_date, ov.h)] = float(ov.override_value)
+
+                total_val = sum(
+                    ov_map.get((r.forecast_date, r.h), ov_map.get(r.forecast_date, float(r.y_pred)))
+                    for r in fc_records[:horizon_days]
+                )
+                return float(round(total_val, 2))
+
+        # 2. Kiểm tra nếu có trong bảng forecast_backtest (R-15)
+        # Tính review_day tương ứng với origin_date (M5 day 1 = 2011-01-29)
+        m5_start = date(2011, 1, 29)
+        origin_day_idx = (origin_date - m5_start).days + 1
+        backtest_row = (
+            db.query(ForecastBacktest.dhat)
+            .filter(
+                ForecastBacktest.item_id == item_id,
+                ForecastBacktest.store_id == store_id,
+                ForecastBacktest.review_day <= origin_day_idx,
+            )
+            .order_by(ForecastBacktest.review_day.desc())
+            .first()
+        )
+        if backtest_row and backtest_row[0] is not None:
+            return float(round(float(backtest_row[0]) * horizon_days, 2))
+
+        # 3. Nếu thiếu dữ liệu forecast, fallback từ doanh số trung bình gần nhất * H
         past_sales = (
             db.query(func.avg(SalesHistory.quantity))
             .filter(
@@ -95,26 +144,80 @@ class WindowQuantileService:
         origin_date: date,
         horizon_days: int = 10,
         max_origins: int = 52,
+        model_run_id: str = "backtest-ensemble-v1",
     ) -> np.ndarray:
         """
         Thu thập sai số lịch sử trên cửa sổ H ngày từ các mốc thời gian đã chín (s + H <= origin_date).
         Đảm bảo tính nhân quả tuyệt đối (Zero lookahead bias).
+        Ưu tiên đọc từ forecast_backtest (R-15) nếu có.
+        Loại bỏ hoàn toàn cơ chế coalesce(y_pred, quantity) làm triệt tiêu sai số về 0 (R-06).
         """
         cutoff_date = origin_date - timedelta(days=horizon_days)
+        m5_start = date(2011, 1, 29)
+        cutoff_day_idx = (cutoff_date - m5_start).days + 1
 
-        # 1. Thu thập dữ liệu thực tế và dự báo Ensemble đồng thời trên các mốc thời gian đã chín
-        # Sai số cửa sổ thực nghiệm chuẩn tắc: r(H) = D(H) - F_hat(H) (Route c, research.md §7.2, R-06)
+        # 1. Thử thu thập từ forecast_backtest (R-15)
+        try:
+            backtest_rows = (
+                db.query(ForecastBacktest.review_day, ForecastBacktest.dhat)
+                .filter(
+                    ForecastBacktest.item_id == item_id,
+                    ForecastBacktest.store_id == store_id,
+                    ForecastBacktest.review_day + horizon_days <= cutoff_day_idx + horizon_days,
+                )
+                .order_by(ForecastBacktest.review_day.desc())
+                .limit(max_origins)
+                .all()
+            )
+        except Exception:
+            db.rollback()
+            backtest_rows = None
+
+        if backtest_rows and len(backtest_rows) >= 5:
+            # R-18 & R-33: Tra cứu actual sales cho toàn bộ khoảng review cycles trong 1 query duy nhất (giảm từ 52 query xuống 1)
+            min_rev = min(r[0] for r in backtest_rows)
+            max_rev = max(r[0] for r in backtest_rows)
+            overall_start = m5_start + timedelta(days=min_rev - 1)
+            overall_end = m5_start + timedelta(days=max_rev + horizon_days - 1)
+
+            sales_rows = (
+                db.query(SalesHistory.sale_date, SalesHistory.quantity)
+                .filter(
+                    SalesHistory.item_id == item_id,
+                    SalesHistory.store_id == store_id,
+                    SalesHistory.sale_date >= overall_start,
+                    SalesHistory.sale_date <= overall_end,
+                )
+                .all()
+            )
+            sales_dict = {row[0]: float(row[1]) for row in sales_rows}
+
+            residuals_list = []
+            for rev_day, dhat in backtest_rows:
+                cycle_start = m5_start + timedelta(days=rev_day - 1)
+                actual_qty = sum(
+                    sales_dict.get(cycle_start + timedelta(days=d), 0.0)
+                    for d in range(horizon_days)
+                )
+                pred_window = float(dhat) * horizon_days
+                residuals_list.append(actual_qty - pred_window)
+
+            if len(residuals_list) >= 5:
+                return np.array(residuals_list)
+
+        # 2. Thu thập dữ liệu thực tế và dự báo từ bảng Forecast & SalesHistory
         merged_query = (
             db.query(
                 SalesHistory.sale_date,
                 SalesHistory.quantity,
-                func.coalesce(Forecast.y_pred, SalesHistory.quantity).label("y_pred"),
+                Forecast.y_pred,
             )
-            .outerjoin(
+            .join(
                 Forecast,
                 (SalesHistory.item_id == Forecast.item_id)
                 & (SalesHistory.store_id == Forecast.store_id)
-                & (SalesHistory.sale_date == Forecast.forecast_date),
+                & (SalesHistory.sale_date == Forecast.forecast_date)
+                & ((Forecast.model_version != "fast-inference-sba") | (Forecast.model_version.is_(None))),
             )
             .filter(
                 SalesHistory.item_id == item_id,
@@ -129,8 +232,13 @@ class WindowQuantileService:
             return np.array([])
 
         df = pd.DataFrame(merged_query, columns=["sale_date", "quantity", "y_pred"])
-        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
-        df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce").fillna(df["quantity"])
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
+        df["y_pred"] = pd.to_numeric(df["y_pred"], errors="coerce")
+        # R-06: Loại bỏ hoàn toàn coalesce, chỉ giữ các ngày có đầy đủ cả actual và prediction
+        df = df.dropna(subset=["quantity", "y_pred"])
+
+        if len(df) < horizon_days:
+            return np.array([])
 
         # Tổng nhu cầu thực tế và tổng dự báo trượt trên cửa sổ bảo vệ H ngày
         rolling_actual = df["quantity"].rolling(window=horizon_days).sum().dropna().values
@@ -139,7 +247,7 @@ class WindowQuantileService:
         if len(rolling_actual) < 3:
             return np.array([])
 
-        # Sai số dự báo thực nghiệm r(H) = D(H) - F_hat(H) (Loại bỏ hoàn toàn EMA heuristic)
+        # Sai số dự báo thực nghiệm r(H) = D(H) - F_hat(H)
         residuals = rolling_actual - rolling_pred
         return residuals[-max_origins:]
 
@@ -193,32 +301,34 @@ class WindowQuantileService:
         origin_date: date,
         horizon_days: int = 10,
         model_run_id: str = "backtest-ensemble-v1",
+        persist: bool = True,
     ) -> ForecastWindowQuantile:
         """
-        Lấy bản ghi phân phối cửa sổ đã lưu hoặc tính toán mới và lưu vào bảng forecast_window_quantile.
+        Lấy bản ghi phân phối cửa sổ đã lưu hoặc tính toán mới và lưu vào bảng forecast_window_quantile (nếu persist=True).
+        R-17: persist=False cho phép tính toán trên GET mà không gây tác dụng phụ ghi DB.
         """
         record_id = f"{model_run_id}_{store_id}_{item_id}_{origin_date}_{horizon_days}"
 
-        existing = db.query(ForecastWindowQuantile).filter(ForecastWindowQuantile.id == record_id).first()
-        if existing:
-            return existing
-
-        # Tìm theo store_id, item_id, origin_date nếu khác horizon
-        existing_any = (
+        # R-07: Khắc phục lỗi existing_any trả sai bản ghi của horizon khác
+        existing = (
             db.query(ForecastWindowQuantile)
             .filter(
                 ForecastWindowQuantile.store_id == store_id,
                 ForecastWindowQuantile.item_id == item_id,
                 ForecastWindowQuantile.origin_date == origin_date,
+                ForecastWindowQuantile.horizon_days == horizon_days,
+                ForecastWindowQuantile.model_run_id == model_run_id,
             )
             .first()
         )
-        if existing_any:
-            return existing_any
+        if existing:
+            return existing
 
         # Tính toán F_hat(H) và residuals
         point_window = self.compute_point_window_forecast(db, item_id, store_id, origin_date, horizon_days)
-        residuals = self.collect_historical_residuals(db, item_id, store_id, origin_date, horizon_days)
+        residuals = self.collect_historical_residuals(
+            db, item_id, store_id, origin_date, horizon_days, model_run_id=model_run_id
+        )
         q_levels = self.calculate_quantiles_dict(point_window, residuals, ROUTE_C_TAU_LEVELS, quantile_floor=1.0)
 
         record = ForecastWindowQuantile(
@@ -233,6 +343,9 @@ class WindowQuantileService:
             route="c",
             created_at=datetime.now(timezone.utc),
         )
+
+        if not persist:
+            return record
 
         try:
             db.add(record)

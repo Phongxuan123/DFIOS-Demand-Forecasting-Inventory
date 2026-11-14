@@ -1,10 +1,13 @@
 import csv
 import io
+import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.product import Product
@@ -40,22 +43,39 @@ class ReplenishmentService:
     Sinh, điều chỉnh, phê duyệt, từ chối và xuất báo cáo đề xuất đặt hàng bổ sung tồn kho.
     """
 
-    def generate_recommendations(self, db: Session, store_id: str = "CA_1") -> int:
+    def generate_recommendations(
+        self,
+        db: Session,
+        store_id: str = "CA_1",
+        review_date: Optional[date] = None,
+        auto_order: bool = False,
+    ) -> int:
         """
         UC33 - Tự động sinh đề xuất đặt hàng khi On_hand + On_order <= ROP.
         Số lượng đề xuất = EOQ, gán mức ưu tiên (CRITICAL, HIGH, MEDIUM, LOW).
         Chống sinh trùng đề xuất PENDING cho cùng SKU/kho.
+        Hỗ trợ tham số review_date và auto_order cho môi trường mô phỏng (J1 - J6, N-08 & N-11).
         """
         products = db.query(Product).all()
         if not products:
             return 0
 
-        # Lấy supplier mặc định nếu có
-        default_supplier = db.query(Supplier).first()
-        default_supp_id = default_supplier.id if default_supplier else None
+        # R-28: Lấy map nhà cung cấp theo ngành hàng (FOODS/HOBBIES/HOUSEHOLD)
+        suppliers = db.query(Supplier).all()
+        default_supp_id = suppliers[0].id if suppliers else None
+        supp_by_cat = {}
+        for s in suppliers:
+            s_name_upper = s.name.upper()
+            if "THỰC PHẨM" in s_name_upper or "FOOD" in s_name_upper:
+                supp_by_cat["FOODS"] = s.id
+            elif "GIA DỤNG" in s_name_upper or "HOUSEHOLD" in s_name_upper:
+                supp_by_cat["HOUSEHOLD"] = s.id
+            elif "SỞ THÍCH" in s_name_upper or "HOBBIES" in s_name_upper:
+                supp_by_cat["HOBBIES"] = s.id
 
         generated_count = 0
         now = datetime.now(timezone.utc)
+        effective_review_date = review_date if review_date is not None else now.date()
 
         # Bulk query để tránh N+1 network queries sang database
         inv_records = db.query(Inventory).filter(Inventory.store_id == store_id).all()
@@ -63,6 +83,17 @@ class ReplenishmentService:
 
         params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
         param_map = {p.item_id: p for p in params}
+
+        # N-21: Tự động tính toán lại tham số nếu thiếu trong InventoryParam
+        missing_skus = [p.item_id for p in products if p.item_id not in param_map]
+        if missing_skus:
+            for m_sku in missing_skus:
+                try:
+                    optimization_service.recompute_parameters(db, store_id=store_id, item_id=m_sku)
+                except Exception as e:
+                    logger.warning(f"Error recomputing params for SKU {m_sku} in store {store_id}: {e}")
+            params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+            param_map = {p.item_id: p for p in params}
 
         pending_recs = (
             db.query(ReplenishmentRecommendation.item_id)
@@ -86,16 +117,28 @@ class ReplenishmentService:
             on_hand = float(inv.on_hand) if inv else 0.0
             on_order = float(inv.on_order) if inv else 0.0
 
-            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ) từ map
+            # Lấy tham số tối ưu (s, S, ROP, SS, EOQ) từ map (N-21: xóa bỏ hằng số bịa 50/20/60)
             param = param_map.get(item_id)
-
-            rop = float(param.reorder_point) if param else 50.0
-            safety_stock = float(param.safety_stock) if param else 20.0
-            eoq = float(param.eoq) if param else 60.0
-            s_level = float(param.s) if (param and param.s is not None) else rop
-            has_explicit_S = param is not None and param.S is not None
-            S_level = float(param.S) if has_explicit_S else (s_level + eoq)
-            policy_name = param.model_run_id if (param and param.model_run_id) else "REFIT-RSS-EOQ-G"
+            if not param:
+                # Fallback tính toán tham số khoa học động theo mô hình A3 nếu chưa có trong DB
+                cfg = optimization_service.get_service_level_config(db)
+                tau = optimization_service._resolve_service_level(cfg, item_id, prod.cat_id)
+                lt = optimization_service._resolve_lead_time(db, item_id)
+                calculated = optimization_service._calculate_static_params(db, item_id, store_id, lt, tau)
+                rop = float(calculated["reorder_point"])
+                safety_stock = float(calculated["safety_stock"])
+                eoq = float(calculated["eoq"])
+                s_level = float(calculated["s"])
+                S_level = float(calculated["S"])
+                policy_name = calculated.get("model_run_id", "static-moving-avg")
+            else:
+                rop = float(param.reorder_point)
+                safety_stock = float(param.safety_stock)
+                eoq = float(param.eoq)
+                s_level = float(param.s) if param.s is not None else rop
+                has_explicit_S = param.S is not None
+                S_level = float(param.S) if has_explicit_S else (s_level + eoq)
+                policy_name = param.model_run_id if param.model_run_id else "REFIT-RSS-EOQ-G"
 
             # Vị trí tồn kho IP = On_hand + On_order
             ip = on_hand + on_order
@@ -115,11 +158,18 @@ class ReplenishmentService:
                 else:
                     priority = "LOW"
 
+                created_timestamp = (
+                    datetime.combine(effective_review_date, datetime.min.time(), tzinfo=timezone.utc)
+                    if review_date
+                    else now
+                )
+
+                assigned_supplier_id = supp_by_cat.get(prod.cat_id.upper() if prod.cat_id else "", default_supp_id)
                 rec = ReplenishmentRecommendation(
                     id=str(uuid.uuid4()),
                     item_id=item_id,
                     store_id=store_id,
-                    supplier_id=default_supp_id,
+                    supplier_id=assigned_supplier_id,
                     recommended_qty=recommended_qty,
                     final_qty=recommended_qty,
                     priority=priority,
@@ -130,14 +180,22 @@ class ReplenishmentService:
                     inventory_position=ip,
                     eoq_quantity=eoq,
                     policy_applied=policy_name,
-                    review_date=now.date(),
+                    review_date=effective_review_date,
                     decided_by=None,
-                    created_at=now,
+                    created_at=created_timestamp,
                     decided_at=None,
                 )
                 db.add(rec)
                 pending_set.add(item_id)
                 generated_count += 1
+
+                if auto_order:
+                    if not inv:
+                        inv = Inventory(item_id=item_id, store_id=store_id, on_hand=0.0, on_order=recommended_qty)
+                        db.add(inv)
+                        inv_map[item_id] = inv
+                    else:
+                        inv.on_order += recommended_qty
 
         if generated_count > 0:
             db.commit()
@@ -196,7 +254,7 @@ class ReplenishmentService:
         priority: Optional[str] = None,
         search: Optional[str] = None,
         item_id: Optional[str] = None,
-        auto_generate: bool = True,
+        auto_generate: bool = False,
     ) -> ReplenishmentListResponse:
         """
         UC33 - Lấy danh sách đề xuất nhập hàng (có phân trang, tìm kiếm, lọc).
@@ -205,7 +263,7 @@ class ReplenishmentService:
         if auto_generate:
             total_pending = (
                 db.query(ReplenishmentRecommendation)
-                .filter(ReplenishmentRecommendation.status == "PENDING")
+                .filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]))
                 .count()
             )
             if total_pending == 0:
@@ -224,7 +282,7 @@ class ReplenishmentService:
 
         pending_count = (
             db.query(ReplenishmentRecommendation)
-            .filter(ReplenishmentRecommendation.status == "PENDING")
+            .filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]))
             .count()
         )
         approved_count = (
@@ -269,17 +327,17 @@ class ReplenishmentService:
         UC34 - Điều chỉnh số lượng đặt hàng đề xuất (Warehouse Manager / Admin).
         Bắt buộc lý do, chỉ được sửa khi đơn ở trạng thái PENDING.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy đề xuất nhập hàng với mã '{rec_id}'.",
             )
 
-        if rec.status != "PENDING":
+        if rec.status not in ("PENDING", "PROPOSED"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ được phép điều chỉnh đề xuất đang ở trạng thái 'PENDING' (Trạng thái hiện tại: {rec.status}).",
+                detail=f"Chỉ được phép điều chỉnh đề xuất đang ở trạng thái 'PENDING' hoặc 'PROPOSED' (Trạng thái hiện tại: {rec.status}).",
             )
 
         if not request.reason or len(request.reason.strip()) < 3:
@@ -319,7 +377,7 @@ class ReplenishmentService:
         Tự động tăng on_order tương ứng trong bảng inventory, kích hoạt SSE realtime.
         Không cho phép duyệt lần hai.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -332,10 +390,10 @@ class ReplenishmentService:
                 detail="Đề xuất này đã được phê duyệt trước đó, không thể phê duyệt lần 2.",
             )
 
-        if rec.status != "PENDING":
+        if rec.status not in ("PENDING", "PROPOSED"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ có thể phê duyệt đề xuất đang ở trạng thái 'PENDING' (Hiện tại: {rec.status}).",
+                detail=f"Chỉ có thể phê duyệt đề xuất đang ở trạng thái 'PENDING' hoặc 'PROPOSED' (Hiện tại: {rec.status}).",
             )
 
         # 1. Cập nhật trạng thái đề xuất
@@ -360,6 +418,7 @@ class ReplenishmentService:
             background_tasks=background_tasks,
             user_email=user_email,
             ip_address=ip_address,
+            commit=False,
         )
 
         # 3. Ghi audit log
@@ -371,6 +430,7 @@ class ReplenishmentService:
             details=f"Phê duyệt đề xuất nhập hàng {rec_id} cho SKU {rec.item_id}: số lượng duyệt={rec.final_qty}, on_order ({current_on_order} -> {new_on_order})",
         )
         db.commit()
+        db.refresh(rec)
 
         return rec
 
@@ -386,17 +446,17 @@ class ReplenishmentService:
         UC36 - Từ chối đề xuất nhập hàng (PENDING -> REJECTED).
         Bắt buộc nhập lý do từ chối.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy đề xuất nhập hàng với mã '{rec_id}'.",
             )
 
-        if rec.status != "PENDING":
+        if rec.status not in ("PENDING", "PROPOSED"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chỉ có thể từ chối đề xuất đang ở trạng thái 'PENDING' (Hiện tại: {rec.status}).",
+                detail=f"Chỉ có thể từ chối đề xuất đang ở trạng thái 'PENDING' hoặc 'PROPOSED' (Hiện tại: {rec.status}).",
             )
 
         if not reason or not reason.strip():
@@ -435,7 +495,7 @@ class ReplenishmentService:
         UC36 - Hủy đề xuất đã duyệt (APPROVED -> CANCELLED) và hoàn trả on_order.
         Bắt buộc nhập lý do hủy.
         """
-        rec = replenishment_repository.get(db, rec_id)
+        rec = replenishment_repository.get(db, rec_id, for_update=True)
         if not rec:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -470,6 +530,7 @@ class ReplenishmentService:
             background_tasks=background_tasks,
             user_email=user_email,
             ip_address=ip_address,
+            commit=False,
         )
 
         # 2. Cập nhật trạng thái CANCELLED
@@ -488,6 +549,7 @@ class ReplenishmentService:
             details=f"Hủy đơn đặt hàng đã duyệt {rec_id} cho SKU {rec.item_id}: hoàn trả on_order ({current_on_order} -> {reverted_on_order}). Lý do: {reason}",
         )
         db.commit()
+        db.refresh(rec)
 
         return rec
 

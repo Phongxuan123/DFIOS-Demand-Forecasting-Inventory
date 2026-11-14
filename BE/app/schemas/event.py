@@ -1,8 +1,26 @@
 from datetime import datetime, timezone
 from enum import Enum
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+
+
+def mask_email(email: Optional[str]) -> str:
+    """
+    Sanitize email for privacy when broadcasting events to clients (B-25).
+    E.g. "warehouse.manager@dfios.com" -> "w***r@dfios.com"
+    """
+    if not email:
+        return "system"
+    if "@" not in email:
+        return email
+    parts = email.split("@", 1)
+    local, domain = parts[0], parts[1]
+    if len(local) <= 2:
+        masked_local = local[0] + "***"
+    else:
+        masked_local = local[0] + "***" + local[-1]
+    return f"{masked_local}@{domain}"
 
 
 class EventType(str, Enum):
@@ -49,6 +67,7 @@ class SystemEvent(BaseModel):
     id: Optional[int] = None
     event: str
     data: Dict[str, Any]
+    target_roles: Optional[List[str]] = None
 
     def to_sse_message(self) -> str:
         """
@@ -62,7 +81,12 @@ class SystemEvent(BaseModel):
         return f"{id_str}event: {self.event}\ndata: {data_str}\n\n"
 
 
-def create_inventory_updated_event(sku_id: str, actor_id: str, event_id: Optional[int] = None) -> SystemEvent:
+def create_inventory_updated_event(
+    sku_id: str,
+    actor_id: str,
+    event_id: Optional[int] = None,
+    target_roles: Optional[List[str]] = None,
+) -> SystemEvent:
     """
     Hàm tiện ích khởi tạo sự kiện inventory.updated có đầy đủ kiểu dữ liệu.
     """
@@ -71,6 +95,7 @@ def create_inventory_updated_event(sku_id: str, actor_id: str, event_id: Optiona
         id=event_id,
         event=EventType.INVENTORY_UPDATED.value,
         data=payload.model_dump(),
+        target_roles=target_roles,
     )
 
 
@@ -83,6 +108,7 @@ def create_stock_alert_event(
     safety_stock: float,
     message: str,
     event_id: Optional[int] = None,
+    target_roles: Optional[List[str]] = None,
 ) -> SystemEvent:
     """
     Hàm tiện ích khởi tạo sự kiện stock.alert cho UC10.
@@ -100,6 +126,7 @@ def create_stock_alert_event(
         id=event_id,
         event=EventType.STOCK_ALERT.value,
         data=payload.model_dump(),
+        target_roles=target_roles,
     )
 
 

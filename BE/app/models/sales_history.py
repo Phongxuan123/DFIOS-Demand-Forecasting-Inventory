@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, Float
+from sqlalchemy import Column, String, Date, Float, Index
 from app.models.base import Base
 
 class SalesHistory(Base):
@@ -9,3 +9,7 @@ class SalesHistory(Base):
     store_id = Column(String, nullable=False)
     sale_date = Column(Date, primary_key=True)
     quantity = Column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("idx_sales_item_store_date", "item_id", "store_id", "sale_date"),
+    )

@@ -70,7 +70,8 @@ merged["unit_price"] = merged["unit_price"].fillna(10.0)
 
 merged["order_cost"] = ORDER_COST
 merged["holding_cost"] = (0.002 * merged["unit_price"] * 365).round(4)
-merged["safety_stock"] = (Z_TAU * merged["sigma_d_h7"] * merged["exp_theta"]).round(2).clip(lower=0.0)
+# B-20: Thống nhất công thức tính SS chuẩn lý thuyết: SS = z_tau * sigma_d * sqrt(L) * exp(theta)
+merged["safety_stock"] = (Z_TAU * merged["sigma_d_h7"] * np.sqrt(LEAD_TIME) * merged["exp_theta"]).round(2).clip(lower=0.0)
 merged["reorder_point"] = (merged["d_l"] + merged["safety_stock"]).round(2).clip(lower=0.0)
 merged["annual_demand"] = ((merged["d_l"] / LEAD_TIME) * 365).round(2).clip(lower=1.0)
 merged["eoq"] = np.sqrt((2 * merged["annual_demand"] * merged["order_cost"]) / merged["holding_cost"]).round(2).clip(lower=1.0)

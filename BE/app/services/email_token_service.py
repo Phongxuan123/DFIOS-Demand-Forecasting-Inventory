@@ -31,6 +31,28 @@ class InMemoryRateLimiter:
         self._requests[key].append(now)
         return False
 
+    def check_limit(self, key: str, max_requests: int = 5, window_seconds: int = 3600) -> bool:
+        """Kiểm tra xem key đã chạm ngưỡng giới hạn hay chưa mà không tự động tăng bộ đếm."""
+        now = datetime.now(timezone.utc).timestamp()
+        if key not in self._requests:
+            return False
+        cutoff = now - window_seconds
+        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
+        return len(self._requests[key]) >= max_requests
+
+    def record_attempt(self, key: str, window_seconds: int = 3600) -> None:
+        """Ghi nhận một lần thử (ví dụ thất bại xác thực) vào lịch sử."""
+        now = datetime.now(timezone.utc).timestamp()
+        if key not in self._requests:
+            self._requests[key] = []
+        cutoff = now - window_seconds
+        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
+        self._requests[key].append(now)
+
+    def clear(self, key: str) -> None:
+        """Xóa toàn bộ lịch sử của key (ví dụ khi đăng nhập thành công)."""
+        self._requests.pop(key, None)
+
 
 rate_limiter = InMemoryRateLimiter()
 
@@ -93,6 +115,22 @@ class EmailTokenService:
         db.flush()
 
         return token_record, raw_token
+
+    @classmethod
+    def revoke_all_user_tokens(cls, db: Session, user_id: str) -> int:
+        """
+        Vô hiệu hóa toàn bộ token còn hiệu lực của user khi user bị khóa/vô hiệu hóa (B-13).
+        """
+        now = datetime.now(timezone.utc)
+        count = (
+            db.query(EmailToken)
+            .filter(
+                EmailToken.user_id == user_id,
+                EmailToken.used_at.is_(None),
+            )
+            .update({"used_at": now}, synchronize_session=False)
+        )
+        return count
 
     @classmethod
     def consume_token(

@@ -42,8 +42,9 @@ class DashboardRepository:
             & (Inventory.store_id == InventoryParam.store_id),
         )
 
-        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
-        inv_query = inv_query.filter(Inventory.store_id == target_store)
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
+        if not is_global:
+            inv_query = inv_query.filter(Inventory.store_id == store_id.strip())
 
         rows = inv_query.all()
         total_monitored = len(rows)
@@ -72,12 +73,13 @@ class DashboardRepository:
         rep_query = db.query(ReplenishmentRecommendation).filter(
             ReplenishmentRecommendation.status == "PENDING"
         )
-        rep_query = rep_query.filter(
-            ReplenishmentRecommendation.store_id == target_store
-        )
+        if not is_global:
+            rep_query = rep_query.filter(
+                ReplenishmentRecommendation.store_id == store_id.strip()
+            )
         pending_replenishments = rep_query.count()
 
-        # Lấy chỉ số chính xác thực nghiệm từ Model Registry (BUG-14)
+        # Lấy chỉ số chính xác thực nghiệm từ Model Registry (BUG-14, N-16)
         from app.models.model_registry import ModelRegistry
         prod_model = (
             db.query(ModelRegistry)
@@ -85,11 +87,17 @@ class DashboardRepository:
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
-        if prod_model and prod_model.metrics and "wrmsse" in prod_model.metrics:
-            wrmsse_val = prod_model.metrics["wrmsse"]
-            accuracy_display = f"WRMSSE {float(wrmsse_val):.4f}"
+        if prod_model and prod_model.metrics:
+            if "accuracy" in prod_model.metrics:
+                accuracy_display = f"{float(prod_model.metrics['accuracy']) * 100:.1f}%"
+            elif "wrmsse" in prod_model.metrics:
+                accuracy_display = f"WRMSSE {float(prod_model.metrics['wrmsse']):.4f}"
+            elif "mae" in prod_model.metrics:
+                accuracy_display = f"MAE {float(prod_model.metrics['mae']):.4f}"
+            else:
+                accuracy_display = "N/A"
         else:
-            accuracy_display = "WRMSSE 0.4935"
+            accuracy_display = "N/A"
 
         return {
             "total_skus": total_skus,
@@ -113,25 +121,32 @@ class DashboardRepository:
         """
         UC08: Tổng hợp chuỗi xu hướng nhu cầu thực tế và dự báo theo ngày/tuần/tháng.
         """
-        target_store = (
-            store_id.strip()
-            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
-            else "CA_1"
-        )
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
 
-        # Xác định mốc thời gian căn cứ theo sim_clock của cửa hàng
-        clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
-        clock_date = clock.current_date if clock and clock.current_date else None
-        if not clock_date:
-            max_sale = db.query(func.max(SalesHistory.sale_date)).filter(SalesHistory.store_id == target_store).scalar()
-            clock_date = max_sale if max_sale else date(2016, 5, 23)
+        # Xác định mốc thời gian căn cứ theo sim_clock
+        if not is_global:
+            target_store = store_id.strip()
+            clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+            clock_date = clock.current_date if clock and clock.current_date else None
+            if not clock_date:
+                max_sale = db.query(func.max(SalesHistory.sale_date)).filter(SalesHistory.store_id == target_store).scalar()
+                clock_date = max_sale if max_sale else date(2016, 5, 23)
+        else:
+            clock_max = db.query(func.max(SimClock.current_date)).scalar()
+            clock_date = clock_max if clock_max else None
+            if not clock_date:
+                max_sale = db.query(func.max(SalesHistory.sale_date)).scalar()
+                clock_date = max_sale if max_sale else date(2016, 5, 23)
 
         # 1. Truy vấn lịch sử bán hàng thực tế gần nhất (đến mốc clock_date)
         sales_q = db.query(
             SalesHistory.sale_date,
             func.sum(SalesHistory.quantity).label("total_qty"),
         )
-        sales_q = sales_q.filter(SalesHistory.store_id == target_store, SalesHistory.sale_date <= clock_date)
+        if not is_global:
+            sales_q = sales_q.filter(SalesHistory.store_id == target_store, SalesHistory.sale_date <= clock_date)
+        else:
+            sales_q = sales_q.filter(SalesHistory.sale_date <= clock_date)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             sales_q = sales_q.join(Product, SalesHistory.item_id == Product.item_id).filter(
@@ -154,11 +169,32 @@ class DashboardRepository:
         }
 
         # 2. Truy vấn dự báo nhu cầu tương lai (từ mốc clock_date)
+        # R-20: Lọc theo model_version production để tránh cộng dồn nhiều mô hình làm vọt dữ liệu dự báo
+        from app.models.model_registry import ModelRegistry
+        prod_model = (
+            db.query(ModelRegistry)
+            .filter(ModelRegistry.is_production == True)
+            .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
+            .first()
+        )
+
         fc_q = db.query(
             Forecast.forecast_date,
             func.sum(Forecast.y_pred).label("total_pred"),
         )
-        fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
+        if prod_model and prod_model.algorithm:
+            has_prod_fc = db.query(Forecast.id).filter(Forecast.model_version.ilike(f"%{prod_model.algorithm}%")).first()
+            if has_prod_fc:
+                fc_q = fc_q.filter(Forecast.model_version.ilike(f"%{prod_model.algorithm}%"))
+            else:
+                fc_q = fc_q.filter(~Forecast.model_version.ilike("%fast-inference%"))
+        else:
+            fc_q = fc_q.filter(~Forecast.model_version.ilike("%fast-inference%"))
+
+        if not is_global:
+            fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
+        else:
+            fc_q = fc_q.filter(Forecast.forecast_date >= clock_date)
 
         if category and category.strip() and category.strip().upper() != "ALL":
             fc_q = fc_q.join(Product, Forecast.item_id == Product.item_id).filter(
@@ -201,7 +237,7 @@ class DashboardRepository:
         db: Session,
         store_id: Optional[str] = None,
         severity: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
         """
@@ -225,8 +261,9 @@ class DashboardRepository:
             & (Inventory.store_id == InventoryParam.store_id),
         )
 
-        target_store = store_id.strip() if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL") else "CA_1"
-        query = query.filter(Inventory.store_id == target_store)
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
+        if not is_global:
+            query = query.filter(Inventory.store_id == store_id.strip())
 
         all_records = query.all()
 
@@ -298,7 +335,7 @@ class DashboardRepository:
             combined = critical_items + warning_items + healthy_items
 
         total = len(combined)
-        paginated_items = combined[offset : offset + limit]
+        paginated_items = combined[offset : offset + limit] if limit is not None else combined[offset:]
         return paginated_items, summary_counts, total
 
     def find_or_create_alert(
@@ -311,13 +348,23 @@ class DashboardRepository:
     ) -> Tuple[Alert, bool]:
         """
         UC10: Tạo cảnh báo trong bảng alerts nếu chưa tồn tại cảnh báo chưa đọc (deduplication).
+        B-21: Đồng bộ enum alert (STOCK_CRITICAL/STOCK_WARNING) và hỗ trợ alias cũ.
         """
+        canonical_type = "STOCK_CRITICAL" if alert_type in ("CRITICAL_OUT_OF_STOCK", "STOCK_CRITICAL") else (
+            "STOCK_WARNING" if alert_type in ("WARNING_LOW_STOCK", "STOCK_WARNING") else alert_type
+        )
+        alias_types = {alert_type, canonical_type}
+        if canonical_type == "STOCK_CRITICAL":
+            alias_types.add("CRITICAL_OUT_OF_STOCK")
+        elif canonical_type == "STOCK_WARNING":
+            alias_types.add("WARNING_LOW_STOCK")
+
         existing = (
             db.query(Alert)
             .filter(
                 Alert.item_id == item_id,
                 Alert.store_id == store_id,
-                Alert.type == alert_type,
+                Alert.type.in_(list(alias_types)),
                 Alert.is_read == False,
             )
             .first()
@@ -328,7 +375,7 @@ class DashboardRepository:
         new_alert = Alert(
             item_id=item_id,
             store_id=store_id,
-            type=alert_type,
+            type=canonical_type,
             message=message,
             is_read=False,
             created_at=datetime.now(timezone.utc),

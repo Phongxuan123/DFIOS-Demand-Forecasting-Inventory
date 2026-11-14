@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin, require_manager_or_admin
@@ -31,7 +31,12 @@ def get_clock(
     Lấy ngày mô phỏng hiện tại, trạng thái, tốc độ tua và số chu kỳ review đã qua.
     Role: Warehouse Manager, Admin.
     """
-    clock = pipeline_service.get_sim_clock(db, store_id=store_id)
+    clock = pipeline_service.get_sim_clock(db, store_id=store_id, auto_create=False)
+    if not clock:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'",
+        )
     days_elapsed = (clock.current_date - clock.start_date).days
     reviews_elapsed = max(0, days_elapsed // 7)
 
@@ -70,13 +75,17 @@ def advance_clock(
     Role: Admin only.
     """
     store_id = body.store_id or "CA_1"
-    result = pipeline_service.advance_sim_clock(
-        db=db,
-        store_id=store_id,
-        days=body.days,
-        reviews=body.reviews,
-        until=body.until,
-    )
+    try:
+        result = pipeline_service.advance_sim_clock(
+            db=db,
+            store_id=store_id,
+            days=body.days,
+            reviews=body.reviews,
+            until=body.until,
+        )
+    except ValueError as e:
+        status_code = status.HTTP_400_BAD_REQUEST if "vượt quá" in str(e) else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=str(e))
     return ClockAdvanceResponse(**result)
 
 
@@ -97,7 +106,10 @@ def reset_clock(
     """
     store_id = body.store_id if body and body.store_id else "CA_1"
     target_date = body.target_date if body else None
-    clock = pipeline_service.reset_sim_clock(db, store_id=store_id, target_date=target_date)
+    try:
+        clock = pipeline_service.reset_sim_clock(db, store_id=store_id, target_date=target_date)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     days_elapsed = (clock.current_date - clock.start_date).days
     reviews_elapsed = max(0, days_elapsed // 7)
@@ -129,7 +141,10 @@ def set_clock_speed(
     Cài đặt hệ số tốc độ tua (0.1x - 10.0x).
     Role: Admin only.
     """
-    clock = pipeline_service.set_sim_speed(db, store_id=body.store_id or "CA_1", speed=body.speed)
+    try:
+        clock = pipeline_service.set_sim_speed(db, store_id=body.store_id or "CA_1", speed=body.speed)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     days_elapsed = (clock.current_date - clock.start_date).days
     reviews_elapsed = max(0, days_elapsed // 7)
 
