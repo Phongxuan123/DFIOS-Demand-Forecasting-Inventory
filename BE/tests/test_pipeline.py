@@ -132,6 +132,22 @@ class TestPipelineEndpoints(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
+    def test_b26_batch_schedule_invalid_cron_rejected(self):
+        """B-26: Kiểm tra từ chối biểu thức cron không đúng chuẩn 5 trường."""
+        payload = {
+            "name": "Invalid Cron Task",
+            "cron_expression": "invalid-cron-format",
+            "model_name": "lightgbm",
+            "horizon": 28,
+            "store_id": "CA_1",
+        }
+        resp = self.client.post(
+            "/api/v1/ml/schedule",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
     # ---------------------------------------------------------
     # UC50: Auto-compute SS/ROP/EOQ & ABC-XYZ after Forecast Run
     # ---------------------------------------------------------

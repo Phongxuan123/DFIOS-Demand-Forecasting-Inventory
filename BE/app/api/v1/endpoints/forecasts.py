@@ -27,7 +27,7 @@ router = APIRouter()
 
 @router.get("", response_model=ForecastListResponse, summary="UC17 / UC18 / UC19 - Tra cứu danh sách dự báo nhu cầu")
 def get_forecasts(
-    horizon: Optional[int] = Query(None, description="Khoảng ngày dự báo (7, 14, 28). Mặc định theo cấu hình hệ thống"),
+    horizon: Optional[int] = Query(None, ge=1, le=28, description="Khoảng ngày dự báo (7, 14, 28). Mặc định theo cấu hình hệ thống"),
     item_id: Optional[str] = Query(None, description="Lọc theo mã SKU sản phẩm"),
     category: Optional[str] = Query(None, description="Lọc theo ngành hàng (category / cat_id)"),
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng / kho"),
@@ -137,7 +137,7 @@ def compare_actual_vs_predicted(
 def get_uncertainty_band(
     sku: str,
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng"),
-    horizon: Optional[int] = Query(None, description="Khoảng ngày dự báo (7, 14, 28)"),
+    horizon: Optional[int] = Query(None, ge=1, le=28, description="Khoảng ngày dự báo (7, 14, 28)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

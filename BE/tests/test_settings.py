@@ -246,6 +246,45 @@ class TestSystemSettingsEndpoints(unittest.TestCase):
         )
         self.assertEqual(res_ltb.status_code, 400)
 
+    def test_b26_validation_rejects_arbitrary_setting_key(self):
+        """B-26: Chặn không cho cập nhật các key không thuộc whitelist cấu hình."""
+        res = self.client.put(
+            "/api/v1/settings/unauthorized_arbitrary_key",
+            json={"value": "some_value"},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("không được hỗ trợ", res.json()["detail"])
+
+    def test_b26_validation_rejects_forecast_horizon_above_28(self):
+        """B-26: Chặn cấu hình horizon vượt quá 28 ngày."""
+        res = self.client.put(
+            "/api/v1/settings/forecast_horizons",
+            json={"value": [7, 14, 28, 90]},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("1 đến 28", res.json()["detail"])
+
+    def test_b26_validation_cron_schedule(self):
+        """B-26: Xác thực tính hợp lệ của biểu thức cron trong setting."""
+        # Biểu thức cron hợp lệ
+        res_valid = self.client.put(
+            "/api/v1/settings/cron_schedule",
+            json={"value": "0 2 * * *"},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_valid.status_code, 200)
+
+        # Biểu thức cron sai cú pháp
+        res_invalid = self.client.put(
+            "/api/v1/settings/cron_schedule",
+            json={"value": "invalid cron format"},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_invalid.status_code, 400)
+        self.assertIn("Biểu thức cron", res_invalid.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

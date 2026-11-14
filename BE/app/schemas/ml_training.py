@@ -15,7 +15,7 @@ class TrainJobRequest(BaseModel):
     store_id: Optional[str] = Field(None, description="Mã cửa hàng/kho cần huấn luyện")
     start_date: Optional[date] = Field(None, description="Ngày bắt đầu khoảng thời gian huấn luyện")
     end_date: Optional[date] = Field(None, description="Ngày kết thúc khoảng thời gian huấn luyện")
-    horizon: int = Field(default=28, ge=1, le=90, description="Số ngày dự báo để đánh giá sai số (mặc định 28 ngày)")
+    horizon: int = Field(default=28, ge=1, le=28, description="Số ngày dự báo để đánh giá sai số (tối đa 28 ngày)")
 
 
 class ModelBenchmarkMetrics(BaseModel):
