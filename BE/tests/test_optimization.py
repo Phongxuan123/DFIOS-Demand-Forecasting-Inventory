@@ -1,3 +1,4 @@
+import math
 import unittest
 from datetime import date, timedelta
 from fastapi.testclient import TestClient
@@ -17,6 +18,7 @@ from app.models.audit_log import AuditLog
 from app.models.system_setting import SystemSetting
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
+from app.services.optimization_service import optimization_service
 
 
 class TestOptimizationEndpoints(unittest.TestCase):
@@ -403,3 +405,35 @@ class TestOptimizationEndpoints(unittest.TestCase):
             # Unknown item with no category -> defaults to DEFAULT_LEAD_TIME = 3
             lt_default = optimization_service._resolve_lead_time(session, "UNKNOWN_SKU")
             self.assertEqual(lt_default, 3)
+
+    def test_service_level_boundary_clamping_prevents_inf(self):
+        with self.TestingSessionLocal() as session:
+            res_1 = optimization_service._calculate_static_params(
+                session, item_id="FOODS_1_001", store_id="CA_1", lead_time_days=7, tau=1.0
+            )
+            self.assertFalse(math.isinf(res_1["safety_stock"]))
+            self.assertFalse(math.isnan(res_1["safety_stock"]))
+            self.assertGreater(res_1["safety_stock"], 0.0)
+
+            res_0 = optimization_service._calculate_static_params(
+                session, item_id="FOODS_1_001", store_id="CA_1", lead_time_days=7, tau=0.10
+            )
+            self.assertFalse(math.isinf(res_0["safety_stock"]))
+            self.assertFalse(math.isnan(res_0["safety_stock"]))
+
+        payload = {
+            "item_id": "FOODS_1_001",
+            "store_id": "CA_1",
+            "lead_time_deltas": [0.0],
+            "service_level_deltas": [-0.50, 0.50],
+        }
+        res = self.client.post(
+            "/api/v1/optimization/sensitivity-analysis",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        for s in data["scenarios"]:
+            self.assertFalse(math.isinf(s["safety_stock"]))
+            self.assertFalse(math.isinf(s["total_cost"]))

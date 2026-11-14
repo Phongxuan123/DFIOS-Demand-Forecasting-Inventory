@@ -49,7 +49,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return null;
     }
   });
-  const [isLoading, setIsLoading] = useState<boolean>(() => !localStorage.getItem('access_token'));
+  const [isLoading, setIsLoading] = useState<boolean>(() => !!localStorage.getItem('access_token'));
 
   // Re-hydrate session on mount by validating token with BE
   useEffect(() => {

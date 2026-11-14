@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bar,
@@ -37,7 +37,6 @@ import {
   Scale,
   ShieldAlert,
   ShieldCheck,
-  Store,
   TrendingDown,
   TrendingUp,
   Truck,
@@ -145,17 +144,23 @@ export const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
 
   // Task FE.1 — Simulation Clock & Pipeline Replay State
-  const [simOffsetDays, setSimOffsetDays] = useState<number>(0);
+  const [simOffsetDays, setSimOffsetDays] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? sessionStorage.getItem('dfios_sim_offset') : null;
+      return saved ? Number(saved) : 0;
+    } catch {
+      return 0;
+    }
+  });
   const [simMode, setSimMode] = useState<'replay' | 'live'>('replay');
   const [isRunningPipeline, setIsRunningPipeline] = useState<boolean>(false);
   const [lastPipelineRunAt, setLastPipelineRunAt] = useState<string>('06:00 UTC');
 
   // Dynamic Backend filter metadata
-  const [stores, setStores] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
 
   // Backend query parameters
-  const [selectedStore, setSelectedStore] = useState<string>('CA_1');
+  const selectedStore = 'CA_1';
   const [trendCategory, setTrendCategory] = useState<string>('');
   const [trendDays, setTrendDays] = useState<number>(30);
   const [trendGranularity, setTrendGranularity] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -184,15 +189,8 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      api.inventory.getStores().catch(() => []),
-      api.products.getCategories().catch(() => []),
-    ]).then(([storeList, categoryList]) => {
+    api.products.getCategories().catch(() => []).then((categoryList) => {
       if (!active) return;
-      if (Array.isArray(storeList)) {
-        const cleaned = storeList.filter(Boolean);
-        setStores(cleaned.length > 0 ? cleaned : ['CA_1']);
-      }
       if (Array.isArray(categoryList)) {
         setCategories(categoryList.filter(Boolean));
       }
@@ -202,7 +200,12 @@ export const Dashboard: React.FC = () => {
     };
   }, []);
 
+  const coreReqIdRef = useRef(0);
+  const trendReqIdRef = useRef(0);
+  const alertsReqIdRef = useRef(0);
+
   const fetchCoreDashboard = useCallback(async (storeId: string) => {
+    const reqId = ++coreReqIdRef.current;
     setIsLoadingCore(true);
     try {
       const storeParam = storeId || undefined;
@@ -212,19 +215,25 @@ export const Dashboard: React.FC = () => {
         isAdmin ? api.reports.getCostComparison({ store_id: storeParam }).catch(() => null) : Promise.resolve(null),
         isAdmin ? api.optimization.compareStatic(storeId || 'CA_1').catch(() => null) : Promise.resolve(null),
       ]);
+      if (reqId !== coreReqIdRef.current) return;
       if (kpisRes) setKpis(kpisRes);
       if (alertsRes) setOverviewAlerts(alertsRes);
       if (costRes) setCostComparisonRaw(costRes);
       if (staticRes) setStaticComparisonRaw(staticRes);
     } catch (err) {
-      console.error('Failed to load Dashboard KPIs & Alerts from Backend:', err);
+      if (reqId === coreReqIdRef.current) {
+        console.error('Failed to load Dashboard KPIs & Alerts from Backend:', err);
+      }
     } finally {
-      setIsLoadingCore(false);
+      if (reqId === coreReqIdRef.current) {
+        setIsLoadingCore(false);
+      }
     }
   }, [isAdmin]);
 
   const fetchDemandTrend = useCallback(
     async (storeId: string, category: string, days: number, granularity: string) => {
+      const reqId = ++trendReqIdRef.current;
       setIsLoadingTrend(true);
       try {
         const res = await api.dashboard.getDemandTrend({
@@ -233,11 +242,16 @@ export const Dashboard: React.FC = () => {
           days,
           granularity,
         });
+        if (reqId !== trendReqIdRef.current) return;
         if (res) setDemandTrend(res);
       } catch (err) {
-        console.error('Failed to load Demand Trend from Backend:', err);
+        if (reqId === trendReqIdRef.current) {
+          console.error('Failed to load Demand Trend from Backend:', err);
+        }
       } finally {
-        setIsLoadingTrend(false);
+        if (reqId === trendReqIdRef.current) {
+          setIsLoadingTrend(false);
+        }
       }
     },
     []
@@ -245,6 +259,7 @@ export const Dashboard: React.FC = () => {
 
   const fetchAlertsTable = useCallback(
     async (storeId: string, severity: string, offset: number) => {
+      const reqId = ++alertsReqIdRef.current;
       setIsLoadingTable(true);
       try {
         const res = await api.dashboard.getAlerts({
@@ -253,11 +268,16 @@ export const Dashboard: React.FC = () => {
           limit: ALERT_PAGE_SIZE,
           offset,
         });
+        if (reqId !== alertsReqIdRef.current) return;
         if (res) setTableAlerts(res);
       } catch (err) {
-        console.error('Failed to load Stock Alerts table from Backend:', err);
+        if (reqId === alertsReqIdRef.current) {
+          console.error('Failed to load Stock Alerts table from Backend:', err);
+        }
       } finally {
-        setIsLoadingTable(false);
+        if (reqId === alertsReqIdRef.current) {
+          setIsLoadingTable(false);
+        }
       }
     },
     []
@@ -297,11 +317,6 @@ export const Dashboard: React.FC = () => {
     fetchAlertsTable(selectedStore, alertSeverity, alertOffset);
   }, [selectedStore, alertSeverity, alertOffset, fetchAlertsTable]);
 
-  const handleStoreChange = (nextStore: string) => {
-    setSelectedStore(nextStore);
-    setAlertOffset(0);
-  };
-
   const handleSeverityChange = (nextSeverity: string) => {
     setAlertSeverity(nextSeverity);
     setAlertOffset(0);
@@ -338,7 +353,10 @@ export const Dashboard: React.FC = () => {
       });
 
       setSimOffsetDays(nextOffset);
-      setLastPipelineRunAt(`${new Date().toTimeString().slice(0, 5)} UTC`);
+      try {
+        sessionStorage.setItem('dfios_sim_offset', String(nextOffset));
+      } catch {}
+      setLastPipelineRunAt(`${new Date().toISOString().slice(11, 16)} UTC`);
       setScanBanner({
         type: 'success',
         message: isVi
@@ -576,10 +594,28 @@ export const Dashboard: React.FC = () => {
         ? (cycles.reduce((a, b) => a + b.shadowFillRate, 0) / cycles.length).toFixed(1)
         : '88.5';
 
-    const staticDiffPct =
-      staticComparisonRaw?.avg_rop_diff_pct != null
-        ? Number(staticComparisonRaw.avg_rop_diff_pct).toFixed(1)
-        : '+11.4';
+    const staticDiffPct = (() => {
+      if (staticComparisonRaw?.avg_rop_diff_pct != null) {
+        const val = Number(staticComparisonRaw.avg_rop_diff_pct);
+        return val >= 0 ? `+${val.toFixed(1)}` : val.toFixed(1);
+      }
+      if (Array.isArray(staticComparisonRaw?.items) && staticComparisonRaw.items.length > 0) {
+        const valid = staticComparisonRaw.items.filter((it: any) => Number(it.static_reorder_point) > 0);
+        if (valid.length > 0) {
+          const sumDiffPct = valid.reduce((acc: number, it: any) => {
+            const diff = Number(it.ml_reorder_point) - Number(it.static_reorder_point);
+            return acc + (diff / Number(it.static_reorder_point)) * 100;
+          }, 0);
+          const avg = sumDiffPct / valid.length;
+          return avg >= 0 ? `+${avg.toFixed(1)}` : avg.toFixed(1);
+        }
+      }
+      if (staticComparisonRaw?.avg_ss_reduction_percent != null) {
+        const val = Number(staticComparisonRaw.avg_ss_reduction_percent);
+        return val >= 0 ? `-${val.toFixed(1)}` : `+${Math.abs(val).toFixed(1)}`;
+      }
+      return '—';
+    })();
 
     return {
       cycles,
@@ -1102,7 +1138,7 @@ export const Dashboard: React.FC = () => {
             <h4 className="dash-cost-subtitle">
               {isVi ? ' Sổ Cái Đối Chiếu Chu Kỳ (B₀ vs P₆)' : 'Cycle Comparison Ledger (B₀ vs P₆)'}
             </h4>
-            <span className="dash-formula-chip">ΔROP: {costTelemetry.staticDiffPct}%</span>
+            <span className="dash-formula-chip">ΔROP: {costTelemetry.staticDiffPct}{costTelemetry.staticDiffPct !== '—' ? '%' : ''}</span>
           </div>
 
           <div className="dash-cost-table-wrap">
@@ -1283,23 +1319,6 @@ export const Dashboard: React.FC = () => {
         </div>
 
         <div className="dash-actions-group">
-          <div className="dash-store-control">
-            <Store size={14} className="dash-store-icon" />
-            <span className="dash-store-label">{t('dashboard.store_label', 'Store:')}</span>
-            <select
-              className="dash-store-select"
-              value={selectedStore}
-              onChange={(e) => handleStoreChange(e.target.value)}
-              aria-label="Select store scope"
-            >
-              {(stores.length > 0 ? stores : ['CA_1']).map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <button
             type="button"
             className="dash-refresh-btn"

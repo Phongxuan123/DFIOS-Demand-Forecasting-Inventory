@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { Card } from '../components/ui/Card.tsx';
@@ -141,7 +141,6 @@ export const ForecastExplorer: React.FC = () => {
   const [skuSearch, setSkuSearch] = useState(searchParams.get('sku') || '');
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [stores, setStores] = useState<string[]>([]);
   const [selectedStore, setSelectedStore] = useState(searchParams.get('store') || 'CA_1');
   const [horizon, setHorizon] = useState<number>(28);
   const [selectedEngine, setSelectedEngine] = useState('LightGBM');
@@ -243,14 +242,21 @@ export const ForecastExplorer: React.FC = () => {
     return fullScheduleMatrix.slice(start, start + matrixPageSize);
   }, [fullScheduleMatrix, matrixPage, matrixPageSize]);
 
-  const fetchForecast = async (sku?: string, h: number = horizon, store?: string) => {
+  const forecastReqIdRef = useRef(0);
+  const lastFetchedKeyRef = useRef('');
+
+  const fetchForecast = async (sku?: string, h: number = horizon, store?: string, engine: string = selectedEngine, force: boolean = false) => {
+    const targetSku = (sku || skuSearch || 'FOODS_1_001').trim();
+    const targetStore = store !== undefined && store !== '' ? store : selectedStore || 'CA_1';
+    const fetchKey = `${targetSku}_${targetStore}_${h}_${engine}`;
+    if (!force && fetchKey === lastFetchedKeyRef.current) return;
+    lastFetchedKeyRef.current = fetchKey;
+    const reqId = ++forecastReqIdRef.current;
     setIsLoading(true);
     try {
-      const targetSku = (sku || skuSearch || 'FOODS_1_001').trim();
-      const targetStore = store !== undefined && store !== '' ? store : selectedStore || 'CA_1';
       const [forecast, explRes, overRes, uncRes, cmpRes, modelsRes, wqRes, calRes, clsSkuRes] = await Promise.all([
-        api.forecasting.getExplorerData(targetSku, h, targetStore),
-        api.forecasting.getExplanation(targetSku, { store_id: targetStore }).catch(() => null),
+        api.forecasting.getExplorerData(targetSku, h, targetStore, engine),
+        api.forecasting.getExplanation(targetSku, { store_id: targetStore, model_name: engine.toLowerCase() }).catch(() => null),
         api.forecasting.getOverrides(targetSku, { store_id: targetStore }).catch(() => []),
         api.forecasting.getUncertainty(targetSku, { store_id: targetStore, horizon: h }).catch(() => null),
         api.forecasting.compare(targetSku, { store_id: targetStore }).catch(() => null),
@@ -259,6 +265,8 @@ export const ForecastExplorer: React.FC = () => {
         canEdit ? api.calibration.getStatus(targetStore).catch(() => null) : Promise.resolve(null),
         api.classification.getSkus({ search: targetSku, limit: 5 }).catch(() => null),
       ]);
+
+      if (reqId !== forecastReqIdRef.current) return;
 
       if (modelsRes?.list) {
         setRegisteredModels(modelsRes.list);
@@ -320,15 +328,19 @@ export const ForecastExplorer: React.FC = () => {
       setWindowQuantileRaw(wqRes);
       setCalibrationStatus(calRes);
     } catch (error) {
-      console.error('Failed to load forecast explorer data', error);
-      setToast({
-        type: 'error',
-        message: isVi
-          ? 'Không thể tải dữ liệu dự báo từ máy chủ. Vui lòng thử lại.'
-          : 'Failed to load forecast data from server. Please retry.',
-      });
+      if (reqId === forecastReqIdRef.current) {
+        console.error('Failed to load forecast explorer data', error);
+        setToast({
+          type: 'error',
+          message: isVi
+            ? 'Không thể tải dữ liệu dự báo từ máy chủ. Vui lòng thử lại.'
+            : 'Failed to load forecast data from server. Please retry.',
+        });
+      }
     } finally {
-      setIsLoading(false);
+      if (reqId === forecastReqIdRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -355,13 +367,11 @@ export const ForecastExplorer: React.FC = () => {
   useEffect(() => {
     const initFilters = async () => {
       try {
-        const [catList, storeList, prodRes] = await Promise.all([
+        const [catList, prodRes] = await Promise.all([
           api.products.getCategories().catch(() => []),
-          api.inventory.getStores().catch(() => []),
           api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
         ]);
         if (catList && catList.length) setCategories(catList);
-        if (storeList && storeList.length) setStores(storeList);
         const pList = prodRes?.list || [];
         if (pList.length) setProducts(pList);
       } catch (e) {
@@ -381,14 +391,7 @@ export const ForecastExplorer: React.FC = () => {
   const handleHorizonChange = (newH: number) => {
     setHorizon(newH);
     setMatrixPageSize(newH);
-    fetchForecast(skuSearch, newH, selectedStore);
-  };
-
-  const handleStoreChange = (newStore: string) => {
-    const nextStore = newStore || 'CA_1';
-    setSelectedStore(nextStore);
-    syncUrlParams(skuSearch || 'FOODS_1_001', nextStore);
-    fetchForecast(skuSearch, horizon, nextStore);
+    fetchForecast(skuSearch, newH, selectedStore, selectedEngine, true);
   };
 
   const handleCategoryChange = (newCat: string) => {
@@ -398,18 +401,18 @@ export const ForecastExplorer: React.FC = () => {
       if (match) {
         setSkuSearch(match.item_id);
         syncUrlParams(match.item_id, selectedStore || 'CA_1');
-        fetchForecast(match.item_id, horizon, selectedStore);
+        fetchForecast(match.item_id, horizon, selectedStore, selectedEngine, true);
         return;
       }
     }
-    fetchForecast(skuSearch, horizon, selectedStore);
+    fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
   };
 
   const handleSkuSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleaned = (skuSearch || 'FOODS_1_001').trim();
     syncUrlParams(cleaned, selectedStore || 'CA_1');
-    fetchForecast(cleaned, horizon, selectedStore);
+    fetchForecast(cleaned, horizon, selectedStore, selectedEngine, true);
   };
 
   // Compute Route (c) Cumulative Protection Window Quantiles Q_{D_H}(tau) over H = L + R = 10 days
@@ -585,12 +588,14 @@ export const ForecastExplorer: React.FC = () => {
     setOverrideError('');
     try {
       const fullReason = `${overrideReason}: ${overrideNotes || 'Manual business adjustment'}`;
+      const foundIdx = fullScheduleMatrix.findIndex((r: any) => r.date === overrideDate);
+      const computedH = foundIdx >= 0 ? foundIdx + 1 : undefined;
       await api.forecasting.createOverride(skuSearch, {
         forecast_date: overrideDate,
         override_value: Number(overrideValue),
         reason: fullReason,
         store_id: selectedStore || undefined,
-        horizon,
+        h: computedH,
       });
       setIsOverrideModalOpen(false);
       setOverrideNotes('');
@@ -600,7 +605,7 @@ export const ForecastExplorer: React.FC = () => {
           ? `Đã áp dụng điều chỉnh dự báo cho ngày ${overrideDate} thành công!`
           : `Applied forecast override for ${overrideDate} successfully!`,
       });
-      await fetchForecast(skuSearch, horizon, selectedStore);
+      await fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       let errMsg = isVi ? 'Không thể áp dụng điều chỉnh dự báo' : 'Failed to apply forecast override';
@@ -636,7 +641,7 @@ export const ForecastExplorer: React.FC = () => {
           ? 'Đã hoàn tác điều chỉnh dự báo về ML baseline thành công!'
           : 'Reverted forecast override back to ML baseline successfully!',
       });
-      await fetchForecast(skuSearch, horizon, selectedStore);
+      await fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       const msg =
@@ -722,7 +727,7 @@ export const ForecastExplorer: React.FC = () => {
           ? `Đã áp dụng điều chỉnh hàng loạt thành công cho ${res.created_count ?? items.length} ngày!`
           : `Applied bulk override successfully for ${res.created_count ?? items.length} days!`,
       });
-      await fetchForecast(skuSearch, horizon, selectedStore);
+      await fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       let errMsg = isVi ? 'Không thể áp dụng điều chỉnh hàng loạt' : 'Failed to apply bulk overrides';
@@ -866,22 +871,6 @@ export const ForecastExplorer: React.FC = () => {
               </select>
             </div>
 
-            <div className="filter-item">
-              <label className="filter-label">{isVi ? 'Chi Nhánh / Kho Hàng' : 'Location / Store'}</label>
-              <select
-                className="filter-select"
-                value={selectedStore}
-                onChange={(e) => handleStoreChange(e.target.value)}
-              >
-                <option value="">{isVi ? 'Tất cả kho hàng' : 'All Warehouses'}</option>
-                {stores.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             <div className="filter-item" style={{ minWidth: '220px' }}>
               <label className="filter-label">{isVi ? 'Mã Định Danh SKU' : 'SKU Identifier'}</label>
               <div className="filter-input-wrapper">
@@ -956,10 +945,12 @@ export const ForecastExplorer: React.FC = () => {
                 className="ml-engine-select"
                 value={selectedEngine}
                 onChange={(e) => {
-                  setSelectedEngine(e.target.value);
+                  const newEngine = e.target.value;
+                  setSelectedEngine(newEngine);
+                  fetchForecast(skuSearch, horizon, selectedStore, newEngine);
                   setToast({
                     type: 'success',
-                    message: isVi ? `Đã chuyển sang mô hình ${e.target.value}` : `Switched active engine to ${e.target.value}`,
+                    message: isVi ? `Đã chuyển sang mô hình ${newEngine}` : `Switched active engine to ${newEngine}`,
                   });
                 }}
               >
@@ -1262,7 +1253,7 @@ export const ForecastExplorer: React.FC = () => {
                           ? `Đặc trưng ${idx + 1}`
                           : `Feature ${idx + 1}`,
                       desc:
-                        f.description ||
+                        (isVi ? f.description : null) ||
                         (isVi
                           ? 'Đặc trưng hồi quy trong mô hình Machine Learning'
                           : 'Regression feature in Machine Learning model'),
@@ -1275,7 +1266,7 @@ export const ForecastExplorer: React.FC = () => {
                     const barWidth =
                       maxShapScore > 0 ? Math.min(100, Math.round((absScore / maxShapScore) * 100)) : 20;
                     const sharePct = totalShapSum > 0 ? Math.round((absScore / totalShapSum) * 100) : 0;
-                    const descText = f.description || meta.desc;
+                    const descText = meta.desc || (isVi ? f.description : '');
 
                     return (
                       <div key={idx} className="shap-row">

@@ -8,6 +8,8 @@ from app.main import app
 from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
+from app.models.inventory import Inventory
+from app.models.inventory_adjustment import InventoryAdjustment
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
 
@@ -199,6 +201,45 @@ class TestProductMasterEndpoints(unittest.TestCase):
         data = res.json()
         self.assertEqual(data["inserted"], 2)
         self.assertEqual(data["skipped"], 1)
+
+    def test_delete_product_with_associated_data_returns_400(self):
+        with self.TestingSessionLocal() as session:
+            inv = Inventory(
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                on_hand=50.0,
+            )
+            session.add(inv)
+            session.commit()
+
+        del_res = self.client.delete(
+            "/api/v1/products/FOODS_1_001",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(del_res.status_code, 400)
+        self.assertIn("li\u00ean k\u1ebft", del_res.json()["detail"].lower())
+
+    def test_delete_product_with_adjustment_returns_400(self):
+        with self.TestingSessionLocal() as session:
+            adj = InventoryAdjustment(
+                id="adj_HOBBIES_1_001",
+                item_id="HOBBIES_1_001",
+                store_id="CA_1",
+                old_on_hand=10.0,
+                new_on_hand=8.0,
+                old_on_order=0.0,
+                new_on_order=0.0,
+                reason="Damaged goods",
+            )
+            session.add(adj)
+            session.commit()
+
+        del_res = self.client.delete(
+            "/api/v1/products/HOBBIES_1_001",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(del_res.status_code, 400)
+        self.assertIn("li\u00ean k\u1ebft", del_res.json()["detail"].lower())
 
 
 if __name__ == "__main__":

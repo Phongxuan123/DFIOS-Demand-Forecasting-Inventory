@@ -181,12 +181,11 @@ export const prefetchRouteData = (route: string) => {
         break;
       case '/forecast-explorer':
         cachedGet('/products/categories', null, 300000).catch(() => {});
-        cachedGet('/inventory/stores', null, 600000).catch(() => {});
-        cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
-        cachedGet('/forecasts', { item_id: 'FOODS_1_001', horizon: 28, store_id: 'CA_1' }, 180000).catch(() => {});
+        cachedGet('/products', { limit: 100 }, 120000).catch(() => {});
+        cachedGet('/forecasts/FOODS_1_001', { h: 28, store_id: 'CA_1', model_name: 'lightgbm' }, 180000).catch(() => {});
         break;
       case '/replenishment':
-        cachedGet('/replenishments', { store_id: 'CA_1', skip: 0, limit: 10, auto_generate: false }, 30000).catch(() => {});
+        cachedGet('/replenishments', { status: 'PENDING', skip: 0, limit: 200, auto_generate: false }, 30000).catch(() => {});
         break;
       case '/abc-xyz':
         cachedGet('/classification/matrix', null, 60000).catch(() => {});
@@ -198,7 +197,6 @@ export const prefetchRouteData = (route: string) => {
         break;
       case '/model-performance':
         cachedGet('/ml/models', null, 60000).catch(() => {});
-        cachedGet('/ml/train', { limit: 20 }, 30000).catch(() => {});
         break;
       case '/products':
         cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
@@ -400,10 +398,20 @@ export const api = {
     getExplanation: async (sku: string, params?: { store_id?: string; model_version?: string; model_name?: string }) => {
       return cachedGet(`/forecasts/${sku}/explanation`, params, 60000);
     },
-    createOverride: async (sku: string, data: { forecast_date: string; override_value: number; reason: string; store_id?: string; horizon?: number }) => {
+    createOverride: async (sku: string, data: { forecast_date: string; override_value: number; reason: string; store_id?: string; h?: number; horizon?: number }) => {
       clearApiCache('/forecasts');
       clearApiCache('dashboard');
-      const res = await apiClient.post(`/forecasts/${sku}/override`, data);
+      const payload: any = {
+        forecast_date: data.forecast_date,
+        override_value: data.override_value,
+        reason: data.reason,
+        store_id: data.store_id || 'CA_1',
+      };
+      const stepH = data.h ?? (data.horizon != null && data.horizon <= 28 ? data.horizon : undefined);
+      if (stepH != null) {
+        payload.h = stepH;
+      }
+      const res = await apiClient.post(`/forecasts/${sku}/override`, payload);
       return res.data;
     },
     bulkOverride: async (items: Array<{ store_id?: string; item_id: string; date: string; value: number; reason: string }>) => {
@@ -429,7 +437,7 @@ export const api = {
       const res = await cachedGet(`/forecasts/${sku}/overrides`, params, 30000);
       return Array.isArray(res) ? res : [];
     },
-    getExplorerData: async (skuParam?: string, horizon: number = 28, storeId?: string) => {
+    getExplorerData: async (skuParam?: string, horizon: number = 28, storeId?: string, engine?: string) => {
       try {
         let sku = skuParam;
         if (!sku) {
@@ -438,15 +446,18 @@ export const api = {
           sku = items[0]?.item_id || 'FOODS_1_001';
         }
 
+        const modelParam = engine ? engine.toLowerCase() : undefined;
         const [forecastsRes, compareRes, uncertaintyRes, historyRes] = await Promise.all([
-          cachedGet('/forecasts', { item_id: sku, horizon, store_id: storeId, limit: horizon }, 60000).catch(() => ({ items: [] })),
+          cachedGet('/forecasts', { item_id: sku, horizon, store_id: storeId, limit: horizon, model_name: modelParam }, 60000).catch(() => ({ items: [] })),
           cachedGet(`/forecasts/${sku}/compare`, { store_id: storeId }, 60000).catch(() => null),
           cachedGet(`/forecasts/${sku}/uncertainty`, { store_id: storeId, horizon }, 60000).catch(() => null),
           cachedGet(`/forecasts/${sku}/history`, { store_id: storeId, granularity: 'daily' }, 60000).catch(() => null),
         ]);
 
         const forecastItems = unwrapItems(forecastsRes);
-        const historyPoints = historyRes?.data_points || [];
+        const historyPoints = Array.isArray(historyRes?.history)
+          ? historyRes.history
+          : (Array.isArray(historyRes?.data_points) ? historyRes.data_points : []);
 
         // Build uncertainty lookup map by forecast date
         const uncPoints = Array.isArray(uncertaintyRes?.points) ? uncertaintyRes.points : [];
@@ -610,21 +621,6 @@ export const api = {
       const items = unwrapItems(res);
       return { items, total: res.total || items.length };
     },
-    getReplenishmentAlerts: async () => {
-      const res = await cachedGet('/inventory', { limit: 25, store_id: 'CA_1' }, 180000);
-      const items = unwrapItems(res);
-      const lowItems = items.filter((x: any) => (x.on_hand ?? 0) <= 15);
-      return {
-        alerts: lowItems.map((x: any) => ({
-          id: x.item_id,
-          name: x.name || x.item_id,
-          store: x.store_id || 'CA_1',
-          stock: x.on_hand ?? 0,
-          rop: x.reorder_point ?? 25,
-          status: (x.on_hand ?? 0) <= 0 ? 'CRITICAL' : 'WARNING',
-        })),
-      };
-    },
   },
 
   replenishment: {
@@ -713,6 +709,7 @@ export const api = {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
     },
   },
 
@@ -785,44 +782,6 @@ export const api = {
       clearApiCache('/suppliers');
       clearApiCache('dashboard');
       const res = await apiClient.delete(`/suppliers/${id}`);
-      return res.data;
-    },
-    uploadDataFile: async (file: File) => {
-      clearApiCache('/products');
-      clearApiCache('dashboard');
-      const text = await file.text();
-      let items: any[] = [];
-      if (file.name.endsWith('.json')) {
-        const parsed = JSON.parse(text);
-        items = Array.isArray(parsed) ? parsed : (parsed.items || []);
-      } else {
-        const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-        if (lines.length > 1) {
-          const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-          const itemIdIdx = headers.findIndex(h => h.includes('item') || h.includes('sku') || h.includes('id'));
-          const nameIdx = headers.findIndex(h => h.includes('name') || h.includes('title'));
-          const deptIdx = headers.findIndex(h => h.includes('dept') || h.includes('department'));
-          const catIdx = headers.findIndex(h => h.includes('cat') || h.includes('category'));
-
-          for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
-            if (cols.length >= 2) {
-              items.push({
-                item_id: cols[itemIdIdx !== -1 ? itemIdIdx : 0] || `SKU-${Date.now()}-${i}`,
-                name: cols[nameIdx !== -1 ? nameIdx : 1] || `Product ${i}`,
-                dept_id: deptIdx !== -1 ? cols[deptIdx] : undefined,
-                cat_id: catIdx !== -1 ? cols[catIdx] : undefined,
-              });
-            }
-          }
-        }
-      }
-
-      if (items.length === 0) {
-        throw new Error('No valid records found in file. CSV header should contain item_id, name.');
-      }
-
-      const res = await apiClient.post('/products/bulk', { items });
       return res.data;
     },
     publishTestEvent: async (skuId: string) => {
@@ -915,8 +874,9 @@ export const api = {
     bulkCreate: async (items: Array<{ event_name: string; event_type?: string; event_date?: string; start_date?: string; end_date?: string; details?: string }>) => {
       clearApiCache('/events-calendar');
       const normalizedItems = items.map(item => ({
-        ...item,
+        event_name: item.event_name,
         event_date: item.event_date || item.start_date,
+        event_type: item.event_type || 'Promotion',
       }));
       const res = await apiClient.post('/events-calendar/bulk', { items: normalizedItems });
       return res.data;
@@ -1071,11 +1031,11 @@ export const api = {
   },
 
   models: {
-    getPerformanceMetrics: async () => {
+    getPerformanceMetrics: async (sku: string = 'FOODS_1_001') => {
       try {
         const [modelsRes, compareRes] = await Promise.all([
           apiClient.get('/ml/models').catch(() => ({ data: { items: [] } })),
-          apiClient.get('/forecasts/FOODS_1_001/compare').catch(() => ({ data: { comparison: [] } })),
+          apiClient.get(`/forecasts/${encodeURIComponent(sku)}/compare`).catch(() => ({ data: { comparison: [] } })),
         ]);
         const items = unwrapItems(modelsRes.data);
 
@@ -1085,7 +1045,7 @@ export const api = {
           type: m.is_production ? 'best' : 'challenger',
           isProduction: m.is_production,
           metrics: {
-            mase: m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : (m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(2) : '-'),
+            mase: m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(2) : '-',
             rmse: m.metrics?.rmse != null ? Number(m.metrics.rmse).toFixed(1) : '-',
             mae: m.metrics?.mae != null ? Number(m.metrics.mae).toFixed(1) : '-',
             wrmsse: m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(3) : '-',
@@ -1095,9 +1055,10 @@ export const api = {
         }));
 
         const comparePoints = compareRes.data?.comparison || [];
-        const scatterData = comparePoints.map((c: any) => ({
+        const scatterData = comparePoints.map((c: any, idx: number) => ({
           x: Number(c.actual),
           y: Number(c.predicted),
+          sku: c.item_id || c.sku || `${sku} (t-${idx + 1})`,
           fill: '#0d9488',
         }));
 
@@ -1218,15 +1179,14 @@ export const api = {
     getRecentLogs: async () => {
       const auditRes = await cachedGet('/audit-logs', { limit: 25 }, 180000).catch(() => ({ items: [], list: [], total: 0 }));
       const logList = unwrapItems(auditRes);
-      const logs = logList.map((l: any, idx: number) => ({
-        name: `Audit_${l.action || 'Report'}_${idx + 1}.csv`,
+      const logs = logList.map((l: any) => ({
+        id: l.id,
+        action: l.action || 'system.event',
         type: l.action?.split('.')[0]?.toUpperCase() || 'SYSTEM',
-        date: l.created_at ? new Date(l.created_at).toLocaleDateString() : 'Today',
-        format: 'CSV',
-        formatClass: 'csv',
-        size: '24 KB',
-        status: 'READY',
-        action: 'Download',
+        user: l.actor_email || 'admin@dfios.com',
+        details: l.details || '—',
+        date: l.created_at ? new Date(l.created_at).toLocaleString() : '—',
+        status: 'SUCCESS',
       }));
 
       return {
@@ -1284,6 +1244,7 @@ export const api = {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
     },
   },
 };

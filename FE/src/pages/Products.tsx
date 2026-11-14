@@ -31,11 +31,11 @@ export interface SkuRssMetrics {
   onHand: number;
   onOrder: number;
   ip: number;
-  ss: number;
-  rop_s: number;
-  eoq: number;
+  ss: number | null;
+  rop_s: number | null;
+  eoq: number | null;
   kappa: number;
-  orderUpTo_S: number;
+  orderUpTo_S: number | null;
   orderQty_q: number;
   reviewDays_R: number;
   leadTime_L: number;
@@ -82,8 +82,7 @@ export const Products: React.FC = () => {
   const [categories, setCategories] = useState<string[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const [stores, setStores] = useState<string[]>(['CA_1', 'CA_2', 'TX_1', 'WI_1']);
-  const [selectedStore, setSelectedStore] = useState('CA_1');
+  const selectedStore = 'CA_1';
 
   // Inventory, Optimization & Classification Maps for Periodic Review (R, s, S)
   const [inventoryMap, setInventoryMap] = useState<Record<string, any>>({});
@@ -146,7 +145,7 @@ export const Products: React.FC = () => {
   const [salesTotal, setSalesTotal] = useState(0);
   const [salesSummary, setSalesSummary] = useState<any>(null);
   const [salesFilterSku, setSalesFilterSku] = useState('');
-  const [salesFilterStore, setSalesFilterStore] = useState('All');
+  const salesFilterStore = 'CA_1';
   const [salesStartDate, setSalesStartDate] = useState('');
   const [salesEndDate, setSalesEndDate] = useState('');
   const [isLoadingSales, setIsLoadingSales] = useState(false);
@@ -221,24 +220,19 @@ export const Products: React.FC = () => {
   const loadInitialData = async () => {
     setIsLoading(true);
     try {
-      const [initProdRes, suppRes, storesRes, adjRes, catRes, deptRes] = await Promise.all([
+      const [initProdRes, suppRes, adjRes, catRes, deptRes] = await Promise.all([
         api.products.getProducts({ limit: 50 }).catch(() => ({ list: [], total: 0 })),
         api.products.getAllSuppliers().catch(() => ({ list: [] })),
-        api.inventory.getStores().catch(() => ['CA_1', 'CA_2', 'TX_1', 'WI_1']),
         api.inventory.getAdjustments({ limit: 50 }).catch(() => ({ list: [] })),
         api.products.getCategories().catch(() => []),
         api.products.getDepartments().catch(() => []),
       ]);
 
-      const initialStore = storesRes?.[0] || 'CA_1';
-      setStores(storesRes?.length ? storesRes : ['CA_1', 'CA_2', 'TX_1', 'WI_1']);
-      setSelectedStore(initialStore);
-
       const initialProdList = initProdRes.list || [];
       if (initialProdList.length > 0) {
         setProducts(initialProdList);
         setTotalProducts(initProdRes.total || initialProdList.length);
-        selectProductItem(initialProdList[0], initialStore);
+        selectProductItem(initialProdList[0], selectedStore);
       }
 
       const rawSuppliers = suppRes.list || [];
@@ -252,7 +246,7 @@ export const Products: React.FC = () => {
       setDepartments(deptRes || []);
       setIsLoading(false);
 
-      loadStoreInventoryAndOptimization(initialStore);
+      loadStoreInventoryAndOptimization(selectedStore);
 
       Promise.all([
         api.products.getAllProducts(),
@@ -275,26 +269,29 @@ export const Products: React.FC = () => {
     }
   };
 
-  const loadSalesData = async () => {
+  const loadSalesData = async (page: number = salesPage, size: number = salesPageSize) => {
     setIsLoadingSales(true);
     try {
-      const params: any = {};
+      const params: any = {
+        skip: (page - 1) * size,
+        limit: size,
+      };
       if (salesFilterSku.trim()) params.item_id = salesFilterSku.trim();
-      if (salesFilterStore !== 'All') params.store_id = salesFilterStore;
+      if (salesFilterStore) params.store_id = salesFilterStore;
       if (salesStartDate) params.start_date = salesStartDate;
       if (salesEndDate) params.end_date = salesEndDate;
 
       const [salesRes, summaryRes] = await Promise.all([
-        api.sales.queryAllSales(params),
+        api.sales.querySales(params),
         api.sales
           .getSummary({
             item_id: salesFilterSku.trim() || undefined,
-            store_id: salesFilterStore !== 'All' ? salesFilterStore : undefined,
+            store_id: salesFilterStore || undefined,
           })
           .catch(() => null),
       ]);
       setSalesList(salesRes.list || []);
-      setSalesTotal(salesRes.total || (salesRes.list || []).length);
+      setSalesTotal(salesRes.total || 0);
       setSalesSummary(summaryRes);
     } catch (e) {
       console.error('Failed to load sales data', e);
@@ -332,11 +329,11 @@ export const Products: React.FC = () => {
 
   useEffect(() => {
     if (activeTab === 'Sales Data') {
-      loadSalesData();
+      loadSalesData(salesPage, salesPageSize);
     } else if (activeTab === 'Events & Promotions') {
       loadEventsData();
     }
-  }, [activeTab]);
+  }, [activeTab, salesPage, salesPageSize]);
 
   const getSkuRssMetrics = (prod: any): SkuRssMetrics => {
     const itemId = String(prod?.item_id || 'FOODS_1_001');
@@ -359,26 +356,16 @@ export const Products: React.FC = () => {
         ? Number(inv.on_order)
         : prod.on_order != null
           ? Number(prod.on_order)
-          : h % 3 === 0
-            ? 12 + (h % 20)
-            : 0;
+          : 0;
 
     const onHand = Math.max(0, Math.round(isNaN(rawOnHand) ? 0 : rawOnHand));
     const onOrder = Math.max(0, Math.round(isNaN(rawOnOrder) ? 0 : rawOnOrder));
 
-    const fallbackSs = 10 + (h % 22);
-    const hasBeOpt =
-      opt.s != null ||
-      opt.S != null ||
-      opt.reorder_point != null ||
-      opt.safety_stock != null ||
-      inv.reorder_point != null;
-
     const eff = resolveEffectiveRssMetrics({
       on_hand: onHand,
       on_order: onOrder,
-      safety_stock: opt.safety_stock ?? inv.safety_stock ?? fallbackSs,
-      reorder_point: opt.reorder_point ?? inv.reorder_point ?? fallbackSs + 14 + (h % 28),
+      safety_stock: opt.safety_stock ?? inv.safety_stock ?? null,
+      reorder_point: opt.reorder_point ?? inv.reorder_point ?? opt.s ?? null,
       s: opt.s ?? null,
       S: opt.S ?? null,
       eoq: opt.eoq ?? inv.eoq ?? null,
@@ -387,20 +374,22 @@ export const Products: React.FC = () => {
     });
 
     const ip = eff.inventoryPosition;
-    const ss = Math.max(1, eff.safetyStock);
-    const rop_s = Math.max(ss + 1, eff.reorderPointS);
-    const eoq = Math.max(1, eff.eoq);
+    const ss = eff.safetyStock;
+    const rop_s = eff.reorderPointS;
+    const eoq = eff.eoq;
 
     const catUpper = String(prod?.cat_id || '').toUpperCase();
     const defaultKappa = catUpper === 'FOODS' ? 1.0 : catUpper === 'HOUSEHOLD' ? 1.5 : 1.0;
-    const hasExplicitS = opt.S != null && Number(opt.S) > rop_s;
+    const hasExplicitS = opt.S != null && rop_s != null && Number(opt.S) > rop_s;
     const orderUpTo_S = hasExplicitS
       ? eff.orderUpToS
-      : rop_s + Math.ceil(defaultKappa * eoq);
-    const kappa = hasExplicitS && eoq > 0
+      : rop_s != null && eoq != null
+        ? rop_s + Math.ceil(defaultKappa * eoq)
+        : null;
+    const kappa = hasExplicitS && eoq != null && eoq > 0 && orderUpTo_S != null && rop_s != null
       ? Number(Math.max(0.5, (orderUpTo_S - rop_s) / eoq).toFixed(2))
       : defaultKappa;
-    const orderQty_q = ip <= rop_s ? Math.max(0, orderUpTo_S - ip) : 0;
+    const orderQty_q = rop_s != null && orderUpTo_S != null && ip <= rop_s ? Math.max(0, orderUpTo_S - ip) : 0;
 
     const isStandardM5 =
       itemId.startsWith('FOODS_') || itemId.startsWith('HOBBIES_') || itemId.startsWith('HOUSEHOLD_');
@@ -459,7 +448,7 @@ export const Products: React.FC = () => {
       regime,
       abcClass,
       unitPrice,
-      modelRunId: hasBeOpt ? (opt.model_run_id || null) : null,
+      modelRunId: opt.model_run_id || null,
     };
   };
 
@@ -854,10 +843,7 @@ export const Products: React.FC = () => {
     adjPage * adjPageSize
   );
 
-  const paginatedSales = salesList.slice(
-    (salesPage - 1) * salesPageSize,
-    salesPage * salesPageSize
-  );
+  const paginatedSales = salesList;
 
   // Ultra-short badge for table cells (details in tooltip)
   const renderDemandRegimeBadge = (metrics: SkuRssMetrics) => {
@@ -903,12 +889,12 @@ export const Products: React.FC = () => {
     const selectedMetrics = prod.item_id ? getSkuRssMetrics(prod) : null;
 
     const maxGaugeScale = selectedMetrics
-      ? Math.max(selectedMetrics.orderUpTo_S * 1.15, selectedMetrics.ip * 1.1, 20)
+      ? Math.max(Number(selectedMetrics.orderUpTo_S ?? 0) * 1.15, selectedMetrics.ip * 1.1, 20)
       : 100;
     const ipPct = selectedMetrics ? Math.min(100, Math.round((selectedMetrics.ip / maxGaugeScale) * 100)) : 0;
-    const ssPct = selectedMetrics ? Math.min(96, Math.round((selectedMetrics.ss / maxGaugeScale) * 100)) : 20;
-    const ropPct = selectedMetrics ? Math.min(96, Math.round((selectedMetrics.rop_s / maxGaugeScale) * 100)) : 50;
-    const orderUpToPct = selectedMetrics
+    const ssPct = selectedMetrics && selectedMetrics.ss != null ? Math.min(96, Math.round((selectedMetrics.ss / maxGaugeScale) * 100)) : 20;
+    const ropPct = selectedMetrics && selectedMetrics.rop_s != null ? Math.min(96, Math.round((selectedMetrics.rop_s / maxGaugeScale) * 100)) : 50;
+    const orderUpToPct = selectedMetrics && selectedMetrics.orderUpTo_S != null
       ? Math.min(96, Math.round((selectedMetrics.orderUpTo_S / maxGaugeScale) * 100))
       : 85;
 
@@ -1015,25 +1001,6 @@ export const Products: React.FC = () => {
         <div className="prod-filter-bar">
           <div className="prod-filter-group">
             <div className="prod-filter-item">
-              <span className="prod-filter-label">{isVi ? 'KHO' : 'STORE'}</span>
-              <select
-                className="prod-filter-select"
-                value={selectedStore}
-                onChange={(e) => {
-                  const nextStore = e.target.value;
-                  setSelectedStore(nextStore);
-                  loadStoreInventoryAndOptimization(nextStore);
-                  if (selectedProduct) selectProductItem(selectedProduct, nextStore);
-                }}
-              >
-                {stores.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="prod-filter-item">
               <span className="prod-filter-label">{isVi ? 'NGÀNH' : 'CATEGORY'}</span>
               <select
                 className="prod-filter-select"
@@ -1098,7 +1065,7 @@ export const Products: React.FC = () => {
               />
             </div>
           </div>
-          {canEdit && (
+          {isAdmin && (
             <div className="prod-filter-actions">
               <button className="prod-btn-primary" onClick={openAddProduct}>
                 <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} />{' '}
@@ -1140,7 +1107,7 @@ export const Products: React.FC = () => {
                   ) : (
                     paginatedProducts.map((p) => {
                       const m = getSkuRssMetrics(p);
-                      const needsReplenish = m.ip < m.rop_s;
+                      const needsReplenish = m.rop_s != null ? m.ip < m.rop_s : false;
                       return (
                         <tr
                           key={p.item_id}
@@ -1164,16 +1131,16 @@ export const Products: React.FC = () => {
                             <span className="rss-mono-sub">({m.onHand}+{m.onOrder})</span>
                           </td>
                           <td className="text-right">
-                            <span className="rss-mono-primary">{m.rop_s}</span>
+                            <span className="rss-mono-primary">{m.rop_s ?? '—'}</span>
                             <span className="rss-mono-sub"> / </span>
-                            <span className="rss-mono-primary teal">{m.orderUpTo_S}</span>
+                            <span className="rss-mono-primary teal">{m.orderUpTo_S ?? '—'}</span>
                           </td>
                           <td className="text-right" onClick={(e) => e.stopPropagation()}>
                             <div className="action-buttons-cell">
                               <span className={`rss-status-pill ${needsReplenish ? 'order' : 'ok'}`}>
                                 {needsReplenish ? `q=${m.orderQty_q}` : 'OK'}
                               </span>
-                              {canEdit && (
+                              {isAdmin && (
                                 <button
                                   onClick={() => openEditProduct(p)}
                                   className="action-btn-edit"
@@ -1245,8 +1212,8 @@ export const Products: React.FC = () => {
                     <span>
                       IP: <strong>{selectedMetrics.ip}</strong>
                     </span>
-                    <span className={selectedMetrics.ip < selectedMetrics.rop_s ? 'rss-status-order' : 'rss-status-ok'}>
-                      {selectedMetrics.ip < selectedMetrics.rop_s
+                    <span className={selectedMetrics.rop_s != null && selectedMetrics.ip < selectedMetrics.rop_s ? 'rss-status-order' : 'rss-status-ok'}>
+                      {selectedMetrics.rop_s != null && selectedMetrics.ip < selectedMetrics.rop_s
                         ? isVi
                           ? `Đặt hàng q = ${selectedMetrics.orderQty_q}`
                           : `Order q = ${selectedMetrics.orderQty_q}`
@@ -1256,45 +1223,45 @@ export const Products: React.FC = () => {
                   <div className="rss-gauge-track">
                     <div
                       className={`rss-gauge-fill ${
-                        selectedMetrics.ip <= selectedMetrics.ss
+                        selectedMetrics.ss != null && selectedMetrics.ip <= selectedMetrics.ss
                           ? 'critical'
-                          : selectedMetrics.ip < selectedMetrics.rop_s
+                          : selectedMetrics.rop_s != null && selectedMetrics.ip < selectedMetrics.rop_s
                             ? 'warning'
                             : 'healthy'
                       }`}
                       style={{ width: `${ipPct}%` }}
                     />
-                    <div className="rss-gauge-marker ss" style={{ left: `${ssPct}%` }} title={`SS = ${selectedMetrics.ss}`} />
-                    <div className="rss-gauge-marker rop" style={{ left: `${ropPct}%` }} title={`s = ${selectedMetrics.rop_s}`} />
+                    <div className="rss-gauge-marker ss" style={{ left: `${ssPct}%` }} title={`SS = ${selectedMetrics.ss ?? '—'}`} />
+                    <div className="rss-gauge-marker rop" style={{ left: `${ropPct}%` }} title={`s = ${selectedMetrics.rop_s ?? '—'}`} />
                     <div
                       className="rss-gauge-marker order-up-to"
                       style={{ left: `${orderUpToPct}%` }}
-                      title={`S = ${selectedMetrics.orderUpTo_S}`}
+                      title={`S = ${selectedMetrics.orderUpTo_S ?? '—'}`}
                     />
                   </div>
                   <div className="rss-gauge-legend">
-                    <span className="legend-ss">SS: {selectedMetrics.ss}</span>
-                    <span className="legend-rop">s: {selectedMetrics.rop_s}</span>
-                    <span className="legend-s">S: {selectedMetrics.orderUpTo_S}</span>
+                    <span className="legend-ss">SS: {selectedMetrics.ss ?? '—'}</span>
+                    <span className="legend-rop">s: {selectedMetrics.rop_s ?? '—'}</span>
+                    <span className="legend-s">S: {selectedMetrics.orderUpTo_S ?? '—'}</span>
                   </div>
 
                   {/* 2. Concise 4-Box Parameter Summary (SS, ROP s, Up-To S, EOQ) */}
                   <div className="rss-metrics-grid">
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">SS</span>
-                      <span className="rss-metric-val">{selectedMetrics.ss}</span>
+                      <span className="rss-metric-val">{selectedMetrics.ss ?? '—'}</span>
                     </div>
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">ROP (s)</span>
-                      <span className="rss-metric-val">{selectedMetrics.rop_s}</span>
+                      <span className="rss-metric-val">{selectedMetrics.rop_s ?? '—'}</span>
                     </div>
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">Up-To (S)</span>
-                      <span className="rss-metric-val teal">{selectedMetrics.orderUpTo_S}</span>
+                      <span className="rss-metric-val teal">{selectedMetrics.orderUpTo_S ?? '—'}</span>
                     </div>
                     <div className="rss-metric-item">
                       <span className="rss-metric-label">EOQ (κ={selectedMetrics.kappa})</span>
-                      <span className="rss-metric-val">{selectedMetrics.eoq}</span>
+                      <span className="rss-metric-val">{selectedMetrics.eoq ?? '—'}</span>
                     </div>
                   </div>
                 </div>
@@ -1490,7 +1457,7 @@ export const Products: React.FC = () => {
             <h2 className="prod-table-title" style={{ marginBottom: 0 }}>
               {isVi ? 'Danh bạ Nhà cung cấp' : 'Suppliers'} ({suppliers.length})
             </h2>
-            {canEdit && (
+            {isAdmin && (
               <button className="prod-btn-primary" onClick={openAddSupplier}>
                 <Plus size={14} style={{ marginRight: '4px', display: 'inline' }} />{' '}
                 {isVi ? 'Thêm NCC' : 'Add Supplier'}
@@ -1583,16 +1550,14 @@ export const Products: React.FC = () => {
                 <p style={{ fontSize: '12px', margin: '2px 0', color: '#64748b' }}>{selectedSupplier.address || '—'}</p>
               </div>
 
-              {canEdit && (
+              {isAdmin && (
                 <div className="supplier-actions" style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
                   <button className="prod-btn-outline" onClick={openEditSupplier}>
                     {isVi ? 'Sửa' : 'Edit'}
                   </button>
-                  {isAdmin && (
-                    <button className="supplier-btn-danger" onClick={handleDeleteSupplier}>
-                      {isVi ? 'Xóa' : 'Remove'}
-                    </button>
-                  )}
+                  <button className="supplier-btn-danger" onClick={handleDeleteSupplier}>
+                    {isVi ? 'Xóa' : 'Remove'}
+                  </button>
                 </div>
               )}
             </>
@@ -1642,17 +1607,12 @@ export const Products: React.FC = () => {
                   <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">
                     {isVi ? 'KHO' : 'STORE'}
                   </label>
-                  <select
+                  <input
+                    type="text"
                     value={saleFormData.store_id}
-                    onChange={(e) => setSaleFormData({ ...saleFormData, store_id: e.target.value })}
-                    className="settings-select w-full"
-                  >
-                    {stores.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
+                    disabled
+                    className="settings-input w-full bg-[var(--bg-card-subtle)] text-[var(--text-muted)] cursor-not-allowed"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold mb-1 text-[var(--text-secondary)]">
@@ -1741,21 +1701,6 @@ export const Products: React.FC = () => {
             />
           </div>
           <div className="prod-filter-item">
-            <span className="prod-filter-label">{isVi ? 'KHO' : 'STORE'}</span>
-            <select
-              className="prod-filter-select"
-              value={salesFilterStore}
-              onChange={(e) => setSalesFilterStore(e.target.value)}
-            >
-              <option value="All">{isVi ? 'Tất cả' : 'All'}</option>
-              {stores.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="prod-filter-item">
             <span className="prod-filter-label">{isVi ? 'TỪ NGÀY' : 'FROM'}</span>
             <input
               type="date"
@@ -1775,7 +1720,7 @@ export const Products: React.FC = () => {
           </div>
         </div>
         <div className="prod-filter-actions">
-          <button className="prod-btn-outline" onClick={loadSalesData}>
+          <button className="prod-btn-outline" onClick={() => loadSalesData(1, salesPageSize)}>
             {isVi ? 'Lọc' : 'Filter'}
           </button>
           {isAdmin && (

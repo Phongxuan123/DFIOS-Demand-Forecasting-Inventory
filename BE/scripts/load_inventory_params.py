@@ -19,8 +19,7 @@ STORE_ID = "CA_1"
 LEAD_TIME = 7
 TAU = 0.95
 Z_TAU = 1.645
-HOLDING_COST = 2.0
-ORDER_COST = 50.0
+ORDER_COST = 2.0
 
 with engine.begin() as conn:
     conn.execute(text("""
@@ -61,16 +60,21 @@ merged["sigma_d_h7"] = merged["sigma_d_h7"].fillna(1.5)
 
 with engine.connect() as conn:
     class_df = pd.read_sql("SELECT item_id, segment as class FROM sku_classifications", conn)
+    price_df = pd.read_sql("SELECT item_id, coalesce(price, 10.0) as unit_price FROM products", conn)
 
 merged = pd.merge(merged, class_df, on="item_id", how="left")
+merged = pd.merge(merged, price_df, on="item_id", how="left")
 merged["class"] = merged["class"].fillna("BY")
 merged["exp_theta"] = merged["class"].map(C3_EXP_THETA).fillna(DEFAULT_EXP_THETA)
+merged["unit_price"] = merged["unit_price"].fillna(10.0)
 
+merged["order_cost"] = ORDER_COST
+merged["holding_cost"] = (0.002 * merged["unit_price"] * 365).round(4)
 # B-20: Thống nhất công thức tính SS chuẩn lý thuyết: SS = z_tau * sigma_d * sqrt(L) * exp(theta)
 merged["safety_stock"] = (Z_TAU * merged["sigma_d_h7"] * np.sqrt(LEAD_TIME) * merged["exp_theta"]).round(2).clip(lower=0.0)
 merged["reorder_point"] = (merged["d_l"] + merged["safety_stock"]).round(2).clip(lower=0.0)
 merged["annual_demand"] = ((merged["d_l"] / LEAD_TIME) * 365).round(2).clip(lower=1.0)
-merged["eoq"] = np.sqrt((2 * merged["annual_demand"] * ORDER_COST) / HOLDING_COST).round(2).clip(lower=1.0)
+merged["eoq"] = np.sqrt((2 * merged["annual_demand"] * merged["order_cost"]) / merged["holding_cost"]).round(2).clip(lower=1.0)
 
 merged["s"] = merged["reorder_point"]
 merged["S"] = (merged["s"] + merged["eoq"]).round(2)
@@ -81,9 +85,6 @@ merged["id"] = STORE_ID + "_" + merged["item_id"]
 merged["store_id"] = STORE_ID
 merged["service_level"] = TAU
 merged["lead_time_days"] = LEAD_TIME
-merged["holding_cost"] = HOLDING_COST
-merged["order_cost"] = ORDER_COST
-merged["unit_price"] = 10.0
 merged["source"] = "c3out"
 merged["updated_at"] = now
 

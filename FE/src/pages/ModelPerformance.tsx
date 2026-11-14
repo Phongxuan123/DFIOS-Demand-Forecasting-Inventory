@@ -199,15 +199,25 @@ export const ModelPerformance: React.FC = () => {
     );
   }
 
-  const handleRunBundleValidation = (scope: 'production' | 'backtest' | 'both' = 'both') => {
+  const handleRunBundleValidation = async (scope: 'production' | 'backtest' | 'both' = 'both') => {
     setValidatingEngine(scope);
     setIsValidateModalOpen(true);
     setIsRunningValidation(true);
-    setTimeout(() => {
-      setIsRunningValidation(false);
-      setValidationScore(100);
+    try {
+      const [calStatus] = await Promise.all([
+        api.calibration.getStatus('CA_1').catch(() => null),
+        api.ml.getAllModels().catch(() => null),
+      ]);
+      const hasCalWarning = calStatus?.has_warning ?? false;
+      const atBoundaryCount = calStatus?.at_boundary_classes?.length ?? 0;
+      const calculatedScore = hasCalWarning ? 80 : atBoundaryCount > 0 ? 90 : 100;
+      setValidationScore(calculatedScore);
       setLastValidatedAt(new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC');
-    }, 450);
+    } catch {
+      setValidationScore(90);
+    } finally {
+      setIsRunningValidation(false);
+    }
   };
 
   const handleStartTraining = async (e: React.FormEvent) => {
@@ -441,7 +451,7 @@ export const ModelPerformance: React.FC = () => {
               </p>
             </div>
             <span className="mp-panel-tag font-mono">
-              Live Parity
+              FOODS_1_001 • Parity
             </span>
           </div>
 

@@ -6,20 +6,35 @@ from datetime import datetime, timezone
 import pandas as pd
 from sqlalchemy import text
 from app.core.database import engine
-ARTIFACTS_DIR = os.path.expanduser(r"~\Downloads\Result OK\Result OK\results\dfios_artifacts")
+ARTIFACTS_DIR = os.getenv("DFIOS_ARTIFACTS_DIR")
+if not ARTIFACTS_DIR or not os.path.exists(ARTIFACTS_DIR):
+    for candidate in [
+        os.path.join(SCRIPT_DIR, "sample_data"),
+        os.path.join(SCRIPT_DIR, "dfios_artifacts"),
+        SCRIPT_DIR,
+    ]:
+        if os.path.exists(candidate):
+            ARTIFACTS_DIR = candidate
+            break
 
-ENSEMBLE_PATH = os.path.join(ARTIFACTS_DIR, "forecasts_Ensemble.parquet")
-QUANTILES_PATH = os.path.join(ARTIFACTS_DIR, "quantiles_tft.parquet")
+ENSEMBLE_PATH = os.path.join(ARTIFACTS_DIR, "forecasts_Ensemble.parquet") if ARTIFACTS_DIR else ""
+QUANTILES_PATH = os.path.join(ARTIFACTS_DIR, "quantiles_tft.parquet") if ARTIFACTS_DIR else ""
 
-if not os.path.exists(ENSEMBLE_PATH):
-    ENSEMBLE_PATH = os.path.join(SCRIPT_DIR, "forecasts_Ensemble.parquet")
-if not os.path.exists(QUANTILES_PATH):
-    QUANTILES_PATH = os.path.join(SCRIPT_DIR, "quantiles_tft.parquet")
+if not ENSEMBLE_PATH or not os.path.exists(ENSEMBLE_PATH):
+    ENSEMBLE_PATH = os.path.join(SCRIPT_DIR, "production_forecast.parquet")
+if not QUANTILES_PATH or not os.path.exists(QUANTILES_PATH):
+    QUANTILES_PATH = os.path.join(SCRIPT_DIR, "production_forecast.parquet")
 
 STORE_ID = "CA_1"
 
 
 def main():
+    if not os.path.exists(ENSEMBLE_PATH):
+        raise SystemExit(
+            "Forecast parquet file not found. "
+            "Please ensure production_forecast.parquet is placed in BE/scripts/ "
+            "or configure DFIOS_ARTIFACTS_DIR in BE/.env"
+        )
     print(f"Reading evaluation forecasts from: {ENSEMBLE_PATH}")
     df_ens = pd.read_parquet(ENSEMBLE_PATH)
     df_ens = df_ens[df_ens["store_id"] == STORE_ID].copy()
@@ -77,10 +92,10 @@ def main():
             {"s": STORE_ID, "d1": min_date, "d2": max_date}
         )
 
-    print("Seeding sales_history table into Supabase...")
+    print("Seeding sales_history table into database...")
     sales_df.to_sql("sales_history", engine, if_exists="append", index=False, chunksize=5000, method="multi")
 
-    print("Seeding forecast table into Supabase...")
+    print("Seeding forecast table into database...")
     forecast_df.to_sql("forecast", engine, if_exists="append", index=False, chunksize=5000, method="multi")
 
     print("Sales evaluation data seeded successfully!")

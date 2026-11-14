@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.models.base import Base
 from app.models.user import User
+from app.models.product import Product
 from app.models.sales_history import SalesHistory
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
@@ -77,7 +78,10 @@ class TestSalesEndpoints(unittest.TestCase):
                 sale_date=date(2016, 1, 3),
                 quantity=5.0,
             )
-            session.add_all([admin, viewer, sale1, sale2, sale3])
+            prod1 = Product(item_id="FOODS_1_001", name="Food 1")
+            prod2 = Product(item_id="FOODS_1_002", name="Food 2")
+            prod3 = Product(item_id="HOBBIES_1_001", name="Hobby 1")
+            session.add_all([admin, viewer, prod1, prod2, prod3, sale1, sale2, sale3])
             session.commit()
 
         self.admin_token = create_access_token(
@@ -202,6 +206,21 @@ class TestSalesEndpoints(unittest.TestCase):
                 Inventory.item_id == "FOODS_1_001",
             ).first()
             self.assertIsNotNone(inv)
+
+    def test_admin_import_sales_csv_utf8_bom_and_skip_invalid(self):
+        csv_content = "\ufeffITEM_ID , Store_Id , Sale_Date , Quantity \nFOODS_1_002,CA_1,2016-03-01,10.0\nFOODS_1_002,CA_1,2016-03-02,-5.0\nNON_EXISTENT_SKU,CA_1,2016-03-03,8.0\n"
+        csv_bytes = csv_content.encode("utf-8-sig")
+        csv_file = io.BytesIO(csv_bytes)
+
+        res = self.client.post(
+            "/api/v1/sales/import",
+            files={"file": ("bom_sales.csv", csv_file, "text/csv")},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["imported_count"], 1)
+        self.assertEqual(data["skipped_count"], 2)
 
     def test_download_import_template_headers(self):
         # UC-Import/N-23: Template endpoint /data/template has consistent headers matching FE
