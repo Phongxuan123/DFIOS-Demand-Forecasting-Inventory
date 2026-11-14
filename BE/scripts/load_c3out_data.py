@@ -25,6 +25,7 @@ if BE_DIR not in sys.path:
     sys.path.append(BE_DIR)
 
 from app.core.database import engine
+from app.core.db_bulk import psql_insert_copy
 
 C3_CLASS_FILE = os.path.join(SCRIPT_DIR, "c3ok_sku_class.csv")
 if not os.path.exists(C3_CLASS_FILE):
@@ -237,17 +238,17 @@ def main():
         conn.execute(text("DELETE FROM sku_classifications"))
 
     print(f"5. Seeding {len(sku_classes_df)} rows into sku_classifications...")
-    sku_classes_df.to_sql("sku_classifications", engine, if_exists="append", index=False, chunksize=1000, method="multi")
+    sku_classes_df.to_sql("sku_classifications", engine, if_exists="append", index=False, method=psql_insert_copy)
 
     print(f"6. Seeding {len(final_params)} rows into inventory_params...")
-    final_params.to_sql("inventory_params", engine, if_exists="append", index=False, chunksize=1000, method="multi")
+    final_params.to_sql("inventory_params", engine, if_exists="append", index=False, method=psql_insert_copy)
 
     print(f"7. Seeding {len(inventory_df)} rows into inventory...")
-    inventory_df.to_sql("inventory", engine, if_exists="append", index=False, chunksize=1000, method="multi")
+    inventory_df.to_sql("inventory", engine, if_exists="append", index=False, method=psql_insert_copy)
 
     if not recs_df.empty:
         print(f"8. Seeding {len(recs_df)} recommendations into replenishment_recommendations...")
-        recs_df.to_sql("replenishment_recommendations", engine, if_exists="append", index=False, chunksize=1000, method="multi")
+        recs_df.to_sql("replenishment_recommendations", engine, if_exists="append", index=False, method=psql_insert_copy)
 
     print("=" * 60)
     print("C3-OUT synchronization completed successfully!")

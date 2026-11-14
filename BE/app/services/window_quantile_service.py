@@ -157,37 +157,50 @@ class WindowQuantileService:
         cutoff_day_idx = (cutoff_date - m5_start).days + 1
 
         # 1. Thử thu thập từ forecast_backtest (R-15)
-        backtest_rows = (
-            db.query(ForecastBacktest.review_day, ForecastBacktest.dhat)
-            .filter(
-                ForecastBacktest.item_id == item_id,
-                ForecastBacktest.store_id == store_id,
-                ForecastBacktest.review_day + horizon_days <= cutoff_day_idx + horizon_days,
+        try:
+            backtest_rows = (
+                db.query(ForecastBacktest.review_day, ForecastBacktest.dhat)
+                .filter(
+                    ForecastBacktest.item_id == item_id,
+                    ForecastBacktest.store_id == store_id,
+                    ForecastBacktest.review_day + horizon_days <= cutoff_day_idx + horizon_days,
+                )
+                .order_by(ForecastBacktest.review_day.desc())
+                .limit(max_origins)
+                .all()
             )
-            .order_by(ForecastBacktest.review_day.desc())
-            .limit(max_origins)
-            .all()
-        )
+        except Exception:
+            db.rollback()
+            backtest_rows = None
 
         if backtest_rows and len(backtest_rows) >= 5:
-            # Tra cứu actual sales cho các review cycle
+            # R-18 & R-33: Tra cứu actual sales cho toàn bộ khoảng review cycles trong 1 query duy nhất (giảm từ 52 query xuống 1)
+            min_rev = min(r[0] for r in backtest_rows)
+            max_rev = max(r[0] for r in backtest_rows)
+            overall_start = m5_start + timedelta(days=min_rev - 1)
+            overall_end = m5_start + timedelta(days=max_rev + horizon_days - 1)
+
+            sales_rows = (
+                db.query(SalesHistory.sale_date, SalesHistory.quantity)
+                .filter(
+                    SalesHistory.item_id == item_id,
+                    SalesHistory.store_id == store_id,
+                    SalesHistory.sale_date >= overall_start,
+                    SalesHistory.sale_date <= overall_end,
+                )
+                .all()
+            )
+            sales_dict = {row[0]: float(row[1]) for row in sales_rows}
+
             residuals_list = []
             for rev_day, dhat in backtest_rows:
                 cycle_start = m5_start + timedelta(days=rev_day - 1)
-                cycle_end = cycle_start + timedelta(days=horizon_days - 1)
-                actual_qty = (
-                    db.query(func.sum(SalesHistory.quantity))
-                    .filter(
-                        SalesHistory.item_id == item_id,
-                        SalesHistory.store_id == store_id,
-                        SalesHistory.sale_date >= cycle_start,
-                        SalesHistory.sale_date <= cycle_end,
-                    )
-                    .scalar()
+                actual_qty = sum(
+                    sales_dict.get(cycle_start + timedelta(days=d), 0.0)
+                    for d in range(horizon_days)
                 )
-                if actual_qty is not None:
-                    pred_window = float(dhat) * horizon_days
-                    residuals_list.append(float(actual_qty) - pred_window)
+                pred_window = float(dhat) * horizon_days
+                residuals_list.append(actual_qty - pred_window)
 
             if len(residuals_list) >= 5:
                 return np.array(residuals_list)

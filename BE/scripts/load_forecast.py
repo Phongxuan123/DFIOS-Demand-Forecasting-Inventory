@@ -6,6 +6,7 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
 import pandas as pd
 from app.core.database import engine
+from app.core.db_bulk import psql_insert_copy
 from app.models import Base
 
 Base.metadata.create_all(engine)
@@ -16,10 +17,9 @@ sigma_path = os.path.join(SCRIPT_DIR, "production_sigma.parquet")
 fc = pd.read_parquet(forecast_path).rename(
     columns={"date": "forecast_date", "P10": "p10", "P50": "p50", "P90": "p90"})
 fc["model_version"] = "Ensemble bundle 1.0"
-fc.to_sql("forecast", engine, if_exists="append", index=False,
-          chunksize=20_000, method="multi")
+fc.to_sql("forecast", engine, if_exists="append", index=False, method=psql_insert_copy)
 
 sg = pd.read_parquet(sigma_path)
-sg.to_sql("forecast_sigma", engine, if_exists="append", index=False)
+sg.to_sql("forecast_sigma", engine, if_exists="append", index=False, method=psql_insert_copy)
 
 print("Load complete!")

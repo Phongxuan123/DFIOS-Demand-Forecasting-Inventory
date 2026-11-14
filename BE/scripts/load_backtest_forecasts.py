@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from app.core.database import engine
+from app.core.db_bulk import psql_insert_copy
 
 NPZ_PATH = os.path.join(SCRIPT_DIR, "..", "MODEL", "c3ok_forecasts.npz")
 if not os.path.exists(NPZ_PATH):
@@ -81,6 +82,6 @@ print(f"Total backtest forecast records prepared: {len(df_backtest)}")
 with engine.begin() as conn:
     conn.execute(text("DELETE FROM forecast_backtest WHERE store_id = 'CA_1'"))
 
-df_backtest.to_sql("forecast_backtest", engine, if_exists="append", index=False, chunksize=10000, method="multi")
+df_backtest.to_sql("forecast_backtest", engine, if_exists="append", index=False, method=psql_insert_copy)
 print(f"Successfully loaded {len(df_backtest)} causal backtest forecasts into forecast_backtest!")
 

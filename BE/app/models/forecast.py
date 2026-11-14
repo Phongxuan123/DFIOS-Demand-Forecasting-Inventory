@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, SmallInteger, Float, Boolean, Date, DateTime
+from sqlalchemy import Column, String, SmallInteger, Float, Boolean, Date, DateTime, Index
 from app.models.base import Base
 
 class Forecast(Base):
@@ -17,6 +17,11 @@ class Forecast(Base):
     available = Column(Boolean, nullable=False)
     model_version = Column(String, nullable=False)
     generated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("idx_forecast_item_store_date", "item_id", "store_id", "forecast_date"),
+        Index("idx_forecast_item_store_h", "item_id", "store_id", "h"),
+    )
 
 class ForecastSigma(Base):
     __tablename__ = "forecast_sigma"
