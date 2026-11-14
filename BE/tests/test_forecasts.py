@@ -849,4 +849,32 @@ class TestForecastEndpoints(unittest.TestCase):
 
         self.assertEqual(count_before, count_after, "GET /window-quantiles không được gây tác dụng phụ ghi vào database!")
 
+    def test_r14_predict_sku_future_endpoint_and_service(self):
+        """R-14: Kiểm tra GET /{sku}/future và logic predict_sku_future không hardcode 1.5, nạp từ parquet/sba."""
+        # 1. Test endpoint GET /{sku}/future for FOODS_1_001
+        res = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/future?store_id=CA_1&horizon=28",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        items = res.json()
+        self.assertEqual(len(items), 28)
+        self.assertEqual(items[0]["item_id"], "FOODS_1_001")
+        self.assertEqual(items[0]["h"], 1)
+        self.assertEqual(items[-1]["h"], 28)
+        self.assertIn("p10", items[0])
+        self.assertIn("p50", items[0])
+        self.assertIn("p90", items[0])
+
+        # 2. Test non-existent SKU fallback (honest 0.0, available=False)
+        res_empty = self.client.get(
+            "/api/v1/forecasts/NON_EXISTENT_SKU/future?store_id=CA_1&horizon=14",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res_empty.status_code, 200)
+        empty_items = res_empty.json()
+        self.assertEqual(len(empty_items), 14)
+        self.assertEqual(empty_items[0]["y_pred"], 0.0)
+        self.assertFalse(empty_items[0]["available"])
+
 

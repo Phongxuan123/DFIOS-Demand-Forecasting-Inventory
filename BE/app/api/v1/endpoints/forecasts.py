@@ -288,3 +288,25 @@ def get_sku_window_quantiles(
         route=record.route or "c",
     )
 
+
+@router.get(
+    "/{sku}/future",
+    summary="Task PRE.1 - Dự báo 28 ngày tương lai (Production Ensemble Engine)",
+    description="Tra cứu dự báo 28 ngày tương lai (h=1..28) kèm khoảng tin cậy p10, p50, p90 từ Ensemble Production Bundle.",
+)
+def get_sku_future_forecast(
+    sku: str,
+    store_id: str = Query("CA_1", description="Mã cửa hàng"),
+    horizon: int = Query(28, ge=1, le=28, description="Khoảng dự báo"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.predictor_service import dfios_predictor
+    return dfios_predictor.predict_sku_future(
+        item_id=sku,
+        store_id=store_id,
+        horizon=horizon,
+        db=db,
+    )
+
+
