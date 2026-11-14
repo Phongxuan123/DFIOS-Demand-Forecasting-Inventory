@@ -518,9 +518,32 @@ class OptimizationService:
         """
         # Tối ưu hóa hiệu năng: Bulk query tránh N+1 (giảm từ 297s xuống < 0.2s)
         params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+        # R-17: Không chạy recompute ghi đè DB trên phương thức GET thuần túy (Idempotency)
         if not params:
-            self.recompute_parameters(db, store_id=store_id)
-            params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+            config = self.get_service_level_config(db)
+            params = []
+            for p in db.query(Product).all():
+                tau = self._resolve_service_level(config, p.item_id, p.cat_id)
+                lt_days = self._resolve_lead_time(db, p.item_id)
+                calculated = self._calculate_ml_params(db, p.item_id, store_id, lt_days, tau)
+                if not calculated:
+                    calculated = self._calculate_static_params(db, p.item_id, store_id, lt_days, tau)
+                inv_param = InventoryParam(
+                    id=f"{store_id}_{p.item_id}",
+                    item_id=p.item_id,
+                    store_id=store_id,
+                    service_level=tau,
+                    lead_time_days=lt_days,
+                    safety_stock=calculated["safety_stock"],
+                    reorder_point=calculated["reorder_point"],
+                    eoq=calculated["eoq"],
+                    holding_cost=calculated.get("holding_cost", self.DEFAULT_HOLDING_COST),
+                    order_cost=calculated.get("order_cost", self.DEFAULT_ORDER_COST),
+                    unit_price=calculated.get("unit_price", 10.0),
+                    annual_demand=calculated.get("annual_demand", 1000.0),
+                    source=calculated.get("source", "ml"),
+                )
+                params.append(inv_param)
         products = db.query(Product).all()
         prod_map = {p.item_id: p for p in products}
 

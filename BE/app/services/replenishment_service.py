@@ -254,7 +254,7 @@ class ReplenishmentService:
         priority: Optional[str] = None,
         search: Optional[str] = None,
         item_id: Optional[str] = None,
-        auto_generate: bool = True,
+        auto_generate: bool = False,
     ) -> ReplenishmentListResponse:
         """
         UC33 - Lấy danh sách đề xuất nhập hàng (có phân trang, tìm kiếm, lọc).

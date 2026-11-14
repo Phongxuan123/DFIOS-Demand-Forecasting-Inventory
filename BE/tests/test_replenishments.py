@@ -151,9 +151,17 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     # ==========================================
 
     def test_list_recommendations_and_auto_generate(self):
-        # Manager truy cập danh sách -> hệ thống tự động quét và sinh đề xuất
-        res = self.client.get(
+        # R-17: GET thuần túy không có tác dụng phụ (auto_generate=False mặc định)
+        res_pure = self.client.get(
             "/api/v1/replenishments",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_pure.status_code, 200)
+        self.assertEqual(res_pure.json()["total"], 0)
+
+        # Manager truy cập danh sách với auto_generate=True -> hệ thống tự động quét và sinh đề xuất
+        res = self.client.get(
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.manager_token}"},
         )
         self.assertEqual(res.status_code, 200)
@@ -203,7 +211,7 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     def test_adjust_quantity_success_and_validation(self):
         # Lấy danh sách để có ID đơn PENDING
         list_res = self.client.get(
-            "/api/v1/replenishments",
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.manager_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]
@@ -248,7 +256,7 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     def test_approve_recommendation_and_update_on_order(self):
         # 1. Lấy đơn PENDING
         list_res = self.client.get(
-            "/api/v1/replenishments",
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]
@@ -314,7 +322,7 @@ class TestReplenishmentEndpoints(unittest.TestCase):
     def test_cancel_approved_recommendation_reverts_on_order(self):
         # Duyệt một đơn trước
         list_res = self.client.get(
-            "/api/v1/replenishments",
+            "/api/v1/replenishments?auto_generate=true",
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]

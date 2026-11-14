@@ -829,3 +829,24 @@ class TestForecastEndpoints(unittest.TestCase):
             expected_prefix = f"FOODS_1_001_CA_1_{item['forecast_date']}_{item['h']}"
             self.assertEqual(item["id"], expected_prefix)
 
+    def test_r17_get_window_quantiles_has_no_database_side_effects(self):
+        """R-17: Đảm bảo GET window-quantiles trả về phân phối hợp lệ nhưng không gây tác dụng phụ ghi/tạo bản ghi vào DB."""
+        with self.TestingSessionLocal() as session:
+            count_before = session.query(ForecastWindowQuantile).count()
+
+        res = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/window-quantiles?store_id=CA_1&origin_date=2016-05-23&horizon_days=10",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["item_id"], "FOODS_1_001")
+        self.assertGreater(data["point_window"], 0.0)
+        self.assertIn("0.95", data["q_levels"])
+
+        with self.TestingSessionLocal() as session:
+            count_after = session.query(ForecastWindowQuantile).count()
+
+        self.assertEqual(count_before, count_after, "GET /window-quantiles không được gây tác dụng phụ ghi vào database!")
+
+

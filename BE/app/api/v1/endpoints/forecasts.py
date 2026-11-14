@@ -1,10 +1,12 @@
 from datetime import date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user, require_manager_or_admin, get_client_ip
 from app.models.user import User
+from app.models.product import Product
+from app.models.sim_clock import SimClock
 from app.schemas.forecast import (
     ForecastListResponse,
     HistoricalDemandResponse,
@@ -18,7 +20,6 @@ from app.schemas.forecast import (
     BulkOverrideResponse,
 )
 from app.schemas.window_quantile import WindowQuantileResponse
-from app.models.sim_clock import SimClock
 from app.services.forecast_service import forecast_service
 from app.services.window_quantile_service import window_quantile_service
 
@@ -268,6 +269,7 @@ def get_sku_window_quantiles(
         item_id=sku,
         origin_date=target_date,
         horizon_days=horizon_days,
+        persist=False,
     )
 
     q_dict = record.q_levels or {}

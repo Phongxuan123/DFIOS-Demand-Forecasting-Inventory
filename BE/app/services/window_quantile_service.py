@@ -288,9 +288,11 @@ class WindowQuantileService:
         origin_date: date,
         horizon_days: int = 10,
         model_run_id: str = "backtest-ensemble-v1",
+        persist: bool = True,
     ) -> ForecastWindowQuantile:
         """
-        Lấy bản ghi phân phối cửa sổ đã lưu hoặc tính toán mới và lưu vào bảng forecast_window_quantile.
+        Lấy bản ghi phân phối cửa sổ đã lưu hoặc tính toán mới và lưu vào bảng forecast_window_quantile (nếu persist=True).
+        R-17: persist=False cho phép tính toán trên GET mà không gây tác dụng phụ ghi DB.
         """
         record_id = f"{model_run_id}_{store_id}_{item_id}_{origin_date}_{horizon_days}"
 
@@ -328,6 +330,9 @@ class WindowQuantileService:
             route="c",
             created_at=datetime.now(timezone.utc),
         )
+
+        if not persist:
+            return record
 
         try:
             db.add(record)

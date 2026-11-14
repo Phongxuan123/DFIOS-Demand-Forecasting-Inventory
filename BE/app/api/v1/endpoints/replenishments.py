@@ -37,7 +37,7 @@ def list_replenishments(
     priority: Optional[str] = Query(None, description="Lọc theo mức độ ưu tiên: CRITICAL, HIGH, MEDIUM, LOW"),
     search: Optional[str] = Query(None, description="Tìm kiếm theo mã SKU hoặc lý do"),
     item_id: Optional[str] = Query(None, description="Lọc chính xác theo mã SKU"),
-    auto_generate: bool = Query(True, description="Tự động sinh đề xuất nếu bảng chưa có đơn PENDING"),
+    auto_generate: bool = Query(False, description="Tự động sinh đề xuất nếu bảng chưa có đơn PENDING (mặc định False để đảm bảo phương thức GET không có tác dụng phụ)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_admin),
 ):
