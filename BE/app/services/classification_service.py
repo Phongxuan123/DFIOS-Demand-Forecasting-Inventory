@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.classification import SKUClassification
@@ -120,13 +121,24 @@ class ClassificationService:
             if sales_rows:
                 quantities = [float(r[0]) for r in sales_rows]
             else:
-                # Nếu chưa có sales_history, fallback sang dự báo
-                fc_rows = (
-                    db.query(Forecast.y_pred)
+                # Nếu chưa có sales_history, fallback sang dự báo có áp dụng override hiệu dụng (B-01)
+                from app.models.forecast import ForecastOverride
+                fc_query = (
+                    db.query(
+                        func.coalesce(ForecastOverride.override_value, Forecast.y_pred)
+                    )
+                    .select_from(Forecast)
+                    .outerjoin(
+                        ForecastOverride,
+                        (ForecastOverride.item_id == Forecast.item_id)
+                        & (ForecastOverride.store_id == Forecast.store_id)
+                        & (ForecastOverride.forecast_date == Forecast.forecast_date)
+                        & (ForecastOverride.is_active.is_(True))
+                    )
                     .filter(Forecast.item_id == item_id)
                     .all()
                 )
-                quantities = [float(r[0]) for r in fc_rows] if fc_rows else [0.0]
+                quantities = [float(r[0]) for r in fc_query] if fc_query else [0.0]
 
             n = len(quantities)
             total_qty = sum(quantities)

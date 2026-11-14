@@ -458,7 +458,21 @@ class ForecastService:
         points: List[UncertaintyPoint] = []
         spreads: List[float] = []
 
+        target_store = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
+        active_overrides = forecast_repository.get_active_overrides_dict(
+            db, item_id=sku, store_id=target_store
+        )
+
         for fc in forecasts:
+            ov_key_h = f"{sku}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
+            ov_key_base = f"{sku}_{fc.store_id}_{fc.forecast_date}"
+            ov = active_overrides.get(ov_key_h) or active_overrides.get(ov_key_base)
+            effective_pred = float(ov.override_value) if ov else fc.y_pred
+
             rng = round(fc.p90 - fc.p10, 2) if (fc.p90 is not None and fc.p10 is not None) else None
             if rng is not None:
                 spreads.append(rng)
@@ -467,7 +481,7 @@ class ForecastService:
                 UncertaintyPoint(
                     forecast_date=fc.forecast_date,
                     h=fc.h,
-                    y_pred=fc.y_pred,
+                    y_pred=effective_pred,
                     p10=fc.p10,
                     p50=fc.p50,
                     p90=fc.p90,
@@ -475,12 +489,7 @@ class ForecastService:
                 )
             )
 
-        # Truy vấn doanh số thực tế để tính sai số dự báo thực nghiệm r = y - y_hat (B-06)
-        target_store = (
-            store_id.strip()
-            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
-            else "CA_1"
-        )
+        # Truy vấn doanh số thực tế để tính sai số dự báo thực nghiệm r = y - y_hat (B-06, B-01)
         sales_recs = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store
         )
@@ -488,7 +497,11 @@ class ForecastService:
         residuals: List[float] = []
         for fc in forecasts:
             if fc.forecast_date in sales_map:
-                residuals.append(round(sales_map[fc.forecast_date] - fc.y_pred, 2))
+                ov_key_h = f"{sku}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
+                ov_key_base = f"{sku}_{fc.store_id}_{fc.forecast_date}"
+                ov = active_overrides.get(ov_key_h) or active_overrides.get(ov_key_base)
+                effective_pred = float(ov.override_value) if ov else fc.y_pred
+                residuals.append(round(sales_map[fc.forecast_date] - effective_pred, 2))
 
         # UC22: Phân bố sai số dự báo thực nghiệm r = y - y_hat (B-06)
         # Khi có dữ liệu thực tế trùng với ngày dự báo, tính chuẩn xác trên residual thực tế.
@@ -719,7 +732,11 @@ class ForecastService:
             optimization_service.recompute_parameters(db, store_id=target_store, item_id=sku)
             db.commit()
         except Exception as e:
-            logger.warning(f"Error recomputing quantiles/params on override: {e}")
+            db.rollback()
+            logger.error(
+                f"Error recomputing quantiles/params on override for {sku} in {target_store}: {e}",
+                exc_info=True,
+            )
 
         return ForecastOverrideResponse.model_validate(saved)
 
@@ -775,7 +792,11 @@ class ForecastService:
             optimization_service.recompute_parameters(db, store_id=override.store_id, item_id=sku)
             db.commit()
         except Exception as e:
-            logger.warning(f"Error recomputing quantiles/params on revert: {e}")
+            db.rollback()
+            logger.error(
+                f"Error recomputing quantiles/params on revert for {sku} in {override.store_id}: {e}",
+                exc_info=True,
+            )
 
         return ForecastOverrideRevertResponse(
             success=True,
@@ -915,7 +936,11 @@ class ForecastService:
                     optimization_service.recompute_parameters(db, store_id=affected_store, item_id=affected_sku)
                 db.commit()
             except Exception as e:
-                logger.warning(f"Error recomputing quantiles/params on bulk_override: {e}")
+                db.rollback()
+                logger.error(
+                    f"Error recomputing quantiles/params on bulk_override: {e}",
+                    exc_info=True,
+                )
 
         return BulkOverrideResponse(
             success=True,

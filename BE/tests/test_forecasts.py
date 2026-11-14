@@ -753,3 +753,59 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertTrue(len(h1_items) > 0)
         self.assertEqual(h1_items[0]["y_pred"], 42.0)
         self.assertTrue(h1_items[0]["is_overridden"])
+
+    def test_b01_override_recompute_rollback_on_failure(self):
+        """B-01: Kiểm tra rollback khi recompute_parameters gặp lỗi trong override, không làm hỏng session."""
+        from unittest.mock import patch
+
+        payload = {
+            "forecast_date": "2026-10-01",
+            "override_value": 77.0,
+            "reason": "Test exception rollback",
+        }
+
+        with patch("app.services.optimization_service.optimization_service.recompute_parameters", side_effect=RuntimeError("Simulated optimization failure")):
+            res = self.client.post(
+                "/api/v1/forecasts/FOODS_1_001/override?store_id=CA_1",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.admin_token}"},
+            )
+            self.assertEqual(res.status_code, 201)
+            self.assertEqual(res.json()["override_value"], 77.0)
+
+        # Kiểm tra session vẫn khỏe mạnh và đọc/ghi bình thường
+        with self.TestingSessionLocal() as session:
+            ov = session.query(ForecastOverride).filter(
+                ForecastOverride.item_id == "FOODS_1_001",
+                ForecastOverride.forecast_date == date(2026, 10, 1),
+                ForecastOverride.is_active.is_(True),
+            ).first()
+            self.assertIsNotNone(ov)
+            self.assertEqual(ov.override_value, 77.0)
+
+    def test_b01_uncertainty_band_reflects_active_override(self):
+        """B-01: get_uncertainty_band phản ánh giá trị override hiệu dụng cho cả y_pred và residuals."""
+        # Tạo override cho FOODS_1_001 ngày 2026-10-01
+        payload = {
+            "forecast_date": "2026-10-01",
+            "override_value": 99.0,
+            "reason": "Uncertainty band test override",
+        }
+        res_ov = self.client.post(
+            "/api/v1/forecasts/FOODS_1_001/override?store_id=CA_1",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_ov.status_code, 201)
+
+        # GET uncertainty band
+        res = self.client.get(
+            "/api/v1/forecasts/FOODS_1_001/uncertainty?store_id=CA_1&horizon=28",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        p_oct1 = [p for p in data["points"] if p["forecast_date"] == "2026-10-01"]
+        self.assertTrue(len(p_oct1) > 0)
+        self.assertEqual(p_oct1[0]["y_pred"], 99.0)
+

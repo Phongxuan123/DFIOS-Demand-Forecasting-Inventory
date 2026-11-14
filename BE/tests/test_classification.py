@@ -12,6 +12,7 @@ from app.models.product import Product
 from app.models.sales_history import SalesHistory
 from app.models.audit_log import AuditLog
 from app.models.classification import SKUClassification
+from app.models.forecast import Forecast, ForecastOverride
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
 
@@ -282,3 +283,60 @@ class TestClassificationEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.manager_token}"},
         )
         self.assertEqual(res_inv.status_code, 404)
+
+    def test_b01_classification_fallback_uses_effective_forecast_with_override(self):
+        """B-01: Phân lớp SKU khi fallback sang forecast áp dụng override hiệu dụng (func.coalesce)."""
+        # Tạo SKU mới không có sales_history
+        with self.TestingSessionLocal() as session:
+            p_new = Product(
+                item_id="NEW_SKU_001",
+                name="New Test Product",
+                dept_id="FOODS_1",
+                cat_id="FOODS",
+                price=10.0,
+            )
+            session.add(p_new)
+            # Thêm forecast gốc y_pred = 5.0
+            fc = Forecast(
+                id=9999,
+                item_id="NEW_SKU_001",
+                store_id="CA_1",
+                forecast_date=date(2026, 11, 1),
+                h=1,
+                y_pred=5.0,
+                available=1.0,
+                model_version="Ensemble",
+            )
+            session.add(fc)
+            # Thêm override active với giá trị 150.0
+            ov = ForecastOverride(
+                id="ov-new-01",
+                item_id="NEW_SKU_001",
+                store_id="CA_1",
+                forecast_date=date(2026, 11, 1),
+                h=1,
+                original_value=5.0,
+                override_value=150.0,
+                reason="Promotion boost",
+                is_active=True,
+                created_by="admin@dfios.com",
+            )
+            session.add(ov)
+            session.commit()
+
+        # Recompute classification
+        res = self.client.post(
+            "/api/v1/classification/recompute",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+
+        # Check classified revenue reflects 150.0 * 10.0 = 1500.0 instead of 5.0 * 10.0 = 50.0
+        with self.TestingSessionLocal() as session:
+            cls_item = session.query(SKUClassification).filter(
+                SKUClassification.item_id == "NEW_SKU_001"
+            ).first()
+            self.assertIsNotNone(cls_item)
+            self.assertEqual(cls_item.revenue, 1500.0)
+            self.assertEqual(cls_item.mean_demand, 150.0)
+
