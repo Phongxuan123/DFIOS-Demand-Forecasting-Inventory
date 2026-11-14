@@ -1,5 +1,5 @@
-from typing import Generator, List
-from fastapi import Depends, HTTPException, status
+from typing import Generator, List, Optional
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -98,3 +98,18 @@ def require_roles(allowed_roles: List[str]):
 # Helper shortcuts cho các role
 require_admin = require_roles(["Admin"])
 require_manager_or_admin = require_roles(["Admin", "Warehouse Manager"])
+
+
+def get_client_ip(request: Request) -> Optional[str]:
+    """
+    Trích xuất IP client tập trung (R-44).
+    Ưu tiên header 'X-Forwarded-For' khi chạy sau reverse proxy (Nginx, Docker),
+    nếu không có thì fallback về 'request.client.host'.
+    """
+    if not request:
+        return None
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    client = getattr(request, "client", None)
+    return client.host if client else None

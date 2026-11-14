@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_admin, require_manager_or_admin
+from app.api.deps import get_db, get_current_user, require_admin, require_manager_or_admin, get_client_ip
 from app.models.user import User
 from app.schemas.classification import (
     ClassificationThresholds,
@@ -16,13 +16,6 @@ from app.schemas.classification import (
 from app.services.classification_service import classification_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> Optional[str]:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 @router.get("/thresholds", response_model=ClassificationThresholds, summary="UC25 - Xem cấu hình ngưỡng phân loại ABC/XYZ")

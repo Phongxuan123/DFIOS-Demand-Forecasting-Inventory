@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_admin
+from app.api.deps import get_db, get_current_user, require_admin, get_client_ip
 from app.models.user import User
 from app.schemas.system_setting import (
     SettingItem,
@@ -12,13 +12,6 @@ from app.schemas.system_setting import (
 from app.services.system_setting_service import system_setting_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 @router.get("", response_model=SettingsListResponse, summary="UC44 - Lấy toàn bộ cấu hình hệ thống")

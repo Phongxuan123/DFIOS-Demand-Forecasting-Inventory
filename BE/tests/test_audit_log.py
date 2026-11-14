@@ -180,5 +180,50 @@ class TestAuditLogEndpoints(unittest.TestCase):
         self.assertEqual(len(actions), 3)
 
 
+class TestGetClientIpCentralized(unittest.TestCase):
+    """
+    R-44: Kiểm thử hàm get_client_ip tập trung tại app.api.deps
+    """
+    def test_extract_client_ip_from_x_forwarded_for_multi(self):
+        from unittest.mock import MagicMock
+        from app.api.deps import get_client_ip
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = "203.0.113.195, 70.41.3.18, 150.172.238.178"
+        ip = get_client_ip(mock_request)
+        self.assertEqual(ip, "203.0.113.195")
+
+    def test_extract_client_ip_from_x_forwarded_for_single(self):
+        from unittest.mock import MagicMock
+        from app.api.deps import get_client_ip
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = "192.168.1.100 "
+        ip = get_client_ip(mock_request)
+        self.assertEqual(ip, "192.168.1.100")
+
+    def test_fallback_to_client_host_when_no_forwarded(self):
+        from unittest.mock import MagicMock
+        from app.api.deps import get_client_ip
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = None
+        mock_request.client.host = "10.0.0.5"
+        ip = get_client_ip(mock_request)
+        self.assertEqual(ip, "10.0.0.5")
+
+    def test_return_none_when_no_client_info(self):
+        from unittest.mock import MagicMock
+        from app.api.deps import get_client_ip
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = None
+        mock_request.client = None
+        ip = get_client_ip(mock_request)
+        self.assertIsNone(ip)
+
+        self.assertIsNone(get_client_ip(None))
+
+
 if __name__ == "__main__":
     unittest.main()

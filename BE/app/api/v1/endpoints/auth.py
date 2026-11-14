@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_current_user, get_client_ip
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
@@ -19,13 +19,6 @@ from app.schemas.user import UserResponse
 from app.services.auth_service import auth_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 @router.post("/login", response_model=LoginResponse, summary="UC01 - Đăng nhập tài khoản")

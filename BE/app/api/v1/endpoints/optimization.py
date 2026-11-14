@@ -7,6 +7,7 @@ from app.api.deps import (
     get_current_user,
     require_admin,
     require_manager_or_admin,
+    get_client_ip,
 )
 from app.models.user import User
 from app.schemas.optimization import (
@@ -25,13 +26,6 @@ from app.schemas.optimization import (
 from app.services.optimization_service import optimization_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> Optional[str]:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 # --- UC29: Target Service Level Configuration ---

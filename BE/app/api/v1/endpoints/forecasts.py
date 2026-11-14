@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_manager_or_admin
+from app.api.deps import get_db, get_current_user, require_manager_or_admin, get_client_ip
 from app.models.user import User
 from app.schemas.forecast import (
     ForecastListResponse,
@@ -23,13 +23,6 @@ from app.services.forecast_service import forecast_service
 from app.services.window_quantile_service import window_quantile_service
 
 router = APIRouter()
-
-
-def get_client_ip(request: Request) -> Optional[str]:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
 
 
 @router.get("", response_model=ForecastListResponse, summary="UC17 / UC18 / UC19 - Tra cứu danh sách dự báo nhu cầu")
