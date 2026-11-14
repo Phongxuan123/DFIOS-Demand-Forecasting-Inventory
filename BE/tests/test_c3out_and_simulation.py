@@ -624,6 +624,124 @@ class TestC3OutAndSimulation(unittest.TestCase):
         finally:
             db.close()
 
+    def test_r07_horizon_isolation_no_existing_any_cross_return(self):
+        """R-07: Đảm bảo get_or_create_window_quantile không dùng existing_any trả sai bản ghi của horizon khác."""
+        from app.services.window_quantile_service import window_quantile_service
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            store = "CA_1"
+            item = "FOODS_1_001"
+            origin = date(2016, 5, 23)
+
+            rec_h7 = window_quantile_service.get_or_create_window_quantile(
+                db, store_id=store, item_id=item, origin_date=origin, horizon_days=7
+            )
+            self.assertEqual(rec_h7.horizon_days, 7)
+
+            # Lần gọi thứ 2 với horizon_days=10 không được trả lại bản ghi horizon 7
+            rec_h10 = window_quantile_service.get_or_create_window_quantile(
+                db, store_id=store, item_id=item, origin_date=origin, horizon_days=10
+            )
+            self.assertEqual(rec_h10.horizon_days, 10)
+            self.assertNotEqual(rec_h7.id, rec_h10.id)
+        finally:
+            db.close()
+
+    def test_r07_single_run_isolation_in_compute_point_window_forecast(self):
+        """R-07: Đảm bảo compute_point_window_forecast chỉ lấy đúng 1 lượt chạy dự báo, không trộn 2 run."""
+        from app.services.window_quantile_service import window_quantile_service
+        from app.models.forecast import Forecast
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            store = "CA_1"
+            item = "FOODS_1_001"
+
+            # Run 1 xuất phát 2016-04-25 (h=1..10, y_pred=1.0)
+            for h in range(1, 11):
+                fc = Forecast(
+                    id=f"run1_{h}", item_id=item, store_id=store,
+                    forecast_date=date(2016, 4, 25) + timedelta(days=h - 1),
+                    h=h, y_pred=1.0, p10=0.8, p50=1.0, p90=1.2, available=True,
+                    model_version="run_april"
+                )
+                db.add(fc)
+
+            # Run 2 xuất phát 2016-05-23 (h=1..10, y_pred=5.0)
+            for h in range(1, 11):
+                fc = Forecast(
+                    id=f"run2_{h}", item_id=item, store_id=store,
+                    forecast_date=date(2016, 5, 23) + timedelta(days=h - 1),
+                    h=h, y_pred=5.0, p10=4.0, p50=5.0, p90=6.0, available=True,
+                    model_version="run_may"
+                )
+                db.add(fc)
+            db.commit()
+
+            # Gọi tính tổng cho origin 2016-05-23 (phải chọn đúng Run 2, tổng = 50.0, không bị lẫn với Run 1)
+            total = window_quantile_service.compute_point_window_forecast(
+                db, item_id=item, store_id=store, origin_date=date(2016, 5, 23), horizon_days=10
+            )
+            self.assertEqual(total, 50.0)
+        finally:
+            db.close()
+
+    def test_r15_and_r06_forecast_backtest_causal_residuals_integration(self):
+        """R-15 & R-06: Đọc dữ liệu từ forecast_backtest để tính sai số nhân quả thật không dùng coalesce."""
+        from app.services.window_quantile_service import window_quantile_service
+        from app.models.forecast_backtest import ForecastBacktest
+        from app.models.sales_history import SalesHistory
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            store = "CA_1"
+            item = "FOODS_1_001"
+            m5_start = date(2011, 1, 29)
+            H = 10
+
+            # Nạp 6 chu kỳ backtest: review_days = 1500, 1507, 1514, 1521, 1528, 1535 (dhat = 2.0 -> pred window = 20.0)
+            review_days = [1500, 1507, 1514, 1521, 1528, 1535]
+            for i, r_day in enumerate(review_days):
+                fb = ForecastBacktest(
+                    id=f"fb_{i}", store_id=store, item_id=item, review_day=r_day,
+                    dhat=2.0, dhat_lgb=2.0, sigma_d=0.5, model_run="backtest-ensemble-v1"
+                )
+                db.add(fb)
+
+            # Nạp doanh số thực tế 1 bản ghi duy nhất cho mỗi ngày từ ngày 1500 đến ngày 1535 + H:
+            # Mỗi ngày bán 3.0 đơn -> bất kỳ cửa sổ 10 ngày nào cũng có tổng actual = 30.0
+            total_days = (review_days[-1] + H) - review_days[0]
+            for offset in range(total_days):
+                sale_d = m5_start + timedelta(days=review_days[0] - 1 + offset)
+                sh = SalesHistory(
+                    id=f"sh_{review_days[0] + offset}", item_id=item, store_id=store,
+                    sale_date=sale_d, quantity=3.0
+                )
+                db.add(sh)
+            db.commit()
+
+            # Origin date đặt tại ngày 1600 (sau tất cả các chu kỳ trên)
+            origin = m5_start + timedelta(days=1600)
+            residuals = window_quantile_service.collect_historical_residuals(
+                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H
+            )
+            self.assertEqual(len(residuals), 6)
+            # Mỗi cửa sổ actual (30) - pred (20) = 10.0
+            for r in residuals:
+                self.assertAlmostEqual(r, 10.0, places=2)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

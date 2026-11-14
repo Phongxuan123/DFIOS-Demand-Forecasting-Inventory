@@ -27,6 +27,7 @@ from app.models.policy_selection import PolicySelection
 from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
 from app.models.data_imports import DataImport
+from app.models.forecast_backtest import ForecastBacktest
 
 __all__ = [
     "Base",
@@ -59,4 +60,5 @@ __all__ = [
     "CalibrationState",
     "ServiceOutcome",
     "DataImport",
+    "ForecastBacktest",
 ]
