@@ -742,6 +742,63 @@ class TestC3OutAndSimulation(unittest.TestCase):
         finally:
             db.close()
 
+    def test_b19_service_outcomes_dynamic_n_sku_per_class(self):
+        """B-19: Đảm bảo record_cycle_outcomes tính n_sku động theo từng lớp phân loại, không hardcode 100."""
+        from app.models.classification import SKUClassification
+        from app.models.inventory import Inventory
+        from app.models.inventory_daily import InventoryDaily
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            store = "CA_1"
+            # Tạo 3 SKU thuộc AX và 2 SKU thuộc AY
+            for i in range(3):
+                item = f"FOODS_AX_{i}"
+                db.add(SKUClassification(
+                    id=f"cls_ax_{i}", item_id=item, abc_class="A", xyz_class="X", segment="AX"
+                ))
+                db.add(Inventory(item_id=item, store_id=store, on_hand=10.0, on_order=0.0))
+            for i in range(2):
+                item = f"FOODS_AY_{i}"
+                db.add(SKUClassification(
+                    id=f"cls_ay_{i}", item_id=item, abc_class="A", xyz_class="Y", segment="AY"
+                ))
+                db.add(Inventory(item_id=item, store_id=store, on_hand=5.0, on_order=0.0))
+
+            # Giả lập 1 SKU của AX bị stockout
+            db.add(InventoryDaily(
+                store_id=store, item_id="FOODS_AX_0", date=date(2016, 5, 20),
+                on_hand_end=0.0, stockout=True, lost_sales=2.0
+            ))
+            db.commit()
+
+            outcomes = calibrator_service.record_cycle_outcome(
+                db, store_id=store, cycle_index=1,
+                cycle_start=date(2016, 5, 17), cycle_end=date(2016, 5, 24)
+            )
+
+            outcome_map = {o.class_id: o for o in outcomes}
+            # Lớp AX có 3 SKU thật, 1 stockout -> error_rate = 1/3 = 0.3333
+            self.assertEqual(outcome_map["AX"].n_sku, 3)
+            self.assertEqual(outcome_map["AX"].n_stockout, 1)
+            self.assertAlmostEqual(outcome_map["AX"].error_rate, 0.3333, places=3)
+
+            # Lớp AY có 2 SKU thật, 0 stockout -> error_rate = 0.0
+            self.assertEqual(outcome_map["AY"].n_sku, 2)
+            self.assertEqual(outcome_map["AY"].n_stockout, 0)
+            self.assertEqual(outcome_map["AY"].error_rate, 0.0)
+
+            # Lớp không có SKU (AZ, CX, ...) -> n_sku = 0, error_rate = 0.0, KHÔNG bị gán số 100/4
+            self.assertEqual(outcome_map["AZ"].n_sku, 0)
+            self.assertEqual(outcome_map["AZ"].n_stockout, 0)
+            self.assertEqual(outcome_map["AZ"].error_rate, 0.0)
+        finally:
+            db.close()
+
+
 
 if __name__ == "__main__":
     unittest.main()

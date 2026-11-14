@@ -22,3 +22,4 @@ class ForecastBacktest(Base):
     __table_args__ = (
         Index("idx_fc_backtest_lookup", "store_id", "item_id", "review_day"),
     )
+
