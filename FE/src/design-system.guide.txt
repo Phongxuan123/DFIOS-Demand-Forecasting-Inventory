@@ -8,7 +8,6 @@ localStorage key dfios_theme). Live gallery (dev only): /design-system (both the
 --------
 styles/tokens.css            all tokens (colours, radius, spacing, type, z-index, motion, --chart-*)
 styles/base.css              reset, focus ring, scrollbars
-styles/legacy.css            ONLY for un-rewritten pages. Never use in new code.
 components/ui/index.ts       barrel: import { Button, Card, Table, ... } from '../components/ui/index.ts'
 components/layout/*          shell (Sidebar, Topbar, Layout). navConfig.ts = menu (role-filtered)
 components/legacy/*          old Card/Pagination/OperationalCalendar + <LegacyPage> wrapper
@@ -130,7 +129,7 @@ DO   use <PageHeader> once, <Card>/<Section> for grouping, Table for tabular dat
 DO   keep one accent colour; use status tones only for status; always pair colour with text/icon.
 DO   use lucide-react icons (16-18px). Use tabular numbers for numeric columns (align right).
 DO   put every user-visible string in the dictionaries (vi + en).
-DON'T hard-code colours, px radii, shadows, fonts; don't import legacy.css classes in new code.
+DON'T hard-code colours, px radii, shadows, fonts.
 DON'T use window.confirm/alert, emoji as icons, gradients, glassmorphism, more than 8 chart series.
 DON'T read the theme from JS for charts: use useChartTheme() (works in both themes).
 DON'T open your own SSE connection: the shell has one (/events); use window events / refetch.

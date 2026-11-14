@@ -8,7 +8,6 @@ import { ToastProvider } from './components/ui/Toast.tsx';
 import { EmptyState } from './components/ui/states.tsx';
 import { AuthSplash } from './pages/auth/AuthShell.tsx';
 import { RequireRole } from './auth/RequireRole.tsx';
-import { LegacyPage } from './components/legacy/LegacyPage.tsx';
 
 // Route-level code splitting: every page (and its charts) is its own chunk.
 const Login = lazy(() => import('./pages/auth/Login.tsx').then((m) => ({ default: m.Login })));
@@ -70,28 +69,28 @@ const App: React.FC = () => (
                     </ProtectedRoute>
                   }
                 >
-                  <Route index element={<LegacyPage><Dashboard /></LegacyPage>} />
-                  <Route path="forecast-explorer" element={<LegacyPage><ForecastExplorer /></LegacyPage>} />
+                  <Route index element={<Dashboard />} />
+                  <Route path="forecast-explorer" element={<ForecastExplorer />} />
                   <Route
                     path="replenishment"
                     element={
                       <RequireRole action="view:replenishment">
-                        <LegacyPage><Replenishment /></LegacyPage>
+                        <Replenishment />
                       </RequireRole>
                     }
                   />
-                  <Route path="abc-xyz" element={<LegacyPage><AbcXyzAnalysis /></LegacyPage>} />
-                  <Route path="reports" element={<LegacyPage><Reports /></LegacyPage>} />
-                  <Route path="products" element={<LegacyPage><Products /></LegacyPage>} />
+                  <Route path="abc-xyz" element={<AbcXyzAnalysis />} />
+                  <Route path="reports" element={<Reports />} />
+                  <Route path="products" element={<Products />} />
                   <Route
                     path="model-performance"
                     element={
                       <RequireRole action="view:models">
-                        <LegacyPage><ModelPerformance /></LegacyPage>
+                        <ModelPerformance />
                       </RequireRole>
                     }
                   />
-                  <Route path="settings" element={<LegacyPage><Settings /></LegacyPage>} />
+                  <Route path="settings" element={<Settings />} />
                   {DesignSystem && <Route path="design-system" element={<DesignSystem />} />}
                   <Route path="*" element={<NotFound />} />
                 </Route>
