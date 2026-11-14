@@ -201,19 +201,21 @@ def refit_policies(
     """
     **Job J5 - Quarterly Policy Refit**:
     Tái chọn cặp tham số chính sách (m_g, kappa_g) cho 9 nhóm phân loại ABC/XYZ.
-    Tối ưu hóa tổng chi phí lưu kho và đặt hàng dưới ràng buộc Availability >= 0.96.
+    Tối ưu hóa tổng chi phí lưu kho và đặt hàng dưới ràng buộc Availability >= target + guard (backtest (R,s,S) thật).
     Lưu vết vào bảng policy_selection.
     Role: Admin only.
     """
     store_id = body.store_id if body and body.store_id else "CA_1"
     selection_id = body.selection_id if body else None
-    target_avail = body.target_availability if body and body.target_availability else 0.96
+    target_avail = body.target_availability if body and body.target_availability else None
+    c3out_active = body.c3out_active if body else None
 
     results = optimization_service.refit_quarterly_policies(
         db=db,
         store_id=store_id,
         selection_id=selection_id,
         target_availability=target_avail,
+        c3out_active=c3out_active,
     )
 
     sid = results[0]["selection_id"] if results else "quarterly_refit"

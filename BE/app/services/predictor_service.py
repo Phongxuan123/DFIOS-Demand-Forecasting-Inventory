@@ -95,6 +95,7 @@ class DFIOSPredictor:
         horizon: int = 28,
         df_production_source: Optional[pd.DataFrame] = None,
         db: Optional[Any] = None,
+        as_of: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """
         R-14: Dự báo tương lai 28 ngày cho một SKU cụ thể (Production Engine dfios_forecast v1.0).
@@ -120,7 +121,9 @@ class DFIOSPredictor:
                         "p50": round(float(r.get("P50", r.get("p50", r["y_pred"]))), 3),
                         "p90": round(float(r.get("P90", r.get("p90", r["y_pred"] * 1.3))), 3),
                         "available": bool(r.get("available", True)),
-                        "model_version": "dfios_forecast v1.0",
+                        # R-14 / P-39: static artifact snapshot (generated once, NOT recomputed per sim_clock)
+                        "model_version": "dfios_forecast v1.0 (production artifact snapshot)",
+                        "source": "production_artifact",
                     })
                 return records
 
@@ -128,12 +131,12 @@ class DFIOSPredictor:
         if db is not None:
             from app.models.sales_history import SalesHistory
             from app.services.fast_inference_service import fast_inference_service
-            sales_rows = (
-                db.query(SalesHistory.quantity)
-                .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
-                .order_by(SalesHistory.sale_date.asc())
-                .all()
+            q = db.query(SalesHistory.quantity).filter(
+                SalesHistory.item_id == item_id, SalesHistory.store_id == store_id
             )
+            if as_of is not None:  # P-39: only history known at the simulated date (causal)
+                q = q.filter(SalesHistory.sale_date < as_of)
+            sales_rows = q.order_by(SalesHistory.sale_date.asc()).all()
             if sales_rows:
                 quantities = np.array([float(r[0]) for r in sales_rows])
                 base_rate, std_est = fast_inference_service.sba_croston_forecast(quantities, horizon=horizon)
@@ -152,7 +155,10 @@ class DFIOSPredictor:
                         "p50": p50,
                         "p90": p90,
                         "available": True,
-                        "model_version": "dfios_forecast v1.0 (sba-adaptive)",
+                        # honest label: this is NOT the ensemble, it is the SBA-Croston fallback (R-14)
+                        "model_version": "SBA-Croston fallback (not the ensemble)",
+                        "source": "sba_fallback",
+                        "as_of": as_of.isoformat() if as_of else None,
                     })
                 return records
 
@@ -168,7 +174,8 @@ class DFIOSPredictor:
                 "p50": 0.0,
                 "p90": 0.0,
                 "available": False,
-                "model_version": "dfios_forecast v1.0",
+                "model_version": "no-forecast",
+                "source": "none",
             })
         return records
 

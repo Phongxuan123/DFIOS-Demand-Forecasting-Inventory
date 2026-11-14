@@ -33,7 +33,7 @@ def list_replenishments(
     skip: int = Query(0, ge=0, description="Số bản ghi bỏ qua (phân trang)"),
     limit: int = Query(50, ge=1, le=200, description="Số lượng bản ghi tối đa lấy về"),
     store_id: Optional[str] = Query(None, description="Lọc theo mã kho/cửa hàng"),
-    status: Optional[str] = Query(None, description="Lọc theo trạng thái: PENDING, APPROVED, REJECTED, CANCELLED"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Lọc theo trạng thái: PENDING, APPROVED, REJECTED, CANCELLED"),
     priority: Optional[str] = Query(None, description="Lọc theo mức độ ưu tiên: CRITICAL, HIGH, MEDIUM, LOW"),
     search: Optional[str] = Query(None, description="Tìm kiếm theo mã SKU hoặc lý do"),
     item_id: Optional[str] = Query(None, description="Lọc chính xác theo mã SKU"),
@@ -52,7 +52,7 @@ def list_replenishments(
         skip=skip,
         limit=limit,
         store_id=store_id,
-        status=status,
+        status=status_filter,
         priority=priority,
         search=search,
         item_id=item_id,
@@ -96,7 +96,7 @@ def get_replenishment_history(
     limit: int = Query(50, ge=1, le=200, description="Số bản ghi tối đa lấy về"),
     store_id: Optional[str] = Query(None, description="Lọc theo kho/cửa hàng"),
     item_id: Optional[str] = Query(None, description="Lọc theo mã SKU"),
-    status: Optional[str] = Query(None, description="Lọc theo trạng thái đã xử lý (APPROVED, REJECTED, CANCELLED)"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Lọc theo trạng thái đã xử lý (APPROVED, REJECTED, CANCELLED)"),
     start_date: Optional[datetime] = Query(None, description="Lọc từ ngày"),
     end_date: Optional[datetime] = Query(None, description="Lọc đến ngày"),
     db: Session = Depends(get_db),
@@ -113,7 +113,7 @@ def get_replenishment_history(
         limit=limit,
         store_id=store_id,
         item_id=item_id,
-        status=status,
+        status=status_filter,
         start_date=start_date,
         end_date=end_date,
     )
@@ -131,7 +131,7 @@ def get_replenishment_history(
 )
 def export_replenishments(
     store_id: Optional[str] = Query(None, description="Lọc theo kho/cửa hàng"),
-    status: Optional[str] = Query(None, description="Lọc theo trạng thái"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Lọc theo trạng thái"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_admin),
 ):
@@ -141,7 +141,7 @@ def export_replenishments(
     Role: Warehouse Manager, Admin (Viewer 403).
     """
     csv_content = replenishment_service.export_recommendations_csv(
-        db, store_id=store_id, status=status
+        db, store_id=store_id, status=status_filter
     )
     filename = f"replenishment_recommendations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(

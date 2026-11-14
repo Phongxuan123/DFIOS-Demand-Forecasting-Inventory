@@ -1,9 +1,106 @@
 import io
 import re
 import pandas as pd
-import numpy as np
-from datetime import datetime, timezone
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple, List
+
+# Cột chuẩn của template import (N-23) – nguồn duy nhất cho BE và FE (GET /imports/template).
+TEMPLATE_COLUMNS: List[Dict[str, Any]] = [
+    {"name": "item_id", "required": True, "type": "string",
+     "description": "Mã SKU, phải tồn tại trong danh mục sản phẩm", "example": "FOODS_1_001"},
+    {"name": "store_id", "required": False, "type": "string",
+     "description": "Mã kho. Bỏ trống thì lấy tham số store_id; nếu có thì phải trùng kho đích", "example": "CA_1"},
+    {"name": "sale_date", "required": True, "type": "date",
+     "description": "Ngày bán, ISO YYYY-MM-DD (khuyến nghị) hoặc DD/MM/YYYY, một định dạng duy nhất cho cả file",
+     "example": "2016-04-25"},
+    {"name": "quantity", "required": True, "type": "number",
+     "description": "Số lượng bán trong ngày (>= 0)", "example": "15"},
+    {"name": "sell_price", "required": False, "type": "number",
+     "description": "Đơn giá bán (không bắt buộc)", "example": "2.50"},
+]
+
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$")
+_ISO_SLASH_RE = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})(?:[T ].*)?$")
+_ISO_COMPACT_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
+_DMY_RE = re.compile(r"^(\d{1,2})([/.\-])(\d{1,2})\2(\d{4})(?:[T ].*)?$")
+
+
+def parse_sale_dates(values: pd.Series) -> Tuple[pd.Series, Dict[str, Any]]:
+    """
+    P-03 / N-22: parse cột ngày theo định dạng được NHẬN DIỆN TƯỜNG MINH, không đoán từng dòng.
+
+    - ISO (YYYY-MM-DD, YYYY/MM/DD, YYYYMMDD): parse chặt theo năm-tháng-ngày, không bao giờ đảo ngày/tháng.
+    - D/M/Y hoặc M/D/Y (dấu / . -): thứ tự được suy ra từ CẢ CỘT. Có giá trị > 12 ở vị trí đầu thì là DD/MM;
+      ở vị trí thứ hai thì là MM/DD. Nếu cả hai cùng xuất hiện thì báo lỗi. Nếu không có giá trị nào > 12
+      (mơ hồ hoàn toàn) thì dùng DD/MM/YYYY theo template và ghi cảnh báo.
+    - File trộn ISO với D/M/Y bị từ chối (ValueError) thay vì âm thầm ghi sai ngày.
+
+    Trả về (Series datetime64 mức ngày, NaT cho dòng không parse được; info).
+    """
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return pd.to_datetime(values).dt.normalize(), {"date_format": "datetime", "invalid_dates": 0, "warnings": []}
+
+    text_vals = values.astype(str).str.strip()
+    years: List[Any] = []
+    months: List[Any] = []
+    days: List[Any] = []
+    kinds: List[str] = []
+    for v in text_vals:
+        m = _ISO_DATE_RE.match(v) or _ISO_SLASH_RE.match(v) or _ISO_COMPACT_RE.match(v)
+        if m:
+            kinds.append("iso")
+            years.append(int(m.group(1)))
+            months.append(int(m.group(2)))
+            days.append(int(m.group(3)))
+            continue
+        m = _DMY_RE.match(v)
+        if m:
+            kinds.append("dmy")
+            years.append(int(m.group(4)))
+            months.append(int(m.group(3)))  # tạm coi vị trí 2 là tháng; hoán đổi bên dưới nếu là MM/DD
+            days.append(int(m.group(1)))
+            continue
+        kinds.append("bad")
+        years.append(None)
+        months.append(None)
+        days.append(None)
+
+    n_iso = kinds.count("iso")
+    n_dmy = kinds.count("dmy")
+    warnings: List[str] = []
+
+    if n_iso and n_dmy:
+        raise ValueError(
+            f"Cột ngày trộn nhiều định dạng ({n_iso} dòng ISO YYYY-MM-DD và {n_dmy} dòng dạng DD/MM/YYYY). "
+            "Hãy dùng một định dạng duy nhất cho cả file (khuyến nghị YYYY-MM-DD)."
+        )
+
+    date_format = "YYYY-MM-DD" if n_iso else None
+    if n_dmy:
+        first_gt12 = any(k == "dmy" and d > 12 for k, d in zip(kinds, days))
+        second_gt12 = any(k == "dmy" and mo > 12 for k, mo in zip(kinds, months))
+        if first_gt12 and second_gt12:
+            raise ValueError(
+                "Cột ngày không nhất quán: có dòng chỉ hợp lệ theo DD/MM/YYYY và có dòng chỉ hợp lệ theo MM/DD/YYYY. "
+                "Hãy dùng một định dạng duy nhất cho cả file (khuyến nghị YYYY-MM-DD)."
+            )
+        if second_gt12:
+            date_format = "MM/DD/YYYY"
+            days, months = months, days
+        elif first_gt12:
+            date_format = "DD/MM/YYYY"
+        else:
+            date_format = "DD/MM/YYYY"
+            warnings.append(
+                "Ngày dạng xx/xx/yyyy không có giá trị nào > 12 nên không phân biệt được DD/MM với MM/DD; "
+                "đã hiểu là DD/MM/YYYY theo template. Dùng YYYY-MM-DD để tránh mơ hồ."
+            )
+
+    parsed = pd.to_datetime(
+        pd.DataFrame({"year": years, "month": months, "day": days}, index=values.index, dtype="float64"),
+        errors="coerce",
+    )
+    invalid = int(parsed.isna().sum())
+    return parsed, {"date_format": date_format, "invalid_dates": invalid, "warnings": warnings}
 
 COLUMN_MAPPING = {
     # Date variants
@@ -94,6 +191,8 @@ class DataPreprocessingService:
     - Sinh Data Quality Report chi tiết.
     """
 
+    MAX_REJECTED_SAMPLES = 100
+
     def read_csv_safely(self, file_content: bytes) -> pd.DataFrame:
         """
         Đọc file CSV tự động nhận dạng bảng mã và dấu phân cách linh hoạt.
@@ -179,9 +278,14 @@ class DataPreprocessingService:
         file_content: bytes,
         file_name: str = "upload.csv",
         default_store_id: str = "CA_1",
+        known_item_ids: Any = None,
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Nhận file CSV dạng bytes, làm sạch, chuẩn hóa schema, zero-fill và xuất báo cáo chất lượng.
+
+        `default_store_id` là kho đích DUY NHẤT của lần import (P-26).
+        `known_item_ids` (tập mã SKU hợp lệ): nếu truyền vào, dòng có SKU lạ bị từ chối (N-09).
+        Dòng bị từ chối được đếm trong `rejected_count` và liệt kê mẫu trong `rejected_rows`.
         """
         raw_df = self.read_csv_safely(file_content)
         raw_rows = len(raw_df)
@@ -194,30 +298,74 @@ class DataPreprocessingService:
         if missing:
             raise ValueError(f"Thiếu các cột bắt buộc: {missing}. Các cột tìm thấy: {list(raw_df.columns)}")
 
-        # Gán mặc định nếu thiếu store_id hoặc price
+        rejected_rows: List[Dict[str, Any]] = []
+        rejected_count = 0
+
+        def _reject(frame: pd.DataFrame, mask: pd.Series, reason: str) -> int:
+            for idx in frame.index[mask]:
+                if len(rejected_rows) >= self.MAX_REJECTED_SAMPLES:
+                    break
+                raw_item = frame.at[idx, "item_id"]
+                rejected_rows.append({
+                    "row": int(idx) + 2,  # +1 dòng header, +1 vì đánh số từ 1
+                    "item_id": None if pd.isna(raw_item) else str(raw_item),
+                    "reason": reason,
+                })
+            return int(mask.sum())
+
+        # P-26: MỘT kho duy nhất cho cả lần import. Cột store_id trong CSV (nếu có) phải trùng kho đích;
+        # ô trống được gán kho đích, dòng thuộc kho khác bị từ chối (không ghi lẫn sang kho khác).
         if "store_id" not in df.columns:
             df["store_id"] = default_store_id
         else:
-            df["store_id"] = df["store_id"].fillna(default_store_id).astype(str)
+            store_col = df["store_id"].astype("string").str.strip()
+            store_col = store_col.mask(store_col.str.lower().isin(["", "nan", "none", "null", "<na>"]))
+            store_col = store_col.fillna(default_store_id).astype(str)
+            df["store_id"] = store_col
+            wrong_store = store_col != default_store_id
+            if wrong_store.any():
+                rejected_count += _reject(df, wrong_store, f"store_id khác kho đích '{default_store_id}'")
+                df = df[~wrong_store].copy()
 
         if "price" not in df.columns:
             df["price"] = 1.0
         else:
             df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(1.0)
 
-        # Chuẩn hóa kiểu dữ liệu
-        # N-22: dropna trước khi convert sang str để tránh biến null/NaN thành chuỗi 'nan'
-        df = df.dropna(subset=["item_id", "sale_date"])
+        # N-22: loại dòng thiếu item_id / ngày TRƯỚC khi ép kiểu chuỗi (tránh sinh SKU "nan")
+        item_str = df["item_id"].astype(str).str.strip()
+        missing_key = (
+            df["item_id"].isna()
+            | df["sale_date"].isna()
+            | item_str.str.lower().isin(["nan", "none", "null", ""])
+        )
+        if missing_key.any():
+            rejected_count += _reject(df, missing_key, "thiếu item_id hoặc sale_date")
+        df = df[~missing_key].copy()
         df["item_id"] = df["item_id"].astype(str).str.strip()
-        df = df[~df["item_id"].str.lower().isin(["nan", "none", "null", ""])]
 
-        # N-22: parse ngày hỗ trợ định dạng dd/mm/yyyy với dayfirst=True và format='mixed'
-        df["sale_date"] = pd.to_datetime(df["sale_date"], format="mixed", dayfirst=True, errors="coerce")
-        df = df.dropna(subset=["sale_date", "item_id"])
-        # Chuẩn hóa về mức ngày (loại bỏ giờ:phút:giây của transactional log)
-        df["sale_date"] = df["sale_date"].dt.normalize()
-        df["sales"] = pd.to_numeric(df["sales"], errors="coerce").fillna(0.0)
-        df["sales"] = df["sales"].clip(lower=0.0)
+        # P-03 / N-22: nhận diện định dạng ngày tường minh, không đảo ngày ISO
+        parsed_dates, date_info = parse_sale_dates(df["sale_date"])
+        bad_date = parsed_dates.isna()
+        if bad_date.any():
+            rejected_count += _reject(df, bad_date, "sale_date không hợp lệ")
+        df["sale_date"] = parsed_dates
+        df = df[~bad_date].copy()
+
+        qty = pd.to_numeric(df["sales"], errors="coerce")
+        bad_qty = qty.isna() | (qty < 0)
+        if bad_qty.any():
+            rejected_count += _reject(df, bad_qty, "quantity không phải số hoặc âm")
+        df["sales"] = qty
+        df = df[~bad_qty].copy()
+
+        # N-09: không tự tạo Product. SKU không có trong danh mục bị từ chối và báo lại.
+        if known_item_ids is not None:
+            unknown = ~df["item_id"].isin(list(known_item_ids))
+            if unknown.any():
+                rejected_count += _reject(df, unknown, "item_id không tồn tại trong danh mục sản phẩm")
+            df = df[~unknown].copy()
+        accepted_raw_rows = int(len(df))
 
         # Gộp doanh số nếu có nhiều dòng trùng (store_id, item_id, sale_date)
         df = df.groupby(["store_id", "item_id", "sale_date"], as_index=False).agg({
@@ -264,6 +412,11 @@ class DataPreprocessingService:
             },
             "zero_sales_pct": zero_sales_pct,
             "schema_mapping": mapped_cols,
+            "date_format": date_info.get("date_format"),
+            "warnings": date_info.get("warnings", []),
+            "accepted_rows": accepted_raw_rows,
+            "rejected_count": rejected_count,
+            "rejected_rows": rejected_rows,
             "status": "PASSED" if unique_skus > 0 else "FAILED",
         }
 

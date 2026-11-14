@@ -40,7 +40,7 @@ class ModelRegistryService:
             # Hạ cấp toàn bộ mô hình production cũ cùng scope (B-03)
             old_prods = (
                 db.query(ModelRegistry)
-                .filter(ModelRegistry.scope == clean_scope, ModelRegistry.is_production == True)
+                .filter(ModelRegistry.scope == clean_scope, ModelRegistry.is_production.is_(True))
                 .all()
             )
             for old in old_prods:
@@ -144,7 +144,22 @@ class ModelRegistryService:
         custom_artifact = params.get("artifact_file") or params.get("model_file")
         target_filename = custom_artifact or artifact_filename_map.get(algo)
 
-        target_filepath = os.path.join(model_dir, target_filename) if target_filename else None
+        # P-25: chặn path traversal – artifact_file chỉ được là tên file nằm trong MODEL/
+        target_filepath = None
+        if target_filename:
+            target_filename = str(target_filename)
+            model_dir_real = os.path.realpath(model_dir)
+            candidate = os.path.realpath(os.path.join(model_dir_real, target_filename))
+            if (
+                os.path.isabs(target_filename)
+                or os.path.basename(target_filename) != target_filename
+                or os.path.commonpath([model_dir_real, candidate]) != model_dir_real
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="artifact_file không hợp lệ: chỉ chấp nhận tên file nằm trong thư mục MODEL/.",
+                )
+            target_filepath = candidate
         file_exists = bool(target_filepath and os.path.exists(target_filepath))
         file_size = os.path.getsize(target_filepath) if file_exists else 0
 

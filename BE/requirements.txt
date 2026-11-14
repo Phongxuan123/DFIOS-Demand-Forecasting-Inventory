@@ -1,19 +1,20 @@
-fastapi==0.142.2
+# DFIOS backend runtime dependencies.
+# Target interpreter: CPython 3.12 (see ../.python-version). Also installs on 3.14 (wheels verified).
+# Only packages actually imported by app/, scripts/ and tests/ are listed.
+fastapi==0.159.1
+starlette==1.9.0
 uvicorn==0.54.0
-sqlalchemy==2.1.1
+sqlalchemy==2.1.6
 psycopg2-binary==2.9.13
-pandas==2.3.2
-pyarrow==25.0.1
-numpy==2.3.3
-scipy==1.18.0
-numba==0.61.0
-alembic==1.14.1
-apscheduler==3.10.4
-httpx==0.28.1
-pytest==8.3.4
-mlflow==2.19.0
+pandas==3.0.6
+pyarrow==26.0.0
+numpy==2.5.4
+scipy==1.18.1
+pydantic==2.14.1
 bcrypt==5.0.0
 pyjwt==2.15.1
-python-dotenv==1.1.1
+python-dotenv==1.2.4
 python-multipart==0.0.32
-pydantic==2.13.5
+# test client + test runner
+httpx==0.28.1
+pytest==9.1.1

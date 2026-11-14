@@ -47,6 +47,9 @@ class ClassificationMatrixResponse(BaseModel):
     matrix: Dict[str, SegmentSummary]
     thresholds: ClassificationThresholds
     last_updated: Optional[datetime] = None
+    # P-10: kho của ma trận và số SKU theo nguồn lớp ("ground_truth" = C3-OUT A5, "thresholds" = ngưỡng UC25)
+    store_id: Optional[str] = None
+    class_sources: Dict[str, int] = Field(default_factory=dict)
 
 
 # --- UC27: Filter SKUs ---
@@ -56,6 +59,9 @@ class SKUClassificationItem(BaseModel):
 
     id: str
     item_id: str
+    store_id: Optional[str] = None
+    class_source: Optional[str] = None
+    threshold_segment: Optional[str] = None
     product_name: Optional[str] = None
     category: Optional[str] = None
     abc: str
@@ -95,3 +101,6 @@ class ClassificationRecomputeResponse(BaseModel):
     total_skus_classified: int
     thresholds: ClassificationThresholds
     recomputed_at: datetime
+    store_id: Optional[str] = None
+    source: str = "auto"
+    class_sources: Dict[str, int] = Field(default_factory=dict)

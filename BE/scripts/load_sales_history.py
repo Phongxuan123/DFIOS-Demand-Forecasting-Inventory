@@ -4,27 +4,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 from datetime import datetime, timezone
 import pandas as pd
-from sqlalchemy import text
 from app.core.database import engine
-from app.core.db_bulk import psql_insert_copy
-ARTIFACTS_DIR = os.getenv("DFIOS_ARTIFACTS_DIR")
-if not ARTIFACTS_DIR or not os.path.exists(ARTIFACTS_DIR):
-    for candidate in [
-        os.path.join(SCRIPT_DIR, "sample_data"),
-        os.path.join(SCRIPT_DIR, "dfios_artifacts"),
-        SCRIPT_DIR,
-    ]:
-        if os.path.exists(candidate):
-            ARTIFACTS_DIR = candidate
-            break
-
-ENSEMBLE_PATH = os.path.join(ARTIFACTS_DIR, "forecasts_Ensemble.parquet") if ARTIFACTS_DIR else ""
-QUANTILES_PATH = os.path.join(ARTIFACTS_DIR, "quantiles_tft.parquet") if ARTIFACTS_DIR else ""
-
-if not ENSEMBLE_PATH or not os.path.exists(ENSEMBLE_PATH):
-    ENSEMBLE_PATH = os.path.join(SCRIPT_DIR, "production_forecast.parquet")
-if not QUANTILES_PATH or not os.path.exists(QUANTILES_PATH):
-    QUANTILES_PATH = os.path.join(SCRIPT_DIR, "production_forecast.parquet")
+from app.core.db_bulk import replace_rows
+# P-19: y_true chỉ có trong forecasts_Ensemble.parquet. Không bao giờ rơi về sample_data/ hay production_forecast.parquet.
+ARTIFACTS_DIR = os.getenv("DFIOS_ARTIFACTS_DIR") or SCRIPT_DIR
+ENSEMBLE_PATH = os.path.join(ARTIFACTS_DIR, "forecasts_Ensemble.parquet")
+QUANTILES_PATH = os.path.join(ARTIFACTS_DIR, "quantiles_tft.parquet")
 
 STORE_ID = "CA_1"
 
@@ -32,12 +17,13 @@ STORE_ID = "CA_1"
 def main():
     if not os.path.exists(ENSEMBLE_PATH):
         raise SystemExit(
-            "Forecast parquet file not found. "
-            "Please ensure production_forecast.parquet is placed in BE/scripts/ "
-            "or configure DFIOS_ARTIFACTS_DIR in BE/.env"
+            f"Missing artifact: {ENSEMBLE_PATH}. Run `python scripts/check_artifacts.py` "
+            "and obtain the file from the project owner (or set DFIOS_ARTIFACTS_DIR)."
         )
     print(f"Reading evaluation forecasts from: {ENSEMBLE_PATH}")
     df_ens = pd.read_parquet(ENSEMBLE_PATH)
+    if "y_true" not in df_ens.columns:
+        raise SystemExit(f"{ENSEMBLE_PATH} has no 'y_true' column - wrong artifact (expected forecasts_Ensemble.parquet).")
     df_ens = df_ens[df_ens["store_id"] == STORE_ID].copy()
 
     if os.path.exists(QUANTILES_PATH):
@@ -82,22 +68,14 @@ def main():
     min_date = sales_df["sale_date"].min()
     max_date = sales_df["sale_date"].max()
 
+    # P-11/R-33: DELETE + COPY trong MỘT transaction/connection; lỗi thì rollback toàn bộ
     with engine.begin() as conn:
-        print(f"Deleting existing records for {STORE_ID} between {min_date} and {max_date}...")
-        conn.execute(
-            text("DELETE FROM sales_history WHERE store_id = :s AND sale_date BETWEEN :d1 AND :d2"),
-            {"s": STORE_ID, "d1": min_date, "d2": max_date}
-        )
-        conn.execute(
-            text("DELETE FROM forecast WHERE store_id = :s AND forecast_date BETWEEN :d1 AND :d2"),
-            {"s": STORE_ID, "d1": min_date, "d2": max_date}
-        )
-
-    print("Seeding sales_history table into database...")
-    sales_df.to_sql("sales_history", engine, if_exists="append", index=False, method=psql_insert_copy)
-
-    print("Seeding forecast table into database...")
-    forecast_df.to_sql("forecast", engine, if_exists="append", index=False, method=psql_insert_copy)
+        print(f"Replacing sales_history/forecast for {STORE_ID} between {min_date} and {max_date}...")
+        params = {"s": STORE_ID, "d1": min_date, "d2": max_date}
+        replace_rows(conn, "sales_history", sales_df,
+                     "DELETE FROM sales_history WHERE store_id = :s AND sale_date BETWEEN :d1 AND :d2", params)
+        replace_rows(conn, "forecast", forecast_df,
+                     "DELETE FROM forecast WHERE store_id = :s AND forecast_date BETWEEN :d1 AND :d2", params)
 
     print("Sales evaluation data seeded successfully!")
 

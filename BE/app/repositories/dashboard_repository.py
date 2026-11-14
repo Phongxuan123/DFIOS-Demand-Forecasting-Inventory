@@ -67,7 +67,7 @@ class DashboardRepository:
             total_value = 0.0
             stockout_rate = 0.0
             reorder_alerts_count = 0
-            estimated_service_level = 95.0
+            estimated_service_level = None  # no inventory rows -> unavailable (never a made-up 95)
 
         # Đếm số đề xuất đặt hàng đang chờ duyệt (PENDING)
         rep_query = db.query(ReplenishmentRecommendation).filter(

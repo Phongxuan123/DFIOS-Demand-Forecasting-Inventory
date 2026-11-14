@@ -832,6 +832,14 @@ class TestForecastEndpoints(unittest.TestCase):
     def test_r17_get_window_quantiles_has_no_database_side_effects(self):
         """R-17: Đảm bảo GET window-quantiles trả về phân phối hợp lệ nhưng không gây tác dụng phụ ghi/tạo bản ghi vào DB."""
         with self.TestingSessionLocal() as session:
+            # P-24: only the Tier-1 Ensemble feeds F_hat; give the SKU one Ensemble run at the origin
+            for h in range(1, 11):
+                session.add(Forecast(
+                    id=f"ens_{h}", item_id="FOODS_1_001", store_id="CA_1",
+                    forecast_date=date(2016, 5, 23) + timedelta(days=h - 1), h=h, y_pred=3.0,
+                    p10=2.0, p50=3.0, p90=4.0, available=True, model_version="Ensemble bundle 1.0",
+                ))
+            session.commit()
             count_before = session.query(ForecastWindowQuantile).count()
 
         res = self.client.get(

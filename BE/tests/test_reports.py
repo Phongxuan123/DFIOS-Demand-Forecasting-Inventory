@@ -182,22 +182,18 @@ class TestReportsEndpoints(unittest.TestCase):
     # UC41: Historical Backtesting
     # ---------------------------------------------------------
     def test_run_backtesting_admin_success(self):
-        payload = {
-            "model_name": "lightgbm",
-            "backtest_days": 28,
-            "store_id": "CA_1",
-            "target_service_level": 0.95,
-        }
+        """UC41: no simulation yet -> measured fields are null with a reason (never constant CSL / fill rate)."""
+        payload = {"model_name": "lightgbm", "backtest_days": 28, "store_id": "CA_1", "target_service_level": 0.95}
         resp = self.client.post(
-            "/api/v1/reports/backtesting",
-            json=payload,
+            "/api/v1/reports/backtesting", json=payload,
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertEqual(data["simulated_days"], 28)
-        self.assertGreater(data["stockout_reduction_pct"], 0)
-        self.assertGreater(data["service_level_achieved"], 90.0)
+        self.assertEqual(data["source"], "simulator")
+        self.assertIsNone(data["service_level_achieved"])
+        self.assertIsNone(data["baseline_stockouts"])
+        self.assertTrue(data["reason"])
 
     def test_run_backtesting_viewer_forbidden(self):
         payload = {"model_name": "lightgbm", "backtest_days": 28, "store_id": "CA_1"}
@@ -212,16 +208,17 @@ class TestReportsEndpoints(unittest.TestCase):
     # UC42: Cost Comparison Report
     # ---------------------------------------------------------
     def test_get_cost_comparison_admin_success(self):
+        """UC42: nothing simulated yet -> null + reason, no analytic constants."""
         resp = self.client.get(
             "/api/v1/reports/cost-comparison?store_id=CA_1",
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        self.assertIn("baseline_policy", data)
-        self.assertIn("ml_policy", data)
-        self.assertGreater(data["cost_savings_amount"], 0)
-        self.assertGreater(data["savings_percentage"], 0)
+        self.assertIsNone(data["ml_policy"])
+        self.assertIsNone(data["baseline_policy"])
+        self.assertIsNone(data["cost_savings_amount"])
+        self.assertTrue(data["reason"])
 
     def test_get_cost_comparison_viewer_forbidden(self):
         resp = self.client.get(
@@ -296,66 +293,54 @@ class TestReportsEndpoints(unittest.TestCase):
     # ---------------------------------------------------------
     # R-02: Scientific Fidelity of Accuracy (WRMSSE), Backtest & Cost
     # ---------------------------------------------------------
-    def test_r02_wrmsse_and_cost_comparison_scientific_fidelity(self):
-        # 1. Forecast Accuracy & WRMSSE
-        resp_acc = self.client.get(
-            "/api/v1/reports/forecast-accuracy?store_id=CA_1",
-            headers={"Authorization": f"Bearer {self.viewer_token}"},
-        )
-        self.assertEqual(resp_acc.status_code, 200)
-        data_acc = resp_acc.json()
-        metrics = data_acc["overall_metrics"]
-        self.assertGreater(metrics["sample_count"], 0)
-        # WRMSSE and MASE must be authentic floats calculated from genuine differences
-        self.assertGreater(metrics["wrmsse"], 0.0)
-        self.assertGreater(metrics["mase"], 0.0)
-        # Breakdown by ABC class must have proper keys and zero fake multipliers
-        for grp in ("A", "B", "C"):
-            if grp in data_acc["abc_breakdown"]:
-                grp_metrics = data_acc["abc_breakdown"][grp]
-                self.assertIn("wrmsse", grp_metrics)
-                self.assertIn("mase", grp_metrics)
+    def test_r02_wrmsse_scale_from_training_history_and_no_fake_numbers(self):
+        """R-02: RMSSE/MASE scale comes from the TRAINING history before the evaluation window, not the window."""
+        import math
+        today = date.today()
+        with self.TestingSessionLocal() as session:
+            # training history: 10 days, alternating 10/20 -> 1-step abs diff = 10, rmse diff = 10
+            for i in range(10):
+                session.add(SalesHistory(id=f"h{i}", item_id="FOODS_1_001", store_id="CA_1",
+                                         sale_date=today - timedelta(days=12 + i), quantity=10.0 if i % 2 == 0 else 20.0))
+            session.commit()
+        resp = self.client.get("/api/v1/reports/forecast-accuracy?store_id=CA_1",
+                               headers={"Authorization": f"Bearer {self.viewer_token}"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        m = data["overall_metrics"]
+        self.assertEqual(m["sample_count"], 1)
+        # one eval point: pred 22 vs actual 20 -> |e| = 2 ; scale = 10  => MASE = RMSSE = 0.2 (single series, weight 1)
+        self.assertAlmostEqual(m["mae"], 2.0)
+        self.assertAlmostEqual(m["rmse"], 2.0)
+        self.assertAlmostEqual(m["mase"], 0.2, places=4)
+        self.assertAlmostEqual(m["wrmsse"], 0.2, places=4)
+        self.assertEqual(data["source"], "forecast_vs_sales_history")
+        self.assertEqual(data["n_series_scaled"], 1)
 
-        # 2. Backtest without fake hardcoded multipliers
-        payload_bt = {
-            "model_name": "lightgbm",
-            "backtest_days": 28,
-            "store_id": "CA_1",
-            "target_service_level": 0.95,
-        }
-        resp_bt = self.client.post(
-            "/api/v1/reports/backtesting",
-            json=payload_bt,
-            headers={"Authorization": f"Bearer {self.admin_token}"},
-        )
-        self.assertEqual(resp_bt.status_code, 200)
-        data_bt = resp_bt.json()
-        self.assertEqual(data_bt["simulated_days"], 28)
-        self.assertGreaterEqual(data_bt["service_level_achieved"], 90.0)
-        self.assertGreaterEqual(data_bt["stockout_reduction_pct"], 0.0)
-        self.assertGreater(data_bt["baseline_avg_inventory"], 0.0)
-        self.assertGreater(data_bt["ml_avg_inventory"], 0.0)
+    def test_r02_accuracy_without_history_returns_null_not_clamped(self):
+        resp = self.client.get("/api/v1/reports/forecast-accuracy?store_id=CA_1",
+                               headers={"Authorization": f"Bearer {self.viewer_token}"})
+        m = resp.json()["overall_metrics"]
+        self.assertEqual(m["mae"], 2.0)
+        self.assertIsNone(m["wrmsse"])
+        self.assertIsNone(m["mase"])
+        self.assertIn("lịch sử huấn luyện", resp.json()["metrics_reason"])
 
-        # 3. Cost Comparison adheres to Model A3
-        resp_cost = self.client.get(
-            "/api/v1/reports/cost-comparison?store_id=CA_1",
-            headers={"Authorization": f"Bearer {self.admin_token}"},
-        )
-        self.assertEqual(resp_cost.status_code, 200)
-        data_cost = resp_cost.json()
-        base_p = data_cost["baseline_policy"]
-        ml_p = data_cost["ml_policy"]
-
-        # Both policies must have holding, ordering, penalty and total costs
-        self.assertGreater(base_p["holding_cost"], 0.0)
-        self.assertGreater(base_p["order_cost"], 0.0)
-        self.assertGreater(base_p["stockout_penalty_cost"], 0.0)
-        self.assertGreater(ml_p["holding_cost"], 0.0)
-        self.assertGreater(ml_p["order_cost"], 0.0)
-        self.assertGreater(ml_p["stockout_penalty_cost"], 0.0)
-
-        # Category savings dictionary must contain keys
-        self.assertIn("FOODS", data_cost["category_savings"])
+    def test_accuracy_registry_fallback_reports_only_real_metrics(self):
+        """R-04: registry metrics that do not exist stay null (no 0.0 / invented MAE)."""
+        from app.models.model_registry import ModelRegistry
+        with self.TestingSessionLocal() as session:
+            session.query(Forecast).delete()
+            session.add(ModelRegistry(id="m1", name="lightgbm", algorithm="lightgbm", version="1",
+                                      metrics={"wrmsse": 0.49}, is_production=True))
+            session.commit()
+        resp = self.client.get("/api/v1/reports/forecast-accuracy?model_name=lightgbm",
+                               headers={"Authorization": f"Bearer {self.viewer_token}"})
+        d = resp.json()
+        self.assertEqual(d["source"], "model_registry")
+        self.assertEqual(d["overall_metrics"]["wrmsse"], 0.49)
+        self.assertIsNone(d["overall_metrics"]["mae"])
+        self.assertIn("thiếu", d["metrics_reason"])
 
     def test_b15_export_inventory_no_truncation(self):
         # B-15: Verify get_inventory_performance with limit=None returns all items without truncation

@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -29,9 +29,12 @@ class ProductService:
         search: Optional[str] = None,
         dept_id: Optional[str] = None,
         cat_id: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: str = "asc",
     ) -> ProductListResponse:
         items, total = product_repository.list_products(
-            db, skip=skip, limit=limit, search=search, dept_id=dept_id, cat_id=cat_id
+            db, skip=skip, limit=limit, search=search, dept_id=dept_id, cat_id=cat_id,
+            sort_by=sort_by, sort_dir=sort_dir,
         )
         return ProductListResponse(
             items=[ProductResponse.model_validate(p) for p in items],

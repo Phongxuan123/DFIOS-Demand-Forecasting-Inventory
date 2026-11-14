@@ -213,7 +213,7 @@ class UserService:
             (request.role is not None and request.role != "Admin") or (request.is_active is False)
         ):
             active_admin_count = (
-                db.query(User).filter(User.role == "Admin", User.is_active == True).count()
+                db.query(User).filter(User.role == "Admin", User.is_active.is_(True)).count()
             )
             if active_admin_count <= 1:
                 raise HTTPException(

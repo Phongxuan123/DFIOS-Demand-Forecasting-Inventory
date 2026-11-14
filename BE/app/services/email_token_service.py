@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, List
 from fastapi import HTTPException, status
@@ -12,46 +13,83 @@ class InMemoryRateLimiter:
     """
     Bộ giới hạn tần suất yêu cầu (Rate Limiter) lưu trong bộ nhớ.
     Được thiết kế độc lập để dễ dàng thay thế bằng Redis RateLimiter khi mở rộng.
+
+    P-09 / N-12: key hết hạn được dọn định kỳ (không để dict phình vô hạn), thao tác có khóa
+    để an toàn khi nhiều worker thread cùng gọi.
     """
+
+    SWEEP_INTERVAL_SECONDS = 300
+    MAX_WINDOW_SECONDS = 24 * 3600
+
     def __init__(self):
         self._requests: Dict[str, List[float]] = {}
+        self._windows: Dict[str, int] = {}
+        self._lock = threading.Lock()
+        self._last_sweep = 0.0
+
+    @staticmethod
+    def _now() -> float:
+        return datetime.now(timezone.utc).timestamp()
+
+    def _prune_key(self, key: str, now: float, window_seconds: int) -> List[float]:
+        cutoff = now - window_seconds
+        kept = [t for t in self._requests.get(key, []) if t > cutoff]
+        if kept:
+            self._requests[key] = kept
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+        else:
+            self._requests.pop(key, None)
+            self._windows.pop(key, None)
+        return kept
+
+    def _maybe_sweep(self, now: float) -> None:
+        if now - self._last_sweep < self.SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_sweep = now
+        for key in list(self._requests.keys()):
+            window = self._windows.get(key, self.MAX_WINDOW_SECONDS)
+            self._prune_key(key, now, window)
+
+    def sweep(self) -> None:
+        """Dọn ngay toàn bộ key đã hết hạn (dùng cho test hoặc tác vụ định kỳ)."""
+        with self._lock:
+            self._last_sweep = 0.0
+            self._maybe_sweep(self._now())
+
+    def __len__(self) -> int:
+        return len(self._requests)
 
     def is_rate_limited(self, key: str, max_requests: int = 5, window_seconds: int = 3600) -> bool:
-        now = datetime.now(timezone.utc).timestamp()
-        if key not in self._requests:
-            self._requests[key] = []
-
-        # Lọc bỏ các mốc thời gian đã quá window_seconds
-        cutoff = now - window_seconds
-        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
-
-        if len(self._requests[key]) >= max_requests:
-            return True
-
-        self._requests[key].append(now)
-        return False
+        with self._lock:
+            now = self._now()
+            self._maybe_sweep(now)
+            kept = self._prune_key(key, now, window_seconds)
+            if len(kept) >= max_requests:
+                return True
+            self._requests[key] = kept + [now]
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+            return False
 
     def check_limit(self, key: str, max_requests: int = 5, window_seconds: int = 3600) -> bool:
         """Kiểm tra xem key đã chạm ngưỡng giới hạn hay chưa mà không tự động tăng bộ đếm."""
-        now = datetime.now(timezone.utc).timestamp()
-        if key not in self._requests:
-            return False
-        cutoff = now - window_seconds
-        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
-        return len(self._requests[key]) >= max_requests
+        with self._lock:
+            now = self._now()
+            self._maybe_sweep(now)
+            return len(self._prune_key(key, now, window_seconds)) >= max_requests
 
     def record_attempt(self, key: str, window_seconds: int = 3600) -> None:
         """Ghi nhận một lần thử (ví dụ thất bại xác thực) vào lịch sử."""
-        now = datetime.now(timezone.utc).timestamp()
-        if key not in self._requests:
-            self._requests[key] = []
-        cutoff = now - window_seconds
-        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
-        self._requests[key].append(now)
+        with self._lock:
+            now = self._now()
+            kept = self._prune_key(key, now, window_seconds)
+            self._requests[key] = kept + [now]
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
 
     def clear(self, key: str) -> None:
         """Xóa toàn bộ lịch sử của key (ví dụ khi đăng nhập thành công)."""
-        self._requests.pop(key, None)
+        with self._lock:
+            self._requests.pop(key, None)
+            self._windows.pop(key, None)
 
 
 rate_limiter = InMemoryRateLimiter()

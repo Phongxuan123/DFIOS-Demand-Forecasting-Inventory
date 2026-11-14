@@ -14,6 +14,15 @@ class SimClockResponse(BaseModel):
     updated_at: datetime
     days_elapsed: int = 0
     reviews_elapsed: int = 0
+    # --- provenance / semantics (additive) ---
+    source: str = "sim_clock"
+    as_of: Optional[date] = None  # == current_date
+    n_skus: Optional[int] = None
+    lead_time_days: int = 3
+    review_period_days: int = 7
+    next_review_date: Optional[date] = None  # start_date + k*R, review at START of that day (A4)
+    snapshot_restored: Optional[bool] = None  # only set by POST /clock/reset
+    inventory_source: Optional[str] = None  # only set by POST /clock/reset
 
 
 class ClockAdvanceRequest(BaseModel):
@@ -34,6 +43,15 @@ class ClockAdvanceResponse(BaseModel):
     recommendations_generated: int
     job_events: List[str] = []
     message: str
+    # --- additive provenance ---
+    orders_received: int = 0
+    b0_shadow_stockouts_recorded: Optional[int] = None
+    lead_time_days: int = 3
+    review_period_days: int = 7
+    n_skus: Optional[int] = None
+    source: str = "simulator"
+    as_of: Optional[date] = None
+    duration_seconds: Optional[float] = None
 
 
 class ClockResetRequest(BaseModel):

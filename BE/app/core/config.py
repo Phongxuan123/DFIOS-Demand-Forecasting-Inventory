@@ -40,6 +40,15 @@ class Settings:
         "true" if os.getenv("ENVIRONMENT", "development") != "production" else "false",
     ).lower() in ("true", "1", "yes")
 
+    # P-09: chỉ tin `X-Forwarded-For` khi kết nối đến từ các proxy này (IP hoặc CIDR, phân tách dấu phẩy).
+    # Để trống (mặc định) nghĩa là không tin header, dùng IP kết nối trực tiếp.
+    TRUSTED_PROXIES: list[str] = [
+        p.strip() for p in os.getenv("TRUSTED_PROXIES", "").split(",") if p.strip()
+    ]
+
+    # P-05: thư mục chứa artifact khoa học (parquet, npz, csv, MODEL/*).
+    ARTIFACTS_DIR: str = os.getenv("DFIOS_ARTIFACTS_DIR", "")
+
     # Allow Frontend Vite dev server
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",

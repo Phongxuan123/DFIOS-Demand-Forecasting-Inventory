@@ -9,9 +9,17 @@ import pandas as pd
 from datetime import datetime, timezone
 from sqlalchemy import text
 from app.core.database import engine
+from app.services.policy_config import DEMO_START_DATE
 
 STORE_ID = "CA_1"
 now = datetime.now(timezone.utc)
+
+# P-12: proposals are dated with the SIMULATED clock of the store (never wall-clock "today"/NULL), so they sit in
+# the same time axis as the simulator. They stay PENDING proposals: the simulator only receives APPROVED orders,
+# and in auto-order mode PENDING rows never block reordering (replenishment_service.generate_recommendations).
+with engine.begin() as _conn:
+    _row = _conn.execute(text('SELECT "current_date" FROM sim_clock WHERE store_id = :s'), {"s": STORE_ID}).first()
+REVIEW_DATE = _row[0] if _row else DEMO_START_DATE
 
 with engine.begin() as conn:
     conn.execute(text("""
@@ -38,8 +46,8 @@ reorder_items = joined[joined["inventory_position"] <= joined["reorder_point_s"]
 recs = []
 for _, row in reorder_items.iterrows():
     priority = "CRITICAL" if row["on_hand"] <= row["safety_stock"] else "HIGH"
-    order_qty = max(float(row["eoq"]), float(row["order_up_to_S"] - row["inventory_position"]))
-    order_qty = round(order_qty, 2)
+    # (R, s, S) rule: q = S - IP (research.md §7), no EOQ floor
+    order_qty = round(max(1.0, float(row["order_up_to_S"] - row["inventory_position"])), 2)
 
     recs.append({
         "id": str(uuid.uuid4()),
@@ -56,7 +64,7 @@ for _, row in reorder_items.iterrows():
         "inventory_position": round(float(row["inventory_position"]), 2),
         "eoq_quantity": round(float(row["eoq"]), 2),
         "policy_applied": "REFIT-RSS-EOQ-G",
-        "review_date": now.date(),
+        "review_date": REVIEW_DATE,
         "created_at": now,
         "decided_at": None,
         "decided_by": None

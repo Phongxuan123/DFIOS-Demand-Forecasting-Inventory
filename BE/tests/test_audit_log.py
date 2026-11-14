@@ -185,22 +185,40 @@ class TestGetClientIpCentralized(unittest.TestCase):
     R-44: Kiểm thử hàm get_client_ip tập trung tại app.api.deps
     """
     def test_extract_client_ip_from_x_forwarded_for_multi(self):
-        from unittest.mock import MagicMock
-        from app.api.deps import get_client_ip
+        """P-09: chỉ tin X-Forwarded-For khi peer là proxy tin cậy; lấy hop ngoài cùng bên phải không phải proxy."""
+        from unittest.mock import MagicMock, patch
+        from app.api import deps
 
         mock_request = MagicMock()
-        mock_request.headers.get.return_value = "203.0.113.195, 70.41.3.18, 150.172.238.178"
-        ip = get_client_ip(mock_request)
-        self.assertEqual(ip, "203.0.113.195")
+        mock_request.headers.get.return_value = "203.0.113.195, 70.41.3.18, 10.0.0.2"
+        mock_request.client.host = "10.0.0.1"
+        with patch.object(deps.settings, "TRUSTED_PROXIES", ["10.0.0.0/8"]):
+            ip = deps.get_client_ip(mock_request)
+        self.assertEqual(ip, "70.41.3.18")
 
     def test_extract_client_ip_from_x_forwarded_for_single(self):
-        from unittest.mock import MagicMock
-        from app.api.deps import get_client_ip
+        from unittest.mock import MagicMock, patch
+        from app.api import deps
 
         mock_request = MagicMock()
         mock_request.headers.get.return_value = "192.168.1.100 "
-        ip = get_client_ip(mock_request)
+        mock_request.client.host = "127.0.0.1"
+        with patch.object(deps.settings, "TRUSTED_PROXIES", ["127.0.0.1"]):
+            ip = deps.get_client_ip(mock_request)
         self.assertEqual(ip, "192.168.1.100")
+
+    def test_spoofed_x_forwarded_for_ignored_without_trusted_proxy(self):
+        """P-09: client tự đặt X-Forwarded-For không đổi được IP dùng cho rate limit."""
+        from unittest.mock import MagicMock, patch
+        from app.api import deps
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = "1.2.3.4"
+        mock_request.client.host = "198.51.100.7"
+        with patch.object(deps.settings, "TRUSTED_PROXIES", []):
+            self.assertEqual(deps.get_client_ip(mock_request), "198.51.100.7")
+        with patch.object(deps.settings, "TRUSTED_PROXIES", ["10.0.0.0/8"]):
+            self.assertEqual(deps.get_client_ip(mock_request), "198.51.100.7")
 
     def test_fallback_to_client_host_when_no_forwarded(self):
         from unittest.mock import MagicMock

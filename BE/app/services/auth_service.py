@@ -33,6 +33,9 @@ from app.services.audit_service import audit_service
 from app.core.config import settings
 
 
+_DUMMY_PASSWORD_HASH = get_password_hash("dfios-timing-equaliser")
+
+
 class AuthService:
     def login(self, db: Session, login_data: LoginRequest, client_ip: Optional[str] = None) -> LoginResponse:
         """
@@ -51,29 +54,25 @@ class AuthService:
 
         user = user_repository.get_by_email(db, email_clean)
         if not user:
+            # Chạy một lần bcrypt giả để thời gian phản hồi không lộ email có tồn tại hay không
+            verify_password(login_data.password, _DUMMY_PASSWORD_HASH)
             rate_limiter.record_attempt(rate_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
 
-        # Nếu tài khoản chưa kích hoạt lần đầu (chưa verify), thông báo cần kích hoạt qua link email
-        if not getattr(user, "is_verified", True):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
-            )
-
-        # Với tài khoản đã xác thực: kiểm tra mật khẩu TRƯỚC khi kiểm tra trạng thái active (chống account enumeration và leak trạng thái user, R-24 & B-13)
-        if not verify_password(login_data.password, user.password_hash):
+        # P-09 / R-24: luôn kiểm tra mật khẩu TRƯỚC mọi kiểm tra trạng thái tài khoản (chưa kích hoạt / bị khóa),
+        # để người không biết mật khẩu không dò được trạng thái tài khoản qua mã 403.
+        if not user.password_hash or not verify_password(login_data.password, user.password_hash):
             rate_limiter.record_attempt(rate_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
 
-        # Kiểm tra tài khoản có bị vô hiệu hóa không (chỉ trả 403 khi mật khẩu đã đúng)
-        if not getattr(user, "is_active", True):
+        # Chỉ trả 403 (chưa kích hoạt / bị khóa) khi mật khẩu đã đúng
+        if not getattr(user, "is_verified", True) or not getattr(user, "is_active", True):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",

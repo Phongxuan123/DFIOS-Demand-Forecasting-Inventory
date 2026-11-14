@@ -18,7 +18,7 @@ with engine.begin() as conn:
             m_g DOUBLE PRECISION DEFAULT 0.0,
             kappa_g DOUBLE PRECISION DEFAULT 1.0,
             tau DOUBLE PRECISION DEFAULT 0.95,
-            setpoint DOUBLE PRECISION DEFAULT 0.96,
+            setpoint DOUBLE PRECISION DEFAULT 0.95,
             guard DOUBLE PRECISION DEFAULT 0.01,
             gain_eta DOUBLE PRECISION DEFAULT 1.0,
             val_cost DOUBLE PRECISION,
@@ -30,9 +30,12 @@ with engine.begin() as conn:
         );
     """))
 
-SELECTION_ID = "quarter_2015_Q2"
+from app.services import policy_config as pc
+SELECTION_ID = pc.DEMO_SELECTION_ID
 now = datetime.now(timezone.utc)
 
+# Artifact c3ok_csl_by_class.csv, policy P C3-OUT tau=0.95 (val_service = measured CSL per class,
+# val_cost = c3ok_results.csv). m_g = 0: the closed-loop theta carries the level (N-05).
 OPTIMAL_POLICIES = [
     {"class_id": "AX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
     {"class_id": "AY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
@@ -54,7 +57,7 @@ for p in OPTIMAL_POLICIES:
         "m_g": p["m_g"],
         "kappa_g": p["kappa_g"],
         "tau": 0.95,
-        "setpoint": 0.96,
+        "setpoint": pc.TARGET_AVAILABILITY,
         "guard": 0.01,
         "gain_eta": 1.0,
         "val_cost": p["val_cost"],

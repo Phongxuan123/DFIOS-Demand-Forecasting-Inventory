@@ -302,11 +302,14 @@ def get_sku_future_forecast(
     current_user: User = Depends(get_current_user),
 ):
     from app.services.predictor_service import dfios_predictor
+    from app.models.sim_clock import SimClock
+    clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
     return dfios_predictor.predict_sku_future(
         item_id=sku,
         store_id=store_id,
         horizon=horizon,
         db=db,
+        as_of=clock.current_date if clock and clock.current_date else None,
     )
 
 

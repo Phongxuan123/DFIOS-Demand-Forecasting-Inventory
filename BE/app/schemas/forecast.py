@@ -116,7 +116,11 @@ class ForecastUncertaintyResponse(BaseModel):
     horizon: int
     sigma_h: Optional[float] = None
     points: List[UncertaintyPoint]
+    # B-06: REAL forecast errors r = actual - prediction (None when no actual overlaps the horizon)
     error_distribution: Optional[ErrorDistribution] = None
+    error_distribution_n: int = 0
+    # width of the p10-p90 band (uncertainty), kept separate from the error distribution
+    band_width_distribution: Optional[ErrorDistribution] = None
 
 
 # --- UC23: Forecast Explanation (SHAP) ---

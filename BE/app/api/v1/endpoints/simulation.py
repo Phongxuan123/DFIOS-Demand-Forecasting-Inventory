@@ -12,7 +12,7 @@ router = APIRouter()
 @router.post(
     "/compare-policies",
     response_model=PolicyComparisonResponse,
-    summary="Task API.5 - Mô phỏng đối đầu 4 chính sách tồn kho (P0, P1, P4, P6)",
+    summary="Task API.5 - Mô phỏng đối đầu 4 chính sách tồn kho (B0, B2, P-CR, P6)",
 )
 def compare_policies(
     body: PolicyComparisonRequest,
@@ -20,13 +20,11 @@ def compare_policies(
     current_user: User = Depends(require_manager_or_admin),
 ):
     """
-    **Task API.5 - What-If Policy Simulation**:
-    Chạy mô phỏng song song 4 chính sách tồn kho:
-    - P0: Cổ điển (Gaussian SS + ROP + EOQ)
-    - P1: Raw Route (c) Quantile (không shift m_g, theta=0)
-    - P4/B2: Tĩnh đóng băng (REFIT-RSS-EOQ-G từ đầu năm, theta=0)
-    - P6: C³-OUT vòng kín (REFIT-RSS-EOQ-G + One-sided C³-OUT calibrator thích nghi)
-    So sánh tổng chi phí, chi phí lưu kho, chi phí đặt hàng, chi phí phạt hết hàng, và Availability.
+    **Task API.5 - What-If Policy Comparison (artifact extract)**:
+    Trả về kết quả offline của 4 chính sách trong artifact M5 (c3ok_results.csv), quy đổi theo số SKU/ngày:
+    - B0: raw quantile τ=0.95 (DFIOS gốc) | B2: raw quantile τ*=0.99
+    - PCR: C³-OUT với setpoint = critical ratio (τ=0.9615) | P6: C³-OUT τ=0.95 (bộ điều khiển mức phục vụ)
+    Phản hồi gắn `source="artifact_extract"`, `simulated=false`; thiếu artifact -> 503.
     Role: Warehouse Manager, Admin.
     """
     return simulation_service.compare_policies(

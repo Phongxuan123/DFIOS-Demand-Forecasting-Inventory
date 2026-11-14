@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.services.policy_artifact import ArtifactMissingError, load_results
 from app.api.deps import get_current_user, get_db, require_admin
 from app.models.user import User
 from app.models.system_setting import SystemSetting
@@ -124,18 +125,45 @@ def export_report_csv(
 
 @router.get(
     "/policy-comparison",
-    summary="UC42 - Báo cáo so sánh 4 chính sách tồn kho P0, P1, P4, P6 (M5 Empirical Benchmark)",
-    description="Truy xuất kết quả kiểm định thực nghiệm thật trên 72 chu kỳ review của tập M5 Walmart. So sánh đối đầu P0 (Truyền thống), P1 (Static Quantile), P4 (REFIT-EOQ) và P6 (C3-OUT).",
+    summary="UC42 - Kết quả offline B0 / B2 / P-CR / P6 từ artifact M5 (c3ok_results.csv)",
+    description=(
+        "Trích kết quả offline của artifact M5 (25.950 SKU, 51 kỳ review test = 357 ngày, L=3, R=7). "
+        "Nhãn khớp dòng artifact: B0 raw quantile τ=0.95, B2 τ*=0.99, P-CR (C³-OUT setpoint = critical ratio τ=0.9615), "
+        "P6 (C³-OUT τ=0.95, bộ điều khiển mức phục vụ). source = artifact_extract; thiếu artifact -> status artifact_missing."
+    ),
 )
 def get_policy_comparison_benchmark(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    setting = db.query(SystemSetting).filter(SystemSetting.key == "policy_benchmark_results").first()
-    if setting and setting.value:
-        return setting.value
+    try:
+        art = load_results()
+    except ArtifactMissingError as e:
+        return {"status": "artifact_missing", "source": "none", "reason": str(e), "policies": {}}
+    policies = {}
+    for key, row in art.policies.items():
+        policies[key] = {
+            "policy": row.artifact_row,
+            "label": row.label,
+            "tau": row.tau,
+            "csl": row.csl,
+            "fill_rate": row.fill_rate,
+            "holding_cost": row.holding_bikip,
+            "shortage_cost": row.shortage_bikip,
+            "ordering_cost": row.ordering_bikip,
+            "total_cost_bikip": row.cost_bikip,
+            "total_cost_paper": row.cost_paper,
+        }
     return {
-        "status": "not_synced",
-        "message": "Chưa có dữ liệu benchmark, vui lòng chạy script sync_scientific_baseline.py.",
+        "status": "ok",
+        "source": "artifact_extract",
+        "simulated": False,
+        "as_of": art.as_of,
+        "n_skus": art.n_skus,
+        "n_days": art.n_days,
+        "n_reviews": art.n_reviews,
+        "lead_time_days": 3,
+        "review_period_days": 7,
+        "cost_basis": "cost_BIKIP = A3 (h=0.002*price/day, b=0.35*price, c=2); cost_PAPER = Theodorou et al. rates",
+        "policies": policies,
     }
-

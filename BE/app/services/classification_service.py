@@ -1,6 +1,5 @@
 import json
 import math
-import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 from fastapi import HTTPException, status
@@ -20,10 +19,8 @@ from app.schemas.classification import (
     SKUClassificationItem,
     SKUClassificationListResponse,
     RecommendationResponse,
-    ClassificationRecomputeResponse,
 )
 from app.repositories.classification_repository import classification_repository
-from app.repositories.product_repository import product_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.services.audit_service import audit_service
 from app.core.classification_rules import CLASSIFICATION_RECOMMENDATIONS
@@ -91,18 +88,25 @@ class ClassificationService:
         )
         db.commit()
 
-        # Tính lại phân loại toàn bộ SKU sau khi đổi ngưỡng
-        self.recompute_classification(db)
+        # Tính lại phân loại sau khi đổi ngưỡng cho mọi kho đang có phân lớp (từng kho một, P-10)
+        stores = classification_repository.list_stores(db) or [self.DEFAULT_STORE_ID]
+        for sid in stores:
+            self.recompute_classification(db, store_id=sid)
 
         return ClassificationThresholds(**new_data)
+
+    DEFAULT_STORE_ID = "CA_1"
+    VALID_SEGMENTS = {"AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"}
 
     def _load_ground_truth_classes(self, store_id: Optional[str] = "CA_1") -> Dict[str, str]:
         """
         Nạp ánh xạ phân lớp C3-OUT cố định theo item x store từ c3ok_sku_class.csv (chuẩn A5 research.md).
-        Đảm bảo giữ nguyên vẹn 9 phân khúc nghiên cứu, không làm mất BX hay CY khi chạy pipeline.
+        Trả về {} khi không có file hoặc kho không có trong file (khi đó dùng ngưỡng UC25).
+        File hỏng định dạng thì báo lỗi rõ ràng thay vì âm thầm bỏ qua.
         """
         import os
         import pandas as pd
+        from app.core.config import settings
 
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         be_dir = os.path.abspath(os.path.join(cur_dir, "..", ".."))
@@ -110,149 +114,170 @@ class ClassificationService:
             os.path.join(be_dir, "MODEL", "c3ok_sku_class.csv"),
             os.path.join(be_dir, "scripts", "c3ok_sku_class.csv"),
         ]
+        if settings.ARTIFACTS_DIR:
+            paths.insert(0, os.path.join(settings.ARTIFACTS_DIR, "c3ok_sku_class.csv"))
         class_file = next((p for p in paths if os.path.exists(p)), None)
         if not class_file:
             return {}
 
-        try:
-            df = pd.read_csv(class_file)
-            target_store = store_id or "CA_1"
-            store_match = f"_{target_store}_"
-            df_store = df[df["id"].str.contains(store_match)].copy()
-            if df_store.empty:
-                return {}
-            df_store["item_id"] = df_store["id"].apply(lambda x: "_".join(x.split("_")[:3]))
-            return dict(zip(df_store["item_id"], df_store["class"]))
-        except Exception:
+        df = pd.read_csv(class_file)
+        if "id" not in df.columns or "class" not in df.columns:
+            raise ValueError(f"{class_file}: thiếu cột 'id' hoặc 'class'")
+        target_store = store_id or self.DEFAULT_STORE_ID
+        df_store = df[df["id"].astype(str).str.contains(f"_{target_store}_", regex=False)]
+        if df_store.empty:
             return {}
+        item_ids = df_store["id"].astype(str).str.split("_").str[:3].str.join("_")
+        classes = df_store["class"].astype(str).str.strip().str.upper()
+        return {i: c for i, c in zip(item_ids, classes) if c in self.VALID_SEGMENTS}
 
-    def recompute_classification(self, db: Session, store_id: Optional[str] = "CA_1") -> int:
+    def _demand_stats(self, db: Session, store_id: Optional[str]) -> Dict[str, Tuple[int, float, float]]:
         """
-        R-12: Tính toán phân loại ABC (Pareto tích lũy doanh thu) và XYZ (CV = sigma / mu) cho toàn bộ SKU.
-        - Phân lớp theo từng cửa hàng (item x store) cô lập dữ liệu.
-        - Tận dụng ánh xạ C3-OUT ground truth cố định trước validation (A5) để bảo toàn 9 lớp.
+        Gom (n, tổng, tổng bình phương) nhu cầu theo SKU bằng 2 truy vấn tổng hợp
+        (thay cho 1 truy vấn / SKU). Ưu tiên sales_history; SKU chưa có lịch sử bán thì dùng
+        dự báo hiệu dụng (đã áp override, B-01).
+        """
+        sales_q = db.query(
+            SalesHistory.item_id,
+            func.count(SalesHistory.quantity),
+            func.sum(SalesHistory.quantity),
+            func.sum(SalesHistory.quantity * SalesHistory.quantity),
+        )
+        if store_id:
+            sales_q = sales_q.filter(SalesHistory.store_id == store_id)
+        stats: Dict[str, Tuple[int, float, float]] = {
+            r[0]: (int(r[1] or 0), float(r[2] or 0.0), float(r[3] or 0.0))
+            for r in sales_q.group_by(SalesHistory.item_id).all()
+        }
+
+        from app.models.forecast import ForecastOverride
+        eff = func.coalesce(ForecastOverride.override_value, Forecast.y_pred)
+        fc_q = (
+            db.query(Forecast.item_id, func.count(eff), func.sum(eff), func.sum(eff * eff))
+            .select_from(Forecast)
+            .outerjoin(
+                ForecastOverride,
+                (ForecastOverride.item_id == Forecast.item_id)
+                & (ForecastOverride.store_id == Forecast.store_id)
+                & (ForecastOverride.forecast_date == Forecast.forecast_date)
+                & (ForecastOverride.is_active.is_(True)),
+            )
+        )
+        if store_id:
+            fc_q = fc_q.filter(Forecast.store_id == store_id)
+        for r in fc_q.group_by(Forecast.item_id).all():
+            if r[0] not in stats:
+                stats[r[0]] = (int(r[1] or 0), float(r[2] or 0.0), float(r[3] or 0.0))
+        return stats
+
+    def resolve_store_id(self, db: Session, store_id: Optional[str] = None) -> str:
+        """Kho dùng cho các endpoint đọc khi client không truyền store_id (tương thích ngược)."""
+        if store_id and store_id.strip():
+            return store_id.strip()
+        stores = classification_repository.list_stores(db)
+        if stores and self.DEFAULT_STORE_ID not in stores:
+            return stores[0]
+        return self.DEFAULT_STORE_ID
+
+    def recompute_classification(
+        self,
+        db: Session,
+        store_id: Optional[str] = "CA_1",
+        source: str = "auto",
+    ) -> int:
+        """
+        R-12 / P-10: tính phân loại ABC (Pareto tích lũy doanh thu) và XYZ (CV = sigma / mu) cho MỘT kho.
+        - Chỉ thay thế các dòng của kho đó; kho khác giữ nguyên.
+        - Lớp theo ngưỡng UC25 luôn được tính và lưu ở `threshold_segment`.
+        - `source="auto"` (mặc định): SKU có trong ánh xạ C3-OUT ground truth (A5) dùng lớp ground truth
+          (`class_source="ground_truth"`), còn lại dùng ngưỡng (`class_source="thresholds"`).
+        - `source="thresholds"`: bỏ qua ground truth, lớp hiệu lực = lớp theo ngưỡng UC25.
         - Nhu cầu gián đoạn/ít bán được gán CV = 2.0 (vào lớp Z, tuyệt đối không rơi vào X).
         """
+        if source not in ("auto", "thresholds"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="source phải là 'auto' hoặc 'thresholds'",
+            )
+        store_id = (store_id or self.DEFAULT_STORE_ID).strip() or self.DEFAULT_STORE_ID
         thresholds = self.get_thresholds(db)
-        products = db.query(Product).all()
+        products = db.query(Product.item_id, Product.price).all()
         if not products:
             return 0
 
-        # Thu thập số liệu doanh thu và nhu cầu cho từng SKU
+        demand = self._demand_stats(db, store_id)
         sku_stats: List[Dict[str, Any]] = []
-
-        for p in products:
-            item_id = p.item_id
-
-            # Lấy lịch sử bán hàng theo cửa hàng
-            sales_query = db.query(SalesHistory.quantity).filter(SalesHistory.item_id == item_id)
-            if store_id:
-                sales_query = sales_query.filter(SalesHistory.store_id == store_id)
-            sales_rows = sales_query.all()
-
-            if sales_rows:
-                quantities = [float(r[0]) for r in sales_rows]
-            else:
-                # Nếu chưa có sales_history, fallback sang dự báo có áp dụng override hiệu dụng (B-01)
-                from app.models.forecast import ForecastOverride
-                fc_query = (
-                    db.query(
-                        func.coalesce(ForecastOverride.override_value, Forecast.y_pred)
-                    )
-                    .select_from(Forecast)
-                    .outerjoin(
-                        ForecastOverride,
-                        (ForecastOverride.item_id == Forecast.item_id)
-                        & (ForecastOverride.store_id == Forecast.store_id)
-                        & (ForecastOverride.forecast_date == Forecast.forecast_date)
-                        & (ForecastOverride.is_active.is_(True))
-                    )
-                    .filter(Forecast.item_id == item_id)
-                )
-                if store_id:
-                    fc_query = fc_query.filter(Forecast.store_id == store_id)
-                fc_res = fc_query.all()
-                quantities = [float(r[0]) for r in fc_res] if fc_res else [0.0]
-
-            n = len(quantities)
-            total_qty = sum(quantities)
+        for item_id, price in products:
+            n, total_qty, sum_sq = demand.get(item_id, (1, 0.0, 0.0))
             mean_d = total_qty / n if n > 0 else 0.0
-
             if n > 1 and mean_d > 0.05:
-                variance = sum((q - mean_d) ** 2 for q in quantities) / (n - 1)
+                variance = max(0.0, (sum_sq - n * mean_d * mean_d) / (n - 1))
                 std_d = math.sqrt(variance)
                 cv_val = std_d / mean_d
             else:
                 std_d = 0.0
                 # SKU ít bán / cầu gián đoạn (intermittent/lumpy) thuộc nhóm bất định cao Z
                 cv_val = 2.0
-
-            # Sử dụng giá bán thực tế của sản phẩm
-            unit_price = float(p.price) if p.price and float(p.price) > 0 else 1.0
-            revenue = round(total_qty * unit_price, 2)
-
+            unit_price = float(price) if price and float(price) > 0 else 1.0
             sku_stats.append({
                 "item_id": item_id,
-                "revenue": revenue,
+                "revenue": round(total_qty * unit_price, 2),
                 "mean_demand": mean_d,
                 "std_demand": std_d,
                 "cv": cv_val,
             })
 
-        # Sắp xếp theo doanh thu giảm dần để xếp hạng Pareto ABC
-        sku_stats.sort(key=lambda x: x["revenue"], reverse=True)
+        # Sắp xếp theo doanh thu giảm dần để xếp hạng Pareto ABC (item_id làm khóa phụ cho kết quả ổn định)
+        sku_stats.sort(key=lambda x: (-x["revenue"], x["item_id"]))
         total_revenue = sum(x["revenue"] for x in sku_stats)
         total_skus = len(sku_stats)
 
+        c3_map = self._load_ground_truth_classes(store_id=store_id) if source == "auto" else {}
+
         accumulated_rev = 0.0
         db_records: List[SKUClassification] = []
-
-        # Tải ánh xạ C3-OUT ground truth cố định theo item x store (A5)
-        c3_map = self._load_ground_truth_classes(store_id=store_id)
-
         for idx, stat in enumerate(sku_stats):
             rev = stat["revenue"]
             if total_revenue > 0:
                 rev_share = (rev / total_revenue) * 100.0
             else:
                 rev_share = 100.0 / total_skus if total_skus > 0 else 0.0
-
             accumulated_rev += rev_share
             cum_share = min(accumulated_rev, 100.0)
+
+            # Lớp theo ngưỡng UC25 – luôn tính
+            if cum_share <= thresholds.a_cutoff or idx == 0:
+                t_abc = "A"
+            elif cum_share <= thresholds.b_cutoff:
+                t_abc = "B"
+            else:
+                t_abc = "C"
+            if stat["cv"] <= thresholds.cv_x:
+                t_xyz = "X"
+            elif stat["cv"] <= thresholds.cv_y:
+                t_xyz = "Y"
+            else:
+                t_xyz = "Z"
+            threshold_segment = f"{t_abc}{t_xyz}"
 
             item_id = stat["item_id"]
             if item_id in c3_map:
                 segment = c3_map[item_id]
-                abc = segment[0]
-                xyz = segment[1]
+                class_source = "ground_truth"
             else:
-                # Phân loại ABC theo ngưỡng tích lũy Pareto
-                if cum_share <= thresholds.a_cutoff or idx == 0:
-                    abc = "A"
-                elif cum_share <= thresholds.b_cutoff:
-                    abc = "B"
-                else:
-                    abc = "C"
+                segment = threshold_segment
+                class_source = "thresholds"
 
-                # Phân loại XYZ theo hệ số biến động CV = sigma / mu
-                cv_val = stat["cv"]
-                if cv_val <= thresholds.cv_x:
-                    xyz = "X"
-                elif cv_val <= thresholds.cv_y:
-                    xyz = "Y"
-                else:
-                    xyz = "Z"
-
-                segment = f"{abc}{xyz}"
-
-            rec_id = f"{item_id}_{store_id}" if store_id else f"cls_{item_id}"
             db_records.append(
                 SKUClassification(
-                    id=rec_id,
-                    item_id=stat["item_id"],
-                    abc_class=abc,
-                    xyz_class=xyz,
+                    id=f"{item_id}_{store_id}",
+                    item_id=item_id,
+                    store_id=store_id,
+                    abc_class=segment[0],
+                    xyz_class=segment[1],
                     segment=segment,
+                    class_source=class_source,
+                    threshold_segment=threshold_segment,
                     revenue=rev,
                     revenue_share=round(rev_share, 2),
                     cumulative_share=round(cum_share, 2),
@@ -262,22 +287,32 @@ class ClassificationService:
                 )
             )
 
-        classification_repository.bulk_save(db, db_records)
+        classification_repository.bulk_save(db, db_records, store_id=store_id)
         return len(db_records)
 
-        classification_repository.bulk_save(db, db_records)
-        return len(db_records)
+    def get_source_summary(self, db: Session, store_id: str) -> Dict[str, int]:
+        rows = (
+            db.query(SKUClassification.class_source, func.count(SKUClassification.id))
+            .filter(SKUClassification.store_id == store_id)
+            .group_by(SKUClassification.class_source)
+            .all()
+        )
+        summary = {"ground_truth": 0, "thresholds": 0}
+        for src, cnt in rows:
+            summary[src or "thresholds"] = summary.get(src or "thresholds", 0) + int(cnt)
+        return summary
 
-    def get_matrix(self, db: Session) -> ClassificationMatrixResponse:
+    def get_matrix(self, db: Session, store_id: Optional[str] = None) -> ClassificationMatrixResponse:
         """
         UC26 - View ABC-XYZ Matrix:
         Xem ma trận 3x3 thể hiện số lượng và tỷ trọng SKU, doanh thu theo từng phân khúc.
         """
-        if classification_repository.count(db) == 0:
-            self.recompute_classification(db)
+        store_id = self.resolve_store_id(db, store_id)
+        if classification_repository.count(db, store_id=store_id) == 0:
+            self.recompute_classification(db, store_id=store_id)
 
         thresholds = self.get_thresholds(db)
-        agg_map = classification_repository.get_matrix_aggregation(db)
+        agg_map = classification_repository.get_matrix_aggregation(db, store_id=store_id)
 
         all_segments = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
         total_skus = sum(item["sku_count"] for item in agg_map.values())
@@ -312,7 +347,12 @@ class ClassificationService:
             segments_list.append(summary)
             matrix_dict[seg] = summary
 
-        latest_cls = db.query(SKUClassification.updated_at).order_by(SKUClassification.updated_at.desc()).first()
+        latest_cls = (
+            db.query(SKUClassification.updated_at)
+            .filter(SKUClassification.store_id == store_id)
+            .order_by(SKUClassification.updated_at.desc())
+            .first()
+        )
         last_updated = latest_cls[0] if latest_cls else datetime.now(timezone.utc)
 
         return ClassificationMatrixResponse(
@@ -322,6 +362,8 @@ class ClassificationService:
             matrix=matrix_dict,
             thresholds=thresholds,
             last_updated=last_updated,
+            store_id=store_id,
+            class_sources=self.get_source_summary(db, store_id),
         )
 
     def get_skus(
@@ -336,16 +378,19 @@ class ClassificationService:
         limit: int = 50,
         sort_by: str = "revenue",
         order: str = "desc",
+        store_id: Optional[str] = None,
     ) -> SKUClassificationListResponse:
         """
         UC27 - Filter SKU by Segment:
         Xem danh sách SKU thuộc nhóm phân loại, hỗ trợ tìm kiếm và phân trang.
         """
-        if classification_repository.count(db) == 0:
-            self.recompute_classification(db)
+        store_id = self.resolve_store_id(db, store_id)
+        if classification_repository.count(db, store_id=store_id) == 0:
+            self.recompute_classification(db, store_id=store_id)
 
         total, results = classification_repository.filter_skus(
             db,
+            store_id=store_id,
             abc=abc,
             xyz=xyz,
             segment=segment,
@@ -361,6 +406,9 @@ class ClassificationService:
             SKUClassificationItem(
                 id=c.id,
                 item_id=c.item_id,
+                store_id=c.store_id,
+                class_source=c.class_source,
+                threshold_segment=c.threshold_segment,
                 product_name=p_name,
                 category=p_cat,
                 abc=c.abc_class,

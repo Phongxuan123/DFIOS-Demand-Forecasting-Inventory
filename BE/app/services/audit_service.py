@@ -1,6 +1,5 @@
 from datetime import datetime
 from typing import Optional, List, Tuple
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog

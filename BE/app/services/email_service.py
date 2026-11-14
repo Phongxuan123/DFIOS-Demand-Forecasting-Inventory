@@ -5,7 +5,6 @@ import email.mime.multipart
 import email.mime.text
 import logging
 import smtplib
-from typing import List, Dict, Any, Optional
 
 from app.core.config import settings
 

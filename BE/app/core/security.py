@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
@@ -52,10 +55,6 @@ def verify_password_reset_token(token: str) -> str | None:
     if payload.get("type") != "reset_password":
         return None
     return payload.get("sub")
-
-import secrets
-import hashlib
-import hmac
 
 def generate_secure_token() -> str:
     """

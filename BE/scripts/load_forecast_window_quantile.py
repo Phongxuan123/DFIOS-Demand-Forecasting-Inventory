@@ -1,178 +1,59 @@
-import sys
+"""
+Route (c) window quantiles for the demo origin (research.md §6.1; P-01, N-13, R-06, R-07, R-15, P-24, P-35).
+
+Single implementation: ``WindowQuantileService.build_records`` (the same code the API and J4 use):
+  * F_hat from the Tier-1 Ensemble forecast run chosen by origin (strict model filter),
+  * residuals only from matured origins with COMPLETE actuals (a missing day is never 0),
+  * actuals from sales_history and, for days not in the DB, from the M5 CSV (M5_SALES_CSV_PATH).
+The origin is the ONE demo date of policy_config.DEMO_START_DATE (= sim_clock start).
+Idempotent: existing rows of this model run / origin are replaced.
+"""
 import os
-import uuid
-import json
-from datetime import datetime, timezone, date, timedelta
+import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
-import pandas as pd
 from sqlalchemy import text
-from app.core.database import engine
-
-STORE_ID = "CA_1"
-ORIGIN_DATE = "2016-05-23"
-HORIZON_DAYS = 10
-MODEL_RUN_ID = "backtest-ensemble-v1"
-now = datetime.now(timezone.utc)
-
-with engine.begin() as conn:
-    conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS forecast_window_quantile (
-            id VARCHAR(100) PRIMARY KEY,
-            model_run_id VARCHAR(100) NOT NULL,
-            store_id VARCHAR(50) NOT NULL,
-            item_id VARCHAR(100) NOT NULL,
-            origin_date DATE NOT NULL,
-            horizon_days INTEGER NOT NULL DEFAULT 10,
-            point_window DOUBLE PRECISION NOT NULL,
-            q_levels JSONB NOT NULL,
-            route VARCHAR(10) DEFAULT 'c',
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-        ALTER TABLE forecast_window_quantile ALTER COLUMN created_at SET DEFAULT NOW();
-        CREATE INDEX IF NOT EXISTS idx_fwq_lookup ON forecast_window_quantile (model_run_id, store_id, item_id, origin_date);
-    """))
 
 from app.core.database import SessionLocal, engine
-from app.core.db_bulk import psql_insert_copy
-from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
-import numpy as np
-from datetime import timedelta
+from app.models.forecast_window_quantile import ForecastWindowQuantile
+from app.services import policy_config as pc
+from app.services.window_quantile_service import DEFAULT_MODEL_RUN_ID, m5_actuals, window_quantile_service
 
-db = SessionLocal()
-try:
-    # Lấy danh sách SKU từ cửa hàng STORE_ID
-    skus_df = pd.read_sql(f"""
-        SELECT DISTINCT item_id 
-        FROM inventory 
-        WHERE store_id = '{STORE_ID}'
-        ORDER BY item_id
-    """, engine)
+STORE_ID = pc.DEMO_STORE_ID
+ORIGINS = [pc.DEMO_START_DATE]
 
-    if not skus_df.empty:
-        origin_dt = datetime.strptime(ORIGIN_DATE, "%Y-%m-%d").date()
-        existing_ids = set(pd.read_sql(f"""
-            SELECT id FROM forecast_window_quantile 
-            WHERE store_id = '{STORE_ID}' 
-              AND model_run_id = '{MODEL_RUN_ID}' 
-              AND origin_date = '{ORIGIN_DATE}' 
-              AND horizon_days = {HORIZON_DAYS}
-        """, engine)["id"])
 
-        missing_skus = [sku for sku in skus_df["item_id"] if f"{MODEL_RUN_ID}_{STORE_ID}_{sku}_{origin_dt}_{HORIZON_DAYS}" not in existing_ids]
+def main() -> None:
+    ForecastWindowQuantile.__table__.create(bind=engine, checkfirst=True)
+    if not m5_actuals.path():
+        print("WARNING: M5_SALES_CSV_PATH not set / missing. Only sales_history actuals are available, so most "
+              "residual windows are incomplete and the labelled Gaussian fallback (route 'c_fb') is used.")
+    db = SessionLocal()
+    try:
+        item_ids = [r[0] for r in db.execute(
+            text("SELECT DISTINCT item_id FROM inventory WHERE store_id = :s ORDER BY item_id"), {"s": STORE_ID})]
+        if not item_ids:
+            print("No inventory rows for the store; nothing to do.")
+            return
+        # drop every previous row of this run (also rows of other origins computed by older code)
+        db.query(ForecastWindowQuantile).filter(
+            ForecastWindowQuantile.store_id == STORE_ID,
+            ForecastWindowQuantile.model_run_id == DEFAULT_MODEL_RUN_ID,
+        ).delete(synchronize_session=False)
+        db.commit()
+        for origin in ORIGINS:
+            recs = window_quantile_service.build_records(db, STORE_ID, item_ids, origin, pc.HORIZON_DAYS)
+            db.add_all(recs)
+            db.commit()
+            emp = sum(1 for r in recs if r.route == pc.ROUTE_EMPIRICAL)
+            below = sum(1 for r in recs if r.q_levels.get("0.95", 0) < r.point_window - 1e-9)
+            print(f"origin {origin}: {len(recs)} SKUs, empirical route 'c': {emp}, fallback 'c_fb': {len(recs) - emp}, "
+                  f"Q0.95 < F_hat: {below}")
+    finally:
+        db.close()
 
-        if not missing_skus:
-            print(f"Quantiles for {STORE_ID} already seeded ({len(existing_ids)} records), skipping.", flush=True)
-        else:
-            print(f"Bắt đầu nạp quantile Route (c) thực nghiệm chuẩn tắc cho {len(missing_skus)} SKU còn thiếu ({STORE_ID})...", flush=True)
-            m5_start = date(2011, 1, 29)
-            cutoff_date = origin_dt - timedelta(days=HORIZON_DAYS)
-            cutoff_day_idx = (cutoff_date - m5_start).days + 1
 
-            # Tối ưu Bulk Prefetch: Đọc trước dữ liệu dự báo, backtest và bán hàng một lần duy nhất
-            print("  -> Bulk prefetching forecast, backtest và sales...", flush=True)
-            df_fc = pd.read_sql(f"""
-                SELECT item_id, forecast_date, h, y_pred 
-                FROM forecast 
-                WHERE store_id = '{STORE_ID}' 
-                  AND h BETWEEN 1 AND {HORIZON_DAYS}
-                  AND forecast_date >= '{ORIGIN_DATE}'
-                  AND (model_version != 'fast-inference-sba' OR model_version IS NULL)
-            """, engine)
-
-            df_ov = pd.read_sql(f"""
-                SELECT item_id, forecast_date, h, override_value 
-                FROM forecast_overrides 
-                WHERE store_id = '{STORE_ID}' AND is_active = True
-            """, engine)
-
-            df_bt = pd.read_sql(f"""
-                SELECT item_id, review_day, dhat 
-                FROM forecast_backtest 
-                WHERE store_id = '{STORE_ID}'
-                  AND review_day + {HORIZON_DAYS} <= {cutoff_day_idx + HORIZON_DAYS}
-            """, engine)
-
-            df_sales = pd.read_sql(f"""
-                SELECT item_id, sale_date, quantity 
-                FROM sales_history 
-                WHERE store_id = '{STORE_ID}' 
-                  AND sale_date >= '2015-01-01'
-            """, engine)
-
-            # Lập chỉ mục tra cứu tốc độ cao O(1)
-            fc_grouped = {item_id: grp.sort_values("h") for item_id, grp in df_fc.groupby("item_id")}
-            ov_dict = {}
-            for _, r in df_ov.iterrows():
-                ov_dict[(r["item_id"], r["forecast_date"])] = float(r["override_value"])
-                if pd.notna(r["h"]):
-                    ov_dict[(r["item_id"], r["forecast_date"], int(r["h"]))] = float(r["override_value"])
-
-            bt_grouped = {item_id: grp.sort_values("review_day", ascending=False).head(52) for item_id, grp in df_bt.groupby("item_id")}
-            sales_dict = {}
-            for _, r in df_sales.iterrows():
-                sales_dict[(r["item_id"], r["sale_date"])] = float(r["quantity"])
-
-            new_records = []
-            for i, sku in enumerate(missing_skus, start=1):
-                # 1. Point window
-                if sku in fc_grouped:
-                    grp = fc_grouped[sku].head(HORIZON_DAYS)
-                    p_val = sum(
-                        ov_dict.get((sku, r["forecast_date"], int(r["h"])),
-                        ov_dict.get((sku, r["forecast_date"]), float(r["y_pred"])))
-                        for _, r in grp.iterrows()
-                    )
-                    point_window = float(round(p_val, 2))
-                else:
-                    point_window = 10.0
-
-                # 2. Residuals từ backtest
-                residuals = np.array([])
-                if sku in bt_grouped:
-                    bt_rows = bt_grouped[sku]
-                    if len(bt_rows) >= 5:
-                        res_list = []
-                        for _, br in bt_rows.iterrows():
-                            rev_day = int(br["review_day"])
-                            dhat = float(br["dhat"])
-                            cycle_start = m5_start + timedelta(days=rev_day - 1)
-                            actual_qty = sum(
-                                sales_dict.get((sku, cycle_start + timedelta(days=d)), 0.0)
-                                for d in range(HORIZON_DAYS)
-                            )
-                            res_list.append(actual_qty - dhat * HORIZON_DAYS)
-                        if len(res_list) >= 5:
-                            residuals = np.array(res_list)
-
-                # 3. Tính phân phối quantile
-                q_dict = window_quantile_service.calculate_quantiles_dict(point_window, residuals)
-                rec_id = f"{MODEL_RUN_ID}_{STORE_ID}_{sku}_{origin_dt}_{HORIZON_DAYS}"
-
-                new_records.append({
-                    "id": rec_id,
-                    "model_run_id": MODEL_RUN_ID,
-                    "store_id": STORE_ID,
-                    "item_id": sku,
-                    "origin_date": origin_dt,
-                    "horizon_days": HORIZON_DAYS,
-                    "point_window": point_window,
-                    "q_levels": json.dumps(q_dict),
-                    "route": "c",
-                    "created_at": now,
-                })
-
-                if i % 500 == 0 or i == len(missing_skus):
-                    print(f"  -> Đã tính toán {i}/{len(missing_skus)} SKU...", flush=True)
-
-            if new_records:
-                print(f"  -> Đang bulk insert {len(new_records)} bản ghi bằng psql_insert_copy...", flush=True)
-                df_to_seed = pd.DataFrame(new_records)
-                df_to_seed.to_sql("forecast_window_quantile", engine, if_exists="append", index=False, method=psql_insert_copy)
-                print(f"Hoàn tất nạp {len(new_records)} bản ghi Route (c) thực nghiệm nhân quả cho {STORE_ID} qua bulk COPY!", flush=True)
-    else:
-        print("No items found to seed forecast_window_quantile.")
-finally:
-    db.close()
+if __name__ == "__main__":
+    main()

@@ -28,8 +28,11 @@ from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
 from app.models.data_imports import DataImport
 from app.models.forecast_backtest import ForecastBacktest
+from app.models.sim_state import SimSnapshot, SimShadowDaily
 
 __all__ = [
+    "SimSnapshot",
+    "SimShadowDaily",
     "Base",
     "User",
     "Product",

@@ -103,7 +103,7 @@ class TestOptimizationEndpoints(unittest.TestCase):
                     p50=20.0,
                     p90=24.0,
                     available=True,
-                    model_version="v1.0.0",
+                    model_version="Ensemble bundle 1.0",  # P-24: only the Tier-1 Ensemble feeds Q_hat
                 )
                 session.add(fc)
 
@@ -385,26 +385,24 @@ class TestOptimizationEndpoints(unittest.TestCase):
         )
         self.assertEqual(res_viewer.status_code, 403)
 
-    def test_resolve_lead_time_aligns_with_category_and_research_standard(self):
-        # UC30/R-28: Lead time should resolve according to product category and match research standard L=3
+    def test_resolve_lead_time_single_source_l3_unless_opt_in(self):
+        # R-28 / B-20: L = 3 for EVERY SKU (H = 10), whatever the suppliers say, unless the operator opts in.
         from app.services.optimization_service import optimization_service
+        from app.models.system_setting import SystemSetting
         with self.TestingSessionLocal() as session:
-            supp_foods = Supplier(id="SUP_FOODS", name="Nhà cung cấp A (Thực phẩm)", lead_time_days=3)
-            supp_hobbies = Supplier(id="SUP_HOBBIES", name="Nhà cung cấp C (Sở thích)", lead_time_days=10)
-            session.add_all([supp_foods, supp_hobbies])
+            session.add_all([
+                Supplier(id="SUP_FOODS", name="Nhà cung cấp A (Thực phẩm)", lead_time_days=5),
+                Supplier(id="SUP_HOBBIES", name="Nhà cung cấp C (Sở thích)", lead_time_days=10),
+            ])
             session.commit()
+            self.assertEqual(optimization_service._resolve_lead_time(session, "FOODS_1_001"), 3)
+            self.assertEqual(optimization_service._resolve_lead_time(session, "HOBBIES_1_001"), 3)
+            self.assertEqual(optimization_service._resolve_lead_time(session, "UNKNOWN_SKU"), 3)
 
-            # FOODS_1_001 belongs to FOODS -> resolves to 3 days (Nhà cung cấp A)
-            lt_foods = optimization_service._resolve_lead_time(session, "FOODS_1_001")
-            self.assertEqual(lt_foods, 3)
-
-            # HOBBIES_1_001 belongs to HOBBIES -> resolves to 10 days (Nhà cung cấp C)
-            lt_hobbies = optimization_service._resolve_lead_time(session, "HOBBIES_1_001")
-            self.assertEqual(lt_hobbies, 10)
-
-            # Unknown item with no category -> defaults to DEFAULT_LEAD_TIME = 3
-            lt_default = optimization_service._resolve_lead_time(session, "UNKNOWN_SKU")
-            self.assertEqual(lt_default, 3)
+            session.add(SystemSetting(key="use_supplier_lead_time", value={"enabled": True}))
+            session.commit()
+            self.assertEqual(optimization_service._resolve_lead_time(session, "FOODS_1_001"), 5)
+            self.assertEqual(optimization_service._resolve_lead_time(session, "HOBBIES_1_001"), 10)
 
     def test_service_level_boundary_clamping_prevents_inf(self):
         with self.TestingSessionLocal() as session:

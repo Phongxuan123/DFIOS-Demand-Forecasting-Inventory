@@ -1,9 +1,9 @@
-import sys, os
+import sys
+import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
 import pandas as pd
-import numpy as np
 from app.core.database import engine
 
 # Khởi tạo tồn kho ban đầu chuẩn theo thời gian chờ và chu kỳ đánh giá (L + R = 10 ngày) theo demo.md §6.1

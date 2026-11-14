@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user, require_admin, get_client_ip
@@ -24,16 +24,31 @@ def list_products(
     search: Optional[str] = Query(None, description="Tìm kiếm theo mã SKU hoặc tên sản phẩm"),
     dept_id: Optional[str] = Query(None, description="Lọc theo mã ngành hàng (Department)"),
     cat_id: Optional[str] = Query(None, description="Lọc theo mã phân loại (Category)"),
+    page: Optional[int] = Query(None, ge=1, description="R-35: số trang (từ 1). Nếu có cùng page_size thì thay cho skip/limit"),
+    page_size: Optional[int] = Query(None, ge=1, le=500, description="R-35: số bản ghi mỗi trang"),
+    q: Optional[str] = Query(None, description="R-35: alias của `search`"),
+    sort_by: Optional[str] = Query(None, pattern="^(item_id|name|dept_id|cat_id|price)$", description="R-35: cột sắp xếp"),
+    sort_dir: str = Query("asc", pattern="^(asc|desc)$", description="R-35: chiều sắp xếp"),
+    response: Response = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     **UC11 - List Products**:
     Xem danh sách danh mục sản phẩm (SKU) kèm bộ lọc theo ngành hàng, phân loại và từ khóa tìm kiếm.
+    Phân trang/lọc/sắp xếp ở server (R-35). Dạng cũ `skip`/`limit`/`search` vẫn dùng được; tổng số bản ghi
+    nằm ở `total` và header `X-Total-Count`.
     """
-    return product_service.list_products(
-        db, skip=skip, limit=limit, search=search, dept_id=dept_id, cat_id=cat_id
+    if page is not None:
+        limit = page_size or limit
+        skip = (page - 1) * limit
+    result = product_service.list_products(
+        db, skip=skip, limit=limit, search=q or search, dept_id=dept_id, cat_id=cat_id,
+        sort_by=sort_by, sort_dir=sort_dir,
     )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(result.total)
+    return result
 
 
 @router.get("/categories", response_model=List[str], summary="UC11 - Danh sách danh mục sản phẩm (Categories)")

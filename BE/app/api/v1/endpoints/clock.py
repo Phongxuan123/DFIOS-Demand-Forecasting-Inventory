@@ -1,9 +1,13 @@
+from datetime import timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin, require_manager_or_admin
+from app.models.inventory import Inventory
 from app.models.user import User
+from app.services import policy_config as pc
 from app.schemas.clock import (
     SimClockResponse,
     ClockAdvanceRequest,
@@ -14,6 +18,28 @@ from app.schemas.clock import (
 from app.services.pipeline_service import pipeline_service
 
 router = APIRouter()
+
+
+def _clock_response(db: Session, clock, **extra) -> SimClockResponse:
+    days_elapsed = (clock.current_date - clock.start_date).days
+    k = max(0, days_elapsed // pc.REVIEW_PERIOD_DAYS)
+    n_skus = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id == clock.store_id).scalar() or None
+    return SimClockResponse(
+        store_id=clock.store_id,
+        current_date=clock.current_date,
+        start_date=clock.start_date,
+        mode=clock.mode or "replay",
+        speed=clock.speed or 1.0,
+        updated_at=clock.updated_at,
+        days_elapsed=days_elapsed,
+        reviews_elapsed=k,
+        as_of=clock.current_date,
+        n_skus=n_skus,
+        lead_time_days=pc.LEAD_TIME_DAYS,
+        review_period_days=pc.REVIEW_PERIOD_DAYS,
+        next_review_date=clock.start_date + timedelta(days=(k + 1) * pc.REVIEW_PERIOD_DAYS),
+        **extra,
+    )
 
 
 @router.get(
@@ -37,19 +63,7 @@ def get_clock(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'",
         )
-    days_elapsed = (clock.current_date - clock.start_date).days
-    reviews_elapsed = max(0, days_elapsed // 7)
-
-    return SimClockResponse(
-        store_id=clock.store_id,
-        current_date=clock.current_date,
-        start_date=clock.start_date,
-        mode=clock.mode or "replay",
-        speed=clock.speed or 1.0,
-        updated_at=clock.updated_at,
-        days_elapsed=days_elapsed,
-        reviews_elapsed=reviews_elapsed,
-    )
+    return _clock_response(db, clock)
 
 
 @router.post(
@@ -101,28 +115,18 @@ def reset_clock(
 ):
     """
     **Task API.1 - Reset Sim Clock**:
-    Đặt lại ngày mô phỏng về start_date ban đầu (mặc định 2015-05-24).
+    Đặt lại ngày mô phỏng về start_date, KHÔI PHỤC tồn kho ban đầu từ snapshot và xóa dữ liệu mô phỏng sau start_date.
     Role: Admin only.
     """
     store_id = body.store_id if body and body.store_id else "CA_1"
     target_date = body.target_date if body else None
     try:
-        clock = pipeline_service.reset_sim_clock(db, store_id=store_id, target_date=target_date)
+        clock, info = pipeline_service.reset_sim_clock_with_info(db, store_id=store_id, target_date=target_date)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
-    days_elapsed = (clock.current_date - clock.start_date).days
-    reviews_elapsed = max(0, days_elapsed // 7)
-
-    return SimClockResponse(
-        store_id=clock.store_id,
-        current_date=clock.current_date,
-        start_date=clock.start_date,
-        mode=clock.mode or "replay",
-        speed=clock.speed or 1.0,
-        updated_at=clock.updated_at,
-        days_elapsed=days_elapsed,
-        reviews_elapsed=reviews_elapsed,
+    return _clock_response(
+        db, clock, snapshot_restored=info["snapshot_restored"], inventory_source=info["inventory_source"]
     )
 
 
@@ -145,16 +149,4 @@ def set_clock_speed(
         clock = pipeline_service.set_sim_speed(db, store_id=body.store_id or "CA_1", speed=body.speed)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    days_elapsed = (clock.current_date - clock.start_date).days
-    reviews_elapsed = max(0, days_elapsed // 7)
-
-    return SimClockResponse(
-        store_id=clock.store_id,
-        current_date=clock.current_date,
-        start_date=clock.start_date,
-        mode=clock.mode or "replay",
-        speed=clock.speed or 1.0,
-        updated_at=clock.updated_at,
-        days_elapsed=days_elapsed,
-        reviews_elapsed=reviews_elapsed,
-    )
+    return _clock_response(db, clock)

@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional, Tuple, Any
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.forecast import Forecast, ForecastOverride, ForecastExplanation
@@ -267,6 +268,30 @@ class ForecastService:
             history=history_points,
         )
 
+    def _resolve_forecast_version(self, db: Session, sku: str, store_id: str) -> Optional[str]:
+        """B-05: one model_version for a SKU/store: the Tier-1 Ensemble if present, else the production
+        registry version if the SKU has forecasts of it, else the newest forecast version."""
+        rows = (
+            db.query(Forecast.model_version, func.max(Forecast.generated_at))
+            .filter(Forecast.item_id == sku, Forecast.store_id == store_id)
+            .group_by(Forecast.model_version)
+            .all()
+        )
+        if not rows:
+            return None
+        versions = {r[0]: r[1] for r in rows}
+        ens = [v for v in versions if v and v.lower().startswith("ensemble")]
+        if ens:
+            return max(ens, key=lambda v: versions[v] or datetime.min)
+        prod_model = (
+            db.query(model_registry_repository.model)
+            .filter(model_registry_repository.model.is_production.is_(True))
+            .first()
+        )
+        if prod_model and prod_model.version in versions:
+            return prod_model.version
+        return max(versions, key=lambda v: versions[v] or datetime.min)
+
     def compare_actual_vs_predicted(
         self,
         db: Session,
@@ -293,17 +318,7 @@ class ForecastService:
             else "CA_1"
         )
 
-        active_version = model_version
-        if not active_version:
-            prod_model = (
-                db.query(model_registry_repository.model)
-                .filter(model_registry_repository.model.is_production.is_(True))
-                .first()
-            )
-            if prod_model and prod_model.version:
-                active_version = prod_model.version
-            else:
-                active_version = forecast_repository.get_latest_model_version(db)
+        active_version = model_version or self._resolve_forecast_version(db, sku, target_store)
 
         sales = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
@@ -443,8 +458,14 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
+        _store_for_version = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
         forecasts = forecast_repository.get_forecasts_for_sku(
-            db, item_id=sku, store_id=store_id, horizon=selected_horizon
+            db, item_id=sku, store_id=store_id, horizon=selected_horizon,
+            model_version=self._resolve_forecast_version(db, sku, _store_for_version),
         )
 
         sigma_obj = forecast_repository.get_sigma(db, sku)
@@ -505,32 +526,26 @@ class ForecastService:
                 effective_pred = float(ov.override_value) if ov else fc.y_pred
                 residuals.append(round(sales_map[fc.forecast_date] - effective_pred, 2))
 
-        # UC22: Phân bố sai số dự báo thực nghiệm r = y - y_hat (B-06)
-        # Khi có dữ liệu thực tế trùng với ngày dự báo, tính chuẩn xác trên residual thực tế.
-        # Khi toàn bộ horizon nằm ở tương lai (chưa có actual), dùng độ rộng dải bất định (p90 - p10) làm fallback.
-        eval_metrics = residuals if residuals else spreads
-        err_dist: Optional[ErrorDistribution] = None
-        if eval_metrics:
-            sorted_vals = sorted(eval_metrics)
-            m = sum(sorted_vals) / len(sorted_vals)
-            variance = sum((x - m) ** 2 for x in sorted_vals) / len(sorted_vals)
-            std = math.sqrt(variance)
+        # B-06: error_distribution = REAL residuals r = actual - prediction only. The p90-p10 band width has
+        # its own field; it is never reported as a forecast error.
+        def _dist(vals: List[float]) -> Optional[ErrorDistribution]:
+            if not vals:
+                return None
+            sv = sorted(vals)
+            m = sum(sv) / len(sv)
+            std = math.sqrt(sum((x - m) ** 2 for x in sv) / len(sv))
 
-            def get_percentile(arr: List[float], p: float) -> float:
-                idx = int(p * (len(arr) - 1))
-                return arr[idx]
+            def pct(p: float) -> float:
+                return sv[int(p * (len(sv) - 1))]
 
-            err_dist = ErrorDistribution(
-                mean=round(m, 2),
-                std=round(std, 2),
-                min=round(sorted_vals[0], 2),
-                max=round(sorted_vals[-1], 2),
-                p10=round(get_percentile(sorted_vals, 0.10), 2),
-                p25=round(get_percentile(sorted_vals, 0.25), 2),
-                p50=round(get_percentile(sorted_vals, 0.50), 2),
-                p75=round(get_percentile(sorted_vals, 0.75), 2),
-                p90=round(get_percentile(sorted_vals, 0.90), 2),
+            return ErrorDistribution(
+                mean=round(m, 2), std=round(std, 2), min=round(sv[0], 2), max=round(sv[-1], 2),
+                p10=round(pct(0.10), 2), p25=round(pct(0.25), 2), p50=round(pct(0.50), 2),
+                p75=round(pct(0.75), 2), p90=round(pct(0.90), 2),
             )
+
+        err_dist = _dist(residuals)
+        band_dist = _dist(spreads)
 
         return ForecastUncertaintyResponse(
             item_id=sku,
@@ -539,6 +554,8 @@ class ForecastService:
             sigma_h=round(sigma_val, 2) if sigma_val is not None else None,
             points=points,
             error_distribution=err_dist,
+            error_distribution_n=len(residuals),
+            band_width_distribution=band_dist,
         )
 
     def get_forecast_explanation(
@@ -927,6 +944,7 @@ class ForecastService:
                         ForecastWindowQuantile.origin_date == affected_origin,
                     ).delete()
                 affected_keys = {(it.item_id, it.store_id) for it in request.items}
+                by_store: Dict[str, List[str]] = {}
                 for affected_sku, affected_store in affected_keys:
                     clock = db.query(SimClock).filter(SimClock.store_id == affected_store).first()
                     if clock and clock.current_date:
@@ -935,7 +953,10 @@ class ForecastService:
                             ForecastWindowQuantile.item_id == affected_sku,
                             ForecastWindowQuantile.origin_date == clock.current_date,
                         ).delete()
-                    optimization_service.recompute_parameters(db, store_id=affected_store, item_id=affected_sku)
+                    by_store.setdefault(affected_store, []).append(affected_sku)
+                # P-27: ONE bulk recompute per store, not one per SKU
+                for affected_store, skus in by_store.items():
+                    optimization_service.recompute_parameters(db, store_id=affected_store, item_ids=skus)
                 db.commit()
             except Exception as e:
                 db.rollback()

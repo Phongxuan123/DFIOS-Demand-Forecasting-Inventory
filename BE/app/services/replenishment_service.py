@@ -103,7 +103,9 @@ class ReplenishmentService:
             )
             .all()
         )
-        pending_set = {p[0] for p in pending_recs}
+        # P-12: in simulator mode (auto_order) the inventory position IP = on_hand + on_order already counts every
+        # order in transit, so stale PENDING proposals (loader rows, never received) must NOT block reordering.
+        pending_set = set() if auto_order else {p[0] for p in pending_recs}
 
         for prod in products:
             item_id = prod.item_id
@@ -173,7 +175,9 @@ class ReplenishmentService:
                     recommended_qty=recommended_qty,
                     final_qty=recommended_qty,
                     priority=priority,
-                    status="PENDING",
+                    # auto_order (simulator): the order is placed immediately -> APPROVED, received by J1 after L
+                    # days and then set to COMPLETED; a COMPLETED order is never received twice (P-16).
+                    status="APPROVED" if auto_order else "PENDING",
                     reason=f"Đề xuất {policy_name}: IP ({ip:.1f}) < s ({s_level:.1f}), đặt q = S - IP = {recommended_qty:.0f}",
                     order_up_to_S=S_level,
                     reorder_point_s=s_level,
@@ -181,9 +185,9 @@ class ReplenishmentService:
                     eoq_quantity=eoq,
                     policy_applied=policy_name,
                     review_date=effective_review_date,
-                    decided_by=None,
+                    decided_by="simulator" if auto_order else None,
                     created_at=created_timestamp,
-                    decided_at=None,
+                    decided_at=created_timestamp if auto_order else None,
                 )
                 db.add(rec)
                 pending_set.add(item_id)

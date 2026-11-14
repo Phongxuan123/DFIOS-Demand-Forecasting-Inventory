@@ -1,14 +1,21 @@
 """
-Sync Database to 100% Scientific Rigor according to research.md, demo.md, and c3ok_artifacts.
-- Aligns sim_clock to 2016-05-23 (seamless connection to sales_history 2016-04-25..2016-05-22).
-- Aligns origin_date of forecast_window_quantile to 2016-05-23.
-- Sets policy_selection to optimal (m_g, kappa_g = 1.0) for all 9 ABC/XYZ classes.
-- Sets calibration_state to real empirical theta values from c3ok_artifacts.
-- Updates model_registry with actual WRMSSE metrics (Ensemble 0.4935).
-- Saves empirical policy benchmark comparisons into system_settings.
+Align the database with the scientific artifacts (research.md, c3ok_artifacts). Last step of the build.
+
+One date convention (P-35 / N-11): policy_config.DEMO_START_DATE.
+- sim_clock -> demo start date (the quantile origin is created at that date by
+  load_forecast_window_quantile; nothing is renamed in place any more).
+- policy_selection of the DEMO selection only (m_g = 0, kappa = 1, setpoint 0.95; val_* = artifact values).
+  Other selections (J5 results) are never touched.
+- calibration_state: the theta trajectory is KEPT. When no trajectory exists (only the neutral rev_0), the
+  artifact final e^theta is added as a warm-start state at the next review index (m_g stays 0, so the
+  multiplier is applied exactly once, N-05).
+- model_registry: only the artifact WRMSSE values (RUN_SUMMARY_C3OK.md / c3ok_fidelity.json, h = 7).
+- inventory_params recomputed ONCE at the end with the single formula (B-20).
+- policy benchmark numbers are saved in system_settings (extract of the artifact).
 """
 import sys
 import os
+import math
 from datetime import date, datetime, timezone
 import json
 
@@ -17,125 +24,88 @@ BE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, BE_DIR)
 
 from app.core.database import SessionLocal
+from app.services import policy_config as pc
 from sqlalchemy import text
+
+STORE = pc.DEMO_STORE_ID
+WARM_START_CALIBRATOR = "c3ok_artifact_final"
+
 
 def run_sync():
     db = SessionLocal()
     try:
-        print("=== 1. ALIGNING SIM_CLOCK TO 2016-04-25 ===")
+        print(f"=== 1. ALIGNING SIM_CLOCK TO {pc.DEMO_START_DATE} ===")
         db.execute(text("""
-            UPDATE sim_clock 
-            SET "current_date" = '2016-04-25', 
-                start_date = '2016-04-25',
-                updated_at = NOW()
-            WHERE store_id = 'CA_1'
-        """))
-        print("Updated sim_clock for CA_1 -> current_date = 2016-04-25, start_date = 2016-04-25")
+            UPDATE sim_clock
+            SET "current_date" = :d, start_date = :d, updated_at = NOW()
+            WHERE store_id = :s
+        """), {"d": pc.DEMO_START_DATE, "s": STORE})
 
-        print("\n=== 2. ALIGNING FORECAST_WINDOW_QUANTILE ORIGIN_DATE TO 2016-05-23 ===")
-        res = db.execute(text("""
-            UPDATE forecast_window_quantile
-            SET origin_date = '2016-05-23',
-                id = REPLACE(id, '2015-05-24', '2016-05-23')
-            WHERE store_id = 'CA_1'
-        """))
-        print(f"Updated origin_date for {res.rowcount} quantile rows in CA_1 to 2016-05-23")
-
-        print("\n=== 3. SYNCING TIER 2 POLICY_SELECTION (m_g = 0.0, kappa_g = 1.0) ===")
-        # Giá trị thực nghiệm CSL theo lớp từ c3ok_csl_by_class.csv (P C3-OUT tau=0.95)
+        print("\n=== 3. SYNCING TIER 2 POLICY_SELECTION (demo selection only; m_g = 0, kappa_g = 1) ===")
+        # Measured per-class CSL / cost of policy "P C3-OUT tau=0.95" (c3ok_csl_by_class.csv, c3ok_results.csv)
         optimal_policies = {
-            "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
-            "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
-            "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 66254.19,  "val_service": 0.9490},
-            "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 64478.95,  "val_service": 0.9499},
-            "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 421200.50, "val_service": 0.9491},
-            "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 156711.20, "val_service": 0.9489},
-            "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 2907.45,   "val_service": 0.9483},
-            "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 176043.10, "val_service": 0.9492},
-            "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 491428.00, "val_service": 0.9479},
+            "AX": {"val_cost": 319489.84, "val_service": 0.9495},
+            "AY": {"val_cost": 395968.80, "val_service": 0.9494},
+            "AZ": {"val_cost": 66254.19,  "val_service": 0.9490},
+            "BX": {"val_cost": 64478.95,  "val_service": 0.9499},
+            "BY": {"val_cost": 421200.50, "val_service": 0.9491},
+            "BZ": {"val_cost": 156711.20, "val_service": 0.9489},
+            "CX": {"val_cost": 2907.45,   "val_service": 0.9483},
+            "CY": {"val_cost": 176043.10, "val_service": 0.9492},
+            "CZ": {"val_cost": 491428.00, "val_service": 0.9479},
         }
         for class_id, p in optimal_policies.items():
             db.execute(text("""
                 UPDATE policy_selection
-                SET m_g = :m_g,
-                    kappa_g = :kappa_g,
-                    val_cost = :val_cost,
-                    val_service = :val_service,
-                    setpoint = 0.95,
-                    tau = 0.95
-                WHERE class_id = :class_id
-            """), {
-                "m_g": p["m_g"],
-                "kappa_g": p["kappa_g"],
-                "val_cost": p["val_cost"],
-                "val_service": p["val_service"],
-                "class_id": class_id
-            })
-            print(f"Updated policy_selection for {class_id}: m={p['m_g']}, kappa={p['kappa_g']}")
+                SET m_g = 0.0, kappa_g = 1.0, val_cost = :val_cost, val_service = :val_service,
+                    setpoint = :sp, tau = :sp
+                WHERE class_id = :class_id AND selection_id = :sid
+            """), {**p, "class_id": class_id, "sid": pc.DEMO_SELECTION_ID, "sp": pc.TARGET_AVAILABILITY})
+        print(f"Updated policy_selection {pc.DEMO_SELECTION_ID} for 9 classes")
 
-        print("\n=== 4. SYNCING TIER 3 CALIBRATION_STATE (THETA) ===")
-        # Exact e^theta from RUN_SUMMARY_C3OK.md line 76:
-        # AX 1.095, AY 1.201, AZ 1.481, BX 1.094, BY 1.172, BZ 1.468, CX 1.149, CY 1.133, CZ 1.397
-        theta_multipliers = {
-            "AX": (0.0908, 1.095),
-            "AY": (0.1832, 1.201),
-            "AZ": (0.3927, 1.481),
-            "BX": (0.0898, 1.094),
-            "BY": (0.1587, 1.172),
-            "BZ": (0.3839, 1.468),
-            "CX": (0.1389, 1.149),
-            "CY": (0.1249, 1.133),
-            "CZ": (0.3343, 1.397),
-        }
-        for class_id, (th, mult) in theta_multipliers.items():
+        print("\n=== 4. TIER 3 CALIBRATION_STATE (trajectory kept) ===")
+        # Final e^theta of policy P C3-OUT tau=0.95 (RUN_SUMMARY_C3OK.md): AX 1.095, AY 1.201, AZ 1.481,
+        # BX 1.094, BY 1.172, BZ 1.468, CX 1.149, CY 1.133, CZ 1.397
+        theta_final = {"AX": 0.0908, "AY": 0.1832, "AZ": 0.3927, "BX": 0.0898, "BY": 0.1587,
+                       "BZ": 0.3839, "CX": 0.1389, "CY": 0.1249, "CZ": 0.3343}
+        for class_id, th in theta_final.items():
+            mx = db.execute(text(
+                "SELECT max(review_index) FROM calibration_state WHERE store_id=:s AND class_id=:c"),
+                {"s": STORE, "c": class_id}).scalar()
+            warm = db.execute(text(
+                "SELECT review_index FROM calibration_state WHERE store_id=:s AND class_id=:c AND calibrator_id=:k"),
+                {"s": STORE, "c": class_id, "k": WARM_START_CALIBRATOR}).scalar()
+            if warm is not None:  # idempotent refresh of our own warm-start row
+                idx = warm
+                db.execute(text("""UPDATE calibration_state SET theta=:t, multiplier=:m, review_date=:d
+                                   WHERE store_id=:s AND class_id=:c AND review_index=:i"""),
+                           {"t": th, "m": round(math.exp(th), 4), "d": pc.DEMO_START_DATE, "s": STORE,
+                            "c": class_id, "i": idx})
+            elif mx is None or mx == 0:  # only the neutral rev_0 (or nothing): add the warm-start state
+                idx = (mx or 0) + 1
+                db.execute(text("""
+                    INSERT INTO calibration_state (id, calibrator_id, store_id, class_id, review_index, review_date,
+                        theta, multiplier, error_rate, at_boundary, setpoint, eta, created_at)
+                    VALUES (:id, :k, :s, :c, :i, :d, :t, :m, NULL, false, :sp, :eta, NOW())
+                    ON CONFLICT (id) DO UPDATE SET theta = EXCLUDED.theta, multiplier = EXCLUDED.multiplier
+                """), {"id": f"{STORE}_{class_id}_rev_{idx}", "k": WARM_START_CALIBRATOR, "s": STORE, "c": class_id,
+                       "i": idx, "d": pc.DEMO_START_DATE, "t": th, "m": round(math.exp(th), 4),
+                       "sp": pc.TARGET_AVAILABILITY, "eta": pc.CONTROLLER_ETA})
+            else:
+                print(f"  {class_id}: theta trajectory present (max review {mx}), left unchanged")
+        print("Calibration states synced without deleting history.")
+
+        print("\n=== 5. SYNCING MODEL_REGISTRY METRICS (artifact WRMSSE, h = 7) ===")
+        # c3ok_fidelity.json / RUN_SUMMARY_C3OK.md "Result OK" column. MAE / RMSE / MASE have no source in the
+        # artifact and are NOT written (R-04, N-06).
+        for algo, wr, prod in (("ensemble", 0.4935, True), ("lightgbm", 0.5083, False),
+                               ("xgboost", 0.5213, False), ("tft", 0.5004, False)):
             db.execute(text("""
-                UPDATE calibration_state
-                SET theta = :theta,
-                    multiplier = :multiplier,
-                    review_date = '2016-05-23'
-                WHERE store_id = 'CA_1' AND class_id = :class_id
-            """), {
-                "theta": th,
-                "multiplier": mult,
-                "class_id": class_id
-            })
-            print(f"Updated calibration_state for CA_1 {class_id}: theta={th}, multiplier={mult}")
-
-        print("\n=== 5. SYNCING MODEL_REGISTRY METRICS ===")
-        print("\n=== 5. SYNCING MODEL_REGISTRY METRICS ===")
-        # Khớp 100% số liệu thực nghiệm từ RUN_SUMMARY_C3OK.md và M5 benchmarks:
-        # Ensemble: WRMSSE 0.4935, MASE 0.975 (Duy nhất 1 bản Production)
-        db.execute(text("""
-            UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.4935, "mase": 0.975, "mae": 0.885, "rmse": 1.42}',
-                is_production = true
-            WHERE algorithm = 'ensemble' OR name ILIKE '%ensemble%'
-        """))
-        db.execute(text("""
-            UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.5083, "mase": 0.991, "mae": 0.962, "rmse": 1.54}',
-                is_production = false
-            WHERE algorithm = 'lightgbm'
-        """))
-        db.execute(text("""
-            UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.5213, "mase": 1.012, "mae": 0.985, "rmse": 1.59}',
-                is_production = false
-            WHERE algorithm = 'xgboost'
-        """))
-        db.execute(text("""
-            UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.5004, "mae": 0.948, "mase": 0.982, "rmse": 1.51}',
-                is_production = false
-            WHERE algorithm = 'tft'
-        """))
-        db.execute(text("""
-            UPDATE model_registry
-            SET metrics = '{"wrmsse": 1.05, "mase": 1.12, "mae": 1.34, "rmse": 2.15}',
-                is_production = false
-            WHERE algorithm = 'sarima'
-        """))
-        print("Updated model_registry with actual WRMSSE & MASE metrics (Ensemble: 0.4935, MASE 0.975, TFT MAE 0.948).")
+                UPDATE model_registry
+                SET metrics = :m, is_production = :p
+                WHERE algorithm = :a OR (:a = 'ensemble' AND name ILIKE '%ensemble%')
+            """), {"m": json.dumps({"wrmsse": wr}), "p": prod, "a": algo})
+        print("Updated model_registry with artifact WRMSSE values.")
 
         print("\n=== 6. SAVING SCIENTIFIC BENCHMARK RESULTS IN SYSTEM_SETTINGS ===")
         # Khớp 100% nhãn và kết quả từ c3ok_results.csv & c3ok_pairs.csv
@@ -218,6 +188,11 @@ def run_sync():
         print("Upserted policy_benchmark_results into system_settings.")
 
         db.commit()
+
+        print("=== 7. RECOMPUTING inventory_params ONCE (single formula, L=3, R=7) ===")
+        from app.services.optimization_service import optimization_service
+        n = optimization_service.recompute_parameters(db, store_id=STORE)
+        print(f"Recomputed {n} SKUs.")
         print("\n>>> ALL SCIENTIFIC BASELINES SYNCED TO DATABASE SUCCESSFULLY! <<<")
 
     except Exception as e:

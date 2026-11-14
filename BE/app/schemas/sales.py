@@ -1,6 +1,6 @@
 from datetime import date
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SaleRecordBase(BaseModel):
@@ -42,3 +42,16 @@ class SalesImportResponse(BaseModel):
     imported_count: int
     skipped_count: int
     message: str
+    # R-38: bộ field thống nhất với POST /imports (FE đọc inserted/updated/rejected).
+    # /sales/import ghi theo kiểu upsert và không tách thêm mới/cập nhật, nên toàn bộ dòng ghi được tính vào `inserted`.
+    inserted: Optional[int] = None
+    updated: int = 0
+    rejected: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _fill_unified_counters(self) -> "SalesImportResponse":
+        if self.inserted is None:
+            self.inserted = self.imported_count
+        if self.rejected is None:
+            self.rejected = self.skipped_count
+        return self

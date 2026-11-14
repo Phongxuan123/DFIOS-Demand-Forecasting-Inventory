@@ -21,6 +21,8 @@ class ProductRepository(BaseRepository[Product]):
         search: Optional[str] = None,
         dept_id: Optional[str] = None,
         cat_id: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: str = "asc",
     ) -> Tuple[List[Product], int]:
         query = db.query(Product)
 
@@ -35,7 +37,14 @@ class ProductRepository(BaseRepository[Product]):
             query = query.filter(Product.cat_id == cat_id.strip())
 
         total = query.count()
-        items = query.order_by(Product.item_id.asc()).offset(skip).limit(limit).all()
+        sort_columns = {
+            "item_id": Product.item_id, "name": Product.name, "dept_id": Product.dept_id,
+            "cat_id": Product.cat_id, "price": Product.price,
+        }
+        column = sort_columns.get(sort_by or "item_id", Product.item_id)
+        order = column.desc() if (sort_dir or "asc").lower() == "desc" else column.asc()
+        order_by = [order] if column is Product.item_id else [order, Product.item_id.asc()]
+        items = query.order_by(*order_by).offset(skip).limit(limit).all()
         return items, total
 
     def delete_by_item_id(self, db: Session, item_id: str) -> bool:

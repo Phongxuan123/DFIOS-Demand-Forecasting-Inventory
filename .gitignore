@@ -281,3 +281,7 @@ c3ok_artifacts/
 *.ubj
 *.npz
 
+
+# extra virtualenvs
+BE/.venv*/
+BE/scripts/c3ok_sku_class.csv
