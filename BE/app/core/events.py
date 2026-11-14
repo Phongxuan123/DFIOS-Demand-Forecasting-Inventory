@@ -3,7 +3,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional
 
-from app.schemas.event import SystemEvent
+from app.schemas.event import SystemEvent, mask_email
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class BaseEventBus(ABC):
         pass
 
     @abstractmethod
-    async def subscribe(self, user_id: str) -> asyncio.Queue:
+    async def subscribe(self, user_id: str, role: Optional[str] = None) -> asyncio.Queue:
         """Create and register a subscription queue for a user."""
         pass
 
@@ -46,6 +46,7 @@ class InMemoryEventBus(BaseEventBus):
         self.max_connections_per_user = max_connections_per_user
         self.queue_maxsize = queue_maxsize
         self._subscribers: Dict[str, List[asyncio.Queue]] = {}
+        self._user_roles: Dict[str, str] = {}
         self._event_counter: int = 0
         self._lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -55,11 +56,13 @@ class InMemoryEventBus(BaseEventBus):
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def subscribe(self, user_id: str) -> asyncio.Queue:
+    async def subscribe(self, user_id: str, role: Optional[str] = None) -> asyncio.Queue:
         if self._loop is None or self._loop.is_closed():
             self._loop = asyncio.get_running_loop()
         lock = self._get_lock()
         async with lock:
+            if role:
+                self._user_roles[user_id] = role
             if user_id not in self._subscribers:
                 self._subscribers[user_id] = []
 
@@ -82,7 +85,7 @@ class InMemoryEventBus(BaseEventBus):
             new_queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_maxsize)
             user_queues.append(new_queue)
             logger.info(
-                f"User '{user_id}' subscribed. Active connections for user: {len(user_queues)}"
+                f"User '{user_id}' (role: {role}) subscribed. Active connections for user: {len(user_queues)}"
             )
             return new_queue
 
@@ -95,6 +98,8 @@ class InMemoryEventBus(BaseEventBus):
                     user_queues.remove(queue)
                 if not user_queues:
                     del self._subscribers[user_id]
+                    if user_id in self._user_roles:
+                        del self._user_roles[user_id]
             logger.info(
                 f"User '{user_id}' unsubscribed. Remaining active users: {len(self._subscribers)}"
             )
@@ -146,11 +151,32 @@ class InMemoryEventBus(BaseEventBus):
                 is_same_thread = False
 
         for user_id, queues in list(self._subscribers.items()):
+            user_role = self._user_roles.get(user_id)
+            # 1. Role filtering: If target_roles is specified, skip unauthorized subscribers
+            if event.target_roles is not None:
+                if not user_role or user_role not in event.target_roles:
+                    continue
+
+            # 2. Payload sanitization: Mask email in actor_id for non-privileged subscribers
+            event_to_dispatch = event
+            if user_role not in ("Admin", "Warehouse Manager"):
+                if isinstance(event.data, dict) and "actor_id" in event.data:
+                    raw_actor = event.data["actor_id"]
+                    if isinstance(raw_actor, str) and "@" in raw_actor:
+                        sanitized_data = dict(event.data)
+                        sanitized_data["actor_id"] = mask_email(raw_actor)
+                        event_to_dispatch = SystemEvent(
+                            id=event.id,
+                            event=event.event,
+                            data=sanitized_data,
+                            target_roles=event.target_roles,
+                        )
+
             for queue in list(queues):
                 if loop and not loop.is_closed() and not is_same_thread:
-                    loop.call_soon_threadsafe(self._push_to_queue, queue, event)
+                    loop.call_soon_threadsafe(self._push_to_queue, queue, event_to_dispatch)
                 else:
-                    self._push_to_queue(queue, event)
+                    self._push_to_queue(queue, event_to_dispatch)
 
     def get_subscriber_count(self) -> int:
         """Total active subscriber queues across all users."""

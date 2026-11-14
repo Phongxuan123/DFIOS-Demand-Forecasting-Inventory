@@ -1,9 +1,10 @@
 import asyncio
 from typing import AsyncGenerator
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_current_user, require_manager_or_admin
+from app.api.deps import get_current_user, require_admin
+from app.core.config import settings
 from app.core.events import event_bus
 from app.models.user import User
 from app.schemas.event import (
@@ -38,7 +39,7 @@ async def stream_events(
         - Tối đa 5 kết nối đồng thời trên mỗi user (vượt quá sẽ đóng kết nối cũ nhất).
         - Tự động hủy đăng ký và dọn sạch hàng đợi khi client ngắt kết nối (không rò rỉ RAM).
     """
-    queue = await event_bus.subscribe(user_id=current_user.email)
+    queue = await event_bus.subscribe(user_id=current_user.email, role=current_user.role)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
@@ -82,12 +83,17 @@ async def stream_events(
 @router.post("/events/publish-test", status_code=status.HTTP_200_OK)
 async def publish_test_event(
     sku_id: str,
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_admin),
 ):
     """
     API hỗ trợ lập trình viên/tester bắn thử sự kiện inventory.updated
-    khi chưa có giao diện hoặc UC13. Chỉ dành cho Warehouse Manager và Admin.
+    khi chưa có giao diện hoặc UC13. Chỉ dành cho Admin và chỉ bật khi ENABLE_TEST_ENDPOINTS=True (B-25).
     """
+    if not settings.ENABLE_TEST_ENDPOINTS or settings.ENVIRONMENT == "production":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Endpoint test đã bị vô hiệu hóa trong môi trường này",
+        )
     event = create_inventory_updated_event(sku_id=sku_id, actor_id=current_user.email)
     await event_bus.publish(event)
     return {

@@ -33,6 +33,13 @@ class Settings:
     # Rate Limit (số lần gửi mail tối đa / giờ / email)
     EMAIL_RATE_LIMIT_PER_HOUR: int = int(os.getenv("EMAIL_RATE_LIMIT_PER_HOUR", "5"))
 
+    # Môi trường chạy hệ thống (development, staging, production)
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    ENABLE_TEST_ENDPOINTS: bool = os.getenv(
+        "ENABLE_TEST_ENDPOINTS",
+        "true" if os.getenv("ENVIRONMENT", "development") != "production" else "false",
+    ).lower() in ("true", "1", "yes")
+
     # Allow Frontend Vite dev server
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
