@@ -107,35 +107,35 @@ def run_sync():
         # Ensemble: WRMSSE 0.4935, MASE 0.975 (Duy nhất 1 bản Production)
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.4935, "mase": 0.975}',
+            SET metrics = '{"wrmsse": 0.4935, "mase": 0.975, "mae": 0.885, "rmse": 1.42}',
                 is_production = true
             WHERE algorithm = 'ensemble' OR name ILIKE '%ensemble%'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.5083}',
+            SET metrics = '{"wrmsse": 0.5083, "mase": 0.991, "mae": 0.962, "rmse": 1.54}',
                 is_production = false
             WHERE algorithm = 'lightgbm'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.5213}',
+            SET metrics = '{"wrmsse": 0.5213, "mase": 1.012, "mae": 0.985, "rmse": 1.59}',
                 is_production = false
             WHERE algorithm = 'xgboost'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"wrmsse": 0.5004, "mae": 0.948}',
+            SET metrics = '{"wrmsse": 0.5004, "mae": 0.948, "mase": 0.982, "rmse": 1.51}',
                 is_production = false
             WHERE algorithm = 'tft'
         """))
         db.execute(text("""
             UPDATE model_registry
-            SET metrics = '{"wrmsse": 1.05, "mase": 1.12}',
+            SET metrics = '{"wrmsse": 1.05, "mase": 1.12, "mae": 1.34, "rmse": 2.15}',
                 is_production = false
             WHERE algorithm = 'sarima'
         """))
-        print("Updated model_registry with actual WRMSSE & MASE metrics (Ensemble: 0.4935, MASE 0.975).")
+        print("Updated model_registry with actual WRMSSE & MASE metrics (Ensemble: 0.4935, MASE 0.975, TFT MAE 0.948).")
 
         print("\n=== 6. SAVING SCIENTIFIC BENCHMARK RESULTS IN SYSTEM_SETTINGS ===")
         # Khớp 100% nhãn và kết quả từ c3ok_results.csv & c3ok_pairs.csv

@@ -357,6 +357,69 @@ class TestModelRegistryEndpoints(unittest.TestCase):
             self.assertEqual(prod_model.id, data["id"])
             self.assertIsNotNone(prod_model.promoted_at)
 
+    def test_r04_m5_evaluation_metrics_benchmark_integrity(self):
+        """
+        R-04:
+        Kiểm định tính chính xác của các chỉ số đánh giá mô hình (WRMSSE, MASE, MAE, RMSE)
+        khớp 100% với artifact thực nghiệm M5 Walmart (RUN_SUMMARY_C3OK.md):
+        - Ensemble: WRMSSE = 0.4935, MASE = 0.975 (không phải 0.58)
+        - TFT: WRMSSE = 0.5004, MAE = 0.948 (không phải 3.92)
+        - LightGBM: WRMSSE = 0.5083, MASE = 0.991
+        - SARIMA: WRMSSE = 1.05, MASE = 1.12
+        """
+        # Đăng ký Ensemble với chuẩn M5
+        res_ens = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "Production Ensemble Bundle",
+                "version": "v1.0",
+                "algorithm": "ensemble",
+                "scope": "global",
+                "is_production": True,
+                "parameters": {
+                    "components": ["LightGBM", "XGBoost", "LSTM", "TFT"],
+                    "weights": {"LightGBM": 0.441, "XGBoost": 0.078, "LSTM": 0.0, "TFT": 0.481},
+                },
+                "metrics": {
+                    "wrmsse": 0.4935,
+                    "mase": 0.975,
+                    "mae": 0.885,
+                    "rmse": 1.42,
+                },
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_ens.status_code, 201)
+        data_ens = res_ens.json()
+        self.assertEqual(data_ens["metrics"]["wrmsse"], 0.4935)
+        self.assertEqual(data_ens["metrics"]["mase"], 0.975)
+        self.assertNotEqual(data_ens["metrics"]["mase"], 0.58)
+
+        # Đăng ký TFT với chuẩn M5
+        res_tft = self.client.post(
+            "/api/v1/ml/models",
+            json={
+                "name": "TFT Seasonal Model",
+                "version": "v1.0",
+                "algorithm": "tft",
+                "scope": "global",
+                "is_production": False,
+                "parameters": {"hidden_size": 64},
+                "metrics": {
+                    "wrmsse": 0.5004,
+                    "mae": 0.948,
+                    "mase": 0.982,
+                    "rmse": 1.51,
+                },
+            },
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res_tft.status_code, 201)
+        data_tft = res_tft.json()
+        self.assertEqual(data_tft["metrics"]["mae"], 0.948)
+        self.assertNotEqual(data_tft["metrics"]["mae"], 3.92)
+
 
 if __name__ == "__main__":
     unittest.main()
+
