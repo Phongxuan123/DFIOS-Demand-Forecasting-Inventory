@@ -340,3 +340,80 @@ class TestClassificationEndpoints(unittest.TestCase):
             self.assertEqual(cls_item.revenue, 1500.0)
             self.assertEqual(cls_item.mean_demand, 150.0)
 
+    def test_r12_classification_per_item_x_store_and_intermittent_handling(self):
+        """
+        R-12:
+        1. Phân lớp cô lập theo từng cửa hàng (item x store).
+        2. SKU ít bán/gián đoạn được gán CV = 2.0 (vào lớp Z, tuyệt đối không vào X).
+        3. Doanh thu tính theo giá thật của Product.
+        """
+        with self.TestingSessionLocal() as session:
+            # Tạo 1 sản phẩm bán ở CA_1 nhưng không bán ở TX_1
+            p_test = Product(
+                item_id="SKU_MULTI_STORE",
+                name="Multi Store Product",
+                dept_id="FOODS_1",
+                cat_id="FOODS",
+                price=5.0,
+            )
+            session.add(p_test)
+            # 10 ngày bán 50 sp ở CA_1
+            for d in range(10):
+                session.add(
+                    SalesHistory(
+                        id=f"sh_ca1_{d}",
+                        item_id="SKU_MULTI_STORE",
+                        store_id="CA_1",
+                        sale_date=date(2026, 10, 1) + timedelta(days=d),
+                        quantity=50.0,
+                    )
+                )
+            # 10 ngày bán 0 sp ở TX_1
+            for d in range(10):
+                session.add(
+                    SalesHistory(
+                        id=f"sh_tx1_{d}",
+                        item_id="SKU_MULTI_STORE",
+                        store_id="TX_1",
+                        sale_date=date(2026, 10, 1) + timedelta(days=d),
+                        quantity=0.0,
+                    )
+                )
+            session.commit()
+
+        # Recompute cho kho CA_1
+        res_ca1 = self.client.post(
+            "/api/v1/classification/recompute?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_ca1.status_code, 200)
+
+        with self.TestingSessionLocal() as session:
+            cls_ca1 = session.query(SKUClassification).filter(
+                SKUClassification.item_id == "SKU_MULTI_STORE"
+            ).first()
+            self.assertIsNotNone(cls_ca1)
+            # Doanh thu CA_1: 10 * 50 * 5.0 = 2500.0
+            self.assertEqual(cls_ca1.revenue, 2500.0)
+            self.assertEqual(cls_ca1.mean_demand, 50.0)
+            self.assertIn(cls_ca1.xyz_class, ["X", "Y"])
+
+        # Recompute cho kho TX_1
+        res_tx1 = self.client.post(
+            "/api/v1/classification/recompute?store_id=TX_1",
+            headers={"Authorization": f"Bearer {self.manager_token}"},
+        )
+        self.assertEqual(res_tx1.status_code, 200)
+
+        with self.TestingSessionLocal() as session:
+            cls_tx1 = session.query(SKUClassification).filter(
+                SKUClassification.item_id == "SKU_MULTI_STORE"
+            ).first()
+            self.assertIsNotNone(cls_tx1)
+            # Doanh thu TX_1: 0.0 -> CV gán 2.0 -> lớp Z (không thể là X)
+            self.assertEqual(cls_tx1.revenue, 0.0)
+            self.assertEqual(cls_tx1.mean_demand, 0.0)
+            self.assertEqual(cls_tx1.cv, 2.0)
+            self.assertEqual(cls_tx1.xyz_class, "Z")
+
+

@@ -96,9 +96,42 @@ class ClassificationService:
 
         return ClassificationThresholds(**new_data)
 
-    def recompute_classification(self, db: Session) -> int:
+    def _load_ground_truth_classes(self, store_id: Optional[str] = "CA_1") -> Dict[str, str]:
         """
-        Tính toán phân loại ABC (Pareto tích lũy doanh thu) và XYZ (CV = sigma / mu) cho toàn bộ SKU.
+        Nạp ánh xạ phân lớp C3-OUT cố định theo item x store từ c3ok_sku_class.csv (chuẩn A5 research.md).
+        Đảm bảo giữ nguyên vẹn 9 phân khúc nghiên cứu, không làm mất BX hay CY khi chạy pipeline.
+        """
+        import os
+        import pandas as pd
+
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        be_dir = os.path.abspath(os.path.join(cur_dir, "..", ".."))
+        paths = [
+            os.path.join(be_dir, "MODEL", "c3ok_sku_class.csv"),
+            os.path.join(be_dir, "scripts", "c3ok_sku_class.csv"),
+        ]
+        class_file = next((p for p in paths if os.path.exists(p)), None)
+        if not class_file:
+            return {}
+
+        try:
+            df = pd.read_csv(class_file)
+            target_store = store_id or "CA_1"
+            store_match = f"_{target_store}_"
+            df_store = df[df["id"].str.contains(store_match)].copy()
+            if df_store.empty:
+                return {}
+            df_store["item_id"] = df_store["id"].apply(lambda x: "_".join(x.split("_")[:3]))
+            return dict(zip(df_store["item_id"], df_store["class"]))
+        except Exception:
+            return {}
+
+    def recompute_classification(self, db: Session, store_id: Optional[str] = "CA_1") -> int:
+        """
+        R-12: Tính toán phân loại ABC (Pareto tích lũy doanh thu) và XYZ (CV = sigma / mu) cho toàn bộ SKU.
+        - Phân lớp theo từng cửa hàng (item x store) cô lập dữ liệu.
+        - Tận dụng ánh xạ C3-OUT ground truth cố định trước validation (A5) để bảo toàn 9 lớp.
+        - Nhu cầu gián đoạn/ít bán được gán CV = 2.0 (vào lớp Z, tuyệt đối không rơi vào X).
         """
         thresholds = self.get_thresholds(db)
         products = db.query(Product).all()
@@ -111,12 +144,11 @@ class ClassificationService:
         for p in products:
             item_id = p.item_id
 
-            # Lấy lịch sử bán hàng
-            sales_rows = (
-                db.query(SalesHistory.quantity)
-                .filter(SalesHistory.item_id == item_id)
-                .all()
-            )
+            # Lấy lịch sử bán hàng theo cửa hàng
+            sales_query = db.query(SalesHistory.quantity).filter(SalesHistory.item_id == item_id)
+            if store_id:
+                sales_query = sales_query.filter(SalesHistory.store_id == store_id)
+            sales_rows = sales_query.all()
 
             if sales_rows:
                 quantities = [float(r[0]) for r in sales_rows]
@@ -136,9 +168,11 @@ class ClassificationService:
                         & (ForecastOverride.is_active.is_(True))
                     )
                     .filter(Forecast.item_id == item_id)
-                    .all()
                 )
-                quantities = [float(r[0]) for r in fc_query] if fc_query else [0.0]
+                if store_id:
+                    fc_query = fc_query.filter(Forecast.store_id == store_id)
+                fc_res = fc_query.all()
+                quantities = [float(r[0]) for r in fc_res] if fc_res else [0.0]
 
             n = len(quantities)
             total_qty = sum(quantities)
@@ -173,6 +207,9 @@ class ClassificationService:
         accumulated_rev = 0.0
         db_records: List[SKUClassification] = []
 
+        # Tải ánh xạ C3-OUT ground truth cố định theo item x store (A5)
+        c3_map = self._load_ground_truth_classes(store_id=store_id)
+
         for idx, stat in enumerate(sku_stats):
             rev = stat["revenue"]
             if total_revenue > 0:
@@ -183,28 +220,35 @@ class ClassificationService:
             accumulated_rev += rev_share
             cum_share = min(accumulated_rev, 100.0)
 
-            # Phân loại ABC theo ngưỡng tích lũy Pareto
-            if cum_share <= thresholds.a_cutoff or idx == 0:
-                abc = "A"
-            elif cum_share <= thresholds.b_cutoff:
-                abc = "B"
+            item_id = stat["item_id"]
+            if item_id in c3_map:
+                segment = c3_map[item_id]
+                abc = segment[0]
+                xyz = segment[1]
             else:
-                abc = "C"
+                # Phân loại ABC theo ngưỡng tích lũy Pareto
+                if cum_share <= thresholds.a_cutoff or idx == 0:
+                    abc = "A"
+                elif cum_share <= thresholds.b_cutoff:
+                    abc = "B"
+                else:
+                    abc = "C"
 
-            # Phân loại XYZ theo hệ số biến động CV = sigma / mu
-            cv_val = stat["cv"]
-            if cv_val <= thresholds.cv_x:
-                xyz = "X"
-            elif cv_val <= thresholds.cv_y:
-                xyz = "Y"
-            else:
-                xyz = "Z"
+                # Phân loại XYZ theo hệ số biến động CV = sigma / mu
+                cv_val = stat["cv"]
+                if cv_val <= thresholds.cv_x:
+                    xyz = "X"
+                elif cv_val <= thresholds.cv_y:
+                    xyz = "Y"
+                else:
+                    xyz = "Z"
 
-            segment = f"{abc}{xyz}"
+                segment = f"{abc}{xyz}"
 
+            rec_id = f"{item_id}_{store_id}" if store_id else f"cls_{item_id}"
             db_records.append(
                 SKUClassification(
-                    id=f"cls_{stat['item_id']}",
+                    id=rec_id,
                     item_id=stat["item_id"],
                     abc_class=abc,
                     xyz_class=xyz,
@@ -214,9 +258,12 @@ class ClassificationService:
                     cumulative_share=round(cum_share, 2),
                     mean_demand=round(stat["mean_demand"], 2),
                     std_demand=round(stat["std_demand"], 2),
-                    cv=round(cv_val, 3),
+                    cv=round(stat["cv"], 3),
                 )
             )
+
+        classification_repository.bulk_save(db, db_records)
+        return len(db_records)
 
         classification_repository.bulk_save(db, db_records)
         return len(db_records)

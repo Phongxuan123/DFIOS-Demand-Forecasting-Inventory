@@ -53,6 +53,7 @@ def update_classification_thresholds(
 
 @router.post("/recompute", response_model=ClassificationRecomputeResponse, summary="UC25 - Kích hoạt tính lại phân loại toàn bộ SKU (Manager & Admin only)")
 def trigger_recompute_classification(
+    store_id: Optional[str] = Query("CA_1", description="Mã cửa hàng phân loại"),
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ):
@@ -60,11 +61,11 @@ def trigger_recompute_classification(
     **UC25 - Recompute Classification**:
     Chủ động chạy lại thuật toán phân loại Pareto ABC & CV XYZ cho toàn bộ SKU theo dữ liệu mới nhất.
     """
-    count = classification_service.recompute_classification(db)
+    count = classification_service.recompute_classification(db, store_id=store_id)
     thresholds = classification_service.get_thresholds(db)
     return ClassificationRecomputeResponse(
         success=True,
-        message=f"Đã phân loại lại thành công cho {count} SKU sản phẩm.",
+        message=f"Đã phân loại lại thành công cho {count} SKU sản phẩm ({store_id}).",
         total_skus_classified=count,
         thresholds=thresholds,
         recomputed_at=datetime.now(timezone.utc),

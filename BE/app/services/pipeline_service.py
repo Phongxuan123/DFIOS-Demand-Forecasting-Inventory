@@ -134,6 +134,7 @@ class PipelineService:
         if existing_class_count == 0:
             classifications_updated = classification_service.recompute_classification(
                 db,
+                store_id=request.store_id,
             )
         else:
             classifications_updated = existing_class_count
