@@ -459,6 +459,43 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
         with self.assertRaises(ValueError):
             get_password_hash(pw_over_bytes)
 
+    def test_b12_jwt_sub_uses_user_id_and_resolves_across_email_changes(self):
+        """B-12: JWT subject payload sub = str(user.id), bảo đảm tính nhất quán định danh và tương thích ngược."""
+        from app.core.security import decode_access_token, create_access_token
+
+        # 1. Login trả JWT có sub là user.id
+        res_login = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "sarah.jenkins@dfios.com", "password": "password123"},
+        )
+        self.assertEqual(res_login.status_code, 200)
+        token = res_login.json()["access_token"]
+        payload = decode_access_token(token)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["sub"], "user-01")
+        self.assertEqual(payload["user_id"], "user-01")
+        self.assertEqual(payload["email"], "sarah.jenkins@dfios.com")
+
+        # 2. Truy cập /auth/me thành công bằng token này
+        res_me = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(res_me.status_code, 200)
+        self.assertEqual(res_me.json()["id"], "user-01")
+
+        # 3. Token cũ (legacy token) với sub là email vẫn tương thích ngược thành công
+        legacy_token = create_access_token(
+            data={"sub": "sarah.jenkins@dfios.com", "role": "Warehouse Manager", "token_version": 1}
+        )
+        res_legacy = self.client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {legacy_token}"},
+        )
+        self.assertEqual(res_legacy.status_code, 200)
+        self.assertEqual(res_legacy.json()["email"], "sarah.jenkins@dfios.com")
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,11 +82,13 @@ class AuthService:
         # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
         rate_limiter.clear(rate_key)
 
+        # B-12: sub được chuẩn hóa thành str(user.id) theo RFC 7519, kèm email và user_id
         access_token = create_access_token(
             data={
-                "sub": user.email,
+                "sub": str(user.id),
+                "user_id": str(user.id),
+                "email": user.email,
                 "role": user.role,
-                "user_id": user.id,
                 "token_version": getattr(user, "token_version", 1),
             }
         )

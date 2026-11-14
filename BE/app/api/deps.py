@@ -37,15 +37,26 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user_email: str | None = payload.get("sub")
-    if not user_email:
+    # B-12: Tra cứu ưu tiên theo User ID (sub = user.id theo chuẩn RFC 7519), tương thích ngược nếu sub là email
+    sub_val: str | None = payload.get("sub")
+    user_id: str | None = payload.get("user_id") or (sub_val if sub_val and "@" not in sub_val else None)
+    user_email: str | None = payload.get("email") or (sub_val if sub_val and "@" in sub_val else None)
+
+    if not sub_val and not user_id and not user_email:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token không chứa thông tin định danh người dùng",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = user_repository.get_by_email(db, user_email)
+    user = None
+    if user_id:
+        user = user_repository.get_by_id(db, user_id)
+    if not user and user_email:
+        user = user_repository.get_by_email(db, user_email)
+    if not user and sub_val:
+        user = user_repository.get_by_id(db, sub_val) or user_repository.get_by_email(db, sub_val)
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
