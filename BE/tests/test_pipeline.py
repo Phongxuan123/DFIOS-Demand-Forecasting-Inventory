@@ -224,6 +224,55 @@ class TestPipelineEndpoints(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 404)
 
+    def test_r19_schedule_persistence_in_database(self):
+        """
+        R-19:
+        Kiểm tra tính bền vững của cấu hình lập lịch cron batch forecast:
+        - Lưu vào bảng system_settings trong cơ sở dữ liệu.
+        - Khôi phục nguyên vẹn sau khi RAM cache bị reset.
+        """
+        from app.models.system_setting import SystemSetting
+        from app.services.pipeline_service import pipeline_service
+
+        payload = {
+            "name": "Persisted Nightly Schedule",
+            "cron_expression": "30 3 * * *",
+            "model_name": "lightgbm",
+            "horizon": 28,
+            "store_id": "CA_1",
+            "auto_trigger_optimization": True,
+        }
+        resp = self.client.post(
+            "/api/v1/ml/schedule",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        sched_id = data["id"]
+
+        # Kiểm tra dữ liệu đã được ghi vào bảng system_settings
+        with self.TestingSessionLocal() as session:
+            setting = session.query(SystemSetting).filter(
+                SystemSetting.key == "batch_pipeline_schedules"
+            ).first()
+            self.assertIsNotNone(setting)
+            self.assertIn(sched_id, setting.value)
+            self.assertEqual(setting.value[sched_id]["cron_expression"], "30 3 * * *")
+
+        # Giả lập server khởi động lại (xóa sạch RAM cache của pipeline_service)
+        pipeline_service._schedules = {}
+
+        # Gọi GET /schedule, hệ thống phải tự động phục hồi từ DB
+        resp_list = self.client.get(
+            "/api/v1/ml/schedule",
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(resp_list.status_code, 200)
+        items = resp_list.json()["items"]
+        ids = [item["id"] for item in items]
+        self.assertIn(sched_id, ids)
+
 
 if __name__ == "__main__":
     unittest.main()

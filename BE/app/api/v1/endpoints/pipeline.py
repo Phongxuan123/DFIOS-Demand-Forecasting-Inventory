@@ -24,9 +24,10 @@ router = APIRouter()
 )
 def create_batch_schedule(
     request: BatchScheduleCreateRequest,
+    db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ) -> BatchScheduleResponse:
-    return pipeline_service.create_schedule(request)
+    return pipeline_service.create_schedule(request, db=db)
 
 
 @router.get(
@@ -36,9 +37,10 @@ def create_batch_schedule(
     description="Tra cứu danh sách các tác vụ lập lịch dự báo cron job đang hoạt động.",
 )
 def list_batch_schedules(
+    db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ) -> BatchScheduleListResponse:
-    return pipeline_service.list_schedules()
+    return pipeline_service.list_schedules(db=db)
 
 
 @router.delete(
@@ -48,9 +50,10 @@ def list_batch_schedules(
 )
 def delete_batch_schedule(
     schedule_id: str,
+    db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    pipeline_service.delete_schedule(schedule_id)
+    pipeline_service.delete_schedule(schedule_id, db=db)
 
 
 @router.post(

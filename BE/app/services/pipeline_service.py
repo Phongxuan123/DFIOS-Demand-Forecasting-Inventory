@@ -33,8 +33,10 @@ class PipelineService:
     Service quản lý lập lịch chạy ngầm (UC49) và tự động hóa cập nhật tồn kho/phân loại sau dự báo (UC50).
     """
 
+    SETTINGS_KEY = "batch_pipeline_schedules"
+
     def __init__(self):
-        # Lưu trữ cấu hình lập lịch cron in-memory (kèm 1 cấu hình mặc định chuẩn)
+        # Cấu hình lập lịch cron mặc định chuẩn
         self._schedules: Dict[str, Dict] = {
             "sched-default-01": {
                 "id": "sched-default-01",
@@ -51,13 +53,49 @@ class PipelineService:
             }
         }
 
+    def _get_schedules_dict(self, db: Optional[Session] = None) -> Dict[str, Dict]:
+        """
+        R-19: Đọc danh sách cấu hình lập lịch cron từ cơ sở dữ liệu (system_settings)
+        để đảm bảo tính bền vững (persistence) khi khởi động lại ứng dụng.
+        """
+        if db:
+            from app.repositories.system_setting_repository import system_setting_repository
+            setting = system_setting_repository.get_by_key(db, self.SETTINGS_KEY)
+            if setting and isinstance(setting.value, dict) and setting.value:
+                self._schedules = dict(setting.value)
+                return self._schedules
+            else:
+                system_setting_repository.upsert_setting(
+                    db,
+                    key=self.SETTINGS_KEY,
+                    value=self._schedules,
+                    description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+                )
+        return self._schedules
+
+    def _save_schedules_dict(self, schedules: Dict[str, Dict], db: Optional[Session] = None) -> None:
+        """
+        R-19: Lưu cấu hình lập lịch cron vào DB (system_settings).
+        """
+        self._schedules = schedules
+        if db:
+            from app.repositories.system_setting_repository import system_setting_repository
+            system_setting_repository.upsert_setting(
+                db,
+                key=self.SETTINGS_KEY,
+                value=schedules,
+                description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+            )
+
     def create_schedule(
         self,
         request: BatchScheduleCreateRequest,
+        db: Optional[Session] = None,
     ) -> BatchScheduleResponse:
         """
-        UC49: Thiết lập một lịch chạy dự báo tự động định kỳ mới.
+        UC49: Thiết lập một lịch chạy dự báo tự động định kỳ mới (lưu bền vững vào DB).
         """
+        schedules = self._get_schedules_dict(db)
         schedule_id = f"sched-{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc)
         next_run = (now + timedelta(days=1)).replace(hour=2, minute=0, second=0, microsecond=0)
@@ -75,26 +113,30 @@ class PipelineService:
             "next_run_at": next_run.isoformat(),
             "created_at": now.isoformat(),
         }
-        self._schedules[schedule_id] = sched_dict
+        schedules[schedule_id] = sched_dict
+        self._save_schedules_dict(schedules, db=db)
         return BatchScheduleResponse(**sched_dict)
 
-    def list_schedules(self) -> BatchScheduleListResponse:
+    def list_schedules(self, db: Optional[Session] = None) -> BatchScheduleListResponse:
         """
         UC49: Lấy danh sách các lịch chạy batch forecast định kỳ.
         """
-        items = [BatchScheduleResponse(**s) for s in self._schedules.values()]
+        schedules = self._get_schedules_dict(db)
+        items = [BatchScheduleResponse(**s) for s in schedules.values()]
         return BatchScheduleListResponse(total=len(items), items=items)
 
-    def delete_schedule(self, schedule_id: str) -> None:
+    def delete_schedule(self, schedule_id: str, db: Optional[Session] = None) -> None:
         """
         UC49: Xóa hoặc vô hiệu hóa lịch chạy.
         """
-        if schedule_id not in self._schedules:
+        schedules = self._get_schedules_dict(db)
+        if schedule_id not in schedules:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy lịch chạy với id '{schedule_id}'",
             )
-        del self._schedules[schedule_id]
+        del schedules[schedule_id]
+        self._save_schedules_dict(schedules, db=db)
 
     def trigger_pipeline_run(
         self,
@@ -105,7 +147,7 @@ class PipelineService:
         """
         UC50: Tự động tính toán lại SS/ROP/EOQ và ma trận ABC-XYZ sau khi chạy dự báo (Full Loop Trigger).
         Quy trình khép kín:
-        1. Ghi nhận số lượng dự báo hoàn tất (28 ngày)
+        1. Thực hiện suy luận dự báo thực tế hoặc đếm số lượng dự báo hoàn tất (28 ngày)
         2. Tự động tính lại Safety Stock, ROP, EOQ cho toàn bộ SKU
         3. Tự động tính lại ma trận phân khúc ABC/XYZ
         4. Tự động quét và sinh đề xuất nhập hàng (Replenishment Recommendations)
@@ -114,10 +156,51 @@ class PipelineService:
         started_at = datetime.now(timezone.utc).isoformat()
         run_id = f"pipe-{uuid.uuid4().hex[:8]}"
 
-        # 1. Dự báo: đếm số lượng dự báo thực tế trong cơ sở dữ liệu
-        fc_count = db.query(Forecast).filter(Forecast.store_id == request.store_id).count()
-        sku_count = db.query(Product).count() or 3
-        forecasts_generated = fc_count if fc_count > 0 else (sku_count * request.horizon)
+        # 1. Dự báo: Kiểm tra hoặc thực hiện suy luận mô hình ML thực tế cho kho hàng
+        existing_fc_query = db.query(Forecast).filter(Forecast.store_id == request.store_id)
+        if request.model_name:
+            existing_fc_query = existing_fc_query.filter(Forecast.model_version.ilike(f"%{request.model_name}%"))
+        fc_count = existing_fc_query.count()
+
+        if fc_count == 0:
+            # Nếu chưa có dự báo cho store/model, chạy suy luận thực tế từ sales_history
+            from app.models.sales_history import SalesHistory
+            import pandas as pd
+            sales_rows = (
+                db.query(SalesHistory.store_id, SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity)
+                .filter(SalesHistory.store_id == request.store_id)
+                .all()
+            )
+            if sales_rows:
+                df_sales = pd.DataFrame(sales_rows, columns=["store_id", "item_id", "sale_date", "sales"])
+                df_sales["sale_date"] = pd.to_datetime(df_sales["sale_date"])
+                from app.services.fast_inference_service import fast_inference_service
+                fc_df = fast_inference_service.generate_fast_forecast(
+                    df_sales, horizon=request.horizon, model_version=request.model_name or "production-lightgbm"
+                )
+                fc_records = [
+                    Forecast(
+                        item_id=r["item_id"],
+                        store_id=r["store_id"],
+                        forecast_date=r["forecast_date"],
+                        h=r["h"],
+                        y_pred=r["y_pred"],
+                        p10=r["p10"],
+                        p50=r["p50"],
+                        p90=r["p90"],
+                        available=r["available"],
+                        model_version=r["model_version"],
+                    )
+                    for _, r in fc_df.iterrows()
+                ]
+                db.bulk_save_objects(fc_records)
+                db.commit()
+                forecasts_generated = len(fc_records)
+            else:
+                sku_count = db.query(Product).count() or 1
+                forecasts_generated = sku_count * request.horizon
+        else:
+            forecasts_generated = fc_count
 
         # 2. Tự động tính lại SS, ROP, EOQ (UC30, UC50)
         existing_params_count = db.query(InventoryParam).filter(InventoryParam.store_id == request.store_id).count()
