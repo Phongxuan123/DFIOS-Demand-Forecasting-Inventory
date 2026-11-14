@@ -44,7 +44,7 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'models:manage': ADMIN_ONLY,
   'users:manage': ADMIN_ONLY,
   'audit:view': ADMIN_ONLY,
-  'data:import': ADMIN_ONLY,
+  'data:import': MANAGER_UP, // POST /imports: Manager + Admin
 };
 
 export function normalizeRole(role: string | undefined | null): Role {

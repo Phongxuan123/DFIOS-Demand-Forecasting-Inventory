@@ -53,7 +53,7 @@ const ClockPanel: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
   const toast = useToast();
-  const { storeId } = useStore();
+  const { concreteStoreId: storeId } = useStore();
   const { clock, status, reason, canAdvance, advancing, advance } = useClock();
   const { confirm, dialog } = useConfirm();
   const [days, setDays] = useState<number>(7);
@@ -242,15 +242,17 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
 export const Dashboard: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
-  const { storeId } = useStore();
+  const { storeId, concreteStoreId, isGlobal } = useStore();
   const clock = useClock();
   const enabled = !!storeId;
-  const sid = storeId ?? '';
+  /** Panels that only exist per store use the real store; cost/availability and calibration accept GLOBAL. */
+  const sid = concreteStoreId ?? '';
+  const scope = storeId ?? '';
   const version = clock.version;
 
   const kpis = useApi((s) => getKpis(sid, s), [sid, version], { enabled });
-  const shadow = useApi((s) => getKpiShadowDashboard(sid, s), [sid, version], { enabled });
-  const theta = useApi((s) => getCalibrationHistory(sid, s), [sid, version], { enabled });
+  const shadow = useApi((s) => getKpiShadowDashboard(scope, s), [scope, version], { enabled });
+  const theta = useApi((s) => getCalibrationHistory(scope, s), [scope, version], { enabled });
   const trend = useApi((s) => getDemandTrend(sid, 30, s), [sid, version], { enabled });
   const [severity, setSeverity] = useState<string>('');
   const alerts = useApi((s) => getAlerts(sid, severity || undefined, 50, s), [sid, version, severity], { enabled });
@@ -258,7 +260,7 @@ export const Dashboard: React.FC = () => {
 
   const k = kpis.data;
   const sh = shadow.data;
-  const wrmsse = parseWrmsse(k?.avg_forecast_accuracy);
+  const wrmsse = k?.production_wrmsse ?? parseWrmsse(k?.avg_forecast_accuracy);
 
   const thetaView = useMemo(() => {
     const hist: CalibrationState[] = theta.data ?? [];
@@ -326,11 +328,19 @@ export const Dashboard: React.FC = () => {
         description={t('dashboard.description')}
         meta={
           <>
-            <Badge tone="accent">{t('dashboard.store_label', { store: storeId })}</Badge>
+            <Badge tone="accent">{isGlobal ? t('shell.store.all') : t('dashboard.store_label', { store: storeId })}</Badge>
             <DataSourceNote source={t('dashboard.source_note')} asOf={asOf} note={sh ? `${sh.source}` : undefined} />
           </>
         }
       />
+
+      {isGlobal && (
+        <Section>
+          <Alert tone="info" title={t('dashboard.global.title')}>
+            {t('dashboard.global.body', { store: sid })}
+          </Alert>
+        </Section>
+      )}
 
       <Section>
         <ClockPanel />
@@ -375,7 +385,7 @@ export const Dashboard: React.FC = () => {
             loading={kpis.loading && !k}
             value={k ? fmt.integer(k.pending_replenishments_count) : null}
             unavailableReason={kpis.error ? apiErrorMessage(kpis.error, t) : undefined}
-            hint={k ? t('dashboard.kpi.orders_hint', { count: fmt.integer(k.reorder_alerts_count) }) : undefined}
+            hint={k ? t('dashboard.kpi.orders_hint', { count: fmt.integer(k.reorder_alerts_count) }) + ' · ' + (k.orders_placed_count != null ? t('dashboard.kpi.orders_placed', { count: fmt.integer(k.orders_placed_count) }) : t('dashboard.kpi.orders_placed_missing')) : undefined}
           />
           <KpiTile
             icon={<CircleDollarSign size={14} />}
@@ -398,7 +408,7 @@ export const Dashboard: React.FC = () => {
             loading={kpis.loading && !k}
             value={wrmsse != null ? fmt.number(wrmsse, { digits: 4 }) : null}
             unavailableReason={kpis.error ? apiErrorMessage(kpis.error, t) : wrmsse == null ? t('dashboard.kpi.wrmsse_unavailable') : undefined}
-            hint={t('dashboard.kpi.wrmsse_hint')}
+            hint={k?.production_model_id ? `${t('dashboard.kpi.wrmsse_hint')} ${t('dashboard.kpi.wrmsse_model', { id: k.production_model_id })}` : t('dashboard.kpi.wrmsse_hint')}
           />
         </div>
       </Section>

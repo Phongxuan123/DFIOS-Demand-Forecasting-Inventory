@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, DataSourceNote, Input, SearchInput, Select, Table, usePagination, type Column } from '../../components/ui/index.ts';
+import { Badge, Card, DataSourceNote, Tooltip, Input, SearchInput, Select, Table, usePagination, type Column } from '../../components/ui/index.ts';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { listAuditActions, listAuditLogs, type AuditLog } from '../../services/settingsApi.ts';
@@ -41,6 +41,13 @@ export const AuditTab: React.FC = () => {
     { key: 'time', header: t('settings.audit.col_time'), cell: (r) => fmt.dateTime(r.created_at), width: 170 },
     { key: 'actor', header: t('settings.audit.col_actor'), cell: (r) => r.actor_email || <span className="set-note">{t('settings.audit.actor_unknown')}</span> },
     { key: 'action', header: t('settings.audit.col_action'), value: (r) => r.action },
+    {
+      key: 'result',
+      header: <Tooltip content={t('settings.audit.result_help')}><span>{t('settings.audit.col_result')}</span></Tooltip>,
+      value: (r) => r.result ?? null,
+      cell: (r) => (r.result ? <Badge tone={r.result === 'FAILURE' ? 'danger' : 'success'}>{r.result === 'FAILURE' ? t('settings.audit.result_failure') : t('settings.audit.result_success')}</Badge> : <span className="set-note">—</span>),
+      width: 110,
+    },
     { key: 'details', header: t('settings.audit.col_details'), value: (r) => r.details },
     { key: 'ip', header: t('settings.audit.col_ip'), value: (r) => r.ip_address, width: 130 },
   ];

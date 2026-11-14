@@ -19,7 +19,7 @@ import './shell.css';
 /* ------------------------------ Store selector ----------------------------- */
 const StoreSelector: React.FC = () => {
   const { t } = useI18n();
-  const { storeId, stores, loading, error, setStoreId, reload } = useStore();
+  const { storeId, stores, loading, error, setStoreId, reload, supportsGlobal } = useStore();
 
   if (loading && stores.length === 0) return <Skeleton width={110} height={30} />;
   if (error || stores.length === 0) {
@@ -34,6 +34,7 @@ const StoreSelector: React.FC = () => {
       <Store size={15} aria-hidden="true" />
       <span className="ui-sr-only">{t('shell.store.label')}</span>
       <select value={storeId ?? ''} onChange={(e) => setStoreId(e.target.value)} aria-label={t('shell.store.select')}>
+        {supportsGlobal && <option value="GLOBAL">{t('shell.store.all')}</option>}
         {stores.map((s) => (
           <option key={s} value={s}>
             {s}
@@ -51,7 +52,7 @@ const ADVANCE_STEPS = [7, 14, 30] as const;
 const ClockChip: React.FC = () => {
   const { t, fmt } = useI18n();
   const { clock, status, reason, canAdvance, advancing, refresh, advance } = useClock();
-  const { storeId } = useStore();
+  const { concreteStoreId: storeId } = useStore();
   const toast = useToast();
   const { confirm, dialog } = useConfirm();
   const [open, setOpen] = useState(false);

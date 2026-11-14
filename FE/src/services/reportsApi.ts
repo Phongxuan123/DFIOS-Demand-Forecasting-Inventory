@@ -26,6 +26,11 @@ export interface PolicyBenchmark {
   review_period_days?: number;
   cost_basis?: string;
   reason?: string;
+  /** coverage_q95: artifact c3ok. coverage_q95_db_causal: DB causal windows (different definition, never merge). */
+  coverage_q95?: number | null;
+  coverage_source?: string | null;
+  coverage_q95_db_causal?: number | null;
+  coverage_q95_db_causal_n?: number | null;
   policies: Record<string, PolicyRow>;
 }
 
@@ -73,6 +78,10 @@ export interface AccuracyMetric {
   mase: number | null;
   wrmsse: number | null;
   sample_count: number;
+  coverage_q95?: number | null;
+  coverage_source?: string | null;
+  coverage_q95_db_causal?: number | null;
+  coverage_q95_db_causal_n?: number | null;
 }
 
 export interface ForecastAccuracy {

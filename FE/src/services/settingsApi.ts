@@ -57,7 +57,14 @@ export const putDefaultServiceLevel = (value: number) =>
   apiClient.put<ServiceLevelConfig>('/optimization/service-level', { default_service_level: value }).then((r) => r.data);
 
 /* ------------------------------------ users ---------------------------------- */
-export const listUsers = (signal?: AbortSignal) => getJson<UserRecord[]>('/users', { params: { skip: 0, limit: 500 }, signal });
+export const USERS_LIMIT = 500;
+/** `total` comes from the X-Total-Count header (the body is a plain list). */
+export const listUsers = async (signal?: AbortSignal): Promise<{ items: UserRecord[]; total: number }> => {
+  const res = await apiClient.get<UserRecord[]>('/users', { params: { skip: 0, limit: USERS_LIMIT }, signal });
+  const header = Number(res.headers?.['x-total-count']);
+  return { items: res.data, total: Number.isFinite(header) && header >= 0 ? header : res.data.length };
+};
+export const revokeUserTokens = (id: string) => apiClient.post<{ message?: string }>(`/users/${id}/revoke-tokens`).then((r) => r.data);
 
 export interface CreateUserBody {
   email: string;
@@ -78,6 +85,9 @@ export interface AuditLog {
   action: string;
   ip_address?: string | null;
   details?: string | null;
+  /** SUCCESS | FAILURE, derived by the BE from the action text (no status column). */
+  result?: 'SUCCESS' | 'FAILURE' | string | null;
+  result_source?: string | null;
   created_at: string;
 }
 export interface AuditList {
@@ -113,6 +123,7 @@ export interface Schedule {
   /** Added by the BE pipeline agent (R-19). Absent on older backends. */
   mode?: 'manual' | 'scheduled' | string | null;
   note?: string | null;
+  last_run_status?: string | null;
 }
 export interface ScheduleList {
   total: number;

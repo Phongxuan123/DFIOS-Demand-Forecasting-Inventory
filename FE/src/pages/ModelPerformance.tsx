@@ -28,6 +28,7 @@ import {
   type Tone,
 } from '../components/ui/index.ts';
 import { useApi } from '../hooks/useApi.ts';
+import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
 import { useFormat, useT, type TFunction, type TKey } from '../i18n/index.tsx';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
@@ -47,9 +48,6 @@ type PageTab = 'registry' | 'training';
 type MetricKey = 'wrmsse' | 'mase' | 'mae' | 'rmse';
 const METRICS: readonly MetricKey[] = ['wrmsse', 'mase', 'mae', 'rmse'];
 const COVERAGE_KEYS = ['coverage_q95', 'coverage_95', 'coverage_0.95', 'q95_coverage'];
-/** Research objective O2: window quantile coverage at tau = 0.95 must lie in [0.93, 0.97]. */
-const O2_LOW = 0.93;
-const O2_HIGH = 0.97;
 
 const ALGO_KEYS: Record<string, TKey> = {
   gbdt_lags: 'models.algo.gbdt_lags',
@@ -174,7 +172,7 @@ export const ModelPerformance: React.FC = () => {
   const wrmsse = kpiMetric('wrmsse');
   const mase = kpiMetric('mase');
   const coverage = champion ? metricNumber(champion.metrics, ...COVERAGE_KEYS) : null;
-  const coverageOk = coverage !== null && coverage >= O2_LOW && coverage <= O2_HIGH;
+  const coverageDb = champion ? metricNumber(champion.metrics, 'coverage_q95_db_causal') : null;
 
   /* ------------------------------- bar chart ------------------------------- */
   const chartRows = useMemo(
@@ -399,18 +397,13 @@ export const ModelPerformance: React.FC = () => {
         />
         <KpiTile label={t('models.kpi.wrmsse')} value={wrmsse.value} loading={wrmsse.loading} unavailableReason={wrmsse.reason} hint={t('models.kpi.wrmsse_hint')} />
         <KpiTile label={t('models.kpi.mase')} value={mase.value} loading={mase.loading} unavailableReason={mase.reason} hint={t('models.kpi.mase_hint')} />
-        <KpiTile
-          label={t('models.kpi.coverage')}
+        <CoverageTiles
           loading={registry.loading}
-          value={coverage !== null ? fmt.percent(coverage, { digits: 1 }) : null}
-          unavailableReason={coverage === null && !registry.loading ? t('models.kpi.coverage_missing') : undefined}
-          hint={
-            coverage !== null ? (
-              <Badge tone={coverageOk ? 'success' : 'danger'}>{coverageOk ? t('models.kpi.coverage_in') : t('models.kpi.coverage_out')}</Badge>
-            ) : (
-              t('models.kpi.coverage_hint', { low: fmt.number(O2_LOW, { digits: 2 }), high: fmt.number(O2_HIGH, { digits: 2 }) })
-            )
-          }
+          artifact={coverage}
+          artifactSource={champion ? (typeof champion.metrics?.coverage_source === 'string' ? champion.metrics.coverage_source : null) : null}
+          dbCausal={coverageDb}
+          dbCausalN={champion ? metricNumber(champion.metrics, 'coverage_q95_db_causal_n') : null}
+          missingReason={champion ? t('models.kpi.coverage_missing') : t('models.kpi.no_champion_metric')}
         />
       </div>
 

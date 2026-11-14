@@ -3,6 +3,10 @@ export const dashboard = {
   title: 'Tổng quan điều hành',
   description: 'Số liệu quan sát được từ bộ mô phỏng và kho dữ liệu của cửa hàng đang chọn. Không có số liệu ước tính hay dữ liệu giả.',
   store_label: 'Kho {store}',
+  global: {
+    title: 'Phạm vi: tất cả kho',
+    body: 'Chỉ số chi phí, mức sẵn sàng và θ hiệu chỉnh tổng hợp trên mọi kho đã nạp. Các thẻ tồn kho, cảnh báo và xu hướng cầu chỉ tồn tại theo từng kho nên đang hiển thị kho {store}.',
+  },
   source_note: '/dashboard/kpis, /dashboard/kpi-dashboard, /dashboard/alerts, /calibration/history',
   clock: {
     title: 'Đồng hồ mô phỏng',
@@ -27,6 +31,9 @@ export const dashboard = {
     inventory_hint: 'Theo giá bán, kho hiện tại',
     orders: 'Đề xuất đặt hàng đang chờ duyệt',
     orders_hint: '{count} SKU dưới điểm đặt hàng lại',
+    orders_placed: '{count} đơn đã đặt trong mô phỏng',
+    orders_placed_missing: 'chưa có số đơn đã đặt',
+    wrmsse_model: 'Mô hình: {id}.',
     cost: 'Tổng chi phí lũy kế (C³-OUT)',
     cost_hint: 'B0: {b0}. Chênh lệch: {delta}',
     wrmsse: 'WRMSSE của mô hình sản xuất',

@@ -28,6 +28,13 @@ export interface ReplenishmentItem {
   decided_by?: string | null;
   created_at: string;
   decided_at?: string | null;
+  /** Calibrated C3-OUT fields (null when the recommendation was not produced by C3-OUT). */
+  abc_xyz_class?: string | null;
+  theta?: number | null;
+  m_g?: number | null;
+  kappa_g?: number | null;
+  q_hat?: number | null;
+  lead_time_days?: number | null;
 }
 export interface ReplenishmentList {
   items: ReplenishmentItem[];
@@ -44,6 +51,8 @@ export interface RecParams {
   status?: string;
   priority?: string;
   search?: string;
+  sort_by?: string;
+  sort_dir?: 'asc' | 'desc';
 }
 
 export const listReplenishments = (p: RecParams, signal?: AbortSignal) =>

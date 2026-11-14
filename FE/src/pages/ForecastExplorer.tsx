@@ -199,6 +199,7 @@ export const ForecastExplorer: React.FC = () => {
     return p === 'route_c' || p === 'schedule' ? p : 'forecast';
   });
   const [horizon, setHorizon] = useState<number>(28);
+  const [modelVersion, setModelVersion] = useState('');
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
   const skuPage = usePagination(6);
@@ -233,12 +234,12 @@ export const ForecastExplorer: React.FC = () => {
   /* -------------------------------- forecasts ------------------------------- */
   const ready = !!sku && !!store;
   // No "last fetched key" cache: every dependency change or retry refetches, so a failure never sticks (P-43).
-  const forecasts = useApi((signal) => getForecasts(sku, store as string, horizon, signal), [sku, store, horizon, clock.version], { enabled: ready });
+  const forecasts = useApi((signal) => getForecasts(sku, store as string, horizon, signal, modelVersion), [sku, store, horizon, modelVersion, clock.version], { enabled: ready });
 
   const processed = useMemo(() => {
     const raw = forecasts.data?.items ?? [];
-    const versions = Array.from(new Set(raw.map((r) => r.model_version)));
-    const chosen = forecasts.data?.model_version && versions.includes(forecasts.data.model_version) ? forecasts.data.model_version : versions[0];
+    const versions = forecasts.data?.available_versions?.length ? forecasts.data.available_versions : Array.from(new Set(raw.map((r) => r.model_version)));
+    const chosen = forecasts.data?.model_version ?? versions[0];
     const byH = new Map<number, ForecastRow>();
     for (const r of raw) {
       if (r.model_version !== chosen) continue;
@@ -569,8 +570,10 @@ export const ForecastExplorer: React.FC = () => {
       ? compareErr.kind === 'not_found' || compareErr.kind === 'validation'
         ? t('forecast.kpi.mae_missing')
         : apiErrorMessage(compareErr, t)
-      : undefined;
-  const maeValue = compare.data ? fmt.number(compare.data.metrics.mae, { digits: 3 }) : null;
+      : compare.data && compare.data.metrics.data_points === 0
+        ? t('forecast.kpi.mae_missing') // the BE returns 0.0 for an empty comparison: never show it as an error of 0
+        : undefined;
+  const maeValue = compare.data && compare.data.metrics.data_points > 0 ? fmt.number(compare.data.metrics.mae, { digits: 3 }) : null;
 
   const sigmaValue = uncertainty.data?.sigma_h ?? null;
   const sigmaReason = uncertainty.loading ? undefined : uncertainty.error ? apiErrorMessage(uncertainty.error, t) : sigmaValue === null ? t('forecast.kpi.sigma_missing') : undefined;
@@ -619,6 +622,33 @@ export const ForecastExplorer: React.FC = () => {
     }
     return (
       <>
+        <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'end', flexWrap: 'wrap' }}>
+          {processed.version && (
+            <span style={muted}>
+              {t('forecast.model.current')} <Badge tone="accent">{modelLabel(processed.version)}</Badge>
+              {forecasts.data?.source && (
+                <>
+                  {' '}
+                  <Badge tone="neutral">{['production_artifact', 'backtest', 'forecast_table'].includes(forecasts.data.source) ? t(`forecast.source.${forecasts.data.source}` as TKey) : forecasts.data.source}</Badge>
+                </>
+              )}
+              {forecasts.data?.backtest != null && (
+                <>
+                  {' '}
+                  <Badge tone={forecasts.data.backtest ? 'info' : 'success'}>{forecasts.data.backtest ? t('forecast.model.backtest') : t('forecast.model.future')}</Badge>
+                </>
+              )}
+            </span>
+          )}
+          {processed.versions.length > 1 && (
+            <Select
+              label={t('forecast.model.pick')}
+              value={modelVersion || processed.version || ''}
+              onChange={(v) => setModelVersion(v)}
+              options={processed.versions.map((v) => ({ value: v, label: modelLabel(v) }))}
+            />
+          )}
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
           <KpiTile
             label={t('forecast.kpi.demand')}
@@ -648,7 +678,7 @@ export const ForecastExplorer: React.FC = () => {
             loading={compare.loading && !compare.data}
             value={maeValue}
             unavailableReason={maeReason}
-            hint={compare.data ? t('forecast.kpi.mae_hint', { rmse: fmt.number(compare.data.metrics.rmse, { digits: 3 }), n: compare.data.metrics.data_points }) : undefined}
+            hint={compare.data && compare.data.metrics.data_points > 0 ? t('forecast.kpi.mae_hint', { rmse: fmt.number(compare.data.metrics.rmse, { digits: 3 }), n: compare.data.metrics.data_points, mase: compare.data.metrics.mase != null ? fmt.number(compare.data.metrics.mase, { digits: 3 }) : t('forecast.kpi.mase_missing') }) : undefined}
           />
         </div>
 

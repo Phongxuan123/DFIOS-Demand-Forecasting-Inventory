@@ -25,6 +25,7 @@ export const shell = {
   store: {
     label: 'Kho',
     select: 'Chọn kho',
+    all: 'Tất cả kho',
     loading: 'Đang tải…',
     empty: 'Chưa có kho',
     error: 'Không tải được danh sách kho',

@@ -5,6 +5,10 @@ export const dashboard: typeof Vi = {
   title: 'Executive overview',
   description: 'Observed figures from the simulator and the selected store. No estimated or placeholder data.',
   store_label: 'Store {store}',
+  global: {
+    title: 'Scope: all stores',
+    body: 'Cost, availability and calibrated theta are aggregated over every loaded store. Inventory tiles, alerts and the demand trend exist per store only and show store {store}.',
+  },
   source_note: '/dashboard/kpis, /dashboard/kpi-dashboard, /dashboard/alerts, /calibration/history',
   clock: {
     title: 'Simulation clock',
@@ -29,6 +33,9 @@ export const dashboard: typeof Vi = {
     inventory_hint: 'At price, current store',
     orders: 'Replenishment orders pending approval',
     orders_hint: '{count} SKUs at or below reorder point',
+    orders_placed: '{count} orders placed in the simulation',
+    orders_placed_missing: 'placed-order count unavailable',
+    wrmsse_model: 'Model: {id}.',
     cost: 'Cumulative cost (C³-OUT)',
     cost_hint: 'B0: {b0}. Difference: {delta}',
     wrmsse: 'Production model WRMSSE',

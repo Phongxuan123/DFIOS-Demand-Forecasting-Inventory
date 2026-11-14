@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Lock, LockOpen, Mail, UserPlus } from 'lucide-react';
-import { Alert, Badge, Button, Card, DataSourceNote, IconButton, Input, Modal, SearchInput, Select, Table, useConfirm, useToast, type Column } from '../../components/ui/index.ts';
+import { KeyRound, Lock, LockOpen, Mail, UserPlus } from 'lucide-react';
+import { Alert, Badge, Button, Card, DataSourceNote, IconButton, Input, Modal, SearchInput, Select, Table, useConfirm, usePagination, useToast, type Column } from '../../components/ui/index.ts';
 import { normalizeRole, roleKey } from '../../auth/permissions.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { apiErrorMessage } from '../../services/apiClient.ts';
-import { createUser, listUsers, resendActivation, setUserActive, setUserRole, type CreateUserBody, type UserRecord } from '../../services/settingsApi.ts';
+import { createUser, listUsers, resendActivation, revokeUserTokens, USERS_LIMIT, setUserActive, setUserRole, type CreateUserBody, type UserRecord } from '../../services/settingsApi.ts';
 
 type ApiRole = CreateUserBody['role'];
 const ROLES: ApiRole[] = ['Admin', 'Warehouse Manager', 'Viewer'];
@@ -84,7 +84,9 @@ export const UsersTab: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
-  const { data, loading, error, refetch } = useApi((s) => listUsers(s), [version]);
+  const pg = usePagination(25);
+  const { data: usersData, loading, error, refetch } = useApi((s) => listUsers(s), [version]);
+  const data = usersData?.items;
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -126,6 +128,16 @@ export const UsersTab: React.FC = () => {
     if (ok) await act(u, () => setUserRole(u.id, role), t('settings.users.role_done', { email: u.email }));
   };
 
+  const revokeTokens = async (u: UserRecord) => {
+    const ok = await confirm({
+      title: t('settings.users.revoke_title', { email: u.email }),
+      description: t('settings.users.revoke_description'),
+      tone: 'danger',
+      confirmLabel: t('settings.users.revoke'),
+    });
+    if (ok) await act(u, () => revokeUserTokens(u.id), t('settings.users.revoke_done', { email: u.email }));
+  };
+
   const columns: Column<UserRecord>[] = [
     {
       key: 'email',
@@ -162,12 +174,13 @@ export const UsersTab: React.FC = () => {
       key: 'actions',
       header: t('settings.users.col_actions'),
       align: 'right',
-      width: 110,
+      width: 140,
       cell: (u) => (
         <span className="ui-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
           {!u.is_verified && (
             <IconButton label={t('settings.users.resend')} icon={<Mail size={16} />} disabled={busyId === u.id} onClick={() => void act(u, () => resendActivation(u.id), t('settings.users.resend_done'))} />
           )}
+          <IconButton label={t('settings.users.revoke')} icon={<KeyRound size={16} />} disabled={busyId === u.id} onClick={() => void revokeTokens(u)} />
           <IconButton
             label={isMe(u) ? t('settings.users.cannot_self') : t(u.is_active ? 'settings.users.lock' : 'settings.users.unlock')}
             icon={u.is_active ? <Lock size={16} /> : <LockOpen size={16} />}
@@ -192,11 +205,12 @@ export const UsersTab: React.FC = () => {
     >
       <div className="set-pad">
         <SearchInput value={q} onChange={setQ} placeholder={t('settings.users.search')} aria-label={t('settings.users.search')} />
-        <Alert tone="info">{t('settings.users.revoke_unavailable')}</Alert>
+        <Alert tone="info">{t('settings.users.revoke_info')}</Alert>
+        {usersData && usersData.total > usersData.items.length && <Alert tone="warning">{t('settings.users.truncated', { shown: String(usersData.items.length), total: String(usersData.total), limit: String(USERS_LIMIT) })}</Alert>}
       </div>
-      <Table columns={columns} rows={rows} rowKey={(u) => u.id} loading={loading} error={error} onRetry={refetch} filtered={!!q} pagination={{ page: 1, pageSize: 25, onPageChange: () => undefined }} dense />
+      <Table columns={columns} rows={rows} rowKey={(u) => u.id} loading={loading} error={error} onRetry={refetch} filtered={!!q} pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize }} dense />
       <div className="set-pad">
-        <DataSourceNote source={t('settings.users.source')} />
+        <DataSourceNote source={t('settings.users.source')} note={usersData ? t('settings.users.total', { total: fmt.integer(usersData.total) }) : undefined} />
       </div>
       <CreateModal open={creating} onClose={() => setCreating(false)} onCreated={refresh} />
       {dialog}

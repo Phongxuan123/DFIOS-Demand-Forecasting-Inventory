@@ -47,7 +47,16 @@ export const forecast: typeof Vi = {
     fast_note: 'Only Managers and Admins can generate forecasts.',
   },
   model: {
+    current: 'Model in view:',
+    pick: 'Model version',
+    backtest: 'Period with actuals',
+    future: 'Future',
     sba: 'SBA (statistical fallback)',
+  },
+  source: {
+    production_artifact: 'Production artifact',
+    backtest: 'Backtest',
+    forecast_table: 'Forecast table',
   },
   kind: {
     backtest: 'Backtest: forecast for a period that already has actual sales',
@@ -67,7 +76,8 @@ export const forecast: typeof Vi = {
     sigma_hint: 'From /forecasts/:sku/uncertainty',
     sigma_missing: 'The backend returned no σ_H for this SKU',
     mae: 'MAE',
-    mae_hint: 'RMSE {rmse} · {n} points vs actuals. MASE is not provided by the backend yet.',
+    mase_missing: '—',
+    mae_hint: 'RMSE {rmse} · {n} points vs actuals. MASE {mase}.',
     mae_missing: 'No forecast points overlap actual sales, so the error cannot be computed',
     units: 'units',
   },

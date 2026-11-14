@@ -21,7 +21,7 @@ import {
   type ReplenishmentItem,
 } from '../services/replenishmentApi.ts';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
-import { inventoryPosition, kappaFromPolicy } from '../utils/policyMath.ts';
+import { inventoryPosition } from '../utils/policyMath.ts';
 import {
   Alert,
   Badge,
@@ -38,6 +38,7 @@ import {
   SearchInput,
   Select,
   Table,
+  type SortState,
   Tabs,
   Unavailable,
   useConfirm,
@@ -57,6 +58,9 @@ const PRIORITY_TONE: Record<string, Tone> = { CRITICAL: 'danger', HIGH: 'warning
 const STATUS_KEYS = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
 const PRIORITY_KEYS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 
+/** Table column key -> backend sort_by (only these are sortable server-side). */
+const SORT_MAP: Record<string, string> = { sku: 'item_id', priority: 'priority', status: 'status', recommended: 'recommended_qty', final: 'final_qty', created: 'created_at' };
+
 type DialogState = { kind: 'reject' | 'cancel' | 'adjust'; rec: ReplenishmentItem } | null;
 
 export const Replenishment: React.FC = () => {
@@ -74,6 +78,7 @@ export const Replenishment: React.FC = () => {
   const [priority, setPriority] = useState('');
   const [search, setSearch] = useState('');
   const [nonce, setNonce] = useState(0);
+  const [sort, setSort] = useState<SortState | null>(null);
   const pg = usePagination(25);
   const sel = useRowSelection();
   const [overrides, setOverrides] = useState<Record<string, Partial<ReplenishmentItem>>>({});
@@ -87,10 +92,10 @@ export const Replenishment: React.FC = () => {
   const list = useApi(
     (signal) =>
       listReplenishments(
-        { skip: pg.offset, limit: pg.pageSize, store_id: storeId as string, status: status || undefined, priority: priority || undefined, search: search.trim() || undefined },
+        { skip: pg.offset, limit: pg.pageSize, store_id: storeId as string, status: status || undefined, priority: priority || undefined, search: search.trim() || undefined, sort_by: sort ? SORT_MAP[sort.key] : undefined, sort_dir: sort?.dir },
         signal,
       ),
-    [storeId, pg.offset, pg.pageSize, status, priority, search, version, nonce],
+    [storeId, pg.offset, pg.pageSize, status, priority, search, sort, version, nonce],
     { enabled: !!storeId && tab === 'proposals' },
   );
   const history = useApi(
@@ -208,6 +213,7 @@ export const Replenishment: React.FC = () => {
     {
       key: 'sku',
       header: t('replenishment.col.sku'),
+      sortable: tab === 'proposals',
       cell: (r) => (
         <div>
           <div className="rep-sku">{r.item_id}</div>
@@ -215,8 +221,8 @@ export const Replenishment: React.FC = () => {
         </div>
       ),
     },
-    { key: 'priority', header: t('replenishment.col.priority'), cell: (r) => <Badge tone={PRIORITY_TONE[r.priority] ?? 'neutral'}>{priorityLabel(r.priority)}</Badge> },
-    { key: 'status', header: t('replenishment.col.status'), cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge> },
+    { key: 'priority', header: t('replenishment.col.priority'), sortable: tab === 'proposals', cell: (r) => <Badge tone={PRIORITY_TONE[r.priority] ?? 'neutral'}>{priorityLabel(r.priority)}</Badge> },
+    { key: 'status', header: t('replenishment.col.status'), sortable: tab === 'proposals', cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge> },
     { key: 'on_hand', header: t('replenishment.col.on_hand'), align: 'right', cell: (r) => fmt.integer(r.on_hand) },
     { key: 'on_order', header: t('replenishment.col.on_order'), align: 'right', cell: (r) => fmt.integer(r.on_order) },
     {
@@ -232,16 +238,22 @@ export const Replenishment: React.FC = () => {
       key: 'kappa',
       header: <span title={t('replenishment.col_hint.kappa')}>{t('replenishment.col.kappa')}</span>,
       align: 'right',
-      cell: (r) => fmt.number(kappaFromPolicy(r.reorder_point_s, r.order_up_to_S, r.eoq_quantity), { digits: 2 }),
+      cell: (r) => (r.kappa_g != null ? fmt.number(r.kappa_g, { digits: 2 }) : <Unavailable />),
     },
-    { key: 'recommended', header: t('replenishment.col.recommended'), align: 'right', cell: (r) => fmt.integer(r.recommended_qty) },
+    { key: 'abc', header: t('replenishment.col.abc_xyz'), cell: (r) => (r.abc_xyz_class ? <Badge tone="neutral">{r.abc_xyz_class}</Badge> : <Unavailable />) },
+    { key: 'theta', header: <span title={t('replenishment.col_hint.theta')}>{t('replenishment.col.theta')}</span>, align: 'right', cell: (r) => (r.theta != null ? fmt.number(r.theta, { digits: 3 }) : <Unavailable />) },
+    { key: 'm_g', header: <span title={t('replenishment.col_hint.m_g')}>{t('replenishment.col.m_g')}</span>, align: 'right', cell: (r) => (r.m_g != null ? fmt.number(r.m_g, { digits: 3 }) : <Unavailable />) },
+    { key: 'q_hat', header: <span title={t('replenishment.col_hint.q_hat')}>{t('replenishment.col.q_hat')}</span>, align: 'right', cell: (r) => (r.q_hat != null ? fmt.number(r.q_hat, { digits: 1 }) : <Unavailable />) },
+    { key: 'lt', header: t('replenishment.col.lead_time'), align: 'right', cell: (r) => (r.lead_time_days != null ? t('replenishment.days', { n: fmt.integer(r.lead_time_days) }) : <Unavailable />) },
+    { key: 'recommended', header: t('replenishment.col.recommended'), sortable: tab === 'proposals', align: 'right', cell: (r) => fmt.integer(r.recommended_qty) },
     {
       key: 'final',
       header: t('replenishment.col.final'),
+      sortable: tab === 'proposals',
       align: 'right',
       cell: (r) => <strong>{fmt.integer(r.final_qty)}</strong>,
     },
-    { key: 'created', header: t('replenishment.col.created'), cell: (r) => fmt.date(r.created_at, 'short') },
+    { key: 'created', header: t('replenishment.col.created'), sortable: tab === 'proposals', cell: (r) => fmt.date(r.created_at, 'short') },
   ];
   if (tab === 'history') {
     columns.push(
@@ -387,6 +399,8 @@ export const Replenishment: React.FC = () => {
           emptyTitle={t('replenishment.empty.title')}
           emptyDescription={t('replenishment.empty.description')}
           dense
+          sort={tab === 'proposals' ? sort : undefined}
+          onSortChange={tab === 'proposals' ? (s) => { setSort(s); resetPage(); } : undefined}
           pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total }}
           selection={
             tab === 'proposals' && canWrite
@@ -519,7 +533,6 @@ const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => voi
   const param = useApi((signal) => getPolicyParam(rec!.item_id, rec!.store_id, signal), [rec?.item_id, rec?.store_id], { enabled: !!rec });
   const calib = useApi((signal) => getCalibrationStatus(rec!.store_id, signal), [rec?.store_id], { enabled: !!rec });
   const p = param.data?.items?.[0];
-  const kappa = kappaFromPolicy(rec?.reorder_point_s, rec?.order_up_to_S, rec?.eoq_quantity);
   const mismatch =
     !!rec && !!p && ((p.s != null && rec.reorder_point_s != null && Math.round(p.s) !== Math.round(rec.reorder_point_s)) || (p.S != null && rec.order_up_to_S != null && Math.round(p.S) !== Math.round(rec.order_up_to_S)));
   const thetas = calib.data?.thetas ?? {};
@@ -540,11 +553,17 @@ const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => voi
             <dt>{t('replenishment.drawer.eoq')}</dt>
             <dd className="ui-num">{fmt.integer(rec.eoq_quantity)}</dd>
             <dt>{t('replenishment.drawer.kappa')}</dt>
-            <dd className="ui-num">{fmt.number(kappa, { digits: 2 })}</dd>
+            <dd className="ui-num">{rec.kappa_g != null ? fmt.number(rec.kappa_g, { digits: 3 }) : <Unavailable />}</dd>
             <dt>{t('replenishment.drawer.q_hat')}</dt>
-            <dd>
-              <Unavailable reason={t('replenishment.drawer.q_hat_unavailable')} />
+            <dd className="ui-num">{rec.q_hat != null ? fmt.number(rec.q_hat, { digits: 1 }) : <Unavailable reason={t('replenishment.drawer.q_hat_unavailable')} />}</dd>
+            <dt>{t('replenishment.col.abc_xyz')}</dt>
+            <dd>{rec.abc_xyz_class ?? <Unavailable />}</dd>
+            <dt>{t('replenishment.col.theta')} / {t('replenishment.col.m_g')}</dt>
+            <dd className="ui-num">
+              {rec.theta != null ? fmt.number(rec.theta, { digits: 3 }) : '—'} / {rec.m_g != null ? fmt.number(rec.m_g, { digits: 3 }) : '—'}
             </dd>
+            <dt>{t('replenishment.col.lead_time')}</dt>
+            <dd className="ui-num">{rec.lead_time_days != null ? t('replenishment.days', { n: fmt.integer(rec.lead_time_days) }) : <Unavailable />}</dd>
             <dt>{t('replenishment.drawer.supplier')}</dt>
             <dd>{rec.supplier_name ?? <Unavailable />}</dd>
           </dl>

@@ -11,6 +11,11 @@ export interface DashboardKpis {
   /** Free text from the BE, e.g. "WRMSSE 0.4935" or "N/A". */
   avg_forecast_accuracy: string;
   total_suppliers: number;
+  /** Production model WRMSSE from the registry (null when absent). */
+  production_wrmsse?: number | null;
+  production_model_id?: string | null;
+  /** APPROVED + COMPLETED orders with review_date in (clock start, clock now]. */
+  orders_placed_count?: number | null;
 }
 
 export interface SegmentAvailability {
@@ -79,7 +84,7 @@ export interface CalibrationState {
   review_date: string;
   theta: number;
   multiplier: number;
-  error_rate: number;
+  error_rate: number | null;
   at_boundary: boolean;
   setpoint: number;
 }

@@ -28,6 +28,7 @@ import { useClock } from '../context/ClockContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
+import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
@@ -186,10 +187,12 @@ const PoliciesTab: React.FC = () => {
               </p>
             )}
             <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', margin: 'var(--space-4) 0' }}>
-              <KpiTile
-                label={t('reports.policy.coverage_label')}
-                value={null}
-                unavailableReason={t('reports.policy.coverage_unavailable')}
+              <CoverageTiles
+                loading={bench.loading && !b}
+                artifact={b?.coverage_q95}
+                artifactSource={b?.coverage_source}
+                dbCausal={b?.coverage_q95_db_causal}
+                dbCausalN={b?.coverage_q95_db_causal_n}
               />
               <KpiTile
                 label={t('reports.policy.obj_cost')}
@@ -370,6 +373,13 @@ const AccuracyTab: React.FC = () => {
           {metric(t('reports.accuracy.mase'), a?.overall_metrics.mase, 3)}
           {metric(t('reports.accuracy.mae'), a?.overall_metrics.mae, 3)}
           {metric(t('reports.accuracy.rmse'), a?.overall_metrics.rmse, 3)}
+          <CoverageTiles
+            loading={acc.loading && !a}
+            artifact={a?.overall_metrics.coverage_q95}
+            artifactSource={a?.overall_metrics.coverage_source}
+            dbCausal={a?.overall_metrics.coverage_q95_db_causal}
+            dbCausalN={a?.overall_metrics.coverage_q95_db_causal_n}
+          />
         </div>
         {a && <DataSourceNote source="/reports/forecast-accuracy" asOf={a.as_of ? fmt.date(a.as_of) : undefined} note={`${a.model_name}, ${a.evaluated_period}, ${a.source}`} />}
         {abcRows.length > 0 && (

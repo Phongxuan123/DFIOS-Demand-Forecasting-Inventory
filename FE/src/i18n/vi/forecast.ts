@@ -49,6 +49,15 @@ export const forecast = {
   },
   model: {
     sba: 'SBA (dự phòng thống kê)',
+    current: 'Mô hình đang xem:',
+    pick: 'Phiên bản mô hình',
+    backtest: 'Giai đoạn đã có số liệu thực',
+    future: 'Tương lai',
+  },
+  source: {
+    production_artifact: 'Artifact Production',
+    backtest: 'Backtest',
+    forecast_table: 'Bảng forecast',
   },
   kind: {
     backtest: 'Backtest: dự báo cho giai đoạn đã có số liệu thực',
@@ -68,7 +77,8 @@ export const forecast = {
     sigma_hint: 'Từ /forecasts/:sku/uncertainty',
     sigma_missing: 'Backend không trả σ_H cho SKU này',
     mae: 'MAE',
-    mae_hint: 'RMSE {rmse} · {n} điểm so với thực tế. MASE chưa có từ backend.',
+    mase_missing: '—',
+    mae_hint: 'RMSE {rmse} · {n} điểm so với thực tế. MASE {mase}.',
     mae_missing: 'Chưa có điểm dự báo trùng với số liệu thực để tính sai số',
     units: 'đơn vị',
   },

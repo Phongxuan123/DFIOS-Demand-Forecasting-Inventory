@@ -128,4 +128,16 @@ export const common = {
     show_chart: 'Xem biểu đồ',
     no_data: 'Chưa có dữ liệu để vẽ biểu đồ',
   },
+  coverage: {
+    artifact_label: 'Độ phủ Q0,95 (backtest artifact)',
+    artifact_help: 'coverage_q95: độ phủ ngoài mẫu của phân vị τ=0,95 theo artifact c3ok (backtest 7 ngày). Định nghĩa khác với chỉ số bên cạnh; không được gộp hai số.',
+    db_label: 'Độ phủ Q0,95 (cửa sổ nhân quả trong DB)',
+    db_help: 'coverage_q95_db_causal: độ phủ tính từ bảng forecast_window_quantile trong DB trên các cửa sổ đã đáo hạn (nhân quả). Khác định nghĩa và mẫu với coverage_q95 của artifact nên hai số có thể khác nhau.',
+    db_n: 'Trên {n} SKU, nguồn DB',
+    db_source: 'Nguồn DB',
+    target: 'Mục tiêu O2: {low}–{high}',
+    in: 'Trong ngưỡng',
+    out: 'Ngoài ngưỡng',
+    missing: 'Backend chưa trả giá trị này',
+  },
 };

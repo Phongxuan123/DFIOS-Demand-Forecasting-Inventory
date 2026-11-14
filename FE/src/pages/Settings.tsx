@@ -32,7 +32,7 @@ export const Settings: React.FC = () => {
     if (can(role, 'models:manage')) items.push({ id: 'schedules', label: t('settings.tabs.schedules') });
     if (can(role, 'users:manage')) items.push({ id: 'users', label: t('settings.tabs.users') });
     if (can(role, 'audit:view')) items.push({ id: 'audit', label: t('settings.tabs.audit') });
-    if (can(role, 'inventory:adjust')) items.push({ id: 'import', label: t('settings.tabs.import') });
+    if (can(role, 'data:import')) items.push({ id: 'import', label: t('settings.tabs.import') });
     return items;
   }, [user?.role, t]);
 

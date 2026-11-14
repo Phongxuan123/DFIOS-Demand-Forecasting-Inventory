@@ -861,6 +861,8 @@ select.ui-control__input {
   display: inline-flex;
 }
 .ui-tooltip__bubble {
+  /* display:none while idle: a hidden absolutely positioned bubble would still widen the page on phones */
+  display: none;
   position: absolute;
   z-index: var(--z-tooltip);
   left: 50%;
@@ -893,6 +895,7 @@ select.ui-control__input {
 }
 .ui-tooltip:hover .ui-tooltip__bubble,
 .ui-tooltip:focus-within .ui-tooltip__bubble {
+  display: block;
   opacity: 1;
   visibility: visible;
 }

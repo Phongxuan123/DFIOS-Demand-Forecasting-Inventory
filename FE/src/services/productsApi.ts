@@ -6,6 +6,11 @@ export interface Product {
   name: string;
   dept_id?: string | null;
   cat_id?: string | null;
+  /** List rows only (null on single-item routes or when unknown). */
+  price?: number | null;
+  on_hand?: number | null;
+  s?: number | null;
+  S?: number | null;
 }
 export interface Paged<T> {
   items: T[];
@@ -21,6 +26,7 @@ export interface ProductQuery {
   cat_id?: string;
   sort_by?: string;
   sort_dir?: 'asc' | 'desc';
+  store_id?: string;
 }
 export interface Supplier {
   id: string;

@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -314,3 +314,16 @@ def test_pipeline_pending_policy_for_import_permission_unchanged(env):
     # task 8: POST /imports stays Manager-or-Admin on the BE (Viewer is 403)
     r = env["client"].post("/api/v1/imports?store_id=CA_1", headers=env["viewer"], files={"file": ("a.csv", b"x\n")})
     assert r.status_code == 403
+
+
+def test_calibration_history_tolerates_null_error_rate(env):
+    """Artifact-loaded calibration rows have error_rate NULL: the endpoint must return it as null, not 500 (QA Q-01)."""
+    with env["Session"]() as s:
+        s.add(CalibrationState(id="cs_null", calibrator_id="k", store_id="CA_1", class_id="AX",
+                               review_index=1, review_date=ORIGIN, theta=0.1))
+        s.commit()
+        s.execute(text("UPDATE calibration_state SET error_rate = NULL"))  # the column default would hide the NULL
+        s.commit()
+    r = env["client"].get("/api/v1/calibration/history?store_id=CA_1", headers=env["viewer"])
+    assert r.status_code == 200
+    assert r.json()[0]["error_rate"] is None

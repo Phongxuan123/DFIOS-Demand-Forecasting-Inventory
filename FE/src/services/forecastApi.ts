@@ -22,6 +22,9 @@ export interface ForecastRow {
   category: string | null;
   model_version: string;
   generated_at: string | null;
+  /** forecast_date <= simulated clock date of the store. */
+  backtest?: boolean;
+  source?: 'production_artifact' | 'backtest' | 'forecast_table' | string;
 }
 
 export interface ForecastListResponse {
@@ -31,6 +34,12 @@ export interface ForecastListResponse {
   model_version: string | null;
   skip: number;
   limit: number;
+  /** Exactly one version is returned; the others are listed here. */
+  available_versions?: string[];
+  model_name?: string | null;
+  store_id?: string | null;
+  source?: string | null;
+  backtest?: boolean | null;
 }
 
 export interface HistoryResponse {
@@ -43,7 +52,8 @@ export interface HistoryResponse {
 export interface CompareResponse {
   item_id: string;
   model_version: string | null;
-  metrics: { mae: number; rmse: number; mape: number | null; total_actual: number; total_predicted: number; data_points: number };
+  model_version_source?: 'requested' | 'resolved_ensemble' | 'resolved_other' | 'none' | string;
+  metrics: { mae: number; rmse: number; mase?: number | null; mase_scale_n?: number | null; mape: number | null; total_actual: number; total_predicted: number; data_points: number };
 }
 
 export interface UncertaintyResponse {
@@ -127,8 +137,8 @@ export const listProducts = (params: { page: number; page_size: number; q?: stri
 
 export const listCategories = (signal?: AbortSignal) => getJson<string[]>('/products/categories', { signal });
 
-export const getForecasts = (item: string, store: string, horizon: number, signal?: AbortSignal) =>
-  getJson<ForecastListResponse>('/forecasts', { params: { item_id: item, store_id: store, horizon, limit: 200 }, signal });
+export const getForecasts = (item: string, store: string, horizon: number, signal?: AbortSignal, modelVersion?: string) =>
+  getJson<ForecastListResponse>('/forecasts', { params: { item_id: item, store_id: store, horizon, limit: 200, model_version: modelVersion || undefined }, signal });
 
 export const getHistory = (item: string, store: string, startDate: string | undefined, signal?: AbortSignal) =>
   getJson<HistoryResponse>(`/forecasts/${sku(item)}/history`, {

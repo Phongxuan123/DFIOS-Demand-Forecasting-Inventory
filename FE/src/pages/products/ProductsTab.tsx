@@ -41,10 +41,11 @@ import {
   type SortState,
 } from '../../components/ui/index.ts';
 
-const SORT_MAP: Record<string, string> = { sku: 'item_id', name: 'name', dept: 'dept_id', cat: 'cat_id' };
+const SORT_MAP: Record<string, string> = { sku: 'item_id', name: 'name', dept: 'dept_id', cat: 'cat_id', price: 'price' };
 
 export const ProductsTab: React.FC = () => {
   const t = useT();
+  const fmt = useFormat();
   const toast = useToast();
   const { user } = useAuth();
   const { storeId } = useStore();
@@ -74,10 +75,11 @@ export const ProductsTab: React.FC = () => {
           cat_id: applied.cat || undefined,
           sort_by: sort ? SORT_MAP[sort.key] : undefined,
           sort_dir: sort?.dir,
+          store_id: storeId ?? undefined,
         },
         signal,
       ),
-    [pg.page, pg.pageSize, applied, sort, nonce],
+    [pg.page, pg.pageSize, applied, sort, storeId, nonce],
   );
 
   const submit = (e?: React.FormEvent) => {
@@ -125,6 +127,10 @@ export const ProductsTab: React.FC = () => {
     { key: 'name', header: t('products.col.name'), sortable: true, cell: (r) => r.name },
     { key: 'dept', header: t('products.col.dept'), sortable: true, cell: (r) => r.dept_id ?? <Unavailable /> },
     { key: 'cat', header: t('products.col.cat'), sortable: true, cell: (r) => r.cat_id ?? <Unavailable /> },
+    { key: 'price', header: t('products.col.price'), sortable: true, align: 'right', cell: (r) => (r.price != null ? fmt.currency(r.price) : <Unavailable />) },
+    { key: 'on_hand', header: t('products.col.on_hand'), align: 'right', cell: (r) => (r.on_hand != null ? fmt.integer(r.on_hand) : <Unavailable reason={t('products.col.no_inventory')} />) },
+    { key: 's', header: <span title={t('products.col.s_hint')}>s</span>, align: 'right', cell: (r) => (r.s != null ? fmt.integer(r.s) : <Unavailable reason={t('products.col.no_inventory')} />) },
+    { key: 'S', header: <span title={t('products.col.S_hint')}>S</span>, align: 'right', cell: (r) => (r.S != null ? fmt.integer(r.S) : <Unavailable reason={t('products.col.no_inventory')} />) },
     {
       key: 'actions',
       header: <span className="ui-sr-only">{t('products.col.actions')}</span>,

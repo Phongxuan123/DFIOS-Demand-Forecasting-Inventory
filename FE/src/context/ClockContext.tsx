@@ -60,7 +60,7 @@ const ClockContext = createContext<ClockContextValue | null>(null);
 
 export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const { storeId } = useStore();
+  const { concreteStoreId: storeId } = useStore();
   const allowedView = can(user?.role, 'clock:view');
   const canAdvance = can(user?.role, 'clock:advance');
 

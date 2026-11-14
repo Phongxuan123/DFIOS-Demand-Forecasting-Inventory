@@ -16,10 +16,21 @@ import { registerCacheClearer } from '../services/session.ts';
 export const STORE_PARAM = 'store';
 const STORE_STORAGE_KEY = 'dfios_store';
 const FALLBACK_STORE = 'CA_1';
+/** Pseudo-store: every store together. The BE supports it for /calibration/*, /dashboard/kpi-dashboard (and answers 422 on forecasts). */
+export const GLOBAL_STORE = 'GLOBAL';
+/** Routes that can show the all-stores scope (elsewhere the selector offers real stores only). */
+const GLOBAL_ROUTES = ['/', '/forecast-explorer'];
 
 interface StoreContextValue {
-  /** Selected store id, or null while the list is loading / unavailable. */
+  /**
+   * Selected scope: a store id, or 'GLOBAL' on routes that support all stores (see `supportsGlobal`).
+   * Pages that do not support GLOBAL must use `concreteStoreId`.
+   */
   storeId: string | null;
+  /** Always a real store (never GLOBAL). */
+  concreteStoreId: string | null;
+  isGlobal: boolean;
+  supportsGlobal: boolean;
   stores: string[];
   loading: boolean;
   error: ApiError | null;
@@ -74,13 +85,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [nonce]);
 
   const param = searchParams.get(STORE_PARAM);
-  const storeId = useMemo<string | null>(() => {
+  const supportsGlobal = GLOBAL_ROUTES.includes(location.pathname.replace(/\/+$/, '') || '/');
+  const concreteStoreId = useMemo<string | null>(() => {
     if (stores.length === 0) return null;
     if (param && stores.includes(param)) return param;
     const stored = readStoredStore();
     if (stored && stores.includes(stored)) return stored;
     return stores.includes(FALLBACK_STORE) ? FALLBACK_STORE : stores[0];
   }, [stores, param]);
+  const wantGlobal = param === GLOBAL_STORE && supportsGlobal && stores.length > 0;
+  const storeId = wantGlobal ? GLOBAL_STORE : concreteStoreId;
 
   // Keep the URL authoritative: add / repair ?store= (replace, no history entry).
   useEffect(() => {
@@ -88,12 +102,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const next = new URLSearchParams(searchParams);
     next.set(STORE_PARAM, storeId);
     setSearchParams(next, { replace: true });
-  }, [storeId, param, searchParams, setSearchParams, location.pathname]);
+  }, [storeId, param, searchParams, setSearchParams, location.pathname, supportsGlobal]);
 
   const setStoreId = useCallback(
     (id: string) => {
       try {
-        localStorage.setItem(STORE_STORAGE_KEY, id);
+        if (id !== GLOBAL_STORE) localStorage.setItem(STORE_STORAGE_KEY, id);
       } catch {
         /* ignore */
       }
@@ -126,8 +140,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const value = useMemo(
-    () => ({ storeId, stores, loading, error, setStoreId, reload, withStore }),
-    [storeId, stores, loading, error, setStoreId, reload, withStore],
+    () => ({ storeId, concreteStoreId, isGlobal: storeId === GLOBAL_STORE, supportsGlobal, stores, loading, error, setStoreId, reload, withStore }),
+    [storeId, concreteStoreId, supportsGlobal, stores, loading, error, setStoreId, reload, withStore],
   );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 };

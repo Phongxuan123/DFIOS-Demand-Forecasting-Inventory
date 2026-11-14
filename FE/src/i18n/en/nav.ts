@@ -25,6 +25,7 @@ export const shell: typeof ViShell = {
   },
   store: {
     label: 'Store',
+    all: 'All stores',
     select: 'Select store',
     loading: 'Loading…',
     empty: 'No stores',

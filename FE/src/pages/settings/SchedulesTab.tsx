@@ -151,6 +151,7 @@ export const SchedulesTab: React.FC = () => {
     { key: 'store', header: t('settings.schedules.col_store'), value: (r) => r.store_id },
     { key: 'horizon', header: t('settings.schedules.col_horizon'), align: 'right', cell: (r) => fmt.integer(r.horizon) },
     { key: 'mode', header: t('settings.schedules.col_mode'), cell: (r) => <ModeBadge mode={modeOf(r)} /> },
+    { key: 'last_status', header: t('settings.schedules.col_last_status'), cell: (r) => (r.last_run_status ? <Badge tone={/fail|error/i.test(r.last_run_status) ? 'danger' : /success|ok|complete/i.test(r.last_run_status) ? 'success' : 'neutral'}>{r.last_run_status}</Badge> : <span className="set-note">—</span>) },
     { key: 'last', header: t('settings.schedules.col_last'), cell: (r) => (r.last_run_at ? fmt.dateTime(r.last_run_at) : t('settings.common.never')) },
     { key: 'next', header: t('settings.schedules.col_next'), cell: (r) => (r.next_run_at ? fmt.dateTime(r.next_run_at) : '—') },
     { key: 'actions', header: t('settings.schedules.col_actions'), align: 'right', width: 72, cell: (r) => <IconButton label={t('settings.schedules.delete')} icon={<Trash2 size={16} />} onClick={() => remove(r)} /> },
