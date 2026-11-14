@@ -146,9 +146,11 @@ class ForecastService:
                 orig_val = None
                 ov_reason = None
 
+            # B-29: Đảm bảo id duy nhất cho từng bản ghi theo từng bước dự báo h thay vì lặp lại chuỗi series id
+            unique_item_id = f"{fc.item_id}_{fc.store_id}_{fc.forecast_date}_{fc.h}"
             items.append(
                 ForecastItemResponse(
-                    id=fc.id,
+                    id=unique_item_id,
                     item_id=fc.item_id,
                     store_id=fc.store_id,
                     forecast_date=fc.forecast_date,

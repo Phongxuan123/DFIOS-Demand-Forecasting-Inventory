@@ -809,3 +809,23 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertTrue(len(p_oct1) > 0)
         self.assertEqual(p_oct1[0]["y_pred"], 99.0)
 
+    def test_b29_forecast_items_have_unique_ids(self):
+        """B-29: Kiểm tra tất cả các phần tử trong danh sách dự báo có id duy nhất cho từng bước h."""
+        res = self.client.get(
+            "/api/v1/forecasts?item_id=FOODS_1_001&store_id=CA_1&horizon=28",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        items = data["items"]
+        self.assertEqual(len(items), 28)
+
+        # Kiểm tra tập id không có phần tử trùng lặp
+        ids = [item["id"] for item in items]
+        self.assertEqual(len(ids), len(set(ids)), "Tồn tại id trùng lặp giữa các bước dự báo h!")
+
+        # Kiểm tra cấu trúc id mang tính duy nhất xác định: {item_id}_{store_id}_{forecast_date}_{h}
+        for item in items:
+            expected_prefix = f"FOODS_1_001_CA_1_{item['forecast_date']}_{item['h']}"
+            self.assertEqual(item["id"], expected_prefix)
+
