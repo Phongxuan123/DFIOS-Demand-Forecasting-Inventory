@@ -9,6 +9,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from sqlalchemy import text
 from app.core.database import engine
+from app.core.db_bulk import replace_rows
 from app.services.policy_config import DEMO_START_DATE
 
 STORE_ID = "CA_1"
@@ -70,11 +71,12 @@ for _, row in reorder_items.iterrows():
         "decided_by": None
     })
 
-if recs:
-    recs_df = pd.DataFrame(recs)
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM replenishment_recommendations WHERE store_id = :s AND status IN ('PENDING', 'PROPOSED')"), {"s": STORE_ID})
-    recs_df.to_sql("replenishment_recommendations", engine, if_exists="append", index=False, chunksize=1000, method="multi")
-    print(f"Seeded {len(recs_df)} replenishment recommendations!")
-else:
-    print("No replenishment recommendations needed.")
+# atomic replace (DELETE + COPY in ONE transaction; rollback restores the old PENDING rows if COPY fails)
+recs_df = pd.DataFrame(recs)
+with engine.begin() as conn:
+    n = replace_rows(
+        conn, "replenishment_recommendations", recs_df,
+        "DELETE FROM replenishment_recommendations WHERE store_id = :s AND status IN ('PENDING', 'PROPOSED')",
+        {"s": STORE_ID},
+    )
+print(f"Seeded {n} replenishment recommendations!" if n else "No replenishment recommendations needed.")

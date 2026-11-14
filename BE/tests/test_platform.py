@@ -1,5 +1,4 @@
 """Kiểm thử lớp nền tảng: manifest artifact, bootstrap guard, phân trang products (R-35), SSE role (B-25)."""
-import json
 import os
 import sys
 import unittest

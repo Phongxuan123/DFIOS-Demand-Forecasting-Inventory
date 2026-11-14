@@ -83,6 +83,13 @@
       "purpose": "C3-OK experiment config (series count, review window)",
       "size": 1807,
       "sha256": "1147d9ba715579f4e884bb52dfc4c2e0d8da3b711e6c99be72bbfcb60731edb6"
+    },
+    {
+      "name": "c3ok_forecast_calibration.csv",
+      "location": "scripts",
+      "purpose": "Measured empirical coverage of the Ensemble quantiles (test cover_0.95 = 0.8314) -> coverage_q95",
+      "size": 465,
+      "sha256": "42db7f091af3c94ef0c527d89424de543da07517dd2c10b1efb7c4d4b094acce"
     }
   ]
 }

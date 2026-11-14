@@ -47,7 +47,7 @@ class DFIOSPredictor:
                 })
                 self.is_loaded = True
                 logger.info(f"DFIOSPredictor: Loaded ensemble bundle from {self.model_dir}")
-            except Exception as e:
+            except (OSError, ValueError, KeyError) as e:
                 logger.warning(f"DFIOSPredictor: Failed to parse manifest: {e}")
         else:
             logger.warning(f"DFIOSPredictor: Manifest not found at {self.manifest_path}")
@@ -70,7 +70,7 @@ class DFIOSPredictor:
                     self._prod_df = pd.read_parquet(p)
                     logger.info(f"DFIOSPredictor: Loaded {len(self._prod_df)} production forecasts from {p}")
                     return self._prod_df
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - parquet reader errors vary by engine; logged
                     logger.warning(f"DFIOSPredictor: Failed to load {p}: {e}")
         return None
 

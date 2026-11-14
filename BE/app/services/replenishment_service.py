@@ -14,6 +14,10 @@ from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.inventory import Inventory
 from app.models.inventory_param import InventoryParam
+from app.models.classification import SKUClassification
+from app.models.forecast_window_quantile import ForecastWindowQuantile
+from app.services.calibrator_service import calibrator_service
+from app.services.window_quantile_service import WindowQuantileService
 from app.schemas.inventory import InventoryUpdate
 from app.schemas.replenishment import (
     ReplenishmentItemResponse,
@@ -22,9 +26,6 @@ from app.schemas.replenishment import (
 )
 from app.repositories.replenishment_repository import replenishment_repository
 from app.repositories.inventory_repository import inventory_repository
-from app.repositories.inventory_param_repository import inventory_param_repository
-from app.repositories.product_repository import product_repository
-from app.repositories.supplier_repository import supplier_repository
 from app.services.inventory_service import inventory_service
 from app.services.optimization_service import optimization_service
 from app.services.audit_service import audit_service
@@ -90,7 +91,7 @@ class ReplenishmentService:
             for m_sku in missing_skus:
                 try:
                     optimization_service.recompute_parameters(db, store_id=store_id, item_id=m_sku)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - one SKU must not block the batch (logged)
                     logger.warning(f"Error recomputing params for SKU {m_sku} in store {store_id}: {e}")
             params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
             param_map = {p.item_id: p for p in params}
@@ -214,7 +215,9 @@ class ReplenishmentService:
         supplier_map: Dict[str, Any],
         inv_map: Dict[Tuple[str, str], Any],
         param_map: Dict[Tuple[str, str], Any],
+        extra_map: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
     ) -> ReplenishmentItemResponse:
+        ex = (extra_map or {}).get((rec.item_id, rec.store_id), {})
         prod = product_map.get(rec.item_id)
         supp = supplier_map.get(rec.supplier_id) if rec.supplier_id else None
         inv = inv_map.get((rec.item_id, rec.store_id))
@@ -246,7 +249,62 @@ class ReplenishmentService:
             decided_by=rec.decided_by,
             created_at=rec.created_at,
             decided_at=rec.decided_at,
+            abc_xyz_class=ex.get("abc_xyz_class"),
+            theta=ex.get("theta"),
+            m_g=ex.get("m_g"),
+            kappa_g=ex.get("kappa_g"),
+            q_hat=ex.get("q_hat"),
+            lead_time_days=int(param.lead_time_days) if param and param.lead_time_days is not None else None,
         )
+
+    def _page_maps(self, db: Session, recs: List[ReplenishmentRecommendation]):
+        # lookup maps restricted to the SKUs / suppliers of the page (not the whole tables)
+        ids = list({r.item_id for r in recs})
+        sup_ids = list({r.supplier_id for r in recs if r.supplier_id})
+        product_map = {p.item_id: p for p in db.query(Product).filter(Product.item_id.in_(ids)).all()} if ids else {}
+        supplier_map = {s.id: s for s in db.query(Supplier).filter(Supplier.id.in_(sup_ids)).all()} if sup_ids else {}
+        inv_map = {(i.item_id, i.store_id): i for i in db.query(Inventory).filter(Inventory.item_id.in_(ids)).all()} if ids else {}
+        param_map = {(p.item_id, p.store_id): p for p in db.query(InventoryParam).filter(InventoryParam.item_id.in_(ids)).all()} if ids else {}
+        return product_map, supplier_map, inv_map, param_map
+
+    def _policy_context(
+        self, db: Session, recs: List[ReplenishmentRecommendation],
+        param_map: Dict[Tuple[str, str], Any],
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        # class / theta / (m_g, kappa_g) / Q_hat of a page of recommendations: one query per source, no N+1
+        out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for store in {r.store_id for r in recs}:
+            ids = list({r.item_id for r in recs if r.store_id == store})
+            segs = {
+                i: sg for i, sg in db.query(SKUClassification.item_id, SKUClassification.segment)
+                .filter(SKUClassification.store_id == store, SKUClassification.item_id.in_(ids)).all()
+            }
+            thetas = calibrator_service.get_current_thetas(db, store)
+            policies = calibrator_service.resolve_policies(db, store)
+            latest: Dict[str, ForecastWindowQuantile] = {}
+            for fq in (
+                db.query(ForecastWindowQuantile)
+                .filter(ForecastWindowQuantile.store_id == store, ForecastWindowQuantile.item_id.in_(ids))
+                .order_by(ForecastWindowQuantile.origin_date.desc()).all()
+            ):
+                latest.setdefault(fq.item_id, fq)
+            for iid in ids:
+                seg = segs.get(iid)
+                pol = policies.get(seg) if seg else None
+                param = param_map.get((iid, store))
+                fq = latest.get(iid)
+                q_hat = None
+                if fq is not None:
+                    tau = float(param.service_level) if param and param.service_level else 0.95
+                    q_hat = WindowQuantileService.tau_value(fq.q_levels or {}, tau, fq.point_window)
+                out[(iid, store)] = {
+                    "abc_xyz_class": seg,
+                    "theta": float(thetas.get(seg, 0.0)) if seg else None,
+                    "m_g": float(pol.m_g) if pol and pol.m_g is not None else None,
+                    "kappa_g": float(pol.kappa_g) if pol and pol.kappa_g is not None else None,
+                    "q_hat": round(float(q_hat), 3) if q_hat is not None else None,
+                }
+        return out
 
     def list_recommendations(
         self,
@@ -259,6 +317,8 @@ class ReplenishmentService:
         search: Optional[str] = None,
         item_id: Optional[str] = None,
         auto_generate: bool = False,
+        sort_by: Optional[str] = None,
+        sort_dir: Optional[str] = None,
     ) -> ReplenishmentListResponse:
         """
         UC33 - Lấy danh sách đề xuất nhập hàng (có phân trang, tìm kiếm, lọc).
@@ -282,6 +342,8 @@ class ReplenishmentService:
             priority=priority,
             search=search,
             item_id=item_id,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
         )
 
         pending_count = (
@@ -296,16 +358,12 @@ class ReplenishmentService:
         )
 
         # Batch lookup metadata để tối ưu truy vấn N+1
-        product_map = {p.item_id: p for p in db.query(Product).all()}
-        supplier_map = {s.id: s for s in db.query(Supplier).all()}
-        inv_map = {(i.item_id, i.store_id): i for i in db.query(Inventory).all()}
-        param_map = {
-            (p.item_id, p.store_id): p for p in db.query(InventoryParam).all()
-        }
+        product_map, supplier_map, inv_map, param_map = self._page_maps(db, items)
+        extra_map = self._policy_context(db, items, param_map)
 
         response_items = [
             self._build_response_item(
-                db, it, product_map, supplier_map, inv_map, param_map
+                db, it, product_map, supplier_map, inv_map, param_map, extra_map
             )
             for it in items
         ]
@@ -567,6 +625,8 @@ class ReplenishmentService:
         status: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: Optional[str] = None,
     ) -> ReplenishmentListResponse:
         """
         UC37 - Xem lịch sử xử lý đề xuất nhập hàng (Viewer, Warehouse Manager, Admin).
@@ -580,18 +640,16 @@ class ReplenishmentService:
             status=status,
             start_date=start_date,
             end_date=end_date,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
         )
 
-        product_map = {p.item_id: p for p in db.query(Product).all()}
-        supplier_map = {s.id: s for s in db.query(Supplier).all()}
-        inv_map = {(i.item_id, i.store_id): i for i in db.query(Inventory).all()}
-        param_map = {
-            (p.item_id, p.store_id): p for p in db.query(InventoryParam).all()
-        }
+        product_map, supplier_map, inv_map, param_map = self._page_maps(db, items)
+        extra_map = self._policy_context(db, items, param_map)
 
         response_items = [
             self._build_response_item(
-                db, it, product_map, supplier_map, inv_map, param_map
+                db, it, product_map, supplier_map, inv_map, param_map, extra_map
             )
             for it in items
         ]
@@ -694,13 +752,15 @@ class ReplenishmentService:
         supp = db.query(Supplier).filter(Supplier.id == rec.supplier_id).first() if rec.supplier_id else None
         inv = db.query(Inventory).filter(Inventory.item_id == rec.item_id, Inventory.store_id == rec.store_id).first()
         param = db.query(InventoryParam).filter(InventoryParam.item_id == rec.item_id, InventoryParam.store_id == rec.store_id).first()
+        param_map = {(rec.item_id, rec.store_id): param} if param else {}
         return self._build_response_item(
             db,
             rec,
             {rec.item_id: prod} if prod else {},
             {rec.supplier_id: supp} if supp else {},
             {(rec.item_id, rec.store_id): inv} if inv else {},
-            {(rec.item_id, rec.store_id): param} if param else {},
+            param_map,
+            self._policy_context(db, [rec], param_map),
         )
 
 

@@ -13,7 +13,6 @@ from app.models.event import Event
 from app.models.audit_log import AuditLog
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
-from app.services.ml_training_service import ml_training_service
 
 
 class TestMLTrainingEndpoints(unittest.TestCase):
@@ -219,7 +218,7 @@ class TestMLTrainingEndpoints(unittest.TestCase):
     def test_r03_ml_training_gbdt_and_no_unwanted_registry_pollution(self):
         """R-03: Kiểm tra GBDT thật, gom chuỗi không trộn lẫn SKU, và không tự ghi candidate vào ModelRegistry nếu không yêu cầu."""
         from app.models.model_registry import ModelRegistry
-        from app.services.ml_training_service import TinyGBDTRegressor, TinyDecisionTreeRegressor
+        from app.services.ml_training_service import TinyGBDTRegressor
         import numpy as np
 
         # 1. Kiểm tra thuật toán TinyGBDTRegressor và TinyDecisionTreeRegressor

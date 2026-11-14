@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import math
 from datetime import date, timedelta, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -22,9 +20,7 @@ from app.schemas.dashboard import (
 from app.schemas.event import create_stock_alert_event
 from app.schemas.kpi_dashboard import CostCurvePoint, SegmentAvailability, KPIDashboardResponse
 from app.models.sim_clock import SimClock
-from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
-from app.models.policy_selection import PolicySelection
 from app.models.classification import SKUClassification
 from app.models.product import Product
 from app.models.inventory_daily import InventoryDaily
@@ -204,7 +200,7 @@ class DashboardService:
             try:
                 event_bus.publish_nowait(event)
                 broadcast_count += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad SSE subscriber must not stop the others (logged)
                 logger.warning(f"Error publishing stock alert event: {e}")
 
         return RealtimeStockAlertTriggerResponse(

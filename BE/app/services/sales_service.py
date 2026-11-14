@@ -1,6 +1,5 @@
 import csv
 import io
-import uuid
 from datetime import datetime, date, timezone
 from typing import Optional
 from fastapi import HTTPException, status, UploadFile
@@ -120,7 +119,7 @@ class SalesService:
                 content = content_bytes.decode("utf-8-sig")
             except UnicodeDecodeError:
                 content = content_bytes.decode("latin-1")
-        except Exception:
+        except (OSError, ValueError):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Không thể đọc nội dung file. Vui lòng đảm bảo file được mã hóa định dạng UTF-8 hoặc UTF-8 BOM.",
@@ -186,7 +185,7 @@ class SalesService:
                         quantity=qty,
                     )
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - malformed row is counted as skipped
                 skipped_count += 1
 
         if not records_to_insert:

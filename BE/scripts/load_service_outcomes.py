@@ -7,7 +7,6 @@ BE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 if BE_DIR not in sys.path:
     sys.path.append(BE_DIR)
 
-import pandas as pd
 from sqlalchemy import text
 from app.core.database import engine, SessionLocal
 from app.models.classification import SKUClassification

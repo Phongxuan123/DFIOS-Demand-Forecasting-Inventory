@@ -1,19 +1,15 @@
 from datetime import datetime, date, timedelta, timezone
 import time
 import uuid
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.models.inventory import Inventory
 from app.models.product import Product
 from app.models.sim_clock import SimClock
-from app.models.inventory_daily import InventoryDaily
 from app.models.inventory_param import InventoryParam
 from app.models.classification import SKUClassification
-from app.models.sales_history import SalesHistory
 from app.models.forecast import Forecast
-from app.models.replenishment import ReplenishmentRecommendation
 from app.schemas.pipeline import (
     BatchScheduleCreateRequest,
     BatchScheduleListResponse,
@@ -24,10 +20,9 @@ from app.schemas.pipeline import (
 from app.services.classification_service import classification_service
 from app.services.optimization_service import optimization_service
 from app.services.replenishment_service import replenishment_service
-from app.services.calibrator_service import calibrator_service
-from app.services.window_quantile_service import window_quantile_service
 from app.services.simulator_service import simulator_service
 from app.services import policy_config as pc
+from app.services.scheduler_service import next_run as scheduler_next_run, scheduler_running
 
 
 class PipelineService:
@@ -100,7 +95,8 @@ class PipelineService:
         schedules = self._get_schedules_dict(db)
         schedule_id = f"sched-{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc)
-        next_run = (now + timedelta(days=1)).replace(hour=2, minute=0, second=0, microsecond=0)
+        nxt = scheduler_next_run(request.cron_expression, now)
+        next_run = nxt or (now + timedelta(days=1)).replace(hour=2, minute=0, second=0, microsecond=0)
 
         sched_dict = {
             "id": schedule_id,
@@ -117,14 +113,27 @@ class PipelineService:
         }
         schedules[schedule_id] = sched_dict
         self._save_schedules_dict(schedules, db=db)
-        return BatchScheduleResponse(**sched_dict)
+        return self._to_response(sched_dict)
+
+    @staticmethod
+    def _to_response(sched: Dict) -> BatchScheduleResponse:
+        """mode/note are derived at read time: scheduled only while the in-process scheduler really runs."""
+        active = scheduler_running() and sched.get("is_active", True)
+        data = {k: v for k, v in sched.items() if k not in ("mode", "note")}
+        data["mode"] = "scheduled" if active else "manual"
+        data["note"] = (
+            "Executed by the in-process scheduler (UTC cron, single process)." if active
+            else "Stored only: the scheduler is not running (DFIOS_SCHEDULER=0, tests, or not started) or the schedule is inactive; "
+                 "trigger runs with POST /pipeline/trigger-run."
+        )
+        return BatchScheduleResponse(**data)
 
     def list_schedules(self, db: Optional[Session] = None) -> BatchScheduleListResponse:
         """
         UC49: Lấy danh sách các lịch chạy batch forecast định kỳ.
         """
         schedules = self._get_schedules_dict(db)
-        items = [BatchScheduleResponse(**s) for s in schedules.values()]
+        items = [self._to_response(s) for s in schedules.values()]
         return BatchScheduleListResponse(total=len(items), items=items)
 
     def delete_schedule(self, schedule_id: str, db: Optional[Session] = None) -> None:

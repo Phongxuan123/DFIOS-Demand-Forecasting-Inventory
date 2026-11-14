@@ -4,16 +4,14 @@ import os
 if sys.stdout.encoding != 'utf-8':
     try:
         sys.stdout.reconfigure(encoding='utf-8')
-    except Exception:
+    except (AttributeError, ValueError, OSError):
         pass
 if sys.stderr.encoding != 'utf-8':
     try:
         sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
+    except (AttributeError, ValueError, OSError):
         pass
 
-import math
-import uuid
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np

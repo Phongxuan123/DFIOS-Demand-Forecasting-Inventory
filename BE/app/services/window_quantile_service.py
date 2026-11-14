@@ -31,7 +31,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.forecast import Forecast, ForecastOverride

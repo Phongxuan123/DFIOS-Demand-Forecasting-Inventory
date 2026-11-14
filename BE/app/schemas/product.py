@@ -22,6 +22,12 @@ class ProductUpdate(BaseModel):
 class ProductResponse(ProductBase):
     model_config = ConfigDict(from_attributes=True)
 
+    price: Optional[float] = Field(None, description="Giá bán (USD)")
+    # list view only (one joined query, store_id param; sums stores when omitted) - null on single-item routes
+    on_hand: Optional[float] = None
+    s: Optional[float] = Field(None, description="Reorder point s of (R,s,S)")
+    S: Optional[float] = Field(None, description="Order-up-to level S of (R,s,S)")
+
 
 class ProductListResponse(BaseModel):
     items: List[ProductResponse]

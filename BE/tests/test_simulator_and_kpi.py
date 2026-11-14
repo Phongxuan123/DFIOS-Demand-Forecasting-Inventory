@@ -4,7 +4,7 @@ shadow B0), of the what-if simulation endpoint (real Session incl. the price que
 KPI / report layers. Everything runs through real SQLAlchemy sessions (SQLite in memory).
 """
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from unittest import mock
 
 from fastapi import HTTPException
@@ -28,7 +28,6 @@ from app.models.sim_clock import SimClock
 from app.models.sim_state import SimShadowDaily, SimSnapshot
 from app.models.user import User
 from app.services import policy_config as pc
-from app.services.dashboard_service import dashboard_service
 from app.services.pipeline_service import pipeline_service
 
 START = date(2016, 4, 25)

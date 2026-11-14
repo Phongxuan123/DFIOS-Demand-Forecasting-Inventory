@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -99,9 +99,32 @@ class DashboardRepository:
         else:
             accuracy_display = "N/A"
 
+        production_wrmsse = None
+        if prod_model and prod_model.metrics and prod_model.metrics.get("wrmsse") is not None:
+            production_wrmsse = round(float(prod_model.metrics["wrmsse"]), 4)
+
+        # Orders placed = APPROVED + COMPLETED recommendations whose review date falls in the simulated-clock window
+        ord_q = db.query(func.count(ReplenishmentRecommendation.id)).filter(
+            ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED"])
+        )
+        clk_q = db.query(func.min(SimClock.start_date), func.max(SimClock.current_date))
+        if not is_global:
+            ord_q = ord_q.filter(ReplenishmentRecommendation.store_id == store_id.strip())
+            clk_q = clk_q.filter(SimClock.store_id == store_id.strip())
+        w_start, w_end = clk_q.one()
+        if w_start is not None and w_end is not None:
+            ord_q = ord_q.filter(
+                ReplenishmentRecommendation.review_date > w_start,
+                ReplenishmentRecommendation.review_date <= w_end,
+            )
+        orders_placed = int(ord_q.scalar() or 0)
+
         return {
             "total_skus": total_skus,
             "total_inventory_value": round(total_value, 2),
+            "production_wrmsse": production_wrmsse,
+            "production_model_id": prod_model.id if prod_model else None,
+            "orders_placed_count": orders_placed,
             "stockout_rate": stockout_rate,
             "estimated_service_level": estimated_service_level,
             "reorder_alerts_count": reorder_alerts_count,

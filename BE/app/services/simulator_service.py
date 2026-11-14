@@ -25,7 +25,6 @@ inventory is written back with one UPDATE ... FROM unnest(...).
 """
 from __future__ import annotations
 
-import math
 import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone

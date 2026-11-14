@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc
 

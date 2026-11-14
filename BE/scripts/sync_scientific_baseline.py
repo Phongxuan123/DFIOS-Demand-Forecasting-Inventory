@@ -16,7 +16,6 @@ One date convention (P-35 / N-11): policy_config.DEMO_START_DATE.
 import sys
 import os
 import math
-from datetime import date, datetime, timezone
 import json
 
 # Setup BE path
@@ -96,15 +95,23 @@ def run_sync():
         print("Calibration states synced without deleting history.")
 
         print("\n=== 5. SYNCING MODEL_REGISTRY METRICS (artifact WRMSSE, h = 7) ===")
-        # c3ok_fidelity.json / RUN_SUMMARY_C3OK.md "Result OK" column. MAE / RMSE / MASE have no source in the
-        # artifact and are NOT written (R-04, N-06).
+        # WRMSSE: c3ok_fidelity.json / RUN_SUMMARY_C3OK.md "Result OK" column; ensemble MAE/RMSE/MASE: MODEL/best_params.json
+        # test_metrics h=7d. Other models: no MAE/RMSE/MASE source -> not written (R-04, N-06).
+        def metrics_for(algo, wr):
+            m = {"wrmsse": wr, "metrics_source": {"wrmsse": "artifact:c3ok Result OK (h=7)"}}
+            if algo == "ensemble":  # MODEL/best_params.json test_metrics h=7d
+                m.update({"mase": 0.9753, "mae": 0.9467, "rmse": 1.8509})
+                m["metrics_source"] = {k: "artifact:MODEL/best_params.json test_metrics h=7d"
+                                       for k in ("wrmsse", "mase", "mae", "rmse")}
+            return m
+
         for algo, wr, prod in (("ensemble", 0.4935, True), ("lightgbm", 0.5083, False),
                                ("xgboost", 0.5213, False), ("tft", 0.5004, False)):
             db.execute(text("""
                 UPDATE model_registry
                 SET metrics = :m, is_production = :p
                 WHERE algorithm = :a OR (:a = 'ensemble' AND name ILIKE '%ensemble%')
-            """), {"m": json.dumps({"wrmsse": wr}), "p": prod, "a": algo})
+            """), {"m": json.dumps(metrics_for(algo, wr)), "p": prod, "a": algo})
         print("Updated model_registry with artifact WRMSSE values.")
 
         print("\n=== 6. SAVING SCIENTIFIC BENCHMARK RESULTS IN SYSTEM_SETTINGS ===")
@@ -112,7 +119,7 @@ def run_sync():
         benchmark_data = {
             "title": "DFIOS C3-OUT Policy Evaluation on M5 Walmart (72 Review Cycles)",
             "test_summary": {
-                "P0_Traditional": {
+                "B0_Raw_Quantile_095": {
                     "policy": "B0 DFIOS τ=0.95",
                     "tau": 0.95,
                     "csl": 0.9071,
@@ -123,7 +130,7 @@ def run_sync():
                     "total_cost_bikip": 3412044.82,
                     "total_cost_paper": 767052.47
                 },
-                "P1_Static_EOQ": {
+                "B2_Raw_Quantile_099": {
                     "policy": "B2 DFIOS τ*=0.99 [BIKIP]",
                     "tau": 0.99,
                     "csl": 0.9336,
@@ -134,7 +141,7 @@ def run_sync():
                     "total_cost_bikip": 3357081.62,
                     "total_cost_paper": 699361.32
                 },
-                "P4_Refit_EOQ": {
+                "PCR_C3OUT_09615": {
                     "policy": "P-CR C³-OUT τ=0.9615 [BIKIP]",
                     "tau": 0.9615,
                     "csl": 0.9605,
@@ -145,7 +152,7 @@ def run_sync():
                     "total_cost_bikip": 3194898.39,
                     "total_cost_paper": 598919.84
                 },
-                "P6_C3_OUT": {
+                "P6_C3OUT_095": {
                     "policy": "P C³-OUT τ=0.95",
                     "tau": 0.95,
                     "csl": 0.9490,
@@ -174,13 +181,14 @@ def run_sync():
                 }
             },
             "coverage_095": 0.8314,
+            "coverage_095_source": "artifact:c3ok c3ok_forecast_calibration.csv test cover_0.95",
             "wrmsse_ensemble": 0.4935
         }
 
         # Upsert into system_settings
         db.execute(text("""
             INSERT INTO system_settings (key, value, description, updated_at)
-            VALUES ('policy_benchmark_results', :val, 'Empirical M5 Results for Policies P0-P6', NOW())
+            VALUES ('policy_benchmark_results', :val, 'Empirical M5 Results (artifact c3ok): B0 / B2 / P-CR / P6 (N-06: labels = artifact rows)', NOW())
             ON CONFLICT (key) DO UPDATE
             SET value = EXCLUDED.value,
                 updated_at = NOW()

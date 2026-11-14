@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -295,7 +295,6 @@ class TestReportsEndpoints(unittest.TestCase):
     # ---------------------------------------------------------
     def test_r02_wrmsse_scale_from_training_history_and_no_fake_numbers(self):
         """R-02: RMSSE/MASE scale comes from the TRAINING history before the evaluation window, not the window."""
-        import math
         today = date.today()
         with self.TestingSessionLocal() as session:
             # training history: 10 days, alternating 10/20 -> 1-step abs diff = 10, rmse diff = 10

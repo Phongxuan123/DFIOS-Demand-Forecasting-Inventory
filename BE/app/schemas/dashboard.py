@@ -15,6 +15,9 @@ class DashboardKPIs(BaseModel):
     pending_replenishments_count: int = Field(..., description="Số đề xuất đặt hàng đang chờ duyệt (PENDING)")
     avg_forecast_accuracy: str = Field(default="N/A", description="Chỉ số sai số / độ chính xác dự báo mô hình sản xuất (ví dụ: WRMSSE 0.4935)")
     total_suppliers: int = Field(..., description="Tổng số nhà cung cấp đang hợp tác")
+    production_wrmsse: Optional[float] = Field(None, description="WRMSSE numeric of the Production model (null when not in the registry)")
+    production_model_id: Optional[str] = Field(None, description="Registry id of the Production model")
+    orders_placed_count: int = Field(0, description="Orders placed = APPROVED + COMPLETED recommendations with review_date in the simulated clock window")
 
 
 class DemandTrendPoint(BaseModel):

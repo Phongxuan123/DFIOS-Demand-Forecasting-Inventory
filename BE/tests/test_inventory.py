@@ -10,7 +10,6 @@ from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
 from app.models.inventory import Inventory
-from app.models.inventory_adjustment import InventoryAdjustment
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
 from app.core.events import event_bus

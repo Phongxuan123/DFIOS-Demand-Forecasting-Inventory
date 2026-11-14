@@ -29,7 +29,7 @@ if os.path.exists(PRICES_CSV):
         df = pd.merge(df, avg_prices, on="item_id", how="left")
         df.rename(columns={"sell_price": "price"}, inplace=True)
         df["price"] = df["price"].fillna(1.0).round(2)
-    except Exception:
+    except (OSError, ValueError, KeyError):
         df["price"] = 1.0
 else:
     df["price"] = 1.0

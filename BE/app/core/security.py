@@ -12,7 +12,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         if len(pw_bytes) > 72:
             return False
         return bcrypt.checkpw(pw_bytes, hashed_password.encode("utf-8"))
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return False
 
 def get_password_hash(password: str) -> str:
@@ -36,7 +36,7 @@ def decode_access_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         return payload
-    except (jwt.PyJWTError, Exception):
+    except (jwt.PyJWTError, ValueError, TypeError):
         return None
 
 def create_password_reset_token(email: str, expires_minutes: int = 15) -> str:

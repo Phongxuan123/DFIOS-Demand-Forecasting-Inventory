@@ -1,7 +1,7 @@
 import math
 import logging
 import numpy as np
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import func
@@ -329,7 +329,7 @@ class MLTrainingService:
             )
             db.commit()
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background job: any failure marks the job failed
             try:
                 db.rollback()
                 ml_training_repository.update_job_status(
@@ -338,12 +338,12 @@ class MLTrainingService:
                     status="failed",
                     error_message=str(e),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - status update is best-effort
                 pass
         finally:
             try:
                 db.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - close is best-effort
                 pass
             if gen is not None:
                 try:
@@ -446,7 +446,7 @@ class MLTrainingService:
                     predictions.append(round(pred_step, 2))
                     current_hist.append(pred_step)
                 return predictions
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001 - model fallback, logged
                 logger.warning(f"MLTraining: GBDT failed for {model_name}: {ex}")
 
         # Mặc định fallback khi mẫu huấn luyện quá ngắn (<8)

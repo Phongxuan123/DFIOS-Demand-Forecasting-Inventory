@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,7 +9,7 @@ from app.main import app
 from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
-from app.models.forecast import Forecast, ForecastSigma, ForecastOverride, ForecastExplanation
+from app.models.forecast import Forecast, ForecastSigma, ForecastOverride
 from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.sales_history import SalesHistory
 from app.models.audit_log import AuditLog

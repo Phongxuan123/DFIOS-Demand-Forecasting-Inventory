@@ -9,6 +9,11 @@ class AccuracyMetricItem(BaseModel):
     mase: Optional[float] = Field(None, description="MASE, scale = naive 1-step MAE of the TRAINING history")
     wrmsse: Optional[float] = Field(None, description="WRMSSE, RMSSE scale from the training history, weights = dollar sales of the last 28 training days")
     sample_count: int = Field(default=0)
+    # Measured Q0.95 coverage (overall only). Two DIFFERENT measurements, never merged (see coverage_service).
+    coverage_q95: Optional[float] = Field(None, description="Offline artifact value (c3ok test split)")
+    coverage_source: Optional[str] = Field(None, description="Source label of coverage_q95, e.g. artifact:c3ok")
+    coverage_q95_db_causal: Optional[float] = Field(None, description="Measured on DB windows (forecast_window_quantile vs actuals)")
+    coverage_q95_db_causal_n: Optional[int] = None
 
 
 class ForecastAccuracyReportResponse(BaseModel):

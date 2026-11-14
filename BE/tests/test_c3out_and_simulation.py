@@ -12,8 +12,6 @@ from app.models.policy_selection import PolicySelection
 from app.services.calibrator_service import calibrator_service
 from app.services.optimization_service import optimization_service
 from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
-from app.services.simulation_service import simulation_service
-from app.services.dashboard_service import dashboard_service
 from app.services.data_preprocessing_service import data_preprocessing_service
 
 
@@ -298,7 +296,6 @@ class TestC3OutAndSimulation(unittest.TestCase):
         Test N-05: Kiểm tra tách m_g của Tier 2 khỏi theta của C3-OUT.
         - Khởi tạo mặc định m_g = 0.0 cho cả 9 lớp (tránh lỗi cộng dồn thành e^{2*theta})
         """
-        from app.services.optimization_service import optimization_service
         for class_id, policy in optimization_service.DEFAULT_OPTIMAL_POLICIES.items():
             self.assertEqual(
                 policy["m_g"],
@@ -309,7 +306,6 @@ class TestC3OutAndSimulation(unittest.TestCase):
     def test_tier2_j5_without_validation_data_is_neutral_and_not_feasible(self):
         """J5 never invents metrics: with no backtest data every class is the neutral policy, flagged infeasible
         (the real (R,s,S) backtest is covered in test_scientific_core.py)."""
-        from app.services.optimization_service import optimization_service
         from app.models.classification import SKUClassification
         from app.models.product import Product
 
@@ -342,7 +338,6 @@ class TestC3OutAndSimulation(unittest.TestCase):
         - Chu kỳ rà soát J6 không chồng lấn (đúng 7 ngày)
         """
         from app.services.pipeline_service import pipeline_service
-        from app.services.replenishment_service import replenishment_service
         from app.models.product import Product
         from app.models.inventory import Inventory
         from app.models.inventory_daily import InventoryDaily

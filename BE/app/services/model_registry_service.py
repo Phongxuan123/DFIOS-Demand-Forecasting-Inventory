@@ -17,6 +17,7 @@ from app.schemas.model_registry import (
 )
 from app.repositories.model_registry_repository import model_registry_repository
 from app.services.audit_service import audit_service
+from app.services.coverage_service import coverage_fields
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,15 @@ class ModelRegistryService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy phiên bản mô hình với ID: {model_id}",
             )
-        return ModelRegistryResponse.model_validate(model)
+        return self._with_coverage(db, ModelRegistryResponse.model_validate(model))
+
+    @staticmethod
+    def _with_coverage(db: Session, resp: ModelRegistryResponse) -> ModelRegistryResponse:
+        """Production models carry the MEASURED Q0.95 coverage in ``metrics`` (not persisted; labelled by source)."""
+        if resp.is_production:
+            cov = {k: v for k, v in coverage_fields(db).items() if v is not None}
+            resp.metrics = {**(resp.metrics or {}), **cov}
+        return resp
 
     def validate_model(self, db: Session, model_id: str) -> Dict[str, Any]:
         """
@@ -169,7 +178,7 @@ class ModelRegistryService:
             try:
                 with open(target_filepath, "rb") as f:
                     file_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.warning(f"Lỗi tính checksum cho {target_filepath}: {e}")
 
         # 3. Đếm số SKU thực tế có trong hệ thống có thể kiểm thử (tối đa 200 SKU mẫu)
@@ -208,7 +217,7 @@ class ModelRegistryService:
                     if comp_name.lower() == algo and "val_wrmsse" in comp_info:
                         metrics = {"val_wrmsse": comp_info["val_wrmsse"]}
                         break
-            except Exception:
+            except (OSError, ValueError, KeyError, AttributeError):
                 pass
 
         status_msg = (
@@ -253,7 +262,7 @@ class ModelRegistryService:
             scope=scope,
         )
         return ModelRegistryListResponse(
-            items=[ModelRegistryResponse.model_validate(m) for m in items],
+            items=[self._with_coverage(db, ModelRegistryResponse.model_validate(m)) for m in items],
             total=total,
         )
 

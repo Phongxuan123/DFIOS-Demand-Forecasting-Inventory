@@ -220,7 +220,7 @@ class DataPreprocessingService:
                 df = pd.read_csv(io.StringIO(text_data), sep=detected_sep)
                 if df.shape[1] >= 2:
                     return df
-            except Exception:
+            except (ValueError, pd.errors.ParserError):
                 continue
 
         # Fallback cuối cùng

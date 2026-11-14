@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, Request, Response, BackgroundTasks, status
+from fastapi import APIRouter, Depends, Query, Request, Response, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -37,6 +37,9 @@ def list_replenishments(
     priority: Optional[str] = Query(None, description="Lọc theo mức độ ưu tiên: CRITICAL, HIGH, MEDIUM, LOW"),
     search: Optional[str] = Query(None, description="Tìm kiếm theo mã SKU hoặc lý do"),
     item_id: Optional[str] = Query(None, description="Lọc chính xác theo mã SKU"),
+    sort_by: Optional[str] = Query(None, pattern="^(created_at|decided_at|item_id|store_id|status|priority|recommended_qty|final_qty|review_date)$", description="Cột sắp xếp"),
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    response: Response = None,
     auto_generate: bool = Query(False, description="Tự động sinh đề xuất nếu bảng chưa có đơn PENDING (mặc định False để đảm bảo phương thức GET không có tác dụng phụ)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager_or_admin),
@@ -47,7 +50,7 @@ def list_replenishments(
     Số lượng đề xuất = EOQ, có phân cấp ưu tiên CRITICAL, HIGH, MEDIUM, LOW.
     Role: Warehouse Manager, Admin (Viewer 403).
     """
-    return replenishment_service.list_recommendations(
+    result = replenishment_service.list_recommendations(
         db=db,
         skip=skip,
         limit=limit,
@@ -57,7 +60,11 @@ def list_replenishments(
         search=search,
         item_id=item_id,
         auto_generate=auto_generate,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
+    response.headers["X-Total-Count"] = str(result.total)
+    return result
 
 
 @router.post(
@@ -99,6 +106,9 @@ def get_replenishment_history(
     status_filter: Optional[str] = Query(None, alias="status", description="Lọc theo trạng thái đã xử lý (APPROVED, REJECTED, CANCELLED)"),
     start_date: Optional[datetime] = Query(None, description="Lọc từ ngày"),
     end_date: Optional[datetime] = Query(None, description="Lọc đến ngày"),
+    sort_by: Optional[str] = Query(None, pattern="^(created_at|decided_at|item_id|store_id|status|priority|recommended_qty|final_qty|review_date)$", description="Cột sắp xếp"),
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
+    response: Response = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -107,7 +117,7 @@ def get_replenishment_history(
     Xem lịch sử các đề xuất nhập hàng đã được phê duyệt, từ chối hoặc hủy.
     Role: Cả 3 role (Viewer, Warehouse Manager, Admin).
     """
-    return replenishment_service.list_history(
+    result = replenishment_service.list_history(
         db=db,
         skip=skip,
         limit=limit,
@@ -116,7 +126,11 @@ def get_replenishment_history(
         status=status_filter,
         start_date=start_date,
         end_date=end_date,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
+    response.headers["X-Total-Count"] = str(result.total)
+    return result
 
 
 # --- UC38: Export Replenishment List (Đặt TRƯỚC /{id} để tránh bị bắt nhầm) ---

@@ -1,7 +1,8 @@
 import math
 import re
+from types import SimpleNamespace
 from datetime import datetime, date, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -357,6 +358,53 @@ class CalibratorService:
         if class_id:
             query = query.filter(CalibrationState.class_id == class_id)
         return query.order_by(CalibrationState.review_index.desc()).limit(limit).all()
+
+    # ---- GLOBAL (all stores) aggregation (FE request: GLOBAL scope) ----------------------------------
+    GLOBAL_KEYS = ("GLOBAL", "ALL")
+
+    @classmethod
+    def is_global(cls, store_id: Optional[str]) -> bool:
+        return bool(store_id) and store_id.strip().upper() in cls.GLOBAL_KEYS
+
+    @staticmethod
+    def _aggregate(rows: List[CalibrationState], class_id: str, review_index: int) -> SimpleNamespace:
+        n = len(rows)
+        mean = lambda xs: sum(xs) / len(xs)  # noqa: E731
+        top = max(rows, key=lambda r: (r.review_date, r.created_at or datetime.min))
+        return SimpleNamespace(
+            id=f"GLOBAL_{class_id}_rev_{review_index}", calibrator_id="global_mean_of_stores", store_id="GLOBAL",
+            class_id=class_id, review_index=review_index, review_date=top.review_date,
+            theta=mean([float(r.theta or 0.0) for r in rows]),
+            multiplier=mean([float(r.multiplier if r.multiplier is not None else 1.0) for r in rows]),
+            error_rate=mean([float(r.error_rate or 0.0) for r in rows]),
+            at_boundary=any(bool(r.at_boundary) for r in rows),
+            setpoint=mean([float(r.setpoint or 0.0) for r in rows]),
+            eta=mean([float(r.eta or 0.0) for r in rows]),
+            created_at=top.created_at or datetime.now(timezone.utc), n_stores=n,
+        )
+
+    def global_latest_states(self, db: Session) -> List[SimpleNamespace]:
+        """Per class: mean over stores of each store's latest state (one store => equals that store)."""
+        stores = [s for (s,) in db.query(CalibrationState.store_id).distinct().all()]
+        per_class: Dict[str, List[CalibrationState]] = {}
+        for st in stores:
+            for c, rec in self.latest_states(db, st).items():
+                per_class.setdefault(c, []).append(rec)
+        return [
+            self._aggregate(per_class[c], c, max(r.review_index for r in per_class[c]))
+            for c in self.ALL_CLASSES if c in per_class
+        ]
+
+    def global_history(self, db: Session, class_id: Optional[str] = None, limit: int = 100) -> List[SimpleNamespace]:
+        q = db.query(CalibrationState)
+        if class_id:
+            q = q.filter(CalibrationState.class_id == class_id)
+        groups: Dict[Tuple[str, int], List[CalibrationState]] = {}
+        for r in q.all():
+            groups.setdefault((r.class_id, r.review_index), []).append(r)
+        out = [self._aggregate(rows, c, k) for (c, k), rows in groups.items()]
+        out.sort(key=lambda r: (-r.review_index, r.class_id))
+        return out[:limit]
 
 
 calibrator_service = CalibratorService()

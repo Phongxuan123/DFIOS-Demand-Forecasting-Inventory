@@ -388,7 +388,6 @@ class TestOptimizationEndpoints(unittest.TestCase):
     def test_resolve_lead_time_single_source_l3_unless_opt_in(self):
         # R-28 / B-20: L = 3 for EVERY SKU (H = 10), whatever the suppliers say, unless the operator opts in.
         from app.services.optimization_service import optimization_service
-        from app.models.system_setting import SystemSetting
         with self.TestingSessionLocal() as session:
             session.add_all([
                 Supplier(id="SUP_FOODS", name="Nhà cung cấp A (Thực phẩm)", lead_time_days=5),

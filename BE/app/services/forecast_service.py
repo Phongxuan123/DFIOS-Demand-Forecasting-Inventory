@@ -2,15 +2,15 @@ import json
 import logging
 import math
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.forecast import Forecast, ForecastOverride, ForecastExplanation
+from app.models.forecast import Forecast, ForecastOverride
 from app.models.user import User
 from app.schemas.forecast import (
     ForecastItemResponse,
@@ -36,6 +36,9 @@ from app.repositories.product_repository import product_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.repositories.model_registry_repository import model_registry_repository
 from app.services.audit_service import audit_service
+from app.models.sim_clock import SimClock
+from app.models.sales_history import SalesHistory
+from types import SimpleNamespace
 
 
 class ForecastService:
@@ -66,6 +69,7 @@ class ForecastService:
         limit: int = 50,
         sort_by: str = "forecast_date",
         order: str = "asc",
+        model_name: Optional[str] = None,
     ) -> ForecastListResponse:
         """
         UC17, UC18, UC19: Xem, chọn horizon và lọc danh sách dự báo nhu cầu.
@@ -81,16 +85,12 @@ class ForecastService:
         else:
             selected_horizon = max(allowed_horizons) if allowed_horizons else 28
 
-        # Kiểm tra model production nếu chưa chỉ định version
-        active_version = model_version
-        if not active_version:
-            prod_model = (
-                db.query(model_registry_repository.model)
-                .filter(model_registry_repository.model.is_production.is_(True))
-                .first()
-            )
-            if prod_model and prod_model.version:
-                active_version = prod_model.version
+        self._reject_global(store_id, "GET /forecasts")
+        target_store = store_id.strip() if store_id and store_id.strip() else "CA_1"
+
+        # ONE version only (never mixed): explicit version > model_name filter > production algorithm > Ensemble > newest
+        available = self._available_versions(db, target_store, item_id, model_name)
+        active_version = model_version or self._pick_version(db, available, model_name)
 
         total, records = forecast_repository.get_forecasts(
             db,
@@ -100,30 +100,15 @@ class ForecastService:
             store_id=store_id,
             start_date=start_date,
             end_date=end_date,
-            model_version=active_version,
+            model_version=active_version or "__no_matching_version__",
             skip=skip,
             limit=limit,
             sort_by=sort_by,
             order=order,
         )
 
-        # Nếu lọc theo production model version mà không có dữ liệu, fallback sang phiên bản có sẵn
-        if total == 0 and active_version is not None:
-            total, records = forecast_repository.get_forecasts(
-                db,
-                horizon=selected_horizon,
-                item_id=item_id,
-                category=category,
-                store_id=store_id,
-                start_date=start_date,
-                end_date=end_date,
-                model_version=None,
-                skip=skip,
-                limit=limit,
-                sort_by=sort_by,
-                order=order,
-            )
-            active_version = records[0][0].model_version if records else active_version
+        clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+        clock_date = clock.current_date if clock and clock.current_date else None
 
         # Lấy overrides đang hoạt động để áp dụng lên kết quả
         active_overrides = forecast_repository.get_active_overrides_dict(
@@ -167,6 +152,8 @@ class ForecastService:
                     category=p_cat,
                     model_version=fc.model_version,
                     generated_at=fc.generated_at,
+                    backtest=bool(clock_date and fc.forecast_date <= clock_date),
+                    source=self._source_label(fc.model_version, bool(clock_date and fc.forecast_date <= clock_date)),
                 )
             )
 
@@ -174,10 +161,65 @@ class ForecastService:
             items=items,
             total=total,
             horizon=selected_horizon,
+            model_name=model_name,
+            store_id=target_store,
+            source=self._source_label(active_version, False) if active_version else "none",
+            backtest=any(i.backtest for i in items),
+            available_versions=available,
             model_version=active_version,
             skip=skip,
             limit=limit,
         )
+
+    @staticmethod
+    def _is_global(store_id: Optional[str]) -> bool:
+        return bool(store_id) and store_id.strip().upper() in ("GLOBAL", "ALL")
+
+    def _reject_global(self, store_id: Optional[str], what: str) -> None:
+        """GLOBAL/ALL has no aggregated forecast: 422 instead of silently answering with CA_1."""
+        if self._is_global(store_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{what}: store_id={store_id} (GLOBAL/ALL) chưa hỗ trợ dự báo gộp; hãy chọn một cửa hàng cụ thể.",
+            )
+
+    @staticmethod
+    def _source_label(model_version: Optional[str], backtest: bool) -> str:
+        if backtest:
+            return "backtest"
+        if model_version and model_version.lower().startswith("ensemble"):
+            return "production_artifact"
+        return "forecast_table"
+
+    def _available_versions(self, db: Session, store_id: str, item_id: Optional[str], model_name: Optional[str]) -> List[str]:
+        q = db.query(Forecast.model_version, func.max(Forecast.generated_at)).filter(Forecast.store_id == store_id)
+        if item_id:
+            q = q.filter(Forecast.item_id == item_id)
+        if model_name:
+            q = q.filter(Forecast.model_version.ilike(f"%{model_name.strip()}%"))
+        rows = q.group_by(Forecast.model_version).all()
+        rows.sort(key=lambda r: r[1] or datetime.min, reverse=True)
+        return [r[0] for r in rows if r[0]]
+
+    def _pick_version(self, db: Session, available: List[str], model_name: Optional[str]) -> Optional[str]:
+        if not available:
+            return None
+        if model_name:
+            return available[0]  # newest version matching the name
+        prod = (
+            db.query(model_registry_repository.model)
+            .filter(model_registry_repository.model.is_production.is_(True))
+            .order_by(model_registry_repository.model.promoted_at.desc())
+            .first()
+        )
+        if prod:
+            for v in available:
+                if prod.version == v or (prod.algorithm and prod.algorithm.lower() in v.lower()):
+                    return v
+        for v in available:
+            if v.lower().startswith("ensemble"):
+                return v
+        return available[0]
 
     def get_historical_demand(
         self,
@@ -207,9 +249,15 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
+        is_global = self._is_global(store_id)
         sales = forecast_repository.get_historical_sales(
-            db, item_id=sku, store_id=store_id, start_date=start_date, end_date=end_date
+            db, item_id=sku, store_id=None if is_global else store_id, start_date=start_date, end_date=end_date
         )
+        if is_global:  # real aggregate: demand of the SKU summed over all stores, per day
+            agg: Dict[date, float] = {}
+            for s in sales:
+                agg[s.sale_date] = agg.get(s.sale_date, 0.0) + float(s.quantity)
+            sales = [SimpleNamespace(sale_date=d, quantity=q) for d, q in sorted(agg.items())]
 
         if not sales:
             return HistoricalDemandResponse(
@@ -312,11 +360,8 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
-        target_store = (
-            store_id.strip()
-            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
-            else "CA_1"
-        )
+        self._reject_global(store_id, "GET /forecasts/{sku}/compare")
+        target_store = store_id.strip() if store_id and store_id.strip() else "CA_1"
 
         active_version = model_version or self._resolve_forecast_version(db, sku, target_store)
 
@@ -412,7 +457,27 @@ class ForecastService:
         rmse = round(math.sqrt(sum(e**2 for e in errors) / n), 2) if n > 0 else 0.0
         mape = round(sum(pct_errors) / len(pct_errors), 2) if pct_errors else None
 
+        # MASE: scale = mean |y_t - y_(t-1)| of the TRAINING history (sales strictly before the first compared day)
+        mase = None
+        scale_n = 0
+        if comparison:
+            first_day = min(c.date for c in comparison)
+            hist = (
+                db.query(SalesHistory.sale_date, SalesHistory.quantity)
+                .filter(SalesHistory.item_id == sku, SalesHistory.store_id == target_store,
+                        SalesHistory.sale_date < first_day)
+                .order_by(SalesHistory.sale_date.asc()).all()
+            )
+            ys = [float(q) for _, q in hist]
+            scale_n = len(ys)
+            if scale_n >= 2:
+                scale = sum(abs(ys[i] - ys[i - 1]) for i in range(1, scale_n)) / (scale_n - 1)
+                if scale > 0:
+                    mase = round((sum(abs_errors) / n) / scale, 4)
+
         metrics = CompareMetrics(
+            mase=mase,
+            mase_scale_n=scale_n,
             mae=mae,
             rmse=rmse,
             mape=mape,
@@ -425,6 +490,12 @@ class ForecastService:
             item_id=sku,
             store_id=store_id,
             model_version=selected_model_version,
+            model_version_source=(
+                "requested" if model_version
+                else "none" if not selected_model_version
+                else "resolved_ensemble" if str(selected_model_version).lower().startswith("ensemble")
+                else "resolved_other"
+            ),
             metrics=metrics,
             comparison=comparison,
         )
@@ -458,6 +529,7 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
+        self._reject_global(store_id, "GET /forecasts/{sku}/uncertainty")
         _store_for_version = (
             store_id.strip()
             if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
@@ -571,6 +643,7 @@ class ForecastService:
         Mức đóng góp của feature (giá, sự kiện, thời điểm).
         Mô hình ARIMA trả 404 kèm thông báo rõ.
         """
+        self._reject_global(store_id, "GET /forecasts/{sku}/explanation")
         # Kiểm tra nếu người dùng hoặc hệ thống đang dùng mô hình ARIMA
         if model_name and "arima" in model_name.lower():
             raise HTTPException(

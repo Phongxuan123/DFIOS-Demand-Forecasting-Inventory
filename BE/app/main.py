@@ -21,7 +21,17 @@ async def lifespan(_app: FastAPI):
             logger.warning("Schema upgrades applied: %s", ", ".join(applied))
     except Exception as exc:  # noqa: BLE001
         logger.error("Schema upgrade check failed (run scripts/init_tables.py): %s", exc)
+    task = None
+    try:
+        from app.services.scheduler_service import scheduler_enabled, scheduler_loop
+        if scheduler_enabled():
+            import asyncio
+            task = asyncio.create_task(scheduler_loop())
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Scheduler start failed: %s", exc)
     yield
+    if task is not None:
+        task.cancel()
 
 
 app = FastAPI(

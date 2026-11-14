@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 from app.models.inventory import Inventory
 from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.product import Product
-from app.models.sales_history import SalesHistory
 
 
 class InventoryRepository:

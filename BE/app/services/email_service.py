@@ -63,7 +63,7 @@ class SmtpEmailSender(BaseEmailSender):
                 server.sendmail(self.from_email, [to_email], msg.as_string())
             
             logger.info(f"Đã gửi email thành công tới {to_email} qua SMTP.")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - SMTP/network errors are logged, never break the request
             logger.error(f"Lỗi khi gửi email tới {to_email}: {e}")
 
 

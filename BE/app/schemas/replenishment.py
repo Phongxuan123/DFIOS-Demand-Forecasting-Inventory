@@ -33,6 +33,13 @@ class ReplenishmentItemResponse(BaseModel):
     decided_by: Optional[str] = None
     created_at: datetime
     decided_at: Optional[datetime] = None
+    # --- policy context (additive; null when the SKU has no classification / forecast / parameter row) ---
+    abc_xyz_class: Optional[str] = None
+    theta: Optional[float] = Field(None, description="theta_g of the class of the SKU (latest calibration state)")
+    m_g: Optional[float] = None
+    kappa_g: Optional[float] = None
+    q_hat: Optional[float] = Field(None, description="Q_hat(tau) of the latest stored window quantile at the service level of the SKU")
+    lead_time_days: Optional[int] = None
 
 
 class ReplenishmentListResponse(BaseModel):

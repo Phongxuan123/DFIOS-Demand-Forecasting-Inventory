@@ -29,6 +29,7 @@ def list_products(
     q: Optional[str] = Query(None, description="R-35: alias của `search`"),
     sort_by: Optional[str] = Query(None, pattern="^(item_id|name|dept_id|cat_id|price)$", description="R-35: cột sắp xếp"),
     sort_dir: str = Query("asc", pattern="^(asc|desc)$", description="R-35: chiều sắp xếp"),
+    store_id: Optional[str] = Query(None, description="Cửa hàng cho on_hand / s / S theo hàng (bỏ trống = gộp mọi cửa hàng)"),
     response: Response = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -44,7 +45,7 @@ def list_products(
         skip = (page - 1) * limit
     result = product_service.list_products(
         db, skip=skip, limit=limit, search=q or search, dept_id=dept_id, cat_id=cat_id,
-        sort_by=sort_by, sort_dir=sort_dir,
+        sort_by=sort_by, sort_dir=sort_dir, store_id=store_id,
     )
     if response is not None:
         response.headers["X-Total-Count"] = str(result.total)

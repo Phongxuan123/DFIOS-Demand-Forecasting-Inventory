@@ -25,6 +25,8 @@ class ForecastItemResponse(BaseModel):
     category: Optional[str] = None
     model_version: str
     generated_at: Optional[datetime] = None
+    backtest: bool = Field(False, description="True: forecast_date <= simulated clock date of the store (retrospective forecast, actuals may exist)")
+    source: str = Field("forecast_table", description="production_artifact | backtest | forecast_table")
 
 
 class ForecastListResponse(BaseModel):
@@ -32,6 +34,11 @@ class ForecastListResponse(BaseModel):
     total: int
     horizon: int
     model_version: Optional[str] = None
+    model_name: Optional[str] = Field(None, description="Filter applied (substring of model_version) when given")
+    store_id: Optional[str] = None
+    source: Optional[str] = None
+    backtest: bool = False
+    available_versions: List[str] = Field(default_factory=list, description="All model versions available for the filter (exactly ONE is returned)")
     skip: int
     limit: int
 
@@ -73,6 +80,8 @@ class CompareMetrics(BaseModel):
     mae: float
     rmse: float
     mape: Optional[float] = None
+    mase: Optional[float] = Field(None, description="MAE / naive one-step MAE of the training history before the first compared day; null when < 2 training days")
+    mase_scale_n: int = Field(0, description="Days of training history used for the MASE scale")
     total_actual: float
     total_predicted: float
     data_points: int
@@ -82,6 +91,7 @@ class ForecastCompareResponse(BaseModel):
     item_id: str
     store_id: Optional[str] = None
     model_version: Optional[str] = None
+    model_version_source: Optional[str] = Field(None, description="requested | resolved_ensemble | resolved_other | none")
     metrics: CompareMetrics
     comparison: List[ComparePoint]
 

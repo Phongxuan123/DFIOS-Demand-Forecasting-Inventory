@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, Query, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, Request, Response, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin, get_client_ip
@@ -20,14 +20,28 @@ router = APIRouter()
 def list_users(
     skip: int = Query(0, ge=0, description="Số lượng bản ghi bỏ qua"),
     limit: int = Query(100, ge=1, le=500, description="Số lượng bản ghi tối đa lấy về"),
+    response: Response = None,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
     """
     **UC06 - List Users (Admin only)**:
-    Lấy danh sách tất cả các tài khoản người dùng trong hệ thống.
+    Lấy danh sách tất cả các tài khoản người dùng trong hệ thống. Tổng số tài khoản nằm ở header `X-Total-Count`.
     """
+    if response is not None:
+        response.headers["X-Total-Count"] = str(db.query(User).count())
     return user_service.list_users(db, skip=skip, limit=limit)
+
+
+@router.post("/{user_id}/revoke-tokens", response_model=MessageResponse, summary="UC06 - Thu hồi mọi phiên đăng nhập của một tài khoản (Admin only)")
+def revoke_user_tokens(
+    user_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Tăng `token_version` của người dùng: mọi JWT đã phát hành cho tài khoản này bị vô hiệu ngay lập tức."""
+    return user_service.revoke_user_tokens(db, user_id=user_id, admin_email=admin.email, ip_address=get_client_ip(request))
 
 
 @router.post("", response_model=UserResponse, summary="UC06 - Tạo tài khoản mới & gán vai trò")

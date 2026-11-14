@@ -1,12 +1,11 @@
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.services.policy_artifact import ArtifactMissingError, load_results
 from app.api.deps import get_current_user, get_db, require_admin
 from app.models.user import User
-from app.models.system_setting import SystemSetting
 from app.schemas.reports import (
     BacktestRequest,
     BacktestResponse,
@@ -14,6 +13,7 @@ from app.schemas.reports import (
     ForecastAccuracyReportResponse,
     InventoryPerformanceReportResponse,
 )
+from app.services.coverage_service import coverage_fields
 from app.services.reports_service import reports_service
 
 router = APIRouter()
@@ -140,6 +140,7 @@ def get_policy_comparison_benchmark(
         art = load_results()
     except ArtifactMissingError as e:
         return {"status": "artifact_missing", "source": "none", "reason": str(e), "policies": {}}
+    cov = coverage_fields(db)
     policies = {}
     for key, row in art.policies.items():
         policies[key] = {
@@ -153,6 +154,7 @@ def get_policy_comparison_benchmark(
             "ordering_cost": row.ordering_bikip,
             "total_cost_bikip": row.cost_bikip,
             "total_cost_paper": row.cost_paper,
+            **cov,
         }
     return {
         "status": "ok",
@@ -165,5 +167,6 @@ def get_policy_comparison_benchmark(
         "lead_time_days": 3,
         "review_period_days": 7,
         "cost_basis": "cost_BIKIP = A3 (h=0.002*price/day, b=0.35*price, c=2); cost_PAPER = Theodorou et al. rates",
+        **cov,
         "policies": policies,
     }

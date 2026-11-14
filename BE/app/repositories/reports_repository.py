@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,7 +15,6 @@ from app.models.model_registry import ModelRegistry
 from app.models.product import Product
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
-from app.models.service_outcomes import ServiceOutcome
 from app.models.sim_clock import SimClock
 from app.models.sim_state import SimShadowDaily
 from app.services import policy_config as pc

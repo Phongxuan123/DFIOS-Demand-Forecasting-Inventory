@@ -1,6 +1,6 @@
 import math
 from datetime import date
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session

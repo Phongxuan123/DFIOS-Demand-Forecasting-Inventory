@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.repositories.reports_repository import reports_repository
+from app.services.coverage_service import coverage_fields
 from app.schemas.reports import (
     BacktestRequest,
     BacktestResponse,
@@ -47,6 +48,11 @@ class ReportsService:
             store_id=store_id,
             abc_class=abc_class,
         )
+        cov = coverage_fields(db, store_id)
+        res["overall_metrics"] = {
+            **res["overall_metrics"],
+            **{k: v for k, v in cov.items() if k != "coverage_q95_db_causal_source"},
+        }
         return ForecastAccuracyReportResponse(**res)
 
     def get_inventory_performance(
