@@ -22,7 +22,7 @@ import {
 import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
-import { Pagination } from '../components/ui/Pagination.tsx';
+import { Pagination } from '../components/legacy/Pagination.tsx';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
 import { resolveEffectiveRssMetrics } from '../utils/dfiosAnalytics.ts';
 import './Replenishment.css';

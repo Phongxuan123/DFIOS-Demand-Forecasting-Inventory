@@ -42,7 +42,7 @@ import {
   Truck,
   X,
 } from 'lucide-react';
-import { Card } from '../components/ui/Card.tsx';
+import { Card } from '../components/legacy/Card.tsx';
 import { api } from '../services/api.ts';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';

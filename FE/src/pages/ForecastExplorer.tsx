@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { Card } from '../components/ui/Card.tsx';
+import { Card } from '../components/legacy/Card.tsx';
 import {
   XAxis,
   YAxis,
@@ -39,7 +39,7 @@ import {
   type WindowQuantileResponse,
 } from '../services/api.ts';
 import { computeRouteCSummary, formatTauLabel } from '../utils/dfiosAnalytics.ts';
-import { Pagination } from '../components/ui/Pagination.tsx';
+import { Pagination } from '../components/legacy/Pagination.tsx';
 import './ForecastExplorer.css';
 
 const FEATURE_METADATA_EN: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {

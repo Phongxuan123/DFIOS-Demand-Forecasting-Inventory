@@ -18,7 +18,7 @@ import {
   TrendingUp,
   Layers,
 } from 'lucide-react';
-import { Card } from '../components/ui/Card.tsx';
+import { Card } from '../components/legacy/Card.tsx';
 import {
   ScatterChart,
   Scatter,
@@ -33,7 +33,7 @@ import {
 import { useAuth } from '../context/AuthContext.tsx';
 import { useLanguage } from '../context/LanguageContext.tsx';
 import { api } from '../services/api.ts';
-import { Pagination } from '../components/ui/Pagination.tsx';
+import { Pagination } from '../components/legacy/Pagination.tsx';
 import './ModelPerformance.css';
 
 type ModelPerfTab = 'diagnostics' | 'engines' | 'registry' | 'training';

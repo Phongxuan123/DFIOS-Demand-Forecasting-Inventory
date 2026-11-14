@@ -1,76 +1,117 @@
-import { useState, useEffect } from 'react';
+/**
+ * Server-sent events over fetch (the endpoint needs an Authorization header, which
+ * EventSource cannot send).
+ *
+ * R-41 / P-42:
+ *  - aborts the request on unmount / url change (no leaked streams)
+ *  - reconnects with exponential backoff (1s -> 30s, reset after a successful message)
+ *  - one connection per hook instance: mount it once in the shell, not per widget
+ *  - `onEvent` is called directly (no state churn); throttle refetches with
+ *    `useDebouncedCallback` (leading + trailing) inside it.
+ *
+ *   const refresh = useDebouncedCallback(() => refetch(), 500);
+ *   useSSE('/events', { onEvent: () => refresh(), enabled: isAuthenticated });
+ */
+import { useEffect, useRef, useState } from 'react';
 import { apiClient } from '../services/apiClient.ts';
+import { getToken } from '../services/session.ts';
 
-export function useSSE(url: string) {
-  const [data, setData] = useState<any>(null);
-  const [error, setError] = useState<any>(null);
+export interface SseEvent {
+  type: string;
+  payload: unknown;
+}
+
+export interface UseSseOptions {
+  onEvent?: (event: SseEvent) => void;
+  enabled?: boolean;
+}
+
+export type SseStatus = 'idle' | 'connecting' | 'open' | 'reconnecting';
+
+const MIN_DELAY = 1000;
+const MAX_DELAY = 30000;
+
+function parseBlock(block: string): SseEvent | null {
+  let type = 'message';
+  let data = '';
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) type = line.slice(6).trim();
+    else if (line.startsWith('data:')) data += line.slice(5).trim();
+  }
+  if (!data) return null;
+  try {
+    return { type, payload: JSON.parse(data) };
+  } catch {
+    return { type, payload: data };
+  }
+}
+
+export function useSSE(url: string, options: UseSseOptions = {}) {
+  const { enabled = true } = options;
+  const [status, setStatus] = useState<SseStatus>('idle');
+  const handlerRef = useRef(options.onEvent);
+  useEffect(() => {
+    handlerRef.current = options.onEvent;
+  });
 
   useEffect(() => {
-    let active = true;
-    const token = localStorage.getItem('access_token');
-    const connect = async () => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let delay = MIN_DELAY;
+
+    const schedule = () => {
+      if (controller.signal.aborted) return;
+      setStatus('reconnecting');
+      timer = setTimeout(() => void connect(), delay);
+      delay = Math.min(delay * 2, MAX_DELAY);
+    };
+
+    async function connect() {
+      const token = getToken();
+      if (!token || controller.signal.aborted) return;
+      setStatus('connecting');
       try {
         const base = (apiClient.defaults.baseURL || '/api/v1').replace(/\/$/, '');
-        const path = url.replace(/^\//, '');
-        const fullUrl = `${base}/${path}`;
-        const response = await fetch(fullUrl, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Accept': 'text/event-stream'
-          }
+        const res = await fetch(`${base}/${url.replace(/^\//, '')}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+          signal: controller.signal,
         });
-        
-        if (!response.body) return;
-        
-        const reader = response.body.getReader();
+        if (res.status === 401 || res.status === 403) {
+          setStatus('idle'); // not allowed: do not hammer the server
+          return;
+        }
+        if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
+        const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-
-        while (active) {
+        setStatus('open');
+        for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
-          
           buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          
-          // The last part might be incomplete
-          buffer = parts.pop() || '';
-          
-          for (const part of parts) {
-            const lines = part.split('\n');
-            let eventType = 'message';
-            let eventData = '';
-            
-            for (const line of lines) {
-              if (line.startsWith('event: ')) {
-                eventType = line.slice(7).trim();
-              } else if (line.startsWith('data: ')) {
-                eventData += line.slice(6).trim();
-              }
-            }
-            
-            if (eventData) {
-              try {
-                setData({ type: eventType, payload: JSON.parse(eventData) });
-              } catch (e) {
-                setData({ type: eventType, payload: eventData });
-              }
-            }
+          const blocks = buffer.split('\n\n');
+          buffer = blocks.pop() ?? '';
+          for (const block of blocks) {
+            const evt = parseBlock(block);
+            if (!evt) continue;
+            delay = MIN_DELAY;
+            if (evt.type === 'connected' || evt.type === 'close') continue;
+            handlerRef.current?.(evt);
           }
         }
-      } catch (err) {
-        if (active) setError(err);
+        schedule();
+      } catch {
+        if (!controller.signal.aborted) schedule();
       }
-    };
-    
-    if (token) {
-      connect();
     }
-    
-    return () => {
-      active = false;
-    };
-  }, [url]);
 
-  return { data, error };
+    void connect();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [url, enabled]);
+
+  return { status };
 }

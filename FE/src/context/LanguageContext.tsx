@@ -1,5 +1,15 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, type ReactNode } from 'react';
-import { translations, type Language } from '../i18n/translations.ts';
+/**
+ * LEGACY bridge. Only for pages that have not been rewritten yet.
+ * New code must use `useT()` / `useI18n()` from src/i18n.
+ *
+ * The language itself now lives in <I18nProvider>; this hook only maps the
+ * old API (`language`, `t(path, fallback)`) onto it and reads the old
+ * dictionary in i18n/legacyTranslations.ts. Delete this file together with
+ * legacyTranslations.ts when the last legacy page is gone.
+ */
+import React, { useMemo, type ReactNode } from 'react';
+import { translations, type Language } from '../i18n/legacyTranslations.ts';
+import { useI18n } from '../i18n/index.tsx';
 
 interface LanguageContextType {
   language: Language;
@@ -8,88 +18,32 @@ interface LanguageContextType {
   t: (path: string, fallback?: string) => string;
 }
 
-const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
-
-export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [language, setLanguageState] = useState<Language>(() => {
-    try {
-      const saved = localStorage.getItem('dfios_language');
-      if (saved === 'vi' || saved === 'en') return saved;
-    } catch {}
-    return 'en'; // Default to English as requested
-  });
-
-  const setLanguage = (newLang: Language) => {
-    setLanguageState(newLang);
-    try {
-      localStorage.setItem('dfios_language', newLang);
-      document.documentElement.lang = newLang;
-    } catch {}
-  };
-
-  const toggleLanguage = () => {
-    setLanguage(language === 'en' ? 'vi' : 'en');
-  };
-
-  useEffect(() => {
-    document.documentElement.lang = language;
-  }, [language]);
-
-  const t = useMemo(() => {
-    return (path: string, fallback?: string): string => {
-      const keys = path.split('.');
-      let current: any = translations[language];
-
-      for (const k of keys) {
-        if (current && typeof current === 'object' && k in current) {
-          current = current[k];
-        } else {
-          current = undefined;
-          break;
-        }
-      }
-
-      if (typeof current === 'string') {
-        return current;
-      }
-
-      // Fallback to English if not found in current language
-      if (language !== 'en') {
-        let enCurrent: any = translations.en;
-        for (const k of keys) {
-          if (enCurrent && typeof enCurrent === 'object' && k in enCurrent) {
-            enCurrent = enCurrent[k];
-          } else {
-            enCurrent = undefined;
-            break;
-          }
-        }
-        if (typeof enCurrent === 'string') {
-          return enCurrent;
-        }
-      }
-
-      return fallback ?? path;
-    };
-  }, [language]);
-
-  const value = useMemo(
-    () => ({
-      language,
-      setLanguage,
-      toggleLanguage,
-      t,
-    }),
-    [language, t]
-  );
-
-  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
-};
-
-export const useLanguage = (): LanguageContextType => {
-  const context = useContext(LanguageContext);
-  if (!context) {
-    throw new Error('useLanguage must be used within a LanguageProvider');
+function lookup(root: unknown, path: string): string | undefined {
+  let current: unknown = root;
+  for (const k of path.split('.')) {
+    if (current && typeof current === 'object' && k in (current as Record<string, unknown>)) {
+      current = (current as Record<string, unknown>)[k];
+    } else {
+      return undefined;
+    }
   }
-  return context;
+  return typeof current === 'string' ? current : undefined;
+}
+
+/** @deprecated The provider is now <I18nProvider>. Kept as a pass-through. */
+export const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }) => <>{children}</>;
+
+/** @deprecated Use `useT()` / `useI18n()` from src/i18n. */
+export const useLanguage = (): LanguageContextType => {
+  const { locale, setLocale, toggleLocale } = useI18n();
+  return useMemo(
+    () => ({
+      language: locale,
+      setLanguage: setLocale,
+      toggleLanguage: toggleLocale,
+      t: (path: string, fallback?: string) =>
+        lookup(translations[locale], path) ?? lookup(translations.en, path) ?? fallback ?? path,
+    }),
+    [locale, setLocale, toggleLocale],
+  );
 };

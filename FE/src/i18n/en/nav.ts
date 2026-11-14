@@ -1,0 +1,71 @@
+import type { nav as ViNav, shell as ViShell } from '../vi/nav.ts';
+
+export const nav: typeof ViNav = {
+  group_operations: 'Operations',
+  group_analysis: 'Analysis',
+  group_system: 'System',
+  dashboard: 'Dashboard',
+  replenishment: 'Replenishment',
+  products: 'Products and data',
+  forecast_explorer: 'Forecast explorer',
+  abc_xyz: 'ABC/XYZ classes',
+  reports: 'Reports',
+  model_performance: 'Model performance',
+  settings: 'Settings',
+  design_system: 'Design system',
+  main_label: 'Main navigation',
+};
+
+export const shell: typeof ViShell = {
+  sidebar: {
+    collapse: 'Collapse sidebar',
+    expand: 'Expand sidebar',
+    open_menu: 'Open menu',
+    close_menu: 'Close menu',
+  },
+  store: {
+    label: 'Store',
+    select: 'Select store',
+    loading: 'Loading…',
+    empty: 'No stores',
+    error: 'Could not load stores',
+  },
+  clock: {
+    label: 'Simulation date',
+    loading: 'Reading clock…',
+    day_index: 'Day {days} since {start}',
+    reviews: '{count} review cycles elapsed',
+    mode: 'Mode: {mode}',
+    source: 'BE /clock, store {store}',
+    refresh: 'Re-read clock',
+    advance: 'Advance clock',
+    advance_days: 'Advance +{days} days',
+    advance_title: 'Advance the simulation clock by {days} days?',
+    advance_body:
+      'The server will run the J1–J6 batch chain for store {store}: sales replay, forecast, cycle close, C³-OUT review and new replenishment recommendations. This writes to the database and may take a few minutes.',
+    advancing: 'Advancing clock…',
+    advanced: 'Advanced from {from} to {to}: {reviews} review cycles, {recommendations} new recommendations.',
+    advance_failed: 'Could not advance the clock',
+    unavailable_forbidden: 'Your role cannot view the simulation clock',
+    unavailable_missing: 'This store has no simulation clock yet',
+    unavailable_no_store: 'No store selected',
+    unavailable_error: 'Could not read the clock from the server',
+  },
+  user: {
+    menu: 'Account',
+    profile: 'Profile and settings',
+    logout: 'Sign out',
+  },
+  notifications: {
+    title: 'Stock alerts',
+    empty: 'No open alerts.',
+    unread: '{count} unread',
+    view: 'View replenishment',
+    mark_all: 'Mark all as read',
+    stock: 'On hand {on_hand}, reorder point {rop}',
+    unavailable: 'Could not load alerts',
+  },
+  skip_to_content: 'Skip to content',
+  splash: 'Checking your session…',
+  page_loading: 'Loading page…',
+};

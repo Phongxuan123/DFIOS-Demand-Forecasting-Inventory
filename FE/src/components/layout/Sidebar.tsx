@@ -1,203 +1,90 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  TrendingUp, 
-  Truck, 
-  PieChart, 
-  Cpu, 
-  FileBarChart, 
-  Boxes, 
-  Settings, 
-  LogOut,
-  X
-} from 'lucide-react';
+import React, { useEffect, useMemo } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
-import { useLanguage } from '../../context/LanguageContext.tsx';
+import { useStore } from '../../context/StoreContext.tsx';
+import { can } from '../../auth/permissions.ts';
+import { useT } from '../../i18n/index.tsx';
 import { DfiosBrandMark } from '../common/DfiosBrandMark.tsx';
-import { prefetchRouteData } from '../../services/api.ts';
-import './Sidebar.css';
+import { IconButton, cx } from '../ui/primitives.tsx';
+import { NAV_GROUPS } from './navConfig.ts';
+import './shell.css';
 
 interface SidebarProps {
-  mobileOpen?: boolean;
-  onCloseMobile?: () => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen = false, onCloseMobile }) => {
-  const { logout, user } = useAuth();
-  const { t } = useLanguage();
+export const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobile }) => {
+  const t = useT();
+  const { user } = useAuth();
+  const { withStore } = useStore();
+  const location = useLocation();
 
-  const handleNavClick = (path: string) => {
-    prefetchRouteData(path);
-    if (onCloseMobile) {
-      onCloseMobile();
-    }
-  };
+  // Role-filtered navigation (R-36): items the role cannot use are not rendered at all.
+  const groups = useMemo(
+    () =>
+      NAV_GROUPS.map((g) => ({
+        ...g,
+        items: g.items.filter((i) => can(user?.role, i.action) && (!i.devOnly || import.meta.env.DEV)),
+      })).filter((g) => g.items.length > 0),
+    [user?.role],
+  );
 
-  const formatRole = (role?: string) => {
-    if (!role) return 'USER';
-    const r = role.toUpperCase();
-    if (r === 'ADMIN') return 'ADMIN';
-    if (r === 'WAREHOUSE MANAGER') return 'WAREHOUSE MGR';
-    if (r === 'VIEWER') return 'VIEWER';
-    return r;
-  };
+  // Close the mobile drawer on navigation.
+  useEffect(() => {
+    onCloseMobile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
-  const getInitials = (name?: string, email?: string) => {
-    const raw = (name || email || 'US').trim();
-    const parts = raw.split(/[\s@._-]+/).filter(Boolean);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    return raw.substring(0, 2).toUpperCase();
-  };
-
-  const displayName = user?.display_name || user?.name || user?.email || 'User';
+  const isCollapsed = collapsed && !mobileOpen;
 
   return (
     <>
-      {/* Mobile backdrop */}
-      {mobileOpen && (
-        <div 
-          className="sidebar-mobile-backdrop" 
-          onClick={onCloseMobile}
-          aria-hidden="true" 
-        />
-      )}
-
-      <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
-        <div className="sidebar-header">
-          <div className="logo-container">
-            <div className="logo-icon">
-              <DfiosBrandMark size={20} />
-            </div>
-            <div className="logo-text">
-              <div className="logo-title-row">
-                <h2>DFIOS</h2>
-                <span className="logo-tag">SCM · ML</span>
-              </div>
-              <span className="logo-subtext">{t('nav.brand_sub', 'Inventory Intelligence')}</span>
-            </div>
-          </div>
-          {onCloseMobile && (
-            <button 
-              type="button" 
-              className="sidebar-close-btn" 
-              onClick={onCloseMobile}
-              aria-label="Close menu"
-            >
-              <X size={16} />
-            </button>
-          )}
+      {mobileOpen && <div className="shell-backdrop" onClick={onCloseMobile} aria-hidden="true" />}
+      <aside className={cx('shell-sidebar', isCollapsed && 'is-collapsed', mobileOpen && 'is-mobile-open')} aria-label={t('nav.main_label')}>
+        <div className="shell-sidebar__brand">
+          <span className="shell-sidebar__logo">
+            <DfiosBrandMark size={18} />
+          </span>
+          {!isCollapsed && <span className="shell-sidebar__name">DFIOS</span>}
+          <IconButton className="shell-sidebar__close" size="sm" label={t('shell.sidebar.close_menu')} icon={<X size={16} />} onClick={onCloseMobile} />
         </div>
 
-        <nav className="sidebar-nav">
-          <div className="nav-group-title">{t('nav.main_menu', 'MAIN MENU')}</div>
-          
-          <NavLink 
-            to="/" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/')}
-          >
-            <LayoutDashboard size={17} className="nav-icon" />
-            <span>{t('nav.dashboard', 'Dashboard')}</span>
-          </NavLink>
-
-          <NavLink 
-            to="/forecast-explorer" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/forecast-explorer')}
-          >
-            <TrendingUp size={17} className="nav-icon" />
-            <span>{t('nav.forecast_explorer', 'Forecast Explorer')}</span>
-          </NavLink>
-
-          <NavLink 
-            to="/replenishment" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/replenishment')}
-          >
-            <Truck size={17} className="nav-icon" />
-            <span>{t('nav.replenishment', 'Replenishment')}</span>
-          </NavLink>
-
-          <NavLink 
-            to="/abc-xyz" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/abc-xyz')}
-          >
-            <PieChart size={17} className="nav-icon" />
-            <span>{t('nav.abc_xyz', 'ABC/XYZ Analysis')}</span>
-          </NavLink>
-
-          <NavLink 
-            to="/model-performance" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/model-performance')}
-          >
-            <Cpu size={17} className="nav-icon" />
-            <span>{t('nav.model_performance', 'Model Performance')}</span>
-          </NavLink>
-
-          <NavLink 
-            to="/reports" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/reports')}
-          >
-            <FileBarChart size={17} className="nav-icon" />
-            <span>{t('nav.reports', 'Reports')}</span>
-          </NavLink>
-
-          <div className="nav-divider" />
-          <div className="nav-group-title">{t('nav.system', 'SYSTEM')}</div>
-
-          <NavLink 
-            to="/products" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/products')}
-          >
-            <Boxes size={17} className="nav-icon" />
-            <span>{t('nav.products', 'Products')}</span>
-          </NavLink>
-          
-          <NavLink 
-            to="/settings" 
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-            onClick={() => handleNavClick('/settings')}
-          >
-            <Settings size={17} className="nav-icon" />
-            <span>{t('nav.settings', 'Settings')}</span>
-          </NavLink>
+        <nav className="shell-sidebar__nav">
+          {groups.map((group) => (
+            <div key={group.id} className="shell-nav-group">
+              {!isCollapsed && <div className="shell-nav-group__title">{t(group.label)}</div>}
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const label = t(item.label);
+                return (
+                  <NavLink
+                    key={item.path}
+                    to={withStore(item.path)}
+                    end={item.end}
+                    className={({ isActive }) => cx('shell-nav-item', isActive && 'is-active')}
+                    title={isCollapsed ? label : undefined}
+                  >
+                    <Icon size={17} aria-hidden="true" />
+                    {!isCollapsed && <span>{label}</span>}
+                  </NavLink>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
-        <div className="sidebar-footer">
-          <div className="user-profile-bottom">
-            <div className="user-profile-info">
-              <div className="user-avatar-wrap">
-                <div className="user-avatar-initials">
-                  {getInitials(user?.display_name || user?.name, user?.email)}
-                </div>
-                <span className="user-status-dot" title="Session Active" />
-              </div>
-              <div className="user-details">
-                <span className="user-name" title={displayName}>
-                  {displayName}
-                </span>
-                <span className="user-role-badge">
-                  {formatRole(user?.role)}
-                </span>
-              </div>
-            </div>
-            <button 
-              type="button" 
-              onClick={logout} 
-              className="logout-btn-bottom" 
-              title={t('nav.logout', 'Sign Out')}
-              aria-label={t('nav.logout', 'Sign Out')}
-            >
-              <LogOut size={15} />
-            </button>
-          </div>
+        <div className="shell-sidebar__footer">
+          <IconButton
+            className="shell-sidebar__collapse"
+            size="sm"
+            label={t(isCollapsed ? 'shell.sidebar.expand' : 'shell.sidebar.collapse')}
+            icon={isCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            onClick={onToggleCollapsed}
+          />
         </div>
       </aside>
     </>

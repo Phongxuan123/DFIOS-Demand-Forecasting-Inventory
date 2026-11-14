@@ -1,221 +1,119 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext.tsx';
-import { useLanguage } from '../../context/LanguageContext.tsx';
-import { AuthBrandShell } from './AuthBrandShell.tsx';
-import { Eye, EyeOff, AlertCircle, Loader2, Info, ArrowRight, ShieldCheck } from 'lucide-react';
-import './Login.css';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth, SESSION_EXPIRED_FLAG } from '../../context/AuthContext.tsx';
+import { useT } from '../../i18n/index.tsx';
+import { apiErrorMessage, toApiError } from '../../services/apiClient.ts';
+import { Alert } from '../../components/ui/states.tsx';
+import { Button } from '../../components/ui/primitives.tsx';
+import { Checkbox, Input } from '../../components/ui/forms.tsx';
+import { AuthShell } from './AuthShell.tsx';
+import { PasswordField } from './PasswordField.tsx';
+
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
 
 export const Login: React.FC = () => {
-  const { t } = useLanguage();
-  const [email, setEmail] = useState(() => localStorage.getItem('dfios_remembered_email') || '');
-  const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('dfios_remember_me') !== 'false');
-  const [error, setError] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [capsLockActive, setCapsLockActive] = useState(false);
-  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
-
-  const emailRef = useRef<HTMLInputElement>(null);
-  const passwordRef = useRef<HTMLInputElement>(null);
-
-  const { login, isLoading, isAuthenticated } = useAuth();
+  const t = useT();
+  const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
+  const from = (location.state as { from?: { pathname?: string; search?: string } } | null)?.from;
+  const target = from?.pathname ? `${from.pathname}${from.search ?? ''}` : '/';
 
-  // If already authenticated, redirect immediately
-  useEffect(() => {
-    if (isAuthenticated) {
-      navigate(from, { replace: true });
+  const [email, setEmail] = useState(() => readPref('dfios_remembered_email') ?? '');
+  const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(() => readPref('dfios_remember_me') !== 'false');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  // The flag is only set by a real 401 (AuthContext) and cleared by a successful login, so it can never be stale.
+  const [expired, setExpired] = useState(() => {
+    try {
+      return sessionStorage.getItem(SESSION_EXPIRED_FLAG) === '1';
+    } catch {
+      return false;
     }
-  }, [isAuthenticated, navigate, from]);
+  });
+  const [initialEmail] = useState(email);
 
-  // Check if redirected due to session expiry
   useEffect(() => {
-    if (typeof window !== 'undefined' && sessionStorage.getItem('dfios_session_expired')) {
-      setSessionExpiredNotice(true);
-      sessionStorage.removeItem('dfios_session_expired');
-    }
-  }, []);
+    if (isAuthenticated) navigate(target, { replace: true });
+  }, [isAuthenticated, navigate, target]);
 
-  // Intelligent autofocus
-  useEffect(() => {
-    if (!isAuthenticated) {
-      if (email) {
-        passwordRef.current?.focus();
-      } else {
-        emailRef.current?.focus();
-      }
-    }
-  }, [isAuthenticated]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setError('');
-    setSessionExpiredNotice(false);
+    setSubmitting(true);
     try {
       await login(email.trim(), password);
-      if (rememberMe) {
-        localStorage.setItem('dfios_remember_me', 'true');
-        localStorage.setItem('dfios_remembered_email', email.trim());
-      } else {
-        localStorage.setItem('dfios_remember_me', 'false');
-        localStorage.removeItem('dfios_remembered_email');
-      }
-      navigate(from, { replace: true });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      setError(message || t('auth.login_failed'));
+      writePref('dfios_remember_me', remember ? 'true' : 'false');
+      writePref('dfios_remembered_email', remember ? email.trim() : null);
+      navigate(target, { replace: true });
+    } catch (err) {
+      const kind = toApiError(err).kind;
+      setError(kind === 'unauthorized' ? t('auth.login.bad_credentials') : apiErrorMessage(err, t));
+      setSubmitting(false);
     }
-  };
-
-  const handleEmailChange = (val: string) => {
-    setEmail(val);
-    if (error) setError('');
-    if (sessionExpiredNotice) setSessionExpiredNotice(false);
-  };
-
-  const handlePasswordChange = (val: string) => {
-    setPassword(val);
-    if (error) setError('');
-    if (sessionExpiredNotice) setSessionExpiredNotice(false);
-  };
-
-  const handlePasswordKeyEvent = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    setCapsLockActive(e.getModifierState('CapsLock'));
   };
 
   return (
-    <AuthBrandShell>
-      <div className="login-form-header">
-        <h2 className="login-title">{t('auth.welcome_back')}</h2>
-        <p className="login-subtitle">{t('auth.login_subtitle')}</p>
-      </div>
-
-      {sessionExpiredNotice && (
-        <div className="session-expired-card" role="status">
-          <Info size={16} className="session-expired-icon" />
-          <span>{t('auth.session_expired')}</span>
+    <AuthShell title={t('auth.login.title')} subtitle={t('auth.login.subtitle')}>
+      <form className="auth-form" onSubmit={onSubmit} noValidate>
+        {expired && !error && <Alert tone="info">{t('auth.login.session_expired')}</Alert>}
+        {error && <Alert tone="danger">{error}</Alert>}
+        <Input
+          id="login-email"
+          label={t('auth.email_label')}
+          type="email"
+          autoComplete="username"
+          inputMode="email"
+          placeholder={t('auth.email_placeholder')}
+          value={email}
+          required
+          autoFocus={!initialEmail}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setError('');
+            setExpired(false);
+          }}
+        />
+        <PasswordField
+          id="login-password"
+          label={t('auth.password_label')}
+          autoComplete="current-password"
+          value={password}
+          required
+          autoFocus={!!initialEmail}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setError('');
+          }}
+        />
+        <div className="auth-row">
+          <Checkbox label={t('auth.login.remember')} checked={remember} onChange={setRemember} />
+          <Link to="/forgot-password">{t('auth.login.forgot')}</Link>
         </div>
-      )}
-
-      {error && (
-        <div className="login-error-card" role="alert">
-          <AlertCircle size={16} className="login-error-icon" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="login-form">
-        <div className="form-group">
-          <label htmlFor="login-email" className="form-label">
-            {t('auth.email_label')}
-          </label>
-          <input
-            id="login-email"
-            ref={emailRef}
-            type="email"
-            name="email"
-            autoComplete="username"
-            className="form-input"
-            value={email}
-            disabled={isLoading}
-            onChange={(e) => handleEmailChange(e.target.value)}
-            placeholder="admin@dfios.com"
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <div className="form-label-row">
-            <div className="form-label-inline">
-              <label htmlFor="login-password" className="form-label" style={{ marginBottom: 0 }}>
-                {t('auth.password_label')}
-              </label>
-              {capsLockActive && (
-                <span className="caps-lock-badge">{t('auth.caps_lock')}</span>
-              )}
-            </div>
-            <Link to="/forgot-password" className="forgot-password">
-              {t('auth.forgot_password')}
-            </Link>
-          </div>
-          <div className="password-input-wrapper">
-            <input
-              id="login-password"
-              ref={passwordRef}
-              type={showPassword ? 'text' : 'password'}
-              name="password"
-              autoComplete="current-password"
-              className="form-input password-input"
-              value={password}
-              disabled={isLoading}
-              onChange={(e) => handlePasswordChange(e.target.value)}
-              onKeyDown={handlePasswordKeyEvent}
-              onKeyUp={handlePasswordKeyEvent}
-              placeholder="••••••••••••"
-              required
-            />
-            <button
-              type="button"
-              className="password-toggle"
-              onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? t('auth.hide_password') : t('auth.show_password')}
-              tabIndex={-1}
-            >
-              {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-            </button>
-          </div>
-        </div>
-
-        <div className="remember-me-group">
-          <input
-            type="checkbox"
-            id="remember"
-            className="remember-checkbox"
-            checked={rememberMe}
-            disabled={isLoading}
-            onChange={(e) => setRememberMe(e.target.checked)}
-          />
-          <label htmlFor="remember" className="remember-label">
-            {t('auth.remember_me')}
-          </label>
-        </div>
-
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="btn-primary login-btn"
-        >
-          {isLoading ? (
-            <span className="login-btn-inner">
-              <Loader2 size={16} className="login-spinner" />
-              <span>{t('auth.signing_in')}</span>
-            </span>
-          ) : (
-            <span className="login-btn-inner">
-              <span>{t('auth.sign_in')}</span>
-              <ArrowRight size={15} className="login-btn-arrow" />
-            </span>
-          )}
-        </button>
+        <Button type="submit" variant="primary" size="lg" fullWidth loading={submitting} disabled={!email.trim() || !password}>
+          {submitting ? t('auth.login.submitting') : t('auth.login.submit')}
+        </Button>
       </form>
-
-      {/* Structured Enterprise Account Provisioning Notice */}
-      <div className="login-onboarding-hint">
-        <ShieldCheck size={16} className="login-onboarding-icon" />
-        <div className="login-onboarding-content">
-          <span className="login-onboarding-title">{t('auth.need_account_title')}</span>
-          <p>
-            {t('auth.provisioned_desc')}
-            <Link to="/activate" className="login-activate-link">
-              {t('auth.activate_link')}
-            </Link>
-            .
-          </p>
-        </div>
-      </div>
-    </AuthBrandShell>
+      <p className="auth-links">
+        {t('auth.login.no_account')} <Link to="/activate">{t('auth.login.activate_link')}</Link>.
+      </p>
+    </AuthShell>
   );
 };

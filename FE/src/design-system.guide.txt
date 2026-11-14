@@ -1,0 +1,137 @@
+DFIOS FRONTEND DESIGN SYSTEM - GUIDE FOR PAGE AUTHORS
+=====================================================
+Style: enterprise light, minimal. Neutral grays, ONE accent (blue), 1px borders, subtle shadows,
+tabular numerals, Inter. Dark mode follows prefers-color-scheme, overridable (data-theme on <html>,
+localStorage key dfios_theme). Live gallery (dev only): /design-system (both themes side by side).
+
+1. FILES
+--------
+styles/tokens.css            all tokens (colours, radius, spacing, type, z-index, motion, --chart-*)
+styles/base.css              reset, focus ring, scrollbars
+styles/legacy.css            ONLY for un-rewritten pages. Never use in new code.
+components/ui/index.ts       barrel: import { Button, Card, Table, ... } from '../components/ui/index.ts'
+components/layout/*          shell (Sidebar, Topbar, Layout). navConfig.ts = menu (role-filtered)
+components/legacy/*          old Card/Pagination/OperationalCalendar + <LegacyPage> wrapper
+context/                     AuthContext, StoreContext (useStore), ClockContext (useClock)
+auth/permissions.ts          can(role, action), normalizeRole;  auth/RequireRole.tsx
+hooks/                       useApi, useSSE, useDebouncedCallback
+i18n/                        index.tsx (I18nProvider, useT, useI18n, useFormat), format.ts, vi/<ns>.ts, en/<ns>.ts
+services/apiClient.ts        axios + toApiError + apiErrorMessage + getJson
+services/session.ts          token, registerCacheClearer, clearClientCaches
+
+2. TOKENS (never hard-code colour/radius/shadow/font in page CSS)
+-----------------------------------------------------------------
+Surfaces: --color-bg, --color-surface, --color-surface-sunken, --color-surface-hover
+Text:     --color-text, -secondary, -muted, -disabled
+Border:   --color-border, --color-border-strong, --color-border-subtle
+Accent:   --color-accent (+ -hover, -subtle, -border, -text, --color-on-accent)
+Status:   --color-success|warning|danger|info  (+ -subtle, -text, -border). Status colours mean status only.
+Radius:   --radius-xs 4, sm 6, md 8, lg 10, xl 14, full
+Space:    --space-1..16 (4px base)      Type: --text-2xs..3xl, --weight-*, --font-sans, --font-mono
+Shadow:   --shadow-xs|sm|md|lg          Control height: --control-sm 28, md 34, lg 40
+Charts:   --chart-1..8 (categorical, fixed order), --chart-seq-1..7 (single hue), --chart-div-*,
+          --chart-good|warning|serious|critical, --chart-grid|axis|tick|reference
+Numbers in tables/KPIs: className="ui-num" (tabular figures) - Table and KpiTile already do it.
+
+3. COMPONENTS (components/ui)
+-----------------------------
+Button        <Button variant="primary|secondary|ghost|danger" size="sm|md|lg" loading leftIcon fullWidth>
+IconButton    <IconButton label="Xóa" icon={<Trash2 size={16}/>} />   label is mandatory (aria + tooltip)
+Card          <Card title description actions flush>...</Card>        flush = no body padding (tables)
+PageHeader    <PageHeader title description actions meta={<DataSourceNote .../>} />   one per page
+Section       <Section title description actions>...</Section>
+KpiTile       <KpiTile label value={fmt.percent(x)} unit delta={{value:2.1,text:'+2,1 pp',goodWhen:'up'}}
+                       hint loading unavailableReason="chưa có model" />   value null => "—" + reason, NEVER 0
+Badge/StatusPill  <Badge tone="neutral|accent|success|warning|danger|info">, <StatusPill tone>  (always text, not colour only)
+Table<T>      columns: Column<T>[] {key, header, cell?, value?, sortable?, align?, width?}
+              <Table columns rows rowKey={(r)=>r.id} loading error onRetry unavailableReason filtered
+                     sort onSortChange              (controlled = server sorting; omit = client sorting)
+                     pagination={{page,pageSize,onPageChange,onPageSizeChange,total?}}  total given = SERVER paging
+                     selection={{selected,onChange,actions}}  maxHeight onRowClick dense wrap />
+              const sel = useRowSelection();  selection={{selected: sel.selected, onChange: sel.set}}
+              -> selection is keyed by rowKey so it SURVIVES page changes, sorting and filtering (F-22).
+              const p = usePagination(25);  p.page, p.pageSize, p.setPage, p.setPageSize, p.offset
+Pagination    <Pagination page pageSize total onPageChange onPageSizeChange />  (i18n, clamps page and reports it)
+Tabs          <Tabs items={[{id,label,count?}]} value onChange />   arrow-key navigation
+Select        <Select value onChange options={[{value,label}]} label />   native select, typed value
+Input         <Input label hint error leftIcon trailing />      SearchInput <SearchInput value onChange delay=350 />
+Checkbox / Switch / Field
+Modal / Drawer  <Modal open onClose title description footer size="sm|md|lg|xl"> (focus trap, Esc, restores focus)
+ConfirmDialog / useConfirm   const {confirm, dialog} = useConfirm();
+              if (await confirm({title, description, tone:'danger', confirmLabel})) {...}   render {dialog}.
+              NEVER window.confirm / alert.
+Toast         const toast = useToast(); toast.success(msg) / error / warning / info / show({...})
+              403 on a user-initiated mutation is toasted automatically (apiClient -> ToastProvider).
+Tooltip       <Tooltip content="..."><button/></Tooltip>        Skeleton, SkeletonText
+EmptyState    <EmptyState title description action filtered />   filtered = "no results" wording
+ErrorState    <ErrorState error={err} onRetry={refetch} />      403 renders "no permission", not an error
+Alert         <Alert tone="danger|warning|info|success" title>text</Alert>   inline form/notice messages
+Unavailable   <Unavailable reason="..." />                       inline "—" for one cell
+DataSourceNote <DataSourceNote source="/dashboard/kpi, kho CA_1" asOf={fmt.date(d)} />  -> "Nguồn: ..."
+ChartFrame    <ChartFrame title description source height loading error onRetry empty unavailableReason footer>
+                <ResponsiveContainer width="100%" height="100%">...</ResponsiveContainer>
+              </ChartFrame>
+              Inside: const c = useChartTheme(); c.series[0..7], c.grid, c.axis (spread on XAxis/YAxis),
+              c.cursor, c.bandOpacity, c.sequential, c.diverging, c.status, c.surface.
+              <Tooltip content={<ChartTooltip format={(v)=>fmt.integer(v)} />} cursor={c.cursor} />
+              <ChartLegend items={[{label,color}]} />
+
+4. I18N
+-------
+- Default Vietnamese; toggle in topbar; stored in localStorage dfios_language.
+- Each page owns ONE namespace: i18n/vi/<ns>.ts (source of truth) + i18n/en/<ns>.ts typed `typeof Vi`.
+  Namespaces already registered: common, nav, shell, auth, dashboard, reports, models, forecast,
+  products, replenishment, abcxyz, settings. To add one, register it in vi.ts AND en.ts.
+- Keys are typed (TKey). A key missing in en, or a typo, fails `tsc -b`.
+- const t = useT(); t('dashboard.kpi.csl'); t('common.table.selected', { count: 3 })   ("{count}" placeholders)
+- Do not use the legacy useLanguage() in new/rewritten code (it only bridges i18n/legacyTranslations.ts).
+- Keep SKU, CSL, EOQ, WRMSSE, MASE, theta untranslated (put them in the string as-is).
+- Formatting: const fmt = useFormat();
+    fmt.number(x,{digits}) fmt.integer fmt.compact fmt.percent(ratio)  (scale:'percent' if already 0-100)
+    fmt.currency(x,{currency:'USD',compact}) fmt.date(d,'short|medium|long') fmt.dateTime fmt.isoDate fmt.relative
+  All return "—" for null/undefined/NaN. Never write (x ?? 0).toFixed(...) or hard-code "." / "," separators.
+- Server `detail` strings may be Vietnamese; show them via apiErrorMessage(err, t).
+
+5. DATA-STATE RULES (data honesty)
+----------------------------------
+Every data block must handle: loading (Skeleton / loading prop), empty (EmptyState), error (ErrorState with
+retry), forbidden (ErrorState shows "no permission" automatically), unavailable (value cannot be computed:
+"—" + reason). Never substitute 0, a constant, a sin() curve or a hash for missing data. Never catch(()=>[])
+a failed request. Label the origin with DataSourceNote.
+Use the hook:  const { data, loading, error, refetch } = useApi((signal) => getJson<T>('/x', { params, signal }), [deps], { enabled });
+  aborts on unmount/deps change, ignores stale responses, error is a normalised ApiError (error.kind).
+Background GETs never toast 403. For a GET the user explicitly triggers use { notifyForbidden: true }.
+
+6. SHELL CONTEXTS
+-----------------
+useStore()  -> { storeId, stores, setStoreId, withStore(path) }   synced with ?store= ; use storeId in every
+               store-scoped request, include it in deps; use withStore() for internal links.
+useClock()  -> { clock:{current_date,start_date,days_elapsed,reviews_elapsed,mode}, status:'loading|ready|unavailable',
+               reason, canAdvance, advance(days), refresh(), version }  100% from BE /clock. After advance(),
+               `version` increments: put it in useApi deps to refetch. No local offsets, no sessionStorage.
+useAuth()   -> { user, isAuthenticated, login, logout }   can(user?.role, 'replenishment:write')
+<RequireRole action="view:models">...</RequireRole>  route/section guard with a proper no-permission state.
+Sidebar items come from components/layout/navConfig.ts and are filtered by can().
+Role matrix: auth/permissions.ts (clock advance and /models/* are admin-only in the BE; /replenishments is manager+).
+Alerts: call emitAlertsSyncEvent() (utils/alertTracker) after approving/adjusting; the bell refreshes itself.
+Storage: name any per-account key dfios_<name>; it is wiped on login/logout. Device preferences are whitelisted
+in services/session.ts (PRESERVED_KEYS).
+
+7. REWRITING A LEGACY PAGE
+--------------------------
+1. Build the page from components/ui + tokens + your i18n namespace. Page CSS (if any) uses tokens only.
+2. In App.tsx remove the <LegacyPage> wrapper for that route (it pins the old light-only styling).
+3. Delete the page's old CSS and its keys from legacyTranslations.ts when nothing else uses them.
+4. Check: light + dark, VI + EN, 375 px width, loading/empty/error/forbidden states, `npm run build`, `npm run lint`.
+
+8. DO / DON'T
+-------------
+DO   use <PageHeader> once, <Card>/<Section> for grouping, Table for tabular data, ChartFrame for every chart.
+DO   keep one accent colour; use status tones only for status; always pair colour with text/icon.
+DO   use lucide-react icons (16-18px). Use tabular numbers for numeric columns (align right).
+DO   put every user-visible string in the dictionaries (vi + en).
+DON'T hard-code colours, px radii, shadows, fonts; don't import legacy.css classes in new code.
+DON'T use window.confirm/alert, emoji as icons, gradients, glassmorphism, more than 8 chart series.
+DON'T read the theme from JS for charts: use useChartTheme() (works in both themes).
+DON'T open your own SSE connection: the shell has one (/events); use window events / refetch.
+DON'T cache per-account data outside services/api.ts caches or registerCacheClearer().

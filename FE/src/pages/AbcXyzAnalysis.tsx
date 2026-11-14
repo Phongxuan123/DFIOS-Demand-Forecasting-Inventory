@@ -41,7 +41,7 @@ import {
   buildCalibrationTrajectory,
   findPolicySelectionForClass,
 } from '../utils/dfiosAnalytics.ts';
-import { Pagination } from '../components/ui/Pagination.tsx';
+import { Pagination } from '../components/legacy/Pagination.tsx';
 import './AbcXyzAnalysis.css';
 
 interface TrajectoryPointItem {

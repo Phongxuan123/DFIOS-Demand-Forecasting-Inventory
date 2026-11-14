@@ -1,4 +1,5 @@
 import { apiClient } from './apiClient.ts';
+import { registerCacheClearer } from './session.ts';
 
 export interface WindowQuantileResponse {
   id: string;
@@ -118,6 +119,9 @@ export const clearApiCache = (pattern?: string) => {
   }
 };
 
+// R-25: wipe this cache (memory + sessionStorage) on every login / logout.
+registerCacheClearer(() => clearApiCache());
+
 export const cachedGet = async <T = any>(
   url: string,
   params?: any,
@@ -171,42 +175,9 @@ export const cachedGet = async <T = any>(
   return fetchPromise;
 };
 
-export const prefetchRouteData = (route: string) => {
-  try {
-    switch (route) {
-      case '/':
-      case '/dashboard':
-        cachedGet('/dashboard/overview', { store_id: 'CA_1' }, 120000).catch(() => {});
-        cachedGet('/dashboard/alerts', { store_id: 'CA_1', limit: 10 }, 120000).catch(() => {});
-        break;
-      case '/forecast-explorer':
-        cachedGet('/products/categories', null, 300000).catch(() => {});
-        cachedGet('/products', { limit: 100 }, 120000).catch(() => {});
-        cachedGet('/forecasts/FOODS_1_001', { h: 28, store_id: 'CA_1', model_name: 'lightgbm' }, 180000).catch(() => {});
-        break;
-      case '/replenishment':
-        cachedGet('/replenishments', { status: 'PENDING', skip: 0, limit: 200, auto_generate: false }, 30000).catch(() => {});
-        break;
-      case '/abc-xyz':
-        cachedGet('/classification/matrix', null, 60000).catch(() => {});
-        cachedGet('/classification/thresholds', null, 60000).catch(() => {});
-        cachedGet('/classification/skus', { skip: 0, limit: 15 }, 30000).catch(() => {});
-        break;
-      case '/reports':
-        cachedGet('/reports/forecast-accuracy', { store_id: 'CA_1' }, 60000).catch(() => {});
-        break;
-      case '/model-performance':
-        cachedGet('/ml/models', null, 60000).catch(() => {});
-        break;
-      case '/products':
-        cachedGet('/products', { limit: 50 }, 120000).catch(() => {});
-        cachedGet('/suppliers', { limit: 50 }, 60000).catch(() => {});
-        break;
-      default:
-        break;
-    }
-  } catch {}
-};
+// prefetchRouteData was removed (P-30, F-16): it requested routes that do not exist
+// (GET /forecasts/{sku}), used cache keys the pages never read, and called admin-only
+// endpoints for every role. Pages fetch their own data.
 
 export const fetchAllPages = async <T = any>(
   url: string,

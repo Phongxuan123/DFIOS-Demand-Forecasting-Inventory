@@ -1,0 +1,318 @@
+/* ==========================================================================
+   DFIOS design tokens
+   --------------------------------------------------------------------------
+   Light values live on :root. Dark values live on [data-theme="dark"].
+   ThemeProvider (and the inline script in index.html, before first paint)
+   always stamps <html data-theme="light|dark">, resolved from the user's
+   choice or from prefers-color-scheme. Any element can also carry
+   data-theme to force a theme for its subtree (used by /design-system).
+
+   Rules for page authors:
+   - Never hard-code a colour, radius, shadow or font in page CSS. Use tokens.
+   - One accent colour. Status colours are reserved for status.
+   - Chart colours come from --chart-* (see components/ui/chartTheme.ts).
+   ========================================================================== */
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f4f4f5;
+  --color-surface-hover: #f4f4f5;
+  --color-surface-active: #ececee;
+  --color-surface-inverse: #18181b;
+
+  /* Borders */
+  --color-border: #e4e4e7;
+  --color-border-strong: #d0d0d6;
+  --color-border-subtle: #efeff1;
+
+  /* Text */
+  --color-text: #18181b;
+  --color-text-secondary: #52525b;
+  --color-text-muted: #71717a;
+  --color-text-disabled: #a1a1aa;
+  --color-text-inverse: #fafafa;
+
+  /* Accent (the only brand colour) */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-active: #1e40af;
+  --color-accent-subtle: #eff4ff;
+  --color-accent-subtle-hover: #e0eaff;
+  --color-accent-border: #c3d4fb;
+  --color-accent-text: #1d4ed8;
+  --color-on-accent: #ffffff;
+
+  /* Status: solid (icons, dots), subtle (fills), text (on subtle or surface), border */
+  --color-success: #16803c;
+  --color-success-subtle: #edf7f0;
+  --color-success-text: #166534;
+  --color-success-border: #bfe3cb;
+
+  --color-warning: #b45309;
+  --color-warning-subtle: #fdf6e7;
+  --color-warning-text: #92400e;
+  --color-warning-border: #f1d9a6;
+
+  --color-danger: #c62828;
+  --color-danger-hover: #a81f1f;
+  --color-danger-subtle: #fdf0f0;
+  --color-danger-text: #a81f1f;
+  --color-danger-border: #f3c6c6;
+
+  --color-info: #2563eb;
+  --color-info-subtle: #eff4ff;
+  --color-info-text: #1d4ed8;
+  --color-info-border: #c3d4fb;
+
+  --color-neutral-subtle: #f4f4f5;
+  --color-neutral-text: #52525b;
+  --color-neutral-border: #e4e4e7;
+
+  --color-overlay: rgba(24, 24, 27, 0.4);
+  --color-focus-ring: rgba(37, 99, 235, 0.45);
+  --color-skeleton: #ececee;
+  --color-skeleton-shine: #f6f6f7;
+  --color-scrollbar: #d4d4d8;
+  --color-scrollbar-hover: #a1a1aa;
+
+  /* Shadows: very subtle, borders do most of the separation */
+  --shadow-xs: 0 1px 1px rgba(24, 24, 27, 0.04);
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-md: 0 4px 12px rgba(24, 24, 27, 0.08), 0 1px 2px rgba(24, 24, 27, 0.04);
+  --shadow-lg: 0 12px 32px rgba(24, 24, 27, 0.12), 0 2px 6px rgba(24, 24, 27, 0.05);
+
+  /* Charts: categorical order is fixed and colour-blind validated. Never reorder or cycle. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #6250d6;
+  --chart-8: #e34948;
+
+  /* Single-hue sequential scale (blue), low to high */
+  --chart-seq-1: #cde2fb;
+  --chart-seq-2: #9ec5f4;
+  --chart-seq-3: #6da7ec;
+  --chart-seq-4: #3987e5;
+  --chart-seq-5: #256abf;
+  --chart-seq-6: #184f95;
+  --chart-seq-7: #0d366b;
+
+  /* Diverging poles + neutral midpoint */
+  --chart-div-neg: #e34948;
+  --chart-div-mid: #ececee;
+  --chart-div-pos: #2a78d6;
+
+  /* Chart status marks (never used as "series N") */
+  --chart-good: #0ca30c;
+  --chart-warning: #fab219;
+  --chart-serious: #ec835a;
+  --chart-critical: #d03b3b;
+
+  /* Chart chrome */
+  --chart-surface: #ffffff;
+  --chart-grid: #ececee;
+  --chart-axis: #d0d0d6;
+  --chart-tick: #71717a;
+  --chart-reference: #52525b;
+  --chart-band-opacity: 0.14;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-bg: #0e0e10;
+  --color-surface: #161618;
+  --color-surface-sunken: #1c1c1f;
+  --color-surface-hover: #212124;
+  --color-surface-active: #29292d;
+  --color-surface-inverse: #fafafa;
+
+  --color-border: #2a2a2e;
+  --color-border-strong: #3a3a40;
+  --color-border-subtle: #222225;
+
+  --color-text: #ededef;
+  --color-text-secondary: #b4b4bb;
+  --color-text-muted: #8e8e98;
+  --color-text-disabled: #5f5f68;
+  --color-text-inverse: #18181b;
+
+  --color-accent: #4f83f1;
+  --color-accent-hover: #6a97f5;
+  --color-accent-active: #86abf7;
+  --color-accent-subtle: #172238;
+  --color-accent-subtle-hover: #1d2c49;
+  --color-accent-border: #2b4175;
+  --color-accent-text: #8fb3fa;
+  --color-on-accent: #ffffff;
+
+  --color-success: #3fb968;
+  --color-success-subtle: #12261a;
+  --color-success-text: #74d394;
+  --color-success-border: #1f4a2e;
+
+  --color-warning: #e0a030;
+  --color-warning-subtle: #2a2011;
+  --color-warning-text: #efbd62;
+  --color-warning-border: #55401a;
+
+  --color-danger: #e5605f;
+  --color-danger-hover: #ee7c7b;
+  --color-danger-subtle: #2c1616;
+  --color-danger-text: #f19291;
+  --color-danger-border: #5c2626;
+
+  --color-info: #4f83f1;
+  --color-info-subtle: #172238;
+  --color-info-text: #8fb3fa;
+  --color-info-border: #2b4175;
+
+  --color-neutral-subtle: #1f1f22;
+  --color-neutral-text: #b4b4bb;
+  --color-neutral-border: #2a2a2e;
+
+  --color-overlay: rgba(0, 0, 0, 0.6);
+  --color-focus-ring: rgba(79, 131, 241, 0.55);
+  --color-skeleton: #222225;
+  --color-skeleton-shine: #2c2c30;
+  --color-scrollbar: #3a3a40;
+  --color-scrollbar-hover: #5f5f68;
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
+
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+
+  /* Sequential in dark: low values recede toward the surface, high values are bright */
+  --chart-seq-1: #0d366b;
+  --chart-seq-2: #184f95;
+  --chart-seq-3: #256abf;
+  --chart-seq-4: #3987e5;
+  --chart-seq-5: #6da7ec;
+  --chart-seq-6: #9ec5f4;
+  --chart-seq-7: #cde2fb;
+
+  --chart-div-neg: #e66767;
+  --chart-div-mid: #38383d;
+  --chart-div-pos: #3987e5;
+
+  --chart-good: #0ca30c;
+  --chart-warning: #fab219;
+  --chart-serious: #ec835a;
+  --chart-critical: #d03b3b;
+
+  --chart-surface: #161618;
+  --chart-grid: #26262a;
+  --chart-axis: #3a3a40;
+  --chart-tick: #8e8e98;
+  --chart-reference: #b4b4bb;
+  --chart-band-opacity: 0.2;
+}
+
+:root {
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Segoe UI Mono', Menlo, Consolas, monospace;
+
+  --text-2xs: 0.6875rem; /* 11px: table meta, footnotes */
+  --text-xs: 0.75rem; /* 12px */
+  --text-sm: 0.8125rem; /* 13px: default UI size */
+  --text-md: 0.875rem; /* 14px: body */
+  --text-lg: 1rem; /* 16px */
+  --text-xl: 1.125rem; /* 18px: section titles */
+  --text-2xl: 1.375rem; /* 22px: page titles */
+  --text-3xl: 1.75rem; /* 28px: KPI values */
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --tracking-tight: -0.015em;
+  --tracking-caps: 0.04em;
+
+  /* Spacing: 4px base */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* Radius scale */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+
+  /* Control heights */
+  --control-sm: 28px;
+  --control-md: 34px;
+  --control-lg: 40px;
+
+  /* Layout */
+  --sidebar-width: 232px;
+  --sidebar-width-collapsed: 60px;
+  --topbar-height: 52px;
+  --content-max-width: 1440px;
+  --page-gutter: var(--space-6);
+
+  /* Z-index */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-topbar: 40;
+  --z-sidebar: 50;
+  --z-dropdown: 100;
+  --z-overlay: 200;
+  --z-modal: 210;
+  --z-toast: 300;
+  --z-tooltip: 400;
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --page-gutter: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-normal: 0ms;
+    --duration-slow: 0ms;
+  }
+}
