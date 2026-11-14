@@ -332,6 +332,49 @@ class TestDataQualityEndpoints(unittest.TestCase):
         df_cp = data_preprocessing_service.read_csv_safely(raw_cp1258)
         self.assertGreaterEqual(df_cp.shape[1], 2)
 
+    def test_b02_memory_efficient_sql_aggregations_and_large_scale_handling(self):
+        """B-02: Kiểm tra tổng hợp chỉ số chất lượng dữ liệu bằng SQL aggregation trực tiếp, không load toàn bộ record vào RAM."""
+        base_date = date(2026, 5, 1)
+        with self.TestingSessionLocal() as session:
+            # Tạo 50 records cho FOODS_1_001
+            sales_batch = []
+            for d in range(25):
+                sales_batch.append(
+                    SalesHistory(
+                        id=f"scale_rec_{d}",
+                        item_id="FOODS_1_001",
+                        store_id="CA_1",
+                        sale_date=base_date + timedelta(days=d),
+                        quantity=20.0 + (d % 5),
+                    )
+                )
+            # Thêm 1 bản ghi số lượng âm
+            sales_batch.append(
+                SalesHistory(
+                    id="scale_rec_neg",
+                    item_id="FOODS_1_001",
+                    store_id="CA_1",
+                    sale_date=base_date + timedelta(days=26),
+                    quantity=-8.0,
+                )
+            )
+            session.add_all(sales_batch)
+            session.commit()
+
+        res = self.client.post(
+            "/api/v1/ml/data-quality/run",
+            json={"item_ids": ["FOODS_1_001"], "store_id": "CA_1"},
+            headers={"Authorization": f"Bearer {self.admin_token}"},
+        )
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.assertEqual(data["summary"]["total_records"], 26)
+        self.assertEqual(data["summary"]["negative_values_count"], 1)
+        self.assertEqual(data["summary"]["invalid_sku_count"], 0)
+        self.assertFalse(data["passed"])
+        self.assertEqual(data["status"], "FAILED")
+
+
 
 if __name__ == "__main__":
     unittest.main()
