@@ -495,6 +495,30 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
         self.assertEqual(res_legacy.status_code, 200)
         self.assertEqual(res_legacy.json()["email"], "sarah.jenkins@dfios.com")
 
+    def test_b28_mock_email_sender_bounded_memory_safety(self):
+        """B-28: MockEmailSender có giới hạn hàng đợi tối đa FIFO ngăn tràn bộ nhớ RAM."""
+        from app.services.email_service import MockEmailSender
+
+        bounded_sender = MockEmailSender(max_records=5)
+        for i in range(10):
+            bounded_sender.send_email(
+                to_email=f"user{i}@test.com",
+                subject=f"Subject {i}",
+                html_body=f"<p>{i}</p>",
+                text_body=str(i),
+            )
+
+        # Số lượng bản ghi lưu trữ không được vượt quá max_records
+        self.assertEqual(len(bounded_sender.sent_emails), 5)
+        # Các bản ghi cũ nhất (0..4) đã bị đẩy ra, chỉ giữ 5..9
+        self.assertEqual(bounded_sender.sent_emails[0]["to_email"], "user5@test.com")
+        self.assertEqual(bounded_sender.sent_emails[-1]["to_email"], "user9@test.com")
+
+        # Xóa đệm
+        bounded_sender.clear()
+        self.assertEqual(len(bounded_sender.sent_emails), 0)
+
+
 
 
 if __name__ == "__main__":
