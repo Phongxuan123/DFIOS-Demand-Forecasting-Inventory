@@ -169,10 +169,28 @@ class DashboardRepository:
         }
 
         # 2. Truy vấn dự báo nhu cầu tương lai (từ mốc clock_date)
+        # R-20: Lọc theo model_version production để tránh cộng dồn nhiều mô hình làm vọt dữ liệu dự báo
+        from app.models.model_registry import ModelRegistry
+        prod_model = (
+            db.query(ModelRegistry)
+            .filter(ModelRegistry.is_production == True)
+            .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
+            .first()
+        )
+
         fc_q = db.query(
             Forecast.forecast_date,
             func.sum(Forecast.y_pred).label("total_pred"),
         )
+        if prod_model and prod_model.algorithm:
+            has_prod_fc = db.query(Forecast.id).filter(Forecast.model_version.ilike(f"%{prod_model.algorithm}%")).first()
+            if has_prod_fc:
+                fc_q = fc_q.filter(Forecast.model_version.ilike(f"%{prod_model.algorithm}%"))
+            else:
+                fc_q = fc_q.filter(~Forecast.model_version.ilike("%fast-inference%"))
+        else:
+            fc_q = fc_q.filter(~Forecast.model_version.ilike("%fast-inference%"))
+
         if not is_global:
             fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
         else:

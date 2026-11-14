@@ -316,16 +316,24 @@ class DashboardService:
         """
         Task API.4 - Trả về chi phí lũy kế theo mô hình A3, availability 9 nhóm hàng,
         và đường chi phí của chính sách tĩnh B0 chạy song song (shadow baseline).
+        R-20: Hỗ trợ truy vấn toàn hệ thống (GLOBAL) chính xác không ép thành CA_1.
         """
-        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
+        target_store = "GLOBAL" if is_global else store_id.strip()
+
+        if is_global:
+            clock = db.query(SimClock).order_by(SimClock.current_date.desc()).first()
+        else:
+            clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+
         curr_date = clock.current_date if clock and clock.current_date else date(2016, 5, 23)
         start_date = clock.start_date if clock and clock.start_date else date(2016, 4, 25)
         days_elapsed = max(0, (curr_date - start_date).days)
         reviews_elapsed = max(0, days_elapsed // 7)
 
         # 1. Lấy thông tin hệ số C³-OUT của 9 nhóm
-        thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
-        multipliers = calibrator_service.get_current_multipliers(db, store_id=store_id)
+        thetas = calibrator_service.get_current_thetas(db, store_id=None if is_global else target_store)
+        multipliers = calibrator_service.get_current_multipliers(db, store_id=None if is_global else target_store)
 
         # 2. Lấy kết quả phục vụ thực tế theo từng nhóm từ service_outcomes
         ALL_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
@@ -347,11 +355,11 @@ class DashboardService:
         }
 
         for class_id in ALL_CLASSES:
-            avg_err = (
-                db.query(func.avg(ServiceOutcome.error_rate))
-                .filter(ServiceOutcome.store_id == store_id, ServiceOutcome.class_id == class_id)
-                .scalar()
-            )
+            so_q = db.query(func.avg(ServiceOutcome.error_rate)).filter(ServiceOutcome.class_id == class_id)
+            if not is_global:
+                so_q = so_q.filter(ServiceOutcome.store_id == target_store)
+            avg_err = so_q.scalar()
+
             if avg_err is not None:
                 c3_avail = round((1.0 - float(avg_err)) * 100.0, 1)
             else:
@@ -383,7 +391,7 @@ class DashboardService:
         overall_b0_avail = round(sum(b0_avail_list) / max(1, len(b0_avail_list)), 1)
 
         # 3. Tính toán chi phí thực tế từ InventoryDaily và ReplenishmentRecommendation theo chuẩn A3
-        daily_holding_lost = (
+        inv_daily_q = (
             db.query(
                 InventoryDaily.date,
                 func.sum(InventoryDaily.on_hand_end * Product.price).label("holding_val"),
@@ -391,31 +399,36 @@ class DashboardService:
             )
             .join(Product, Product.item_id == InventoryDaily.item_id)
             .filter(
-                InventoryDaily.store_id == store_id,
                 InventoryDaily.date >= start_date,
                 InventoryDaily.date <= curr_date,
             )
-            .group_by(InventoryDaily.date)
-            .all()
         )
+        if not is_global:
+            inv_daily_q = inv_daily_q.filter(InventoryDaily.store_id == target_store)
+        daily_holding_lost = inv_daily_q.group_by(InventoryDaily.date).all()
+
         daily_cost_map = {
             r.date: (float(r.holding_val or 0.0) * 0.002, float(r.lost_val or 0.0) * 0.35)
             for r in daily_holding_lost
         }
 
-        daily_orders = (
+        rep_rec_q = (
             db.query(
                 ReplenishmentRecommendation.review_date,
                 func.count(ReplenishmentRecommendation.id).label("order_count"),
             )
             .filter(
-                ReplenishmentRecommendation.store_id == store_id,
                 ReplenishmentRecommendation.review_date >= start_date,
                 ReplenishmentRecommendation.review_date <= curr_date,
             )
-            .group_by(ReplenishmentRecommendation.review_date)
-            .all()
         )
+        if not is_global:
+            rep_rec_q = rep_rec_q.filter(ReplenishmentRecommendation.store_id == target_store)
+        daily_orders = rep_rec_q.group_by(ReplenishmentRecommendation.review_date).all()
+        daily_order_map = {
+            r.review_date: float(r.order_count or 0.0) * 2.0
+            for r in daily_orders if r.review_date is not None
+        }
         daily_order_map = {
             r.review_date: float(r.order_count or 0.0) * 2.0
             for r in daily_orders if r.review_date is not None

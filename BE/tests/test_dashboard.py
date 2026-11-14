@@ -528,6 +528,60 @@ class TestDashboardEndpoints(unittest.TestCase):
         self.assertIn("alerts_generated", data)
         self.assertIn("broadcast_count", data)
 
+    def test_r20_demand_trend_model_version_isolation_and_kpi_dashboard_global(self):
+        """
+        R-20:
+        1. Demand trend lọc chặt chẽ theo model_version production, loại trừ fast-inference / trùng lặp.
+        2. KPI dashboard hỗ trợ store_id='GLOBAL' không bị ép cứng thành CA_1.
+        """
+        target_date = date.today() + timedelta(days=5)
+        with self.TestingSessionLocal() as session:
+            # Seed 2 forecast records for same item/store/date with different model versions
+            fc_prod = Forecast(
+                id=9101,
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                forecast_date=target_date,
+                h=5,
+                y_pred=20.0,
+                available=True,
+                model_version="ensemble",
+            )
+            fc_fast = Forecast(
+                id=9102,
+                item_id="FOODS_1_001",
+                store_id="CA_1",
+                forecast_date=target_date,
+                h=5,
+                y_pred=35.0,
+                available=True,
+                model_version="fast-inference-sba",
+            )
+            session.add_all([fc_prod, fc_fast])
+            session.commit()
+
+        # Gọi demand-trend
+        resp = self.client.get(
+            "/api/v1/dashboard/demand-trend?store_id=CA_1",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        point = next((p for p in data if p["date"] == target_date.strftime("%Y-%m-%d")), None)
+        self.assertIsNotNone(point)
+        # Giá trị dự báo phải là 20.0 (từ production ensemble), KHÔNG phải bị cộng dồn 20 + 35 = 55.0
+        self.assertEqual(point["predicted"], 20.0)
+
+        # Gọi kpi-dashboard với store_id=GLOBAL
+        resp_kpi_global = self.client.get(
+            "/api/v1/dashboard/kpi-dashboard?store_id=GLOBAL",
+            headers={"Authorization": f"Bearer {self.viewer_token}"},
+        )
+        self.assertEqual(resp_kpi_global.status_code, 200)
+        kpi_data = resp_kpi_global.json()
+        self.assertEqual(kpi_data["store_id"], "GLOBAL")
+        self.assertEqual(len(kpi_data["segment_availabilities"]), 9)
+
 
 if __name__ == "__main__":
     unittest.main()
