@@ -1,10 +1,8 @@
-import json
 import logging
 import math
 import uuid
 from datetime import date, datetime, timedelta
 
-logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func
@@ -39,6 +37,8 @@ from app.services.audit_service import audit_service
 from app.models.sim_clock import SimClock
 from app.models.sales_history import SalesHistory
 from types import SimpleNamespace
+
+logger = logging.getLogger(__name__)
 
 
 class ForecastService:
@@ -250,6 +250,10 @@ class ForecastService:
             )
 
         is_global = self._is_global(store_id)
+        cap = self.clock_cap(db, store_id)
+        bounded = bool(cap is not None and (end_date is None or end_date > cap))
+        if bounded:
+            end_date = cap
         sales = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=None if is_global else store_id, start_date=start_date, end_date=end_date
         )
@@ -270,6 +274,8 @@ class ForecastService:
                 max_quantity=0.0,
                 count=0,
                 history=[],
+                as_of=str(cap) if cap else None,
+                bounded_by_clock=bounded,
             )
 
         gran = granularity.lower()
@@ -314,7 +320,17 @@ class ForecastService:
             max_quantity=round(max_qty, 2),
             count=count,
             history=history_points,
+            as_of=str(cap) if cap else None,
+            bounded_by_clock=bounded,
         )
+
+    def clock_cap(self, db: Session, store_id: Optional[str]) -> Optional[date]:
+        """U-04: actuals after the simulated clock date are the "future" and are never returned.
+        store -> its clock; GLOBAL -> the latest clock; no clock row -> no cap."""
+        if not store_id or not store_id.strip() or self._is_global(store_id):
+            return db.query(func.max(SimClock.current_date)).scalar()
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id.strip()).first()
+        return clock.current_date if clock and clock.current_date else None
 
     def _resolve_forecast_version(self, db: Session, sku: str, store_id: str) -> Optional[str]:
         """B-05: one model_version for a SKU/store: the Tier-1 Ensemble if present, else the production
@@ -365,6 +381,9 @@ class ForecastService:
 
         active_version = model_version or self._resolve_forecast_version(db, sku, target_store)
 
+        cap = self.clock_cap(db, target_store)
+        if cap is not None and (end_date is None or end_date > cap):
+            end_date = cap  # U-04: no actuals from the simulated future
         sales = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
         )
@@ -674,54 +693,23 @@ class ForecastService:
                 )
                 for e in db_explanations
             ]
-            m_name = db_explanations[0].model_name
-            m_ver = db_explanations[0].model_version
-            base_val = 10.0
-        else:
-            # SHAP baseline đặc trưng cho chuỗi Walmart M5 (LightGBM default)
-            m_name = "lightgbm"
-            m_ver = model_version or "v1.0.0"
-            base_val = 12.5
-            features = [
-                SHAPFeatureContribution(
-                    feature_name="sell_price",
-                    importance_score=0.3245,
-                    direction="negative",
-                    description="Giá bán cao hơn tác động làm giảm nhu cầu tiêu thụ",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="event_promotion",
-                    importance_score=0.2812,
-                    direction="positive",
-                    description="Sự kiện khuyến mãi kích thích mạnh mẽ sản lượng bán ra",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="day_of_week",
-                    importance_score=0.1876,
-                    direction="positive",
-                    description="Hiệu ứng tiêu dùng cuối tuần thúc đẩy sức mua",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="lag_7",
-                    importance_score=0.1430,
-                    direction="positive",
-                    description="Doanh số cùng kỳ tuần trước tạo đà tương quan cao",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="rolling_mean_28",
-                    importance_score=0.0821,
-                    direction="positive",
-                    description="Mức tiêu thụ trung bình tháng định hình xu hướng nhu cầu nền",
-                ),
-            ]
+            return ForecastExplanationResponse(
+                item_id=sku, store_id=store_id, model_name=db_explanations[0].model_name,
+                model_version=db_explanations[0].model_version, base_value=None, features=features,
+                available=True, source="stored_explanations",
+                reason=None,
+            )
 
+        # U-03: no explanation was computed for this SKU. The previous canned SHAP values (identical for every
+        # SKU) were fabricated; the production forecast is an ensemble artifact without per-SKU attributions
+        # in this database, so we say so instead of inventing numbers.
         return ForecastExplanationResponse(
-            item_id=sku,
-            store_id=store_id,
-            model_name=m_name,
-            model_version=m_ver,
-            base_value=base_val,
-            features=features,
+            item_id=sku, store_id=store_id, model_name="n/a", model_version=model_version or "n/a",
+            base_value=None, features=[], available=False, source="none",
+            reason=(
+                "No per-SKU feature attribution is available: the production forecast is an ensemble artifact "
+                "(no SHAP values are stored for this SKU and none are fabricated)."
+            ),
         )
 
     def create_override(
@@ -782,17 +770,6 @@ class ForecastService:
         saved = forecast_repository.create_override(db, override)
 
         # Ghi audit log
-        audit_details = json.dumps(
-            {
-                "sku": sku,
-                "store_id": target_store,
-                "forecast_date": str(request.forecast_date),
-                "original_y_pred": original_fc.y_pred,
-                "override_y_pred": request.override_value,
-                "reason": request.reason.strip(),
-            },
-            ensure_ascii=False,
-        )
         audit_service.log(
             db,
             action="forecast.override",

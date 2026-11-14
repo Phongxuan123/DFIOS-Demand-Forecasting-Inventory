@@ -88,6 +88,13 @@ class DFIOSPredictor:
             "model_dir": self.model_dir,
         }
 
+    @staticmethod
+    def _opt_round(row, keys, default=None):
+        for k in keys:
+            if k in row and row[k] is not None and row[k] == row[k]:
+                return round(float(row[k]), 3)
+        return None if default is None else round(default, 3)
+
     def predict_sku_future(
         self,
         item_id: str,
@@ -117,9 +124,10 @@ class DFIOSPredictor:
                         "store_id": store_id,
                         "h": int(r["h"]),
                         "y_pred": round(float(r["y_pred"]), 3),
-                        "p10": round(float(r.get("P10", r.get("p10", max(0.0, r["y_pred"] * 0.7)))), 3),
-                        "p50": round(float(r.get("P50", r.get("p50", r["y_pred"]))), 3),
-                        "p90": round(float(r.get("P90", r.get("p90", r["y_pred"] * 1.3))), 3),
+                        # Q-14: a missing band column is None, never an invented 0.7y / 1.3y
+                        "p10": self._opt_round(r, ("P10", "p10")),
+                        "p50": self._opt_round(r, ("P50", "p50"), default=float(r["y_pred"])),
+                        "p90": self._opt_round(r, ("P90", "p90")),
                         "available": bool(r.get("available", True)),
                         # R-14 / P-39: static artifact snapshot (generated once, NOT recomputed per sim_clock)
                         "model_version": "dfios_forecast v1.0 (production artifact snapshot)",

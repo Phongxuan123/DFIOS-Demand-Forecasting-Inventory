@@ -182,7 +182,8 @@ class ReportsService:
         elif rtype in ("backtest", "backtesting"):
             rep = self.run_backtesting(db, BacktestRequest(store_id=store_id or "CA_1"))
             filename = f"Historical_Backtest_Report_{timestamp}.csv"
-            na = lambda v, suffix="": "n/a" if v is None else f"{v}{suffix}"
+            def na(v, suffix=""):
+                return "n/a" if v is None else f"{v}{suffix}"
             write_sanitized_row(["Metric", "Value", "Note"])
             write_sanitized_row(["Model Name", rep.model_name, "Policy under test: C3-OUT simulator"])
             write_sanitized_row(["Store", rep.store_id, "Fulfillment Center"])

@@ -44,6 +44,14 @@ class AuthService:
         email_clean = login_data.email.strip().lower()
         ip_part = client_ip.strip() if client_ip else "unknown"
         rate_key = f"login:{email_clean}:{ip_part}"
+        # Q-10: per-email limiter INDEPENDENT of the client IP. A spoofed X-Forwarded-For (uvicorn proxy headers
+        # trusting the peer) can mint any number of (email, ip) keys, but not more passwords-per-account budget.
+        email_key = f"login_email:{email_clean}"
+        if rate_limiter.check_limit(email_key, max_requests=10, window_seconds=300):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
+            )
 
         # Chống brute-force: tối đa 10 lần sai trong 5 phút trên cặp (email, ip) (N-12)
         if rate_limiter.check_limit(rate_key, max_requests=10, window_seconds=300):
@@ -57,6 +65,7 @@ class AuthService:
             # Chạy một lần bcrypt giả để thời gian phản hồi không lộ email có tồn tại hay không
             verify_password(login_data.password, _DUMMY_PASSWORD_HASH)
             rate_limiter.record_attempt(rate_key, window_seconds=300)
+            rate_limiter.record_attempt(email_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
@@ -66,6 +75,7 @@ class AuthService:
         # để người không biết mật khẩu không dò được trạng thái tài khoản qua mã 403.
         if not user.password_hash or not verify_password(login_data.password, user.password_hash):
             rate_limiter.record_attempt(rate_key, window_seconds=300)
+            rate_limiter.record_attempt(email_key, window_seconds=300)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
@@ -80,6 +90,7 @@ class AuthService:
 
         # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
         rate_limiter.clear(rate_key)
+        rate_limiter.clear(email_key)
 
         # B-12: sub được chuẩn hóa thành str(user.id) theo RFC 7519, kèm email và user_id
         access_token = create_access_token(

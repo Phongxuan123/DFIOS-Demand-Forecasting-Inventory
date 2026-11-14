@@ -7,8 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.product import Product
 from app.models.supplier import Supplier
@@ -29,6 +27,8 @@ from app.repositories.inventory_repository import inventory_repository
 from app.services.inventory_service import inventory_service
 from app.services.optimization_service import optimization_service
 from app.services.audit_service import audit_service
+
+logger = logging.getLogger(__name__)
 
 
 def sanitize_csv_cell(val: Any) -> Any:
@@ -81,6 +81,8 @@ class ReplenishmentService:
         # Bulk query để tránh N+1 network queries sang database
         inv_records = db.query(Inventory).filter(Inventory.store_id == store_id).all()
         inv_map = {inv.item_id: inv for inv in inv_records}
+        if inv_map:  # Q-12: only SKUs stocked in this store (a partial assortment never gets orders for foreign SKUs)
+            products = [p for p in products if p.item_id in inv_map]
 
         params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
         param_map = {p.item_id: p for p in params}

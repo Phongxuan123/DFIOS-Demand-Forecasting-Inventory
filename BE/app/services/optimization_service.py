@@ -3,9 +3,9 @@ import math
 from datetime import datetime, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+from fastapi import HTTPException
 import scipy.stats as stats
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from app.models.product import Product
 from app.models.supplier import Supplier
@@ -19,7 +19,7 @@ from app.models.classification import SKUClassification
 from app.models.sim_clock import SimClock
 from app.services import policy_config as pc
 from app.services import policy_backtest
-from app.services.calibrator_service import calibrator_service
+from app.services.calibrator_service import calibrator_service, selection_store
 from app.services.window_quantile_service import (
     WindowQuantileService,
     build_actuals_matrix,
@@ -190,10 +190,9 @@ class OptimizationService:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
         if clock and clock.current_date:
             return clock.current_date
-        first_fc = (
-            db.query(func.min(Forecast.forecast_date)).filter(Forecast.store_id == store_id).scalar()
-        )
-        return first_fc or pc.DEMO_START_DATE
+        # U-17: ONE demo origin (never min(forecast_date)): the forecast table starts one month later and a
+        # second origin would create a second set of window-quantile rows.
+        return pc.DEMO_START_DATE
 
     def _demand_stats(
         self, db: Session, store_id: str, item_ids: List[str], origin_date: date, days: int
@@ -764,6 +763,12 @@ class OptimizationService:
         res = policy_backtest.simulate_rss_candidates(dem, q, eoq, price, m_values, kappa_values, theta=theta)
         return res, int(ok.sum()), reviews
 
+    @staticmethod
+    def tag_selection_id(selection_id: str, store_id: str) -> str:
+        """Q-05: a J5 selection always carries its store (CA_1_quarter_2016_Q2) so refitting one store never
+        changes the policy of another (resolve_policies ignores selections of other stores)."""
+        return selection_id if selection_store(selection_id) else f"{store_id}_{selection_id}"
+
     def refit_quarterly_policies(
         self,
         db: Session,
@@ -771,37 +776,56 @@ class OptimizationService:
         selection_id: Optional[str] = None,
         target_availability: Optional[float] = None,
         c3out_active: Optional[bool] = None,
+        search_mode: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Job J5 - re-select (m_g, kappa_g) per ABC-XYZ class with a REAL vectorised (R,s,S) backtest over the
-        last validation reviews (research.md §7.4; R-10, N-07, R-11):
-          * every candidate of the grid m in [-0.7, 2.0] x kappa in {0.5, 1, 1.5, 2} is simulated
-            (daily lost-sales dynamics, A3 costs h/b/c, observed availability);
+        last validation reviews (research.md 7.4; R-10, N-07, R-11):
+          * the full grid m in [-0.7, 2.0] x kappa in {0.5, 1, 1.5, 2} is simulated once (daily lost-sales
+            dynamics, A3 costs h/b/c, observed availability) at the quantile level tau = target (Q-06);
           * choose the cheapest candidate with availability >= target + guard (guard applied ONCE, here);
-            if none is feasible, return the most available one with ``is_feasible = False``;
-          * target = system setting default_service_level when not given (P-13);
-          * when C3-OUT (P6) is active (default) m_g is held at 0 because the closed-loop theta shifts the
-            level: only kappa is selected, so e^{m_g + theta} is never applied twice (N-05);
-          * an existing selection keeps its setpoint (it is the controller's reference), new rows get target.
+            if none is feasible, return the most available one with is_feasible = False;
+          * BOTH selections are reported per class (Q-08): kappa_only_* (m_g = 0, the C3-OUT mode: the
+            closed-loop theta carries the level so e^(m_g + theta) is never applied twice, N-05) and
+            m_grid_* (full 7.4 search). search_mode picks which one is PERSISTED:
+            kappa_only | m_grid | auto (default: kappa_only while C3-OUT is active, else m_grid);
+          * the controller setpoint is A_g + guard (research.md 8.2), refreshed on every refit (Q-06);
+          * selection ids are store-scoped (Q-05).
         """
         if target_availability is None:
             target_availability = float(self.get_service_level_config(db).default_service_level)
         if c3out_active is None:
             c3out_active = self._c3out_active(db)
+        mode = (search_mode or "auto").lower()
+        if mode not in ("auto", "kappa_only", "m_grid"):
+            raise HTTPException(status_code=422, detail="search_mode must be auto | kappa_only | m_grid")
+        persist_kappa_only = (mode == "kappa_only") or (mode == "auto" and c3out_active)
         origin = self._store_origin(db, store_id)
         if not selection_id:
             selection_id = f"quarter_{origin.year}_Q{(origin.month - 1) // 3 + 1}"
+        selection_id = self.tag_selection_id(selection_id, store_id)
         o_idx = pc.date_to_day_index(origin)
-        m_values = [0.0] if c3out_active else list(pc.M_GRID)
+        tau_q = min(0.999, max(0.5, float(target_availability)))
+        setpoint = min(0.999, float(target_availability) + pc.GUARD)
         now = datetime.now(timezone.utc)
         results: List[Dict[str, Any]] = []
+
+        def _fields(prefix: str, c: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            return {
+                f"{prefix}_m_g": None if c is None else c["m"],
+                f"{prefix}_kappa_g": None if c is None else c["kappa"],
+                f"{prefix}_val_cost": None if c is None else c["cost"],
+                f"{prefix}_val_service": None if c is None else c["availability"],
+                f"{prefix}_is_feasible": None if c is None else c["is_feasible"],
+            }
 
         for class_id in pc.ALL_CLASSES:
             default = self.DEFAULT_OPTIMAL_POLICIES[class_id]
             scored = self.evaluate_class_candidates(
-                db, store_id, class_id, o_idx, pc.VALIDATION_PERIODS, pc.TARGET_AVAILABILITY,
-                m_values, list(pc.KAPPA_GRID), theta=0.0,
+                db, store_id, class_id, o_idx, pc.VALIDATION_PERIODS, tau_q,
+                list(pc.M_GRID), list(pc.KAPPA_GRID), theta=0.0,
             )
+            k_best = m_best = None
             if scored is None:
                 # no validation data: neutral policy, explicitly NOT feasible and without invented metrics
                 best = {"m": default["m_g"], "kappa": default["kappa_g"], "cost": None, "availability": None,
@@ -809,7 +833,10 @@ class OptimizationService:
                 n_items, n_rev = 0, 0
             else:
                 res, n_items, reviews = scored
-                best = policy_backtest.select_candidate(res, target_availability, pc.GUARD)
+                k_best = policy_backtest.select_candidate(
+                    res, target_availability, pc.GUARD, mask=np.isclose(res.m, 0.0))
+                m_best = policy_backtest.select_candidate(res, target_availability, pc.GUARD)
+                best = k_best if persist_kappa_only else m_best
                 n_rev = len(reviews)
 
             existing = db.query(PolicySelection).filter(
@@ -819,16 +846,17 @@ class OptimizationService:
                 existing.val_cost, existing.val_service = best["cost"], best["availability"]
                 existing.is_feasible = best["is_feasible"]
                 existing.guard = pc.GUARD
+                existing.setpoint = setpoint
+                existing.tau = tau_q
+                existing.source = "j5_backtest"
                 existing.created_at = now
-                setpoint = existing.setpoint
             else:
-                setpoint = target_availability
                 db.add(PolicySelection(
                     selection_id=selection_id, class_id=class_id, policy_type="REFIT_RSS_EOQ_G",
-                    m_g=best["m"], kappa_g=best["kappa"], tau=pc.TARGET_AVAILABILITY, setpoint=target_availability,
+                    m_g=best["m"], kappa_g=best["kappa"], tau=tau_q, setpoint=setpoint,
                     guard=pc.GUARD, gain_eta=pc.CONTROLLER_ETA, val_cost=best["cost"],
                     val_service=best["availability"], is_feasible=best["is_feasible"],
-                    econ_service=pc.TARGET_AVAILABILITY, created_at=now,
+                    econ_service=pc.TARGET_AVAILABILITY, source="j5_backtest", created_at=now,
                 ))
             results.append({
                 "selection_id": selection_id, "class_id": class_id, "policy_type": "REFIT_RSS_EOQ_G",
@@ -836,6 +864,9 @@ class OptimizationService:
                 "val_service": best["availability"], "is_feasible": best["is_feasible"],
                 "setpoint": setpoint, "n_items": n_items, "n_validation_reviews": n_rev,
                 "c3out_active": bool(c3out_active),
+                "search_mode": "kappa_only" if persist_kappa_only else "m_grid",
+                "source": "j5_backtest",
+                **_fields("kappa_only", k_best), **_fields("m_grid", m_best),
             })
         db.commit()
         return results

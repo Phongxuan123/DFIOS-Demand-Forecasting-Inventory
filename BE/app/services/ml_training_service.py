@@ -371,7 +371,6 @@ class MLTrainingService:
         if not train_y:
             return [0.0] * n_test
 
-        last_val = train_y[-1]
         mean_val = sum(train_y) / len(train_y)
 
         if model_name == "baseline_naive":

@@ -215,6 +215,7 @@ def refit_policies(
         selection_id=selection_id,
         target_availability=target_avail,
         c3out_active=c3out_active,
+        search_mode=body.search_mode if body else None,
     )
 
     sid = results[0]["selection_id"] if results else "quarterly_refit"

@@ -118,6 +118,7 @@ def select_candidate(
     res: BacktestResult,
     target_availability: float,
     guard: float = pc.GUARD,
+    mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     §7.4: minimum cost subject to availability >= target + guard (guard applied ONCE, here).
@@ -125,13 +126,17 @@ def select_candidate(
     and flag ``is_feasible = False``.
     """
     need = target_availability + guard
-    feas = res.availability >= need
+    allowed = np.ones(len(res.availability), dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+    if not allowed.any():
+        raise ValueError("select_candidate: empty candidate mask")
+    feas = (res.availability >= need) & allowed
     if feas.any():
         idx = np.where(feas)[0]
         i = int(idx[np.argmin(res.cost[idx])])
         ok = True
     else:
-        idx = np.where(res.availability >= res.availability.max() - 1e-12)[0]
+        amax = res.availability[allowed].max()
+        idx = np.where((res.availability >= amax - 1e-12) & allowed)[0]
         i = int(idx[np.argmin(res.cost[idx])])
         ok = False
     return {

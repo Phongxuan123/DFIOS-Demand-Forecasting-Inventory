@@ -206,6 +206,10 @@ class ClassificationService:
             return 0
 
         demand = self._demand_stats(db, store_id)
+        if demand:  # Q-12: only the SKUs this store actually sells (partial assortments); legacy: all if no sales yet
+            products = [p for p in products if p[0] in demand]
+            if not products:
+                return 0
         sku_stats: List[Dict[str, Any]] = []
         for item_id, price in products:
             n, total_qty, sum_sq = demand.get(item_id, (1, 0.0, 0.0))
@@ -291,12 +295,10 @@ class ClassificationService:
         return len(db_records)
 
     def get_source_summary(self, db: Session, store_id: str) -> Dict[str, int]:
-        rows = (
-            db.query(SKUClassification.class_source, func.count(SKUClassification.id))
-            .filter(SKUClassification.store_id == store_id)
-            .group_by(SKUClassification.class_source)
-            .all()
-        )
+        q = db.query(SKUClassification.class_source, func.count(SKUClassification.id))
+        if store_id.upper() not in ("GLOBAL", "ALL"):
+            q = q.filter(SKUClassification.store_id == store_id)
+        rows = q.group_by(SKUClassification.class_source).all()
         summary = {"ground_truth": 0, "thresholds": 0}
         for src, cnt in rows:
             summary[src or "thresholds"] = summary.get(src or "thresholds", 0) + int(cnt)
@@ -308,11 +310,13 @@ class ClassificationService:
         Xem ma trận 3x3 thể hiện số lượng và tỷ trọng SKU, doanh thu theo từng phân khúc.
         """
         store_id = self.resolve_store_id(db, store_id)
-        if classification_repository.count(db, store_id=store_id) == 0:
+        # Q-13: GLOBAL / ALL = every real store (SKU-store pairs); never "recompute" a pseudo store
+        is_global = store_id.upper() in ("GLOBAL", "ALL")
+        if not is_global and classification_repository.count(db, store_id=store_id) == 0:
             self.recompute_classification(db, store_id=store_id)
 
         thresholds = self.get_thresholds(db)
-        agg_map = classification_repository.get_matrix_aggregation(db, store_id=store_id)
+        agg_map = classification_repository.get_matrix_aggregation(db, store_id=None if is_global else store_id)
 
         all_segments = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
         total_skus = sum(item["sku_count"] for item in agg_map.values())
@@ -347,12 +351,10 @@ class ClassificationService:
             segments_list.append(summary)
             matrix_dict[seg] = summary
 
-        latest_cls = (
-            db.query(SKUClassification.updated_at)
-            .filter(SKUClassification.store_id == store_id)
-            .order_by(SKUClassification.updated_at.desc())
-            .first()
-        )
+        latest_q = db.query(SKUClassification.updated_at)
+        if not is_global:
+            latest_q = latest_q.filter(SKUClassification.store_id == store_id)
+        latest_cls = latest_q.order_by(SKUClassification.updated_at.desc()).first()
         last_updated = latest_cls[0] if latest_cls else datetime.now(timezone.utc)
 
         return ClassificationMatrixResponse(

@@ -612,6 +612,12 @@ class WindowQuantileService:
             )
             if persist and new_recs:
                 try:
+                    # idempotent: drop any row with the same primary key (race / partial earlier run), then insert
+                    ids = [r.id for r in new_recs]
+                    for k in range(0, len(ids), _IN_CHUNK):
+                        db.query(ForecastWindowQuantile).filter(
+                            ForecastWindowQuantile.id.in_(ids[k:k + _IN_CHUNK])
+                        ).delete(synchronize_session=False)
                     db.add_all(new_recs)
                     db.commit()
                 except Exception:

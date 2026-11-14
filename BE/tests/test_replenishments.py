@@ -194,7 +194,6 @@ class TestReplenishmentEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         self.assertEqual(res1.status_code, 200)
-        count1 = res1.json()["generated_count"]
 
         # Gọi lần 2: Không sinh thêm đơn trùng lặp cho SKU đã có đơn PENDING
         res2 = self.client.post(
@@ -326,7 +325,6 @@ class TestReplenishmentEndpoints(unittest.TestCase):
             headers={"Authorization": f"Bearer {self.admin_token}"},
         )
         rec_id = list_res.json()["items"][0]["id"]
-        qty = list_res.json()["items"][0]["final_qty"]
 
         self.client.post(
             f"/api/v1/replenishments/{rec_id}/approve",

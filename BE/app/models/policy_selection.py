@@ -18,5 +18,6 @@ class PolicySelection(Base):
     val_service = Column(Float, nullable=True)
     is_feasible = Column(Boolean, default=True)
     econ_service = Column(Float, default=0.95)
+    source = Column(String(30), nullable=True)  # j5_backtest | artifact | None (Q-07)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 

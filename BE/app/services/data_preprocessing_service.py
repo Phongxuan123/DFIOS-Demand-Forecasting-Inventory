@@ -279,12 +279,15 @@ class DataPreprocessingService:
         file_name: str = "upload.csv",
         default_store_id: str = "CA_1",
         known_item_ids: Any = None,
+        fill_gaps: bool = False,
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Nhận file CSV dạng bytes, làm sạch, chuẩn hóa schema, zero-fill và xuất báo cáo chất lượng.
 
         `default_store_id` là kho đích DUY NHẤT của lần import (P-26).
         `known_item_ids` (tập mã SKU hợp lệ): nếu truyền vào, dòng có SKU lạ bị từ chối (N-09).
+        `fill_gaps=False` (mặc định, Q-02): KHÔNG tự bịa ngày thiếu = 0; chỉ trả các (SKU, ngày) có trong file.
+        `fill_gaps=True` giữ hành vi cũ (reindex liên tục + zero-fill) cho phân tích ngoại tuyến.
         Dòng bị từ chối được đếm trong `rejected_count` và liệt kê mẫu trong `rejected_rows`.
         """
         raw_df = self.read_csv_safely(file_content)
@@ -381,6 +384,11 @@ class DataPreprocessingService:
 
         for (store, sku), group in df.groupby(["store_id", "item_id"]):
             group = group.set_index("sale_date").sort_index()
+            if not fill_gaps:  # Q-02: only the dates present in the file
+                g = group.reset_index()
+                g["store_id"], g["item_id"] = store, sku
+                resampled_list.append(g)
+                continue
             # Sử dụng dải ngày liên tục
             idx = pd.date_range(group.index.min(), group.index.max(), freq="D")
             reindexed = group.reindex(idx)

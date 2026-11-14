@@ -324,7 +324,7 @@ class TestC3OutAndSimulation(unittest.TestCase):
             self.assertIsNone(ax["val_service"])
             self.assertIsNone(ax["val_cost"])
             self.assertFalse(ax["is_feasible"])
-            self.assertEqual(ax["setpoint"], 0.95)  # target comes from settings (default 0.95), no +guard, no 0.96
+            self.assertAlmostEqual(ax["setpoint"], 0.96)  # Q-06: A_g (0.95 from settings) + guard 0.01 (research 8.2)
         finally:
             db.close()
 
@@ -401,7 +401,7 @@ class TestC3OutAndSimulation(unittest.TestCase):
             self.assertEqual(first_rec.review_date, date(2016, 5, 2))
 
             # 5. Tua tiếp 3 ngày (đến 2016-05-05 = lead_time_days) -> đơn hàng phải đến và COMPLETED
-            res2 = pipeline_service.advance_sim_clock(
+            pipeline_service.advance_sim_clock(
                 db, store_id="CA_1", days=3, lead_time_days=3, review_period_days=7
             )
             db.refresh(first_rec)

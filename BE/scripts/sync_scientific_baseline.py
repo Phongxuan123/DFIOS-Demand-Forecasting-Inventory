@@ -41,26 +41,16 @@ def run_sync():
         """), {"d": pc.DEMO_START_DATE, "s": STORE})
 
         print("\n=== 3. SYNCING TIER 2 POLICY_SELECTION (demo selection only; m_g = 0, kappa_g = 1) ===")
-        # Measured per-class CSL / cost of policy "P C3-OUT tau=0.95" (c3ok_csl_by_class.csv, c3ok_results.csv)
-        optimal_policies = {
-            "AX": {"val_cost": 319489.84, "val_service": 0.9495},
-            "AY": {"val_cost": 395968.80, "val_service": 0.9494},
-            "AZ": {"val_cost": 66254.19,  "val_service": 0.9490},
-            "BX": {"val_cost": 64478.95,  "val_service": 0.9499},
-            "BY": {"val_cost": 421200.50, "val_service": 0.9491},
-            "BZ": {"val_cost": 156711.20, "val_service": 0.9489},
-            "CX": {"val_cost": 2907.45,   "val_service": 0.9483},
-            "CY": {"val_cost": 176043.10, "val_service": 0.9492},
-            "CZ": {"val_cost": 491428.00, "val_service": 0.9479},
-        }
-        for class_id, p in optimal_policies.items():
-            db.execute(text("""
-                UPDATE policy_selection
-                SET m_g = 0.0, kappa_g = 1.0, val_cost = :val_cost, val_service = :val_service,
-                    setpoint = :sp, tau = :sp
-                WHERE class_id = :class_id AND selection_id = :sid
-            """), {**p, "class_id": class_id, "sid": pc.DEMO_SELECTION_ID, "sp": pc.TARGET_AVAILABILITY})
-        print(f"Updated policy_selection {pc.DEMO_SELECTION_ID} for 9 classes")
+        # Q-07: the artifact TEST values (cost, CSL 0.948-0.950) are NOT written as validation metrics any more:
+        # val_cost / val_service / is_feasible stay NULL and the row is labelled source = "artifact".
+        # Q-06: setpoint = A_g + guard (research.md 8.2).
+        db.execute(text("""
+            UPDATE policy_selection
+            SET m_g = 0.0, kappa_g = 1.0, val_cost = NULL, val_service = NULL, is_feasible = NULL,
+                source = 'artifact', setpoint = :sp, tau = :tau
+            WHERE selection_id = :sid
+        """), {"sid": pc.DEMO_SELECTION_ID, "sp": pc.TARGET_AVAILABILITY + pc.GUARD, "tau": pc.TARGET_AVAILABILITY})
+        print(f"Updated policy_selection {pc.DEMO_SELECTION_ID} (source=artifact, no invented validation metrics)")
 
         print("\n=== 4. TIER 3 CALIBRATION_STATE (trajectory kept) ===")
         # Final e^theta of policy P C3-OUT tau=0.95 (RUN_SUMMARY_C3OK.md): AX 1.095, AY 1.201, AZ 1.481,
@@ -80,16 +70,18 @@ def run_sync():
                                    WHERE store_id=:s AND class_id=:c AND review_index=:i"""),
                            {"t": th, "m": round(math.exp(th), 4), "d": pc.DEMO_START_DATE, "s": STORE,
                             "c": class_id, "i": idx})
-            elif mx is None or mx == 0:  # only the neutral rev_0 (or nothing): add the warm-start state
-                idx = (mx or 0) + 1
+            elif mx is None or mx == 0:  # only the neutral rev_0 (or nothing): the warm start REPLACES rev_0
+                # review_index 0 (not 1): the simulator's reviews k = 1, 2, ... never collide with it and
+                # POST /clock/reset (which deletes review_index >= 1) restores exactly this baseline (Q-04).
+                db.execute(text("DELETE FROM calibration_state WHERE store_id=:s AND class_id=:c AND review_index = 0"),
+                           {"s": STORE, "c": class_id})
                 db.execute(text("""
                     INSERT INTO calibration_state (id, calibrator_id, store_id, class_id, review_index, review_date,
                         theta, multiplier, error_rate, at_boundary, setpoint, eta, created_at)
-                    VALUES (:id, :k, :s, :c, :i, :d, :t, :m, NULL, false, :sp, :eta, NOW())
-                    ON CONFLICT (id) DO UPDATE SET theta = EXCLUDED.theta, multiplier = EXCLUDED.multiplier
-                """), {"id": f"{STORE}_{class_id}_rev_{idx}", "k": WARM_START_CALIBRATOR, "s": STORE, "c": class_id,
-                       "i": idx, "d": pc.DEMO_START_DATE, "t": th, "m": round(math.exp(th), 4),
-                       "sp": pc.TARGET_AVAILABILITY, "eta": pc.CONTROLLER_ETA})
+                    VALUES (:id, :k, :s, :c, 0, :d, :t, :m, NULL, false, :sp, :eta, NOW())
+                """), {"id": f"{STORE}_{class_id}_rev_0", "k": WARM_START_CALIBRATOR, "s": STORE, "c": class_id,
+                       "d": pc.DEMO_START_DATE, "t": th, "m": round(math.exp(th), 4),
+                       "sp": pc.TARGET_AVAILABILITY + pc.GUARD, "eta": pc.CONTROLLER_ETA})
             else:
                 print(f"  {class_id}: theta trajectory present (max review {mx}), left unchanged")
         print("Calibration states synced without deleting history.")
@@ -201,6 +193,11 @@ def run_sync():
         from app.services.optimization_service import optimization_service
         n = optimization_service.recompute_parameters(db, store_id=STORE)
         print(f"Recomputed {n} SKUs.")
+
+        print("=== 8. POLICY-CONSISTENT INITIAL STOCK (Q-03): each SKU starts at its S ===")
+        from app.services.simulator_service import simulator_service
+        info = simulator_service.initialise_baseline(db, STORE)
+        print(f"Initial inventory = S for {info['n_skus']} SKUs (sum on_hand {info['total_on_hand']:.0f}); snapshot stored.")
         print("\n>>> ALL SCIENTIFIC BASELINES SYNCED TO DATABASE SUCCESSFULLY! <<<")
 
     except Exception as e:

@@ -114,6 +114,7 @@ def upload_store_data(
             file_name=file.filename,
             default_store_id=store_id,
             known_item_ids=known_items,
+            fill_gaps=False,  # Q-02: never invent zeros / never overwrite real sales with 0
         )
     except ValueError as e:
         raise HTTPException(
@@ -177,7 +178,7 @@ def upload_store_data(
         if not clock:
             db.add(SimClock(
                 store_id=store_id,
-                current_date=dates_in_file[-1],
+                current_date=dates_in_file[0],  # Q-11: clock AT its start; later days can still be simulated
                 start_date=dates_in_file[0],
                 mode="replay",
                 speed=1.0,

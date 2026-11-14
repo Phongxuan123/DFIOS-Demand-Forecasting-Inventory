@@ -89,8 +89,11 @@ class TestParseSaleDates(unittest.TestCase):
         self.assertIn("quantity", reasons)
         self.assertEqual(set(clean_df["store_id"]), {"CA_9"})
         self.assertEqual(set(clean_df["item_id"]), {"SKU_A"})
-        # 2016-04-05 .. 2016-04-08 liên tục, zero-fill ngày 06 và 07
-        self.assertEqual(len(clean_df), 4)
+        # Q-02: only the 2 accepted dates (04-05 and 04-08); 06 and 07 are NOT invented as 0
+        self.assertEqual(len(clean_df), 2)
+        filled, _ = data_preprocessing_service.preprocess_sales_data(
+            csv_bytes, default_store_id="CA_9", known_item_ids={"SKU_A"}, fill_gaps=True)
+        self.assertEqual(len(filled), 4)  # legacy behaviour is still available explicitly
         self.assertEqual(clean_df["sale_date"].min(), pd.Timestamp("2016-04-05"))
         self.assertEqual(clean_df["sale_date"].max(), pd.Timestamp("2016-04-08"))
 
@@ -166,7 +169,7 @@ class TestImportEndpoints(unittest.TestCase):
             dates = sorted({h.sale_date for h in session.query(SalesHistory).all()})
             self.assertEqual(dates, [date(2016, 4, 5), date(2016, 4, 6)])
             clock = session.query(SimClock).filter(SimClock.store_id == "NEW_1").one()
-            self.assertEqual(clock.current_date, date(2016, 4, 6))
+            self.assertEqual(clock.current_date, date(2016, 4, 5))  # Q-11: not pre-advanced
             self.assertEqual(clock.start_date, date(2016, 4, 5))
 
         # Nạp lại cùng file: không trùng khóa, toàn bộ là cập nhật
@@ -182,6 +185,26 @@ class TestImportEndpoints(unittest.TestCase):
                 SalesHistory.item_id == "SKU_A", SalesHistory.sale_date == date(2016, 4, 5)
             ).one()
             self.assertEqual(row.quantity, 9.0)
+
+    def test_gaps_are_never_zero_filled_and_existing_sales_untouched(self):
+        """Q-02: a second file with a gap must not overwrite 04-06 / 04-07 with 0."""
+        res = self._upload(
+            "item_id,store_id,sale_date,quantity\n"
+            "SKU_A,NEW_1,2016-04-05,2\nSKU_A,NEW_1,2016-04-06,4\nSKU_A,NEW_1,2016-04-07,5\n"
+        )
+        self.assertEqual(res.status_code, 200, res.text)
+        res2 = self._upload(
+            "item_id,store_id,sale_date,quantity\n"
+            "SKU_A,NEW_1,2016-04-05,2\nSKU_A,NEW_1,2016-04-08,7\n"
+        )
+        self.assertEqual(res2.status_code, 200, res2.text)
+        self.assertEqual((res2.json()["inserted"], res2.json()["updated"]), (1, 1))
+        with self.TestingSessionLocal() as session:
+            q = {h.sale_date: h.quantity for h in session.query(SalesHistory).filter(SalesHistory.item_id == "SKU_A")}
+        self.assertEqual(q[date(2016, 4, 6)], 4.0)
+        self.assertEqual(q[date(2016, 4, 7)], 5.0)
+        self.assertEqual(q[date(2016, 4, 8)], 7.0)
+        self.assertEqual(len(q), 4)
 
     def test_unknown_sku_rejected_not_created(self):
         res = self._upload(

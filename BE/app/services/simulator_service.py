@@ -42,6 +42,7 @@ from app.models.calibration_state import CalibrationState
 from app.models.inventory import Inventory
 from app.models.inventory_daily import InventoryDaily
 from app.models.inventory_param import InventoryParam
+from app.models.policy_selection import PolicySelection
 from app.models.product import Product
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
@@ -187,6 +188,29 @@ class SimulatorService:
     def _max_sale_date(db: Session, store_id: str) -> Optional[date]:
         return db.execute(select(func.max(SalesHistory.sale_date)).where(SalesHistory.store_id == store_id)).scalar()
 
+    def initialise_baseline(self, db: Session, store_id: str) -> Dict[str, Any]:
+        """
+        Q-03: policy-consistent starting point. Every SKU starts at its order-up-to level S (from
+        ``inventory_params``; mean demand x H when absent), nothing on order; this state is stored as the
+        reset snapshot. Called by the bootstrap once the parameters are final.
+        """
+        ensure_tables(db)
+        item_ids = [r[0] for r in db.execute(select(Product.item_id).order_by(Product.item_id)).all()]
+        on_hand = self.initial_inventory_levels(db, store_id, item_ids)
+        on_order = np.zeros(len(item_ids))
+        self._inventory_arrays(db, store_id, item_ids)  # creates missing rows
+        write_inventory(db, store_id, item_ids, on_hand, on_order)
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        as_of = clock.start_date if clock else pc.DEMO_START_DATE
+        db.execute(delete(SimSnapshot).execution_options(synchronize_session=False).where(SimSnapshot.store_id == store_id))
+        db.execute(
+            SimSnapshot.__table__.insert(),
+            [{"store_id": store_id, "item_id": i, "on_hand": float(a), "on_order": 0.0, "as_of_date": as_of,
+              "created_at": datetime.now(timezone.utc)} for i, a in zip(item_ids, on_hand)],
+        )
+        db.commit()
+        return {"n_skus": len(item_ids), "total_on_hand": float(on_hand.sum())}
+
     # ------------------------------------------------------------------ reset
     def reset(self, db: Session, store_id: str, target_date: Optional[date] = None) -> Tuple[SimClock, Dict[str, Any]]:
         ensure_tables(db)
@@ -209,6 +233,11 @@ class SimulatorService:
                 db.execute(delete(SimShadowDaily).execution_options(synchronize_session=False).where(SimShadowDaily.store_id == store_id))
                 db.execute(delete(ServiceOutcome).execution_options(synchronize_session=False).where(ServiceOutcome.store_id == store_id, ServiceOutcome.cycle_start >= start))
                 db.execute(delete(CalibrationState).execution_options(synchronize_session=False).where(CalibrationState.store_id == store_id, CalibrationState.review_index >= 1))
+                # Q-04: review_index 0 (neutral state or the labelled artifact warm start) is the BASELINE and stays.
+                # Q-05: J5 selections made by this store's simulation (store-scoped ids) are dropped, so the
+                # policy returns to the seeded selection.
+                db.execute(delete(PolicySelection).execution_options(synchronize_session=False).where(
+                    PolicySelection.selection_id.startswith(f"{store_id}_quarter_", autoescape=True)))
                 db.execute(
                     delete(ReplenishmentRecommendation).execution_options(synchronize_session=False).where(
                         ReplenishmentRecommendation.store_id == store_id,
@@ -416,6 +445,82 @@ class SimulatorService:
             db.flush()
             db.expire_all()
 
+        def review_block(t: date, review_k: int, refit: bool = False) -> np.ndarray:
+            """J6 (close previous cycle) -> J5 (quarter start) -> J3 quantiles -> J4 (C3-OUT step, params, orders)
+            -> shadow B0 review. ``review_k = 0`` is the review at the START of day 0 (A4): nothing to close and
+            no controller step (theta keeps its warm-start state)."""
+            nonlocal on_hand, on_order, reviews_executed, recommendations_generated
+            reviews_executed += 1
+            if review_k >= 1:
+                cycle_idx = review_k - 1
+                calibrator_service.record_cycle_outcome(
+                    db=db, store_id=store_id, cycle_index=cycle_idx,
+                    cycle_start=t - timedelta(days=R), cycle_end=t - timedelta(days=1),
+                )
+                job_events.append(
+                    f"[{t}] Job J6: đóng chu kỳ {cycle_idx} ({t - timedelta(days=R)} -> {t - timedelta(days=1)}), lưu service_outcomes"
+                )
+            if refit:
+                q_num = (t.month - 1) // 3 + 1
+                sid = f"{store_id}_quarter_{t.year}_Q{q_num}"
+                optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
+                flush_state()
+                job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
+            # --- J3: window quantiles, ONE bulk call
+            recs = window_quantile_service.get_or_create_window_quantiles_bulk(
+                db, store_id, item_ids, t, horizon_days=L + R
+            )
+            # shadow B0 reads Q_hat(0.95) now (before the session objects are expired)
+            q95 = np.zeros(n)
+            for iid, rec in recs.items():
+                k = pos.get(iid)
+                if k is not None:
+                    q95[k] = window_quantile_service.tau_value(rec.q_levels or {}, B0_TAU, rec.point_window)
+            # --- J4: C3-OUT step (not at k = 0), parameters, orders (auto-ordered)
+            if review_k >= 1:
+                calibrator_service.run_calibration_step(
+                    db=db, store_id=store_id, review_index=review_k, review_date=t,
+                    lead_time_days=L, review_period_days=R,
+                )
+            optimization_service.recompute_parameters(db, store_id=store_id)
+            db.flush()
+            db.expire_all()
+            recs_count = replenishment_service.generate_recommendations(
+                db, store_id=store_id, review_date=t, auto_order=True
+            )
+            recommendations_generated += recs_count
+            db.flush()
+            db.expire_all()
+            on_hand, on_order, _ = self._inventory_arrays(db, store_id, item_ids)
+
+            # shadow B0 review: order up to S0 = ceil(raw Q_hat(0.95))
+            S0 = np.ceil(np.maximum(q95, 0.0))
+            sh_ip = sh_on_hand + sum((q for _, q in sh_pipeline), np.zeros(n))
+            order_today = np.where(sh_ip <= S0, np.maximum(S0 - sh_ip, 0.0), 0.0)
+            if (order_today > 0).any():
+                sh_pipeline.append((t + timedelta(days=L), order_today.copy()))
+            job_events.append(
+                f"[{t}] Job J3 & J4: review k={review_k} (đầu ngày), C³-OUT, cập nhật (s, S), {recs_count} đơn đặt "
+                f"(về sau {L} ngày); B0 shadow đặt {(order_today > 0).sum()} đơn"
+            )
+            return order_today
+
+        # Q-03 / A4: review at the START of day 0 from the policy-consistent initial stock (S). It runs once per
+        # clean start (clock at t0; reset puts the clock back there and clears the simulated orders).
+        if prev_date == t0:
+            clock.current_date = t0
+            flush_state()
+            day0_order = review_block(t0, 0)
+            # row of day 0 for the shadow: keeps the day-0 order in the persisted B0 pipeline (it arrives at t0 + L)
+            shadow_rows.append({
+                "date": t0,
+                "df": pd.DataFrame({
+                    "store_id": store_id, "item_id": item_ids, "date": t0,
+                    "on_hand_end": sh_on_hand, "on_order": day0_order, "sales": 0.0, "lost_sales": 0.0,
+                    "stockout": sh_on_hand <= 0, "order_qty": day0_order, "created_at": now,
+                }),
+            })
+
         for t in days_list:
             delta_days = (t - t0).days
             ti = didx[t]
@@ -464,61 +569,13 @@ class SimulatorService:
 
             if is_review:
                 review_k = delta_days // R
-                reviews_executed += 1
-                # --- 2. J6: close cycle k-1 = [t-R, t-1] (observed availability)
-                cycle_idx = review_k - 1
-                calibrator_service.record_cycle_outcome(
-                    db=db, store_id=store_id, cycle_index=cycle_idx,
-                    cycle_start=t - timedelta(days=R), cycle_end=t - timedelta(days=1),
-                )
-                job_events.append(
-                    f"[{t}] Job J6: đóng chu kỳ {cycle_idx} ({t - timedelta(days=R)} -> {t - timedelta(days=1)}), lưu service_outcomes"
-                )
-
-            if is_refit:
+                sh_order_today = review_block(t, review_k, refit=is_refit)
+            elif is_refit:
                 q_num = (t.month - 1) // 3 + 1
-                sid = f"quarter_{t.year}_Q{q_num}"
+                sid = f"{store_id}_quarter_{t.year}_Q{q_num}"
                 optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
                 flush_state()
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
-
-            if is_review:
-                # --- 4. J3: window quantiles, ONE bulk call
-                recs = window_quantile_service.get_or_create_window_quantiles_bulk(
-                    db, store_id, item_ids, t, horizon_days=L + R
-                )
-                # shadow B0 reads Q_hat(0.95) now (before the session objects are expired)
-                q95 = np.zeros(n)
-                for iid, rec in recs.items():
-                    k = pos.get(iid)
-                    if k is not None:
-                        q95[k] = window_quantile_service.tau_value(rec.q_levels or {}, B0_TAU, rec.point_window)
-                # --- J4: C3-OUT step, parameters, orders (auto-ordered)
-                calibrator_service.run_calibration_step(
-                    db=db, store_id=store_id, review_index=review_k, review_date=t,
-                    lead_time_days=L, review_period_days=R,
-                )
-                optimization_service.recompute_parameters(db, store_id=store_id)
-                db.flush()
-                db.expire_all()
-                recs_count = replenishment_service.generate_recommendations(
-                    db, store_id=store_id, review_date=t, auto_order=True
-                )
-                recommendations_generated += recs_count
-                db.flush()
-                db.expire_all()
-                on_hand, on_order, _ = self._inventory_arrays(db, store_id, item_ids)
-
-                # shadow B0 review: order up to S0 = ceil(raw Q_hat(0.95))
-                S0 = np.ceil(np.maximum(q95, 0.0))
-                sh_ip = sh_on_hand + sum((q for _, q in sh_pipeline), np.zeros(n))
-                sh_order_today = np.where(sh_ip <= S0, np.maximum(S0 - sh_ip, 0.0), 0.0)
-                if (sh_order_today > 0).any():
-                    sh_pipeline.append((t + timedelta(days=L), sh_order_today.copy()))
-                job_events.append(
-                    f"[{t}] Job J3 & J4: review k={review_k} (đầu ngày), C³-OUT, cập nhật (s, S), {recs_count} đơn đặt "
-                    f"(về sau {L} ngày); B0 shadow đặt {(sh_order_today > 0).sum()} đơn"
-                )
 
             # --- 5. J1: sales of day t (vectorised) - main policy
             d = D[ti]

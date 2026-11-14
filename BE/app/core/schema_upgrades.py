@@ -14,6 +14,11 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
     if engine.dialect.name != "postgresql":
         return applied
     insp = inspect(engine)
+    if "policy_selection" in insp.get_table_names():
+        if "source" not in {c["name"] for c in insp.get_columns("policy_selection")}:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE policy_selection ADD COLUMN source VARCHAR(30)"))
+            applied.append("policy_selection.source")
     if "sku_classifications" not in insp.get_table_names():
         return applied
 

@@ -183,6 +183,19 @@ class PolicySelectionItem(BaseModel):
     n_items: Optional[int] = None
     n_validation_reviews: Optional[int] = None
     c3out_active: Optional[bool] = None
+    # additive (Q-06/Q-07/Q-08)
+    search_mode: Optional[str] = None  # kappa_only | m_grid (which candidate was persisted)
+    source: Optional[str] = None  # j5_backtest | artifact | None
+    kappa_only_m_g: Optional[float] = None
+    kappa_only_kappa_g: Optional[float] = None
+    kappa_only_val_cost: Optional[float] = None
+    kappa_only_val_service: Optional[float] = None
+    kappa_only_is_feasible: Optional[bool] = None
+    m_grid_m_g: Optional[float] = None
+    m_grid_kappa_g: Optional[float] = None
+    m_grid_val_cost: Optional[float] = None
+    m_grid_val_service: Optional[float] = None
+    m_grid_is_feasible: Optional[bool] = None
 
 
 class RefitPoliciesRequest(BaseModel):
@@ -190,6 +203,7 @@ class RefitPoliciesRequest(BaseModel):
     selection_id: Optional[str] = Field(None, description="Mã chu kỳ (ví dụ: quarter_2015_Q3)")
     target_availability: Optional[float] = Field(None, ge=0.85, le=0.999, description="Mức Availability mục tiêu (mặc định: cấu hình hệ thống default_service_level)")
     c3out_active: Optional[bool] = Field(None, description="True: giữ m_g = 0 (P6), chỉ chọn kappa. Mặc định theo setting c3out_active (True)")
+    search_mode: Optional[str] = Field(None, description="auto (mặc định) | kappa_only | m_grid: kết quả nào được lưu vào policy_selection; cả hai luôn được trả về")
 
 
 class RefitPoliciesResponse(BaseModel):

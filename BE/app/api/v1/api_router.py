@@ -14,6 +14,17 @@ from app.api.v1.endpoints.data_quality import router as data_quality_router
 from app.api.v1.endpoints.ml_training import router as ml_training_router
 from app.api.v1.endpoints.model_registry import router as model_registry_router
 from app.api.v1.endpoints.forecasts import router as forecasts_router
+from app.api.v1.endpoints.classification import router as classification_router
+from app.api.v1.endpoints.optimization import router as optimization_router
+from app.api.v1.endpoints.replenishments import router as replenishments_router
+from app.api.v1.endpoints.calibration import router as calibration_router
+from app.api.v1.endpoints.clock import router as clock_router
+from app.api.v1.endpoints.reports import router as reports_router
+from app.api.v1.endpoints.pipeline import router as pipeline_router
+from app.api.v1.endpoints.imports import router as imports_router
+from app.api.v1.endpoints.simulation import router as simulation_router
+from app.api.v1.endpoints.dashboard import get_kpi_shadow_dashboard
+from app.api.v1.endpoints.auth import request_change_email, confirm_change_email
 
 api_router = APIRouter()
 
@@ -45,30 +56,24 @@ api_router.include_router(events_calendar_router, prefix="/events-calendar", tag
 api_router.include_router(forecasts_router, prefix="/forecasts", tags=["Demand Forecasting - Forecast Explorer (UC17-UC24)"])
 
 # UC25 - UC28: Inventory Classification (ABC/XYZ)
-from app.api.v1.endpoints.classification import router as classification_router
 api_router.include_router(classification_router, prefix="/classification", tags=["Inventory Classification - ABC/XYZ (UC25-UC28)"])
 
 # UC29 - UC32: Inventory Optimization (Module F)
-from app.api.v1.endpoints.optimization import router as optimization_router
 api_router.include_router(optimization_router, prefix="/optimization", tags=["Inventory Optimization (UC29-UC32)"])
 
 # UC33 - UC38: Replenishment Recommendations (Module G)
-from app.api.v1.endpoints.replenishments import router as replenishments_router
 api_router.include_router(replenishments_router, prefix="/replenishments", tags=["Replenishment Recommendations (UC33-UC38)"])
 
 # Stage 5 / Tier 3: C³-OUT Closed-Loop Calibrator
-from app.api.v1.endpoints.calibration import router as calibration_router
 api_router.include_router(calibration_router, prefix="/calibration", tags=["C³-OUT Closed-Loop Calibrator (Tier 3)"])
 
 # Stage 6 & 7 / Task API.1: Sim Clock Control & Batch Orchestration
-from app.api.v1.endpoints.clock import router as clock_router
 api_router.include_router(clock_router, prefix="/clock", tags=["Simulation Clock & Batch Orchestration (Task API.1)"])
 
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])
 
 # UC39 - UC43: Reports & Analytics (Module H)
-from app.api.v1.endpoints.reports import router as reports_router
 api_router.include_router(reports_router, prefix="/reports", tags=["Reports & Analytics (UC39-UC43)"])
 
 # UC45: System Administration & Audit Logs (Admin)
@@ -78,25 +83,20 @@ api_router.include_router(audit_logs_router, prefix="/audit-logs", tags=["System
 api_router.include_router(settings_router, prefix="/settings", tags=["System Administration - General Settings (UC44)"])
 
 # UC46 - UC50: ML Pipeline & Model Ops (Module J)
-from app.api.v1.endpoints.pipeline import router as pipeline_router
 api_router.include_router(data_quality_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC46)"])
 api_router.include_router(ml_training_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC47)"])
 api_router.include_router(model_registry_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC48)"])
 api_router.include_router(pipeline_router, prefix="/ml", tags=["ML Pipeline & Model Ops (UC49, UC50)"])
 
 # Stage 7 / Task API.2: Imports, Fast Inference & Template
-from app.api.v1.endpoints.imports import router as imports_router
 api_router.include_router(imports_router, tags=["Data Ingestion & Fast Inference (Task API.2)"])
 
 # Stage 7 / Task API.5: What-If Policy Simulation (/simulation/compare-policies)
-from app.api.v1.endpoints.simulation import router as simulation_router
 api_router.include_router(simulation_router, prefix="/simulation", tags=["What-If Policy Simulation (Task API.5)"])
 
 # Stage 7 / Task API.4: KPI Dashboard Alias (/kpi/dashboard)
-from app.api.v1.endpoints.dashboard import get_kpi_shadow_dashboard
 api_router.add_api_route("/kpi/dashboard", get_kpi_shadow_dashboard, methods=["GET"], tags=["Dashboard & Shadow Baseline (Task API.4)"], summary="Task API.4 - KPI Dashboard với Shadow Baseline B0")
 
 # Alias cho /me/email và /me/email/confirm (đáp ứng cả 2 cấu trúc URL)
-from app.api.v1.endpoints.auth import request_change_email, confirm_change_email
 api_router.add_api_route("/me/email", request_change_email, methods=["POST"], tags=["User Profile & Settings"], summary="UC05 - Đổi email (Alias)")
 api_router.add_api_route("/me/email/confirm", confirm_change_email, methods=["POST"], tags=["User Profile & Settings"], summary="UC05 - Xác nhận đổi email (Alias)")

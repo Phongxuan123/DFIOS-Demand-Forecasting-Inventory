@@ -3,9 +3,9 @@ import time
 import uuid
 from typing import Dict, Optional, Any
 from fastapi import HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.product import Product
 from app.models.sim_clock import SimClock
 from app.models.inventory_param import InventoryParam
 from app.models.classification import SKUClassification
@@ -23,6 +23,8 @@ from app.services.replenishment_service import replenishment_service
 from app.services.simulator_service import simulator_service
 from app.services import policy_config as pc
 from app.services.scheduler_service import next_run as scheduler_next_run, scheduler_running
+
+PIPELINE_SBA_MODEL_VERSION = "pipeline-sba-croston-fallback"
 
 
 class PipelineService:
@@ -167,16 +169,26 @@ class PipelineService:
         started_at = datetime.now(timezone.utc).isoformat()
         run_id = f"pipe-{uuid.uuid4().hex[:8]}"
 
-        # 1. Dự báo: Kiểm tra hoặc thực hiện suy luận mô hình ML thực tế cho kho hàng
-        existing_fc_query = db.query(Forecast).filter(Forecast.store_id == request.store_id)
+        # 1. Forecast: use what exists; otherwise generate the SBA-Croston fallback under its OWN label
+        #    (Q-01: never reuse the production series id / never store SBA output under the requested name).
+        #    The fallback is idempotent: the previous fallback run of this store is replaced atomically.
+        existing_fc_query = db.query(Forecast).filter(
+            Forecast.store_id == request.store_id,
+            Forecast.model_version != PIPELINE_SBA_MODEL_VERSION,
+        )
         if request.model_name:
-            existing_fc_query = existing_fc_query.filter(Forecast.model_version.ilike(f"%{request.model_name}%"))
+            existing_fc_query = existing_fc_query.filter(or_(
+                Forecast.model_version.ilike(f"%{request.model_name}%"),
+                Forecast.model_version.ilike(pc.POINT_FORECAST_MODEL_PATTERN),
+            ))
         fc_count = existing_fc_query.count()
+        forecast_source = "existing"
+        forecast_note = None
 
         if fc_count == 0:
-            # Nếu chưa có dự báo cho store/model, chạy suy luận thực tế từ sales_history
             from app.models.sales_history import SalesHistory
             import pandas as pd
+            from app.core.db_bulk import replace_rows
             sales_rows = (
                 db.query(SalesHistory.store_id, SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity)
                 .filter(SalesHistory.store_id == request.store_id)
@@ -185,32 +197,32 @@ class PipelineService:
             if sales_rows:
                 df_sales = pd.DataFrame(sales_rows, columns=["store_id", "item_id", "sale_date", "sales"])
                 df_sales["sale_date"] = pd.to_datetime(df_sales["sale_date"])
+                df_sales["sales"] = df_sales["sales"].astype(float)
                 from app.services.fast_inference_service import fast_inference_service
                 fc_df = fast_inference_service.generate_fast_forecast(
-                    df_sales, horizon=request.horizon, model_version=request.model_name or "production-lightgbm"
+                    df_sales, horizon=request.horizon, model_version=PIPELINE_SBA_MODEL_VERSION
+                ).copy()
+                fc_df["id"] = (
+                    "pipe_" + fc_df["store_id"].astype(str) + "_" + fc_df["item_id"].astype(str)
+                    + "_" + fc_df["forecast_date"].astype(str) + "_" + fc_df["h"].astype(str)
                 )
-                fc_records = [
-                    Forecast(
-                        id=f"{r['item_id']}_{r['store_id']}_evaluation",  # M5 series id (PK, P-08)
-                        item_id=r["item_id"],
-                        store_id=r["store_id"],
-                        forecast_date=r["forecast_date"],
-                        h=r["h"],
-                        y_pred=r["y_pred"],
-                        p10=r["p10"],
-                        p50=r["p50"],
-                        p90=r["p90"],
-                        available=r["available"],
-                        model_version=r["model_version"],
-                    )
-                    for _, r in fc_df.iterrows()
-                ]
-                db.bulk_save_objects(fc_records)
+                fc_df["generated_at"] = datetime.now(timezone.utc)
+                cols = ["id", "item_id", "store_id", "forecast_date", "h", "y_pred", "p10", "p50", "p90",
+                        "available", "model_version", "generated_at"]
+                forecasts_generated = replace_rows(
+                    db.connection(), "forecast", fc_df[cols],
+                    "DELETE FROM forecast WHERE store_id = :s AND model_version = :m",
+                    {"s": request.store_id, "m": PIPELINE_SBA_MODEL_VERSION},
+                )
                 db.commit()
-                forecasts_generated = len(fc_records)
+                forecast_source = "sba-croston-fallback"
+                forecast_note = (
+                    f"No '{request.model_name}' / Ensemble forecast exists for this store: statistical SBA-Croston "
+                    f"fallback generated and stored as model_version '{PIPELINE_SBA_MODEL_VERSION}'."
+                )
             else:
-                sku_count = db.query(Product).count() or 1
                 forecasts_generated = 0  # no sales history -> nothing was generated (never sku_count * horizon)
+                forecast_source = "none"
         else:
             forecasts_generated = fc_count
 
@@ -257,6 +269,8 @@ class PipelineService:
             started_at=started_at,
             completed_at=completed_at,
             duration_seconds=duration,
+            forecast_source=forecast_source,
+            forecast_note=forecast_note,
         )
 
     # --- Task PIPE.1 & Task API.1: Sim Clock Control & Batch Orchestration (J1 - J6) ---

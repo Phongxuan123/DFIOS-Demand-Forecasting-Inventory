@@ -15,7 +15,7 @@ class ModelRegistryRepository(BaseRepository[ModelRegistry]):
     def get_production_model(self, db: Session, scope: str = "global") -> Optional[ModelRegistry]:
         return (
             db.query(ModelRegistry)
-            .filter(ModelRegistry.scope == scope, ModelRegistry.is_production == True)
+            .filter(ModelRegistry.scope == scope, ModelRegistry.is_production.is_(True))
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
@@ -32,7 +32,7 @@ class ModelRegistryRepository(BaseRepository[ModelRegistry]):
             db.query(ModelRegistry)
             .filter(
                 ModelRegistry.scope == target_model.scope,
-                ModelRegistry.is_production == True,
+                ModelRegistry.is_production.is_(True),
                 ModelRegistry.id != target_model.id,
             )
             .all()

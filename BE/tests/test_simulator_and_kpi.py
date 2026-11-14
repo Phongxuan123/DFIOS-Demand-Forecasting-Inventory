@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_db
 from app.core.security import create_access_token, get_password_hash
 from app.main import app
+from tests.artifact_marks import requires_c3ok_results
 from app.models.base import Base
 from app.models.calibration_state import CalibrationState
 from app.models.inventory import Inventory
@@ -63,7 +64,8 @@ class TestSimulator(unittest.TestCase):
         L, R = pc.LEAD_TIME_DAYS, pc.REVIEW_PERIOD_DAYS
         review_day = START + timedelta(days=R)
         pipeline_service.advance_sim_clock(db, "CA_1", days=R)
-        order = db.query(ReplenishmentRecommendation).filter_by(item_id=ITEM).one()
+        # Q-03: a review also runs at the START of day 0 (orders of review_date = START may exist)
+        order = db.query(ReplenishmentRecommendation).filter_by(item_id=ITEM, review_date=review_day).one()
         self.assertEqual(order.review_date, review_day)
         self.assertEqual(order.status, "APPROVED")
         qty = order.final_qty
@@ -73,7 +75,8 @@ class TestSimulator(unittest.TestCase):
         # up to t+L-1 the order has NOT arrived (days t, t+1, t+2 sell from old stock = lead time L)
         pipeline_service.advance_sim_clock(db, "CA_1", days=L - 1)
         db.expire_all()
-        self.assertEqual(db.query(ReplenishmentRecommendation).filter_by(item_id=ITEM).one().status, "APPROVED")
+        self.assertEqual(
+            db.query(ReplenishmentRecommendation).filter_by(item_id=ITEM, review_date=review_day).one().status, "APPROVED")
         self.assertEqual(_inv(db)[1], qty)
         # at the start of t+L it arrives exactly once
         pipeline_service.advance_sim_clock(db, "CA_1", days=1)
@@ -83,7 +86,8 @@ class TestSimulator(unittest.TestCase):
         on_hand, on_order = _inv(db)
         self.assertEqual(on_order, 0.0)
         daily = db.query(InventoryDaily).filter_by(item_id=ITEM, date=review_day + timedelta(days=L)).one()
-        self.assertAlmostEqual(daily.on_hand_end, qty - 2.0)  # qty received, demand 2 served
+        prev = db.query(InventoryDaily).filter_by(item_id=ITEM, date=review_day + timedelta(days=L - 1)).one()
+        self.assertAlmostEqual(daily.on_hand_end, prev.on_hand_end + qty - 2.0)  # qty received, demand 2 served
 
     def test_completed_orders_never_received_again_and_approved_received_once(self):
         """P-16: COMPLETED rows are ignored; an APPROVED row is received exactly once."""
@@ -159,8 +163,9 @@ class TestSimulator(unittest.TestCase):
         pipeline_service.advance_sim_clock(db, "CA_1", days=pc.REVIEW_PERIOD_DAYS)
         db.expire_all()
         sim_orders = db.query(ReplenishmentRecommendation).filter_by(item_id=ITEM, decided_by="simulator").all()
-        self.assertEqual(len(sim_orders), 1)
-        self.assertEqual(sim_orders[0].status, "APPROVED")
+        # day-0 review (Q-03) + review at day R: both are simulator orders, none of them is the stale loader row
+        self.assertEqual(sorted(o.review_date for o in sim_orders), [START, START + timedelta(days=pc.REVIEW_PERIOD_DAYS)])
+        self.assertIn(sim_orders[0].status, ("APPROVED", "COMPLETED"))
         self.assertEqual(db.query(ReplenishmentRecommendation).filter_by(id="loader").one().status, "PENDING")
 
     def test_missing_demand_days_rejected_not_simulated_as_zero(self):
@@ -175,9 +180,9 @@ class TestSimulator(unittest.TestCase):
         """N-03: B0 rows exist per day, are computed from their own stock/orders (not C3 x ratios)."""
         engine, Session, db = _make_db(initial_on_hand=14.0)
         r = pipeline_service.advance_sim_clock(db, "CA_1", days=14)
-        self.assertEqual(db.query(SimShadowDaily).count(), 14)
+        self.assertEqual(db.query(SimShadowDaily).count(), 15)  # 14 days + the day-0 row that stores the day-0 B0 order
         self.assertIn("b0_shadow_stockouts_recorded", r)
-        shadow = db.query(SimShadowDaily).order_by(SimShadowDaily.date).all()
+        shadow = db.query(SimShadowDaily).filter(SimShadowDaily.date > START).order_by(SimShadowDaily.date).all()
         main = db.query(InventoryDaily).order_by(InventoryDaily.date).all()
         # same initial stock and demand -> identical until the first review decides differently
         self.assertEqual([s.on_hand_end for s in shadow[:6]], [m.on_hand_end for m in main[:6]])
@@ -204,6 +209,7 @@ class TestSimulationEndpointAndKpi(unittest.TestCase):
     def tearDown(self):
         app.dependency_overrides.clear()
 
+    @requires_c3ok_results
     def test_compare_policies_through_real_session_with_price_query(self):
         """P-06: the Postgres-style path (db is not None) used to crash on Product.sell_price."""
         r = self.client.post("/api/v1/simulation/compare-policies",
@@ -245,6 +251,7 @@ class TestSimulationEndpointAndKpi(unittest.TestCase):
         self.assertEqual(r.status_code, 503)
         self.assertIn("c3ok_results.csv", r.json()["detail"])
 
+    @requires_c3ok_results
     def test_policy_comparison_report_labels_and_provenance(self):
         r = self.client.get("/api/v1/reports/policy-comparison", headers=self.h)
         self.assertEqual(r.status_code, 200)
@@ -328,7 +335,14 @@ class TestPipelineNewStore(unittest.TestCase):
         rows = db.query(Forecast).filter(Forecast.store_id == "TX_9").all()
         self.assertGreater(len(rows), 0)
         self.assertEqual(res.forecasts_generated, len(rows))
-        self.assertTrue(all(r.id == f"{r.item_id}_TX_9_evaluation" for r in rows))
+        # Q-01: the fallback has its OWN model label and id namespace, never the production series id
+        self.assertTrue(all(r.model_version == "pipeline-sba-croston-fallback" for r in rows))
+        self.assertTrue(all(r.id.startswith("pipe_TX_9_") for r in rows))
+        self.assertEqual(res.forecast_source, "sba-croston-fallback")
+        # idempotent: a second run replaces, never collides
+        res2 = pipeline_service.trigger_pipeline_run(db, PipelineRunRequest(store_id="TX_9", horizon=7, model_name="lightgbm"))
+        self.assertEqual(res2.status, "COMPLETED")
+        self.assertEqual(db.query(Forecast).filter(Forecast.store_id == "TX_9").count(), len(rows))
 
     def test_trigger_pipeline_run_without_sales_reports_zero_forecasts(self):
         from app.schemas.pipeline import PipelineRunRequest

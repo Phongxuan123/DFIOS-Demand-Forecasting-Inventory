@@ -33,9 +33,9 @@ def main() -> None:
     db = SessionLocal()
     try:
         item_ids = [r[0] for r in db.execute(
-            text("SELECT DISTINCT item_id FROM inventory WHERE store_id = :s ORDER BY item_id"), {"s": STORE_ID})]
-        if not item_ids:
-            print("No inventory rows for the store; nothing to do.")
+            text("SELECT DISTINCT item_id FROM forecast WHERE store_id = :s ORDER BY item_id"), {"s": STORE_ID})]
+        if not item_ids:  # U-17: the loader order is forecast -> window quantile -> params -> inventory
+            print("No forecast rows for the store; nothing to do.")
             return
         # drop every previous row of this run (also rows of other origins computed by older code)
         db.query(ForecastWindowQuantile).filter(

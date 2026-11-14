@@ -93,3 +93,5 @@ class PipelineRunResponse(BaseModel):
     started_at: str
     completed_at: str
     duration_seconds: float
+    forecast_source: Optional[str] = None  # existing | sba-croston-fallback | none
+    forecast_note: Optional[str] = None

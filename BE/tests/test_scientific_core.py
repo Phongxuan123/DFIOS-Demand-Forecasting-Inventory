@@ -229,7 +229,7 @@ class TestPolicyBacktestJ5(unittest.TestCase):
 
     def test_availability_definition_is_observed_not_lost_sales(self):
         """A period where stock reaches exactly 0 without lost sales is UNAVAILABLE (§8.1)."""
-        R, L = pc.REVIEW_PERIOD_DAYS, pc.LEAD_TIME_DAYS
+        R = pc.REVIEW_PERIOD_DAYS
         dem = np.zeros((1, R))
         dem[0, 0] = 10.0  # sells exactly the initial stock on day 1
         res = pb.simulate_rss_candidates(dem, np.array([[10.0]]), np.array([[1.0]]), np.array([1.0]),
@@ -267,12 +267,12 @@ class TestPolicyBacktestJ5(unittest.TestCase):
             self.assertGreaterEqual(ax["kappa_g"], 0.5)
             if ax["is_feasible"]:
                 self.assertGreaterEqual(ax["val_service"], 0.90 + pc.GUARD - 1e-9)
-            # P6 active: m_g held at 0 (no double application with theta), setpoint untouched by guard
+            # P6 active: m_g held at 0 (no double application with theta); setpoint = A_g + guard (research 8.2)
             res2 = optimization_service.refit_quarterly_policies(db, store_id=STORE, selection_id="p6",
                                                                  target_availability=0.95, c3out_active=True)
             ax2 = next(r for r in res2 if r["class_id"] == "AX")
             self.assertEqual(ax2["m_g"], 0.0)
-            self.assertEqual(ax2["setpoint"], 0.95)
+            self.assertAlmostEqual(ax2["setpoint"], 0.96)  # Q-06: A_g + guard
         finally:
             db.close()
 

@@ -175,7 +175,6 @@ class DataQualityService:
 
         total_missing_days = 0
         total_expected_days = 0
-        outlier_candidates = []
 
         for s in series_agg:
             # E. Kiểm tra khoảng trống / ngày bị thiếu (Missing Days)

@@ -19,6 +19,7 @@ from app.schemas.forecast import (
     BulkOverrideRequest,
     BulkOverrideResponse,
 )
+from app.services import policy_config as pc
 from app.schemas.window_quantile import WindowQuantileResponse
 from app.services.forecast_service import forecast_service
 from app.services.window_quantile_service import window_quantile_service
@@ -262,7 +263,7 @@ def get_sku_window_quantiles(
 
     if not origin_date:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-        target_date = clock.current_date if clock else date(2015, 5, 24)
+        target_date = clock.current_date if clock else pc.DEMO_START_DATE
     else:
         target_date = origin_date
 
@@ -276,7 +277,7 @@ def get_sku_window_quantiles(
     )
 
     q_dict = record.q_levels or {}
-    tau_95 = float(q_dict.get("0.95", round(record.point_window * 1.6, 2)))
+    tau_95 = float(q_dict["0.95"]) if "0.95" in q_dict else None  # Q-14: never an invented point*1.6
 
     return WindowQuantileResponse(
         id=record.id,

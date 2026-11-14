@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_db
 from app.core.security import create_access_token, get_password_hash
 from app.main import app
+from tests.artifact_marks import requires_c3ok_calibration, requires_c3ok_results
 from app.models.base import Base
 from app.models.calibration_state import CalibrationState
 from app.models.classification import SKUClassification
@@ -73,6 +74,7 @@ def _seed_registry(s):
 
 
 # ------------------------------------------------------------------ coverage_q95 (task 1)
+@requires_c3ok_calibration
 def test_artifact_coverage_is_real_and_labelled():
     art = coverage_service.artifact_coverage_q95()
     assert art is not None and abs(art["value"] - 0.8314) < 1e-4 and art["split"] == "test"
@@ -99,6 +101,8 @@ def test_db_causal_coverage_separate_from_artifact(env):
     assert out["coverage_q95"] == pytest.approx(0.8314, abs=1e-4)  # artifact value untouched
 
 
+@requires_c3ok_results  # also reads /reports/policy-comparison (c3ok_results.csv)
+@requires_c3ok_calibration
 def test_registry_reports_and_dashboard_expose_coverage(env):
     c = env["client"]
     with env["Session"]() as s:

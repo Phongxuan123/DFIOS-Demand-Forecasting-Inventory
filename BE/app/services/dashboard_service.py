@@ -57,12 +57,14 @@ class DashboardService:
         """
         UC08: Lấy chuỗi xu hướng nhu cầu bán hàng và dự báo.
         """
+        meta: Dict[str, Any] = {}
         trend_rows = dashboard_repository.get_demand_trend(
             db,
             store_id=store_id,
             category=category,
             days=days,
             granularity=granularity,
+            meta=meta,
         )
         points = [DemandTrendPoint(**r) for r in trend_rows]
         return DemandTrendResponse(
@@ -70,6 +72,8 @@ class DashboardService:
             store_id=store_id,
             category=category,
             data=points,
+            as_of=meta.get("as_of"),
+            forecast_note=meta.get("forecast_note"),
         )
 
     def get_alerts(
@@ -135,7 +139,7 @@ class DashboardService:
             .filter(
                 Alert.store_id.in_(target_stores),
                 Alert.item_id.in_(target_items),
-                Alert.is_read == False,
+                Alert.is_read.is_(False),
             )
             .all()
         )

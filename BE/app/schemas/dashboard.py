@@ -37,6 +37,9 @@ class DemandTrendResponse(BaseModel):
     store_id: Optional[str] = None
     category: Optional[str] = None
     data: List[DemandTrendPoint] = []
+    # additive (U-04): the series is bounded by the simulated clock
+    as_of: Optional[str] = None
+    forecast_note: Optional[str] = None
 
 
 class InventoryAlertItem(BaseModel):

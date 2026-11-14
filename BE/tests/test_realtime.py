@@ -142,7 +142,7 @@ class TestRealtimeSSE(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bus.get_user_connection_count(user_email), 5)
 
         # Mở kết nối thứ 6: kết nối cũ nhất thứ 1 sẽ bị ngắt
-        sixth_queue = await bus.subscribe(user_email)
+        await bus.subscribe(user_email)
         self.assertEqual(bus.get_user_connection_count(user_email), 5)
 
         # Kết nối thứ 1 sẽ nhận tín hiệu None báo hiệu kết nối đã bị đóng do quá giới hạn

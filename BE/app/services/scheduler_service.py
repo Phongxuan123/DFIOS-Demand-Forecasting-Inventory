@@ -6,8 +6,8 @@ Lightweight in-process scheduler for the saved ML/pipeline schedules (UC49, R-19
   the current UTC minute (at most once per minute) through ``pipeline_service.trigger_pipeline_run``.
 * Disabled with ``DFIOS_SCHEDULER=0`` and automatically under pytest. When disabled the schedules are only
   stored and ``mode`` of every schedule is reported as ``"manual"`` (honest, nothing executes them).
-* Single-process only: with several uvicorn workers every worker would run the job (use ``DFIOS_SCHEDULER=0``
-  on all but one).
+* Multi-worker safe on PostgreSQL: a ``pg_try_advisory_lock`` held for the tick lets only one worker run the
+  due schedules (Q-09); SQLite is single-process.
 """
 from __future__ import annotations
 
@@ -70,12 +70,26 @@ def cron_matches(expr: str, when: datetime) -> bool:
 
 
 def next_run(expr: str, after: Optional[datetime] = None) -> Optional[datetime]:
-    """Next UTC minute (within 366 days) matching the cron expression, else None."""
-    t = (after or datetime.now(timezone.utc)).replace(second=0, microsecond=0) + timedelta(minutes=1)
-    for _ in range(366 * 24 * 60):
-        if cron_matches(expr, t):
-            return t
-        t += timedelta(minutes=1)
+    """Next UTC minute (within 366 days) matching the cron expression, else None.
+    Day-by-day search over the date fields, then only the matching hour/minute pairs (Q-09: no 527 k-step loop)."""
+    try:
+        m_f, h_f, dom_f, mon_f, dow_f = expr.split()
+        start = (after or datetime.now(timezone.utc)).replace(second=0, microsecond=0) + timedelta(minutes=1)
+        hours = [h for h in range(24) if _field_matches(h_f, h, 0, 23)]
+        minutes = [m for m in range(60) if _field_matches(m_f, m, 0, 59)]
+        for d in range(367):
+            day = start + timedelta(days=d)
+            cron_dow = (day.weekday() + 1) % 7
+            dow_ok = _field_matches(dow_f, cron_dow, 0, 7) or (cron_dow == 0 and _field_matches(dow_f, 7, 0, 7))
+            if not (_field_matches(mon_f, day.month, 1, 12) and _field_matches(dom_f, day.day, 1, 31) and dow_ok):
+                continue
+            for h in hours:
+                for m in minutes:
+                    cand = day.replace(hour=h, minute=m)
+                    if cand >= start:
+                        return cand
+    except (ValueError, TypeError):
+        return None
     return None
 
 
@@ -117,11 +131,30 @@ def run_due_schedules(db, now: Optional[datetime] = None) -> int:
     return started
 
 
-def _tick() -> None:
-    from app.core.database import SessionLocal
+SCHEDULER_LOCK_KEY = 727_001  # arbitrary application-wide advisory lock id
 
-    with SessionLocal() as db:
-        run_due_schedules(db)
+
+def _tick() -> int:
+    """One scheduler tick. On PostgreSQL a session advisory lock (held on a dedicated connection for the whole
+    tick) guarantees that with several uvicorn workers only ONE of them runs the due schedules (Q-09);
+    the others skip the tick. SQLite (dev/tests) has a single process by construction."""
+    from sqlalchemy import text
+
+    from app.core.database import SessionLocal, engine
+
+    if engine.dialect.name != "postgresql":
+        with SessionLocal() as db:
+            return run_due_schedules(db)
+    with engine.connect() as lock_conn:
+        got = lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": SCHEDULER_LOCK_KEY}).scalar()
+        if not got:
+            return 0
+        try:
+            with SessionLocal() as db:
+                return run_due_schedules(db)
+        finally:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": SCHEDULER_LOCK_KEY})
+            lock_conn.commit()
 
 
 async def scheduler_loop() -> None:

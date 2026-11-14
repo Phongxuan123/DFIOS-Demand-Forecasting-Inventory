@@ -335,8 +335,10 @@ class TestForecastEndpoints(unittest.TestCase):
         )
         self.assertEqual(res_mgr.status_code, 200)
         data = res_mgr.json()
-        self.assertEqual(data["model_name"], "lightgbm")
-        self.assertGreater(len(data["features"]), 0)
+        # U-03: nothing is stored for this SKU -> explicit "unavailable", no fabricated SHAP numbers
+        self.assertFalse(data["available"])
+        self.assertEqual(data["features"], [])
+        self.assertTrue(data["reason"])
 
         # ARIMA model -> 404 Not Found kèm thông báo rõ ràng
         res_arima = self.client.get(
@@ -409,7 +411,7 @@ class TestForecastEndpoints(unittest.TestCase):
         # Kiểm tra Audit Log đã ghi nhận cả 2 thao tác override và revert
         with self.TestingSessionLocal() as session:
             logs = session.query(AuditLog).all()
-            actions = [l.action for l in logs]
+            actions = [lg.action for lg in logs]
             self.assertIn("forecast.override", actions)
             self.assertIn("forecast.revert_override", actions)
 

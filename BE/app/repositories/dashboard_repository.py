@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -83,7 +83,7 @@ class DashboardRepository:
         from app.models.model_registry import ModelRegistry
         prod_model = (
             db.query(ModelRegistry)
-            .filter(ModelRegistry.is_production == True)
+            .filter(ModelRegistry.is_production.is_(True))
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
@@ -140,9 +140,13 @@ class DashboardRepository:
         category: Optional[str] = None,
         days: int = 30,
         granularity: str = "daily",
+        meta: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         UC08: Tổng hợp chuỗi xu hướng nhu cầu thực tế và dự báo theo ngày/tuần/tháng.
+        U-04: actuals <= clock date; forecasts only when their ORIGIN (day before the first forecast date)
+        is <= clock date (a forecast run made after the clock is look-ahead and is not shown). ``meta`` (dict)
+        receives ``as_of`` and ``forecast_note``.
         """
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
 
@@ -196,7 +200,7 @@ class DashboardRepository:
         from app.models.model_registry import ModelRegistry
         prod_model = (
             db.query(ModelRegistry)
-            .filter(ModelRegistry.is_production == True)
+            .filter(ModelRegistry.is_production.is_(True))
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
@@ -218,6 +222,24 @@ class DashboardRepository:
             fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
         else:
             fc_q = fc_q.filter(Forecast.forecast_date >= clock_date)
+        # U-04: origin of the forecast run = the day before its first forecast date
+        first_fc_date = fc_q.with_entities(func.min(Forecast.forecast_date)).scalar()
+        has_clock = (
+            db.query(SimClock.store_id).filter(SimClock.store_id == target_store).first() is not None
+            if not is_global else db.query(SimClock.store_id).first() is not None
+        )
+        forecast_hidden = bool(
+            has_clock and first_fc_date is not None and (first_fc_date - timedelta(days=1)) > clock_date
+        )
+        if meta is not None:
+            meta["as_of"] = str(clock_date)
+            meta["forecast_note"] = (
+                f"Forecasts start on {first_fc_date} (origin {first_fc_date - timedelta(days=1)}), after the "
+                f"simulated clock ({clock_date}): hidden until the clock reaches the forecast origin."
+                if forecast_hidden else None
+            )
+        if forecast_hidden:
+            fc_q = fc_q.filter(Forecast.forecast_date < date(1900, 1, 1))
 
         if category and category.strip() and category.strip().upper() != "ALL":
             fc_q = fc_q.join(Product, Forecast.item_id == Product.item_id).filter(
@@ -388,7 +410,7 @@ class DashboardRepository:
                 Alert.item_id == item_id,
                 Alert.store_id == store_id,
                 Alert.type.in_(list(alias_types)),
-                Alert.is_read == False,
+                Alert.is_read.is_(False),
             )
             .first()
         )

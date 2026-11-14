@@ -60,6 +60,9 @@ class HistoricalDemandResponse(BaseModel):
     max_quantity: float
     count: int
     history: List[HistoryPoint]
+    # additive (U-04): the series never goes beyond the simulated clock date
+    as_of: Optional[str] = None
+    bounded_by_clock: bool = False
 
 
 # --- UC21: Compare Actual vs Predicted ---
@@ -147,8 +150,12 @@ class ForecastExplanationResponse(BaseModel):
     store_id: Optional[str] = None
     model_name: str
     model_version: str
-    base_value: float
+    base_value: Optional[float] = None
     features: List[SHAPFeatureContribution]
+    # additive (U-03): False => no attribution exists for this SKU, features is empty, never fabricated
+    available: bool = True
+    source: Optional[str] = None  # stored_explanations | none
+    reason: Optional[str] = None
 
 
 # --- UC24: Manual Forecast Override ---
