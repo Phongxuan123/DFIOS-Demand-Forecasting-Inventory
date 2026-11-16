@@ -14,7 +14,7 @@
  */
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import { getActiveLocale } from '../i18n/format.ts';
-import { localizeBe } from '../i18n/beText.ts';
+import { localizeCoded } from '../i18n/beText.ts';
 import {
   AUTH_FORBIDDEN_EVENT,
   AUTH_UNAUTHORIZED_EVENT,
@@ -55,6 +55,12 @@ function extractDetail(data: unknown): string | undefined {
   if (!data || typeof data !== 'object') return typeof data === 'string' && data.length < 300 ? data : undefined;
   const detail = (data as { detail?: unknown; message?: unknown }).detail ?? (data as { message?: unknown }).message;
   if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    // Structured detail, e.g. { reason_code, reason } (what-if 422).
+    const d = detail as { reason?: unknown; message?: unknown; msg?: unknown };
+    const text = d.reason ?? d.message ?? d.msg;
+    return typeof text === 'string' ? text : undefined;
+  }
   if (Array.isArray(detail)) {
     const parts = detail
       .map((d) => {
@@ -132,6 +138,19 @@ export interface ApiError {
   detail?: string;
   /** Technical message for logs. For UI text use `apiErrorMessage(err, t)`. */
   message: string;
+  /** Stable machine code when the server sends one (`detail.reason_code` / `detail.code` / top-level `code`). */
+  code?: string;
+  /** The structured `detail` object, when the server sent one (extra fields such as supported values). */
+  data?: Record<string, unknown>;
+}
+
+/** Stable code + structured detail from an error body (works for every BE error shape seen so far). */
+export function extractCodeAndData(body: unknown): { code?: string; data?: Record<string, unknown> } {
+  if (!body || typeof body !== 'object') return {};
+  const top = body as { detail?: unknown; code?: unknown; reason_code?: unknown; detail_code?: unknown };
+  const detail = top.detail && typeof top.detail === 'object' && !Array.isArray(top.detail) ? (top.detail as Record<string, unknown>) : undefined;
+  const raw = detail?.reason_code ?? detail?.code ?? top.reason_code ?? top.detail_code ?? top.code;
+  return { code: typeof raw === 'string' ? raw : undefined, data: detail };
 }
 
 export function isApiError(value: unknown): value is ApiError {
@@ -151,14 +170,16 @@ export function toApiError(err: unknown): ApiError {
     if (err.code === 'ERR_CANCELED') return { kind: 'cancelled', message };
     if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') return { kind: 'timeout', message };
     if (!err.response) return { kind: 'network', message };
-    if (status === 401) return { kind: 'unauthorized', status, detail, message };
-    if (status === 403) return { kind: 'forbidden', status, detail, message };
-    if (status === 404) return { kind: 'not_found', status, detail, message };
+    const extra = extractCodeAndData(err.response.data);
+    const base = { status, detail, message, ...(extra.code ? { code: extra.code } : {}), ...(extra.data ? { data: extra.data } : {}) };
+    if (status === 401) return { kind: 'unauthorized', ...base };
+    if (status === 403) return { kind: 'forbidden', ...base };
+    if (status === 404) return { kind: 'not_found', ...base };
     if (status === 400 || status === 409 || status === 413 || status === 422) {
-      return { kind: 'validation', status, detail, message };
+      return { kind: 'validation', ...base };
     }
-    if (status !== undefined && status >= 500) return { kind: 'server', status, detail, message };
-    return { kind: 'unknown', status, detail, message };
+    if (status !== undefined && status >= 500) return { kind: 'server', ...base };
+    return { kind: 'unknown', ...base };
   }
   if (err instanceof Error) return { kind: 'unknown', message: err.message };
   return { kind: 'unknown', message: String(err) };
@@ -182,6 +203,8 @@ type ErrorTranslator = (
  */
 export function apiErrorMessage(err: unknown, t: ErrorTranslator): string {
   const e = toApiError(err);
+  // A stable code (newer BE) is translated first; else the known-sentence map; else the raw detail.
+  const text = () => localizeCoded(getActiveLocale(), e.code, e.data as Record<string, string | number | null> | undefined, e.detail) || e.code || '';
   switch (e.kind) {
     case 'network':
       return t('common.errors.network');
@@ -192,13 +215,13 @@ export function apiErrorMessage(err: unknown, t: ErrorTranslator): string {
     case 'forbidden':
       return t('common.errors.forbidden');
     case 'not_found':
-      return e.detail ? localizeBe(getActiveLocale(), e.detail) : t('common.errors.not_found');
+      return e.detail || e.code ? text() : t('common.errors.not_found');
     case 'validation':
-      return e.detail ? localizeBe(getActiveLocale(), e.detail) : t('common.errors.validation');
+      return e.detail || e.code ? text() : t('common.errors.validation');
     case 'server':
-      return e.detail ? `${t('common.errors.server')} (${localizeBe(getActiveLocale(), e.detail)})` : t('common.errors.server');
+      return e.detail || e.code ? `${t('common.errors.server')} (${text()})` : t('common.errors.server');
     default:
-      return e.detail ? localizeBe(getActiveLocale(), e.detail) : t('common.errors.unknown');
+      return e.detail || e.code ? text() : t('common.errors.unknown');
   }
 }
 

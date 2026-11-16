@@ -3,8 +3,10 @@ import { Download, Upload } from 'lucide-react';
 import { Alert, Badge, Button, Card, DataSourceNote, KpiTile, Select, Table, useToast, type Column } from '../../components/ui/index.ts';
 import { useStore } from '../../context/StoreContext.tsx';
 import { useApi } from '../../hooks/useApi.ts';
+import { useElapsed } from '../../hooks/useElapsed.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { apiErrorMessage } from '../../services/apiClient.ts';
+import { BeText } from '../../i18n/BeText.tsx';
 import { downloadImportTemplate, getImportTemplate, uploadImport, type ImportResult, type RejectedRow, type TemplateColumn } from '../../services/settingsApi.ts';
 
 const FALLBACK_MAX_MB = 50;
@@ -22,6 +24,7 @@ export const ImportTab: React.FC = () => {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const tpl = useApi((s) => getImportTemplate(s), []);
+  const elapsed = useElapsed(uploading);
   const target = store || storeId || '';
   const maxMb = tpl.data?.max_file_size_mb ?? FALLBACK_MAX_MB;
 
@@ -87,14 +90,14 @@ export const ImportTab: React.FC = () => {
     { key: 'name', header: t('settings.import.col_name'), cell: (c) => <code>{c.name}</code> },
     { key: 'required', header: t('settings.import.col_required'), cell: (c) => <Badge tone={c.required ? 'accent' : 'neutral'}>{t(c.required ? 'settings.import.required_yes' : 'settings.import.required_no')}</Badge>, width: 110 },
     { key: 'type', header: t('settings.import.col_type'), value: (c) => c.type, width: 90 },
-    { key: 'description', header: t('settings.import.col_description'), cell: (c) => <span className="set-wrap">{c.description}</span> },
+    { key: 'description', header: t('settings.import.col_description'), cell: (c) => <BeText className="set-wrap" text={c.description} /> },
     { key: 'example', header: t('settings.import.col_example'), cell: (c) => <code>{c.example}</code> },
   ];
 
   const rejCols: Column<RejectedRow>[] = [
     { key: 'row', header: t('settings.import.rej_row'), align: 'right', cell: (r) => fmt.integer(r.row), width: 80 },
     { key: 'sku', header: t('settings.import.rej_sku'), value: (r) => r.item_id, width: 160 },
-    { key: 'reason', header: t('settings.import.rej_reason'), cell: (r) => <span className="set-wrap">{r.reason}</span> },
+    { key: 'reason', header: t('settings.import.rej_reason'), cell: (r) => <BeText className="set-wrap" text={r.reason} code={r.reason_code} params={r.reason_params} /> },
   ];
 
   const rejected = result ? (result.rejected ?? result.skipped_count ?? 0) : 0;
@@ -130,7 +133,13 @@ export const ImportTab: React.FC = () => {
               {t('settings.import.template_download')}
             </Button>
           </div>
-          {uploading && <Alert tone="info">{t('settings.import.uploading')}</Alert>}
+          <div aria-live="polite">
+            {uploading && (
+              <Alert tone="info">
+                {t('settings.import.uploading')} <span aria-hidden="true">{t('common.misc.elapsed', { seconds: elapsed })}</span>
+              </Alert>
+            )}
+          </div>
           {uploadError && (
             <Alert tone="danger" title={t('settings.import.failed')}>
               {uploadError}
@@ -159,7 +168,9 @@ export const ImportTab: React.FC = () => {
               <Alert tone="warning" title={t('settings.import.warnings')}>
                 <ul className="set-hints">
                   {warnings.map((w) => (
-                    <li key={w}>{w}</li>
+                    <li key={w}>
+                      <BeText text={w} />
+                    </li>
                   ))}
                 </ul>
               </Alert>
@@ -180,7 +191,7 @@ export const ImportTab: React.FC = () => {
         <div className="set-pad">
           {(tpl.data?.notes ?? []).map((n) => (
             <p key={n} className="set-note">
-              {n}
+              <BeText text={n} />
             </p>
           ))}
           <DataSourceNote source={t('settings.import.source')} />

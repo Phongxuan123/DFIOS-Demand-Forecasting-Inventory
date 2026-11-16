@@ -116,6 +116,8 @@ export const common = {
     clear_search: 'Xóa từ khóa',
   },
   misc: {
+    server_text_vi: 'Nội dung gốc từ máy chủ',
+    elapsed: 'Đã chạy {seconds} giây',
     yes: 'Có',
     no: 'Không',
     all: 'Tất cả',

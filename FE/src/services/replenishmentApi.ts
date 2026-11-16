@@ -29,6 +29,9 @@ export interface ReplenishmentItem {
   priority: string;
   status: RecStatus;
   reason?: string | null;
+  /** BE round 5: ip_below_s | user_adjusted | user_rejected | cancelled (+ params for ip_below_s). */
+  reason_code?: string | null;
+  reason_params?: Record<string, string | number | null> | null;
   decided_by?: string | null;
   created_at: string;
   decided_at?: string | null;

@@ -286,6 +286,15 @@
   line-height: 1;
   white-space: nowrap;
 }
+/* Long sentence-like badge content: wraps instead of widening its container (U-13). */
+.ui-badge.ui-badge--wrap {
+  height: auto;
+  min-height: 20px;
+  padding-block: 3px;
+  line-height: var(--leading-normal, 1.4);
+  white-space: normal;
+  max-width: 100%;
+}
 .ui-badge__dot {
   width: 6px;
   height: 6px;

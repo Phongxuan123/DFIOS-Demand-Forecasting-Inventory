@@ -78,7 +78,7 @@ class ForecastService:
         if horizon is not None:
             if horizon not in allowed_horizons:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Khoảng dự báo horizon={horizon} không hợp lệ. Các giá trị hợp lệ: {allowed_horizons}.",
                 )
             selected_horizon = horizon
@@ -179,7 +179,7 @@ class ForecastService:
         """GLOBAL/ALL has no aggregated forecast: 422 instead of silently answering with CA_1."""
         if self._is_global(store_id):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"{what}: store_id={store_id} (GLOBAL/ALL) chưa hỗ trợ dự báo gộp; hãy chọn một cửa hàng cụ thể.",
             )
 
@@ -237,7 +237,7 @@ class ForecastService:
         valid_granularities = ["daily", "weekly", "monthly"]
         if granularity.lower() not in valid_granularities:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"granularity='{granularity}' không hợp lệ. Chỉ chấp nhận: {valid_granularities}.",
             )
 
@@ -472,9 +472,21 @@ class ForecastService:
                 )
 
         n = len(comparison)
-        mae = round(sum(abs_errors) / n, 2) if n > 0 else 0.0
-        rmse = round(math.sqrt(sum(e**2 for e in errors) / n), 2) if n > 0 else 0.0
+        # no overlapping (actual, forecast) day -> the error is UNKNOWN, never 0.0
+        mae = round(sum(abs_errors) / n, 2) if n > 0 else None
+        rmse = round(math.sqrt(sum(e**2 for e in errors) / n), 2) if n > 0 else None
         mape = round(sum(pct_errors) / len(pct_errors), 2) if pct_errors else None
+        if n > 0:
+            metrics_reason_code = metrics_reason = None
+        elif not forecast_by_date:
+            metrics_reason_code = "no_forecast"
+            metrics_reason = "Không có dự báo nào trong khoảng thời gian yêu cầu: chưa tính được sai số."
+        elif not actual_map:
+            metrics_reason_code = "no_actuals"
+            metrics_reason = "Chưa có doanh số thực tế (tới ngày đồng hồ mô phỏng) trong khoảng yêu cầu: chưa tính được sai số."
+        else:
+            metrics_reason_code = "no_overlap"
+            metrics_reason = "Không có ngày nào có đồng thời doanh số thực tế và dự báo: chưa tính được sai số."
 
         # MASE: scale = mean |y_t - y_(t-1)| of the TRAINING history (sales strictly before the first compared day)
         mase = None
@@ -503,6 +515,8 @@ class ForecastService:
             total_actual=round(total_actual, 2),
             total_predicted=round(total_pred, 2),
             data_points=n,
+            metrics_reason=metrics_reason,
+            metrics_reason_code=metrics_reason_code,
         )
 
         return ForecastCompareResponse(
@@ -534,7 +548,7 @@ class ForecastService:
         if horizon is not None:
             if horizon not in allowed_horizons:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Khoảng dự báo horizon={horizon} không hợp lệ. Chỉ chấp nhận {allowed_horizons}.",
                 )
             selected_horizon = horizon
@@ -917,7 +931,7 @@ class ForecastService:
 
         if validation_errors:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=validation_errors,
             )
 

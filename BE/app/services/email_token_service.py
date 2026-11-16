@@ -95,6 +95,56 @@ class InMemoryRateLimiter:
 rate_limiter = InMemoryRateLimiter()
 
 
+class DbLoginFailureCounter:
+    """
+    Q-17: failure counter shared by ALL API processes (table ``login_failures``). The in-memory limiter above is
+    per process, so with N uvicorn workers an attacker would get N x the budget; the per-email login budget is
+    therefore also enforced from the database. Any database error degrades to the in-memory limiter only
+    (returns None / does nothing) - it never blocks a login by itself.
+    """
+
+    @staticmethod
+    def count(db: Session, key: str, window_seconds: int) -> Optional[int]:
+        from sqlalchemy import func
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+        try:
+            return int(db.query(func.count(LoginFailure.id))
+                       .filter(LoginFailure.key == key, LoginFailure.created_at > cutoff).scalar() or 0)
+        except SQLAlchemyError:
+            db.rollback()
+            return None
+
+    @staticmethod
+    def record(db: Session, key: str, window_seconds: int) -> None:
+        """Adds one failure and prunes this key's expired rows. The caller commits."""
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        now = datetime.now(timezone.utc)
+        try:
+            db.query(LoginFailure).filter(
+                LoginFailure.key == key, LoginFailure.created_at <= now - timedelta(seconds=window_seconds)
+            ).delete(synchronize_session=False)
+            db.add(LoginFailure(key=key, created_at=now))
+            db.flush()
+        except SQLAlchemyError:
+            db.rollback()
+
+    @staticmethod
+    def clear(db: Session, key: str) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        try:
+            db.query(LoginFailure).filter(LoginFailure.key == key).delete(synchronize_session=False)
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+
+
+db_login_failures = DbLoginFailureCounter()
+
+
 class EmailTokenService:
     """
     Dịch vụ quản lý vòng đời token xác thực email dùng chung cho 3 luồng:

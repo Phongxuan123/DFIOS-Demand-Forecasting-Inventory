@@ -28,15 +28,38 @@ from app.services.email_service import (
     render_confirm_change_email,
     render_notify_old_email_changed,
 )
-from app.services.email_token_service import email_token_service, rate_limiter
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.models.audit_log import AUDIT_RESULT_FAILURE
+from app.services.email_token_service import db_login_failures, email_token_service, rate_limiter
 from app.services.audit_service import audit_service
 from app.core.config import settings
 
 
 _DUMMY_PASSWORD_HASH = get_password_hash("dfios-timing-equaliser")
+LOGIN_MAX_FAILURES = 10
+LOGIN_WINDOW_SECONDS = 300
 
 
 class AuthService:
+    @staticmethod
+    def _record_login_failure(
+        db: Session, rate_key: str, email_key: str, email: str, client_ip: Optional[str], reason_code: str
+    ) -> None:
+        """Failed login: in-memory limiter (per process), shared DB counter (Q-17) and an audit row with
+        result = FAILURE (round 5: the outcome is recorded, never derived from text). Never raises."""
+        rate_limiter.record_attempt(rate_key, window_seconds=LOGIN_WINDOW_SECONDS)
+        rate_limiter.record_attempt(email_key, window_seconds=LOGIN_WINDOW_SECONDS)
+        db_login_failures.record(db, email_key, LOGIN_WINDOW_SECONDS)
+        try:
+            audit_service.log(
+                db, action="auth.login_failed", actor_email=email, ip_address=client_ip,
+                details=f"Đăng nhập thất bại ({reason_code}).", result=AUDIT_RESULT_FAILURE,
+            )
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+
     def login(self, db: Session, login_data: LoginRequest, client_ip: Optional[str] = None) -> LoginResponse:
         """
         UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration, N-12)
@@ -47,7 +70,11 @@ class AuthService:
         # Q-10: per-email limiter INDEPENDENT of the client IP. A spoofed X-Forwarded-For (uvicorn proxy headers
         # trusting the peer) can mint any number of (email, ip) keys, but not more passwords-per-account budget.
         email_key = f"login_email:{email_clean}"
-        if rate_limiter.check_limit(email_key, max_requests=10, window_seconds=300):
+        # Q-17: the same per-email budget is also counted in the DATABASE (shared by every worker process)
+        db_failures = db_login_failures.count(db, email_key, LOGIN_WINDOW_SECONDS)
+        if rate_limiter.check_limit(email_key, max_requests=LOGIN_MAX_FAILURES, window_seconds=LOGIN_WINDOW_SECONDS) or (
+            db_failures is not None and db_failures >= LOGIN_MAX_FAILURES
+        ):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
@@ -64,8 +91,7 @@ class AuthService:
         if not user:
             # Chạy một lần bcrypt giả để thời gian phản hồi không lộ email có tồn tại hay không
             verify_password(login_data.password, _DUMMY_PASSWORD_HASH)
-            rate_limiter.record_attempt(rate_key, window_seconds=300)
-            rate_limiter.record_attempt(email_key, window_seconds=300)
+            self._record_login_failure(db, rate_key, email_key, email_clean, client_ip, "unknown_account")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
@@ -74,8 +100,7 @@ class AuthService:
         # P-09 / R-24: luôn kiểm tra mật khẩu TRƯỚC mọi kiểm tra trạng thái tài khoản (chưa kích hoạt / bị khóa),
         # để người không biết mật khẩu không dò được trạng thái tài khoản qua mã 403.
         if not user.password_hash or not verify_password(login_data.password, user.password_hash):
-            rate_limiter.record_attempt(rate_key, window_seconds=300)
-            rate_limiter.record_attempt(email_key, window_seconds=300)
+            self._record_login_failure(db, rate_key, email_key, email_clean, client_ip, "wrong_password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
@@ -91,6 +116,8 @@ class AuthService:
         # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
         rate_limiter.clear(rate_key)
         rate_limiter.clear(email_key)
+        if db_failures:
+            db_login_failures.clear(db, email_key)
 
         # B-12: sub được chuẩn hóa thành str(user.id) theo RFC 7519, kèm email và user_id
         access_token = create_access_token(

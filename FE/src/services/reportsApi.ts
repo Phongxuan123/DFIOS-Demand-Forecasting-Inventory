@@ -48,16 +48,18 @@ export interface SimPolicyMetric {
   policy_key?: string | null;
   policy_name: string;
   description: string;
-  total_cost: number;
-  holding_cost: number;
-  ordering_cost: number;
-  stockout_cost: number;
-  availability: number;
-  total_orders: number;
+  /** Nullable on newer backends when a figure is not in the source (rendered "—", never 0). */
+  total_cost: number | null;
+  holding_cost: number | null;
+  ordering_cost: number | null;
+  stockout_cost: number | null;
+  availability: number | null;
+  total_orders: number | null;
   total_stockouts: number | null;
   stockouts_reason: string | null;
   stockouts_reason_code?: string | null;
-  is_feasible: boolean;
+  /** null = feasibility unknown (no availability figure). */
+  is_feasible: boolean | null;
   tau: number | null;
   csl: number | null;
   fill_rate: number | null;
@@ -108,6 +110,8 @@ export interface ForecastAccuracy {
   as_of: string | null;
   n_skus: number | null;
   metrics_reason: string | null;
+  metrics_reason_code?: string | null;
+  metrics_reason_params?: Record<string, string | number | null> | null;
 }
 
 export interface InventoryPerfItem {
@@ -134,6 +138,7 @@ export interface InventoryPerformance {
   source: string;
   n_skus: number | null;
   reason: string | null;
+  reason_code?: string | null;
 }
 
 export interface CostPolicyDetail {
@@ -156,6 +161,7 @@ export interface CostComparison {
   period_end: string | null;
   cost_basis: string;
   reason: string | null;
+  reason_code?: string | null;
 }
 
 export interface Backtest {
@@ -172,6 +178,7 @@ export interface Backtest {
   source: string;
   as_of: string | null;
   reason: string | null;
+  reason_code?: string | null;
 }
 
 export interface RegistryModel {
@@ -184,7 +191,82 @@ export interface RegistryModel {
   created_at: string;
 }
 
-export const getPolicyBenchmark = (signal?: AbortSignal) => getJson<PolicyBenchmark>('/reports/policy-comparison', { signal });
+/* --------------------------------- FR10 what-if ------------------------------ */
+export interface WhatIfRequest {
+  store_id: string;
+  /** L (days). The BE accepts 1 | 3 | 7. */
+  lead_time_days: number;
+  /** R (days). Only the spacing of the stored review forecasts can be replayed (422 otherwise). */
+  review_period_days: number;
+  /** h: holding cost per unit per day, share of price. */
+  holding_rate: number;
+  /** b: penalty per lost unit, share of price. */
+  stockout_penalty_rate: number;
+  /** c: cost per order line. */
+  order_cost: number;
+  tau?: number;
+  n_reviews?: number;
+}
+export interface WhatIfMetrics {
+  total_cost: number;
+  holding_cost: number;
+  shortage_cost: number;
+  ordering_cost: number;
+  orders: number;
+  availability?: number | null;
+  availability_pct?: number | null;
+  fill_rate?: number | null;
+  lost_units?: number;
+  demand_units?: number;
+  n_items?: number;
+  n_sku_periods?: number;
+}
+export interface WhatIfClassResult extends WhatIfMetrics {
+  class_id: string;
+  m_g: number;
+  kappa_g: number;
+  theta_g?: number;
+}
+export interface WhatIfPolicyResult {
+  policy_key: string;
+  label?: string | null;
+  overall: WhatIfMetrics;
+  by_class: WhatIfClassResult[];
+}
+export interface WhatIfResponse {
+  source: string;
+  simulated: boolean;
+  store_id: string;
+  as_of?: string | null;
+  lead_time_days: number;
+  review_period_days: number;
+  horizon_days?: number;
+  tau?: number;
+  holding_rate?: number;
+  stockout_penalty_rate?: number;
+  order_cost?: number;
+  n_reviews?: number;
+  period_start?: string | null;
+  period_end?: string | null;
+  quantile_basis?: string;
+  initial_stock_basis?: string;
+  policies: WhatIfPolicyResult[];
+  skipped_classes?: Array<{ class_id: string; reason_code: string; reason: string }>;
+  notes?: string[];
+}
+
+/** Narrow an unknown payload to a usable what-if result (defensive: old or partial backends). */
+export function isWhatIfResponse(v: unknown): v is WhatIfResponse {
+  if (!v || typeof v !== 'object') return false;
+  const p = (v as { policies?: unknown }).policies;
+  return Array.isArray(p) && p.every((x) => !!x && typeof x === 'object' && 'overall' in (x as object) && 'policy_key' in (x as object));
+}
+
+/** POST /simulation/what-if (FR10). A REAL replay on the store history; long-running. */
+export const postWhatIf = async (body: WhatIfRequest) =>
+  (await apiClient.post<WhatIfResponse>('/simulation/what-if', body, { timeout: 300000, notifyForbidden: true })).data;
+
+export const getPolicyBenchmark =(signal?: AbortSignal) => getJson<PolicyBenchmark>('/reports/policy-comparison', { signal });
 
 export const postComparePolicies = async (storeId: string, signal?: AbortSignal) =>
   (await apiClient.post<PolicyComparison>('/simulation/compare-policies', { store_id: storeId }, { signal })).data;

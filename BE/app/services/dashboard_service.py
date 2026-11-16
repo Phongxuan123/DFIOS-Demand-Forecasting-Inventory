@@ -18,7 +18,7 @@ from app.schemas.dashboard import (
     RealtimeStockAlertTriggerResponse,
 )
 from app.schemas.event import create_stock_alert_event
-from app.schemas.kpi_dashboard import CostCurvePoint, SegmentAvailability, KPIDashboardResponse
+from app.schemas.kpi_dashboard import CostCurvePoint, InsightDetail, SegmentAvailability, KPIDashboardResponse
 from app.models.sim_clock import SimClock
 from app.models.service_outcomes import ServiceOutcome
 from app.models.classification import SKUClassification
@@ -32,6 +32,26 @@ from app.models.inventory import Inventory
 from app.models.sim_state import SimShadowDaily
 
 logger = logging.getLogger(__name__)
+
+# Round 5 (U-06): every Vietnamese reason of the KPI dashboard / reports has a STABLE code (`*_reason_code`).
+KPI_REASONS: Dict[str, str] = {
+    "no_clock": "Không có sim_clock cho phạm vi yêu cầu.",
+    "no_closed_cycle": "Chưa có chu kỳ review nào được đóng (service_outcomes); tua đồng hồ ít nhất 1 kỳ review (7 ngày).",
+    "no_shadow": (
+        "B0 shadow chưa được mô phỏng song song cho giai đoạn này (đồng hồ tua trước khi có shadow); "
+        "reset đồng hồ và tua lại để có B0."
+    ),
+    "no_shadow_cost": "B0 shadow chưa có dữ liệu chi phí: reset đồng hồ và tua lại.",
+    "no_simulated_days": "Chưa có inventory_daily trong cửa sổ mô phỏng (đồng hồ chưa tua): chưa tính được chi phí A3.",
+}
+_KPI_REASON_CODES = {v: k for k, v in KPI_REASONS.items()}
+
+
+def kpi_reason_code(reason: Optional[str]) -> Optional[str]:
+    """Stable code of a KPI reason text (None for no reason, 'other' for a text without a code)."""
+    if not reason:
+        return None
+    return _KPI_REASON_CODES.get(reason, "other")
 
 
 class DashboardService:
@@ -359,7 +379,7 @@ class DashboardService:
             c: {"n_sku": 0, "n_periods": 0, "c3_stockout": 0, "b0_stockout": None} for c in pc.ALL_CLASSES
         }
         if not so:
-            reason = "Chưa có chu kỳ review nào được đóng (service_outcomes); tua đồng hồ ít nhất 1 kỳ review (7 ngày)."
+            reason = KPI_REASONS["no_closed_cycle"]
             return out, reason, reason
         closed = {(r.store_id, r.cycle_index) for r in so}
         for r in so:
@@ -374,10 +394,7 @@ class DashboardService:
             .scalar()
         )
         if not has_shadow:
-            return out, None, (
-                "B0 shadow chưa được mô phỏng song song cho giai đoạn này (đồng hồ tua trước khi có shadow); "
-                "reset đồng hồ và tua lại để có B0."
-            )
+            return out, None, KPI_REASONS["no_shadow"]
         # B0: stocked-out SKU-cycles (on_hand_end <= 0 on at least one day of the cycle) of the same closed cycles
         sh_rows = (
             db.query(SimShadowDaily.store_id, SimShadowDaily.item_id, SimShadowDaily.date)
@@ -422,7 +439,7 @@ class DashboardService:
 
         clocks = db.query(SimClock).all() if is_global else db.query(SimClock).filter(SimClock.store_id == target_store).all()
         if not clocks:
-            no_clock = "Không có sim_clock cho phạm vi yêu cầu."
+            no_clock = KPI_REASONS["no_clock"]
             return KPIDashboardResponse(
                 store_id=store_id, current_date=pc.DEMO_START_DATE, days_elapsed=0, reviews_elapsed=0,
                 segment_availabilities=[
@@ -434,7 +451,9 @@ class DashboardService:
                 ],
                 cost_curves=[],
                 summary_insights=[f"Chưa có đồng hồ mô phỏng cho '{target_store}': không có số liệu KPI."],
+                insight_details=[InsightDetail(code="no_clock", params={"store_id": target_store})],
                 source="none", cost_reason=no_clock, availability_reason=no_clock, b0_reason=no_clock,
+                cost_reason_code="no_clock", availability_reason_code="no_clock", b0_reason_code="no_clock",
             )
         stores = [c.store_id for c in clocks]
         curr_date = max(c.current_date for c in clocks)
@@ -517,7 +536,7 @@ class DashboardService:
 
         curves: List[CostCurvePoint] = []
         if not have_c3:
-            cost_reason = "Chưa có inventory_daily trong cửa sổ mô phỏng (đồng hồ chưa tua): chưa tính được chi phí A3."
+            cost_reason = KPI_REASONS["no_simulated_days"]
         else:
             ch = co = cs = bh = bo = bs = 0.0
             for cyc in range(reviews_elapsed + 1):
@@ -552,15 +571,21 @@ class DashboardService:
         b0_total = last.b0_total_cost if last else None
         savings = last.cost_savings if last else None
         if have_c3 and not have_b0:
-            b0_reason = b0_reason or "B0 shadow chưa có dữ liệu chi phí: reset đồng hồ và tua lại."
+            b0_reason = b0_reason or KPI_REASONS["no_shadow_cost"]
 
         insights: List[str] = []
+        details: List[InsightDetail] = []  # same order as ``insights`` (stable codes for client-side i18n)
         if overall_c3 is not None:
             line = f"Availability quan sát (các chu kỳ đã đóng): C³-OUT {overall_c3}% (mục tiêu {target_pct}%)"
             line += f", B0 raw quantile τ=0.95 {overall_b0}%." if overall_b0 is not None else f"; B0: {b0_reason}"
             insights.append(line)
+            details.append(InsightDetail(code="availability_observed", params={
+                "c3out_pct": overall_c3, "target_pct": target_pct, "b0_pct": overall_b0,
+                "b0_reason_code": kpi_reason_code(b0_reason),
+            }))
         else:
             insights.append(c3_reason or "Chưa có availability quan sát.")
+            details.append(InsightDetail(code=kpi_reason_code(c3_reason) or "no_availability"))
         if savings is not None:
             word = "tiết kiệm" if savings >= 0 else "chi thêm"
             insights.append(
@@ -568,9 +593,15 @@ class DashboardService:
                 f"(B0 {b0_total:,.2f} $, C³-OUT {c3_total:,.2f} $). C³-OUT là bộ điều khiển mức phục vụ, "
                 f"chênh lệch chi phí có thể âm."
             )
+            details.append(InsightDetail(code="cost_vs_b0", params={
+                "direction": "saves" if savings >= 0 else "costs_more", "difference": round(abs(savings), 2),
+                "savings": savings, "b0_total": b0_total, "c3out_total": c3_total,
+            }))
         elif cost_reason or b0_reason:
             insights.append(cost_reason or b0_reason)
+            details.append(InsightDetail(code=kpi_reason_code(cost_reason or b0_reason) or "no_cost"))
         insights.append("B0 được mô phỏng song song trên cùng nhu cầu và tồn kho ban đầu (không dùng tỷ lệ cố định).")
+        details.append(InsightDetail(code="b0_shadow_definition"))
 
         return KPIDashboardResponse(
             store_id=store_id,
@@ -592,6 +623,10 @@ class DashboardService:
             cost_reason=cost_reason,
             availability_reason=c3_reason,
             b0_reason=b0_reason,
+            cost_reason_code=kpi_reason_code(cost_reason),
+            availability_reason_code=kpi_reason_code(c3_reason),
+            b0_reason_code=kpi_reason_code(b0_reason),
+            insight_details=details,
         )
 
 

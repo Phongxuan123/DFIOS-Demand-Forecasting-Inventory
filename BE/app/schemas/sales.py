@@ -43,10 +43,12 @@ class SalesImportResponse(BaseModel):
     skipped_count: int
     message: str
     # R-38: bộ field thống nhất với POST /imports (FE đọc inserted/updated/rejected).
-    # /sales/import ghi theo kiểu upsert và không tách thêm mới/cập nhật, nên toàn bộ dòng ghi được tính vào `inserted`.
+    # Round 5: /sales/import tách thêm mới (`inserted`) và cập nhật dòng đã có (`updated`);
+    # imported_count = inserted + updated.
     inserted: Optional[int] = None
     updated: int = 0
     rejected: Optional[int] = None
+    duplicate_rows: int = Field(0, description="Rows of the file repeating an (item, store, day) already in the file (last value kept)")
 
     @model_validator(mode="after")
     def _fill_unified_counters(self) -> "SalesImportResponse":

@@ -22,7 +22,8 @@ export type Action =
   | 'models:manage'
   | 'users:manage'
   | 'audit:view'
-  | 'data:import';
+  | 'data:import'
+  | 'data:quality';
 
 const ALL: readonly Role[] = ['ADMIN', 'WAREHOUSE MANAGER', 'VIEWER'];
 const MANAGER_UP: readonly Role[] = ['ADMIN', 'WAREHOUSE MANAGER'];
@@ -45,6 +46,7 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'users:manage': ADMIN_ONLY,
   'audit:view': ADMIN_ONLY,
   'data:import': MANAGER_UP, // POST /imports: Manager + Admin
+  'data:quality': ADMIN_ONLY, // /data-quality/*: require_admin
 };
 
 export function normalizeRole(role: string | undefined | null): Role {

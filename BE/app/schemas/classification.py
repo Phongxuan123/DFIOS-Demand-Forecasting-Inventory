@@ -93,6 +93,13 @@ class RecommendationResponse(BaseModel):
     replenishment_policy: str
     safety_stock_level: str
     priority: str
+    # round 5: stable codes of the Vietnamese texts above (client-side i18n)
+    description_code: Optional[str] = None
+    strategy_code: Optional[str] = None
+    replenishment_policy_code: Optional[str] = None
+    review_frequency_code: Optional[str] = None  # daily | weekly | weekly_or_event | biweekly | monthly | quarterly_or_on_demand
+    safety_stock_level_code: Optional[str] = None  # low | medium | high | standard | cautious | moderate | none_or_minimal
+    priority_code: Optional[str] = None  # critical | high | medium | medium_low | low | very_low
 
 
 class ClassificationRecomputeResponse(BaseModel):

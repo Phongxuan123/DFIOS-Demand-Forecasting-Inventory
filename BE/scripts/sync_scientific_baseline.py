@@ -30,6 +30,26 @@ STORE = pc.DEMO_STORE_ID
 WARM_START_CALIBRATOR = "c3ok_artifact_final"
 
 
+def rebuild_stock_alerts(db, store_id: str) -> int:
+    """Unread stock alerts of the store = the CRITICAL / WARNING rows of the traffic light (UC09) of the CURRENT
+    state (same rule as GET /dashboard/alerts). Read alerts are kept."""
+    import uuid
+    from datetime import datetime, timezone
+    from app.models.alert import Alert
+    from app.repositories.dashboard_repository import dashboard_repository
+    db.query(Alert).filter(Alert.store_id == store_id, Alert.is_read.is_(False)).delete(synchronize_session=False)
+    now = datetime.now(timezone.utc)
+    n = 0
+    for sev in ("CRITICAL", "WARNING"):
+        items, _, _ = dashboard_repository.get_stock_alerts(db, store_id=store_id, severity=sev, limit=None)
+        for it in items:
+            db.add(Alert(id=str(uuid.uuid4()), item_id=it["item_id"], store_id=store_id, type=f"STOCK_{sev}",
+                         message=it["suggested_action"], is_read=False, created_at=now))
+            n += 1
+    db.commit()
+    return n
+
+
 def run_sync():
     db = SessionLocal()
     try:
@@ -198,6 +218,21 @@ def run_sync():
         from app.services.simulator_service import simulator_service
         info = simulator_service.initialise_baseline(db, STORE)
         print(f"Initial inventory = S for {info['n_skus']} SKUs (sum on_hand {info['total_on_hand']:.0f}); snapshot stored.")
+
+        print("=== 9. PENDING PROPOSALS + STOCK ALERTS FROM THE BASELINE STATE (review date = clock start) ===")
+        # The loader proposals / alerts were computed from the provisional load_inventory seed BEFORE the baseline
+        # reset the stock to S. They are rebuilt here from the FINAL state with the app's own (R, s, S) rule, so the
+        # IP / s / S of every pending row are those of the review date.
+        from datetime import date as _date
+        from app.services.replenishment_service import replenishment_service
+        review_date = db.execute(text('SELECT start_date FROM sim_clock WHERE store_id = :s'), {"s": STORE}).scalar()
+        if isinstance(review_date, str):
+            review_date = _date.fromisoformat(review_date)
+        review_date = review_date or pc.DEMO_START_DATE
+        prop = replenishment_service.regenerate_pending_proposals(db, STORE, review_date)
+        print(f"Pending proposals at {review_date}: {prop['created']} (replaced {prop['removed']} provisional loader rows).")
+        n_alerts = rebuild_stock_alerts(db, STORE)
+        print(f"Stock alerts rebuilt from the baseline state: {n_alerts}.")
         print("\n>>> ALL SCIENTIFIC BASELINES SYNCED TO DATABASE SUCCESSFULLY! <<<")
 
     except Exception as e:

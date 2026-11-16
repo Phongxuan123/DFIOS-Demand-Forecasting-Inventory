@@ -54,6 +54,15 @@ export const dashboard = {
     wrmsse_hint: 'Chỉ số sai số dự báo (thấp hơn là tốt hơn), không phải độ chính xác. Nguồn: model registry.',
     wrmsse_unavailable: 'Model registry chưa có WRMSSE cho mô hình sản xuất',
   },
+  demo: {
+    title: 'Về bản demo này',
+    toggle_show: 'Bản demo này cho thấy gì?',
+    toggle_hide: 'Ẩn',
+    p1: 'Trình mô phỏng phát lại doanh số M5 thật của kho {store} theo từng ngày từ {start}. Mọi con số trên trang được đo từ lần phát lại đó hoặc đọc từ model registry; không có gì được tinh chỉnh hay bịa ra.',
+    p2: 'Lịch sử doanh số đã nạp ngắn (vài tuần) nên chỉ mô phỏng được vài chu kỳ review: đồng hồ từ chối tua qua ngày cuối cùng có doanh số.',
+    p3: 'C³-OUT là bộ điều khiển mức phục vụ, không phải bộ giảm chi phí: trong cửa sổ ngắn này θ chỉ thay đổi vài phần trăm mỗi kỳ review và C³-OUT có thể tốn hơn B0. Đó là kết quả trung thực, không phải lỗi hiển thị.',
+    p4: 'Phần so sánh chính sách offline ở trang Báo cáo (P-CR và P6 trên 25.950 SKU) lấy từ artifact nghiên cứu và được ghi rõ nguồn.',
+  },
   availability_miss: {
     title: 'Mức sẵn có dưới mục tiêu',
     body: 'Mức sẵn có {value} thấp hơn mục tiêu {target} sau {days} ngày mô phỏng. Đây là kết quả của trình mô phỏng ở trạng thái hiện tại, không phải lỗi hiển thị. Hãy chạy thêm các chu kỳ review (tua đồng hồ) để bộ điều khiển thích nghi trước khi đánh giá.',
@@ -77,6 +86,7 @@ export const dashboard = {
     actual: 'Thực tế',
     predicted: 'Dự báo',
     review: 'Kỳ review {n}',
+    review_tick: 'R{n}',
     availability: 'Availability',
     target: 'Mục tiêu',
     health_title: 'Sức khỏe tồn kho',

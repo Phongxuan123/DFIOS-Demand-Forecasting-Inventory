@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 
 class AuditLogResponse(BaseModel):
@@ -8,23 +8,32 @@ class AuditLogResponse(BaseModel):
 
     id: str
     actor_email: Optional[str] = None
-    action: str
+    action: str = Field(..., description="Stable action code, e.g. 'product.update', 'auth.login_failed'")
     ip_address: Optional[str] = None
-    details: Optional[str] = None
+    details: Optional[str] = Field(None, description="Free text (Vietnamese) written by the service")
     created_at: datetime
+    result: str = Field(
+        "unknown",
+        description="SUCCESS | FAILURE as RECORDED by the service that wrote the row (audit_logs.result); "
+                    "'unknown' for legacy rows written before the column existed (never guessed from the text)",
+    )
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def result(self) -> str:
-        """SUCCESS | FAILURE, DERIVED from action/details (the table has no status column; every
-        service writes its audit row on the success path, so FAILURE only appears for explicit failure actions)."""
-        text = f"{self.action} {self.details or ''}".lower()
-        return "FAILURE" if any(k in text for k in ("fail", "denied", "invalid", "error", "locked")) else "SUCCESS"
+    @field_validator("result", mode="before")
+    @classmethod
+    def _legacy_unknown(cls, v):
+        return v or "unknown"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def result_source(self) -> str:
-        return "derived_from_action"
+        """recorded (written by the audit service) | legacy_unknown (row older than the result column)."""
+        return "legacy_unknown" if self.result == "unknown" else "recorded"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def action_code(self) -> str:
+        """Alias of ``action`` (already a stable, language-independent code)."""
+        return self.action
 
 
 class AuditLogListResponse(BaseModel):

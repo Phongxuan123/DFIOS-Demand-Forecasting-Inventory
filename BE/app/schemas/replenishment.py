@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -34,6 +34,12 @@ class ReplenishmentItemResponse(BaseModel):
     priority: str = Field(..., description="Mức độ ưu tiên: CRITICAL, HIGH, MEDIUM, LOW")
     status: str = Field(..., description="Trạng thái: PENDING, APPROVED, REJECTED, CANCELLED")
     reason: Optional[str] = None
+    reason_code: Optional[str] = Field(
+        None,
+        description="Stable code of `reason`: ip_below_s (system proposal, params ip/s/S/q/policy) | user_adjusted | "
+                    "user_rejected | cancelled (the text is the user's own note)",
+    )
+    reason_params: Dict[str, Any] = Field(default_factory=dict)
     decided_by: Optional[str] = None
     created_at: datetime
     decided_at: Optional[datetime] = None

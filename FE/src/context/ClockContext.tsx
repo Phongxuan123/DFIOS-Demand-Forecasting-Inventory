@@ -40,6 +40,14 @@ export interface ClockAdvanceResult {
   recommendations_generated: number;
   job_events: string[];
   message: string;
+  /** Server processing time of the batch chain (BE field, may be absent on old backends). */
+  duration_seconds?: number | null;
+}
+
+/** Measured duration of the last advance in this session: the only honest basis for a time hint. */
+export interface AdvanceTiming {
+  days: number;
+  seconds: number;
 }
 
 export type ClockStatus = 'loading' | 'ready' | 'unavailable';
@@ -52,6 +60,10 @@ interface ClockContextValue {
   reason: ClockReason | null;
   canAdvance: boolean;
   advancing: boolean;
+  /** Wall-clock start of the running advance (ms), for the elapsed-time indicator. */
+  advanceStartedAt: number | null;
+  /** Last measured advance in this session (null before the first one). */
+  lastTiming: AdvanceTiming | null;
   /** Increments after each successful advance. */
   version: number;
   /** Re-read the clock from the server. */
@@ -75,6 +87,8 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     failure: null,
   });
   const [advancing, setAdvancing] = useState(false);
+  const [advanceStartedAt, setAdvanceStartedAt] = useState<number | null>(null);
+  const [lastTiming, setLastTiming] = useState<AdvanceTiming | null>(null);
   const [version, setVersion] = useState(0);
   const [nonce, setNonce] = useState(0);
 
@@ -120,25 +134,30 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     async (days: number) => {
       if (!storeId) throw new Error('No store selected');
       setAdvancing(true);
+      const started = Date.now();
+      setAdvanceStartedAt(started);
       try {
         const res = await apiClient.post<ClockAdvanceResult>(
           '/clock/advance',
           { store_id: storeId, days },
           { timeout: 600000 }, // the batch chain can take minutes
         );
+        const server = res.data?.duration_seconds;
+        setLastTiming({ days, seconds: typeof server === 'number' && Number.isFinite(server) ? server : (Date.now() - started) / 1000 });
         setVersion((v) => v + 1);
         refresh();
         return res.data;
       } finally {
         setAdvancing(false);
+        setAdvanceStartedAt(null);
       }
     },
     [storeId, refresh],
   );
 
   const value = useMemo(
-    () => ({ clock, status, reason, canAdvance, advancing, version, refresh, advance }),
-    [clock, status, reason, canAdvance, advancing, version, refresh, advance],
+    () => ({ clock, status, reason, canAdvance, advancing, advanceStartedAt, lastTiming, version, refresh, advance }),
+    [clock, status, reason, canAdvance, advancing, advanceStartedAt, lastTiming, version, refresh, advance],
   );
   return <ClockContext.Provider value={value}>{children}</ClockContext.Provider>;
 };

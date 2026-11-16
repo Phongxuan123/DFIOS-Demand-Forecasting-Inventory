@@ -200,8 +200,8 @@ class SimulationService:
             avg_price=round(avg_price, 4) if avg_price is not None else None,
             what_if=None,
             what_if_reason=(
-                "Chưa chạy mô phỏng what-if thật: cần ma trận Q̂ nhân quả theo từng kỳ review và nhu cầu thực của "
-                "toàn bộ cửa sổ; endpoint trả về trích kết quả artifact và gắn nhãn rõ."
+                "Bảng này là trích kết quả artifact (không mô phỏng). Mô phỏng what-if THẬT trên lịch sử của cửa hàng: "
+                "gửi kèm `what_if` trong request hoặc gọi POST /api/v1/simulation/what-if."
             ),
         )
 

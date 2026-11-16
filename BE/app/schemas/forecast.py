@@ -80,14 +80,16 @@ class ComparePoint(BaseModel):
 
 
 class CompareMetrics(BaseModel):
-    mae: float
-    rmse: float
+    mae: Optional[float] = Field(None, description="null when data_points = 0 (no day with both actual and forecast)")
+    rmse: Optional[float] = Field(None, description="null when data_points = 0")
     mape: Optional[float] = None
     mase: Optional[float] = Field(None, description="MAE / naive one-step MAE of the training history before the first compared day; null when < 2 training days")
     mase_scale_n: int = Field(0, description="Days of training history used for the MASE scale")
     total_actual: float
     total_predicted: float
     data_points: int
+    metrics_reason: Optional[str] = Field(None, description="Why the error metrics are null (Vietnamese text)")
+    metrics_reason_code: Optional[str] = Field(None, description="no_forecast | no_actuals | no_overlap; null when metrics exist")
 
 
 class ForecastCompareResponse(BaseModel):

@@ -299,8 +299,9 @@ class UserService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy người dùng có ID '{user_id}'",
             )
-        user_repository.delete(db, user)
-        return MessageResponse(message=f"Đã xóa vĩnh viễn tài khoản {user.email}.")
+        email = user.email
+        user_repository.delete(db, user.id)  # repository API nhận id, không nhận object
+        return MessageResponse(message=f"Đã xóa vĩnh viễn tài khoản {email}.")
 
 
 user_service = UserService()

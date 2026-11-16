@@ -30,6 +30,9 @@ from app.services.audit_service import audit_service
 
 logger = logging.getLogger(__name__)
 
+# reasons written by the system itself (generate_recommendations; legacy loader text) -> reason_code "ip_below_s"
+SYSTEM_REASON_PREFIXES = ("Đề xuất ", "REFIT-RSS-EOQ-G trigger")
+
 
 def sanitize_csv_cell(val: Any) -> Any:
     """Chống tấn công CSV Formula Injection (CWE-1236, R-42)"""
@@ -90,11 +93,8 @@ class ReplenishmentService:
         # N-21: Tự động tính toán lại tham số nếu thiếu trong InventoryParam
         missing_skus = [p.item_id for p in products if p.item_id not in param_map]
         if missing_skus:
-            for m_sku in missing_skus:
-                try:
-                    optimization_service.recompute_parameters(db, store_id=store_id, item_id=m_sku)
-                except Exception as e:  # noqa: BLE001 - one SKU must not block the batch (logged)
-                    logger.warning(f"Error recomputing params for SKU {m_sku} in store {store_id}: {e}")
+            # P-27: the whole missing set is recomputed in ONE bulk call (same computation as per SKU)
+            optimization_service.recompute_parameters(db, store_id=store_id, item_ids=missing_skus)
             params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
             param_map = {p.item_id: p for p in params}
 
@@ -211,6 +211,48 @@ class ReplenishmentService:
 
         return generated_count
 
+    def regenerate_pending_proposals(self, db: Session, store_id: str, review_date: date) -> Dict[str, int]:
+        """
+        Round 5 (bootstrap): replace the store's open, undecided proposals (PENDING / PROPOSED, decided_by NULL) by
+        the proposals of a review AT ``review_date`` computed from the CURRENT inventory and ``inventory_params``
+        (q = S - IP, IP split stored), so IP / s / S on every pending row are coherent with the stock at that date.
+        Decided rows (approved, rejected, simulator orders) are never touched.
+        """
+        removed = (
+            db.query(ReplenishmentRecommendation)
+            .filter(
+                ReplenishmentRecommendation.store_id == store_id,
+                ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]),
+                ReplenishmentRecommendation.decided_by.is_(None),
+            )
+            .delete(synchronize_session=False)
+        )
+        db.flush()
+        created = self.generate_recommendations(db, store_id=store_id, review_date=review_date, auto_order=False)
+        db.commit()
+        return {"removed": int(removed or 0), "created": int(created)}
+
+    @staticmethod
+    def reason_code_of(rec: ReplenishmentRecommendation) -> Dict[str, Any]:
+        """
+        Round 5 (U-06): stable code + numbers of the Vietnamese ``reason``. System proposals carry the (R, s, S)
+        trigger numbers stored on the row (IP at review, s, S, q); a reason typed by a user (adjust / reject /
+        cancel) is that user's own note and is only classified.
+        """
+        text = rec.reason or ""
+        if rec.status == "CANCELLED" or text.startswith("Đã hủy"):
+            return {"reason_code": "cancelled", "reason_params": {}}
+        if rec.status == "REJECTED":
+            return {"reason_code": "user_rejected", "reason_params": {}}
+        if text.startswith(SYSTEM_REASON_PREFIXES):
+            return {"reason_code": "ip_below_s", "reason_params": {
+                "inventory_position": rec.inventory_position, "s": rec.reorder_point_s, "S": rec.order_up_to_S,
+                "q": rec.recommended_qty, "policy": rec.policy_applied,
+            }}
+        if not text:
+            return {"reason_code": None, "reason_params": {}}
+        return {"reason_code": "user_adjusted", "reason_params": {}}
+
     def _build_response_item(
         self,
         db: Session,
@@ -252,6 +294,7 @@ class ReplenishmentService:
             priority=rec.priority,
             status=rec.status,
             reason=rec.reason,
+            **self.reason_code_of(rec),
             decided_by=rec.decided_by,
             created_at=rec.created_at,
             decided_at=rec.decided_at,
@@ -352,16 +395,12 @@ class ReplenishmentService:
             sort_dir=sort_dir,
         )
 
-        pending_count = (
-            db.query(ReplenishmentRecommendation)
-            .filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]))
-            .count()
-        )
-        approved_count = (
-            db.query(ReplenishmentRecommendation)
-            .filter(ReplenishmentRecommendation.status == "APPROVED")
-            .count()
-        )
+        # round 5: the counters follow the requested store (they used to count every store)
+        count_q = db.query(ReplenishmentRecommendation)
+        if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL"):
+            count_q = count_q.filter(ReplenishmentRecommendation.store_id == store_id.strip())
+        pending_count = count_q.filter(ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"])).count()
+        approved_count = count_q.filter(ReplenishmentRecommendation.status == "APPROVED").count()
 
         # Batch lookup metadata để tối ưu truy vấn N+1
         product_map, supplier_map, inv_map, param_map = self._page_maps(db, items)
@@ -410,7 +449,7 @@ class ReplenishmentService:
 
         if not request.reason or len(request.reason.strip()) < 3:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Lý do điều chỉnh số lượng là bắt buộc (tối thiểu 3 ký tự).",
             )
 
@@ -529,7 +568,7 @@ class ReplenishmentService:
 
         if not reason or not reason.strip():
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Lý do từ chối đề xuất nhập hàng là bắt buộc.",
             )
 
@@ -578,7 +617,7 @@ class ReplenishmentService:
 
         if not reason or not reason.strip():
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Lý do hủy đơn đặt hàng là bắt buộc.",
             )
 

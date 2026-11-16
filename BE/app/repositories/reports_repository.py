@@ -158,13 +158,15 @@ class ReportsRepository:
         overall = agg(all_keys)
         abc_breakdown = {g: agg([k for k in all_keys if series[k]["abc"] == g]) for g in ("A", "B", "C")}
         n_scaled = sum(1 for k in all_keys if stats[k]["rmsse"] is not None and stats[k]["dollar"])
-        reason = None
+        reason = reason_code = None
         if overall["wrmsse"] is None:
+            reason_code = "no_training_scale"
             reason = (
                 "MASE/WRMSSE không tính được: không chuỗi nào có >= 2 ngày lịch sử huấn luyện trước cửa sổ đánh giá "
                 f"({eval_start}) hoặc thiếu giá. MAE/RMSE vẫn tính trực tiếp từ dự báo và doanh số thực."
             )
         elif n_scaled < len(all_keys):
+            reason_code = "partial_training_scale"
             reason = f"{len(all_keys) - n_scaled}/{len(all_keys)} chuỗi bị loại khỏi MASE/WRMSSE vì thiếu lịch sử huấn luyện (scale) hoặc giá."
 
         mae_items = sorted(((stats[k]["mae"], k) for k in all_keys), key=lambda x: (x[0], x[1]))
@@ -189,6 +191,9 @@ class ReportsRepository:
             "n_skus": len({k[0] for k in all_keys}),
             "n_series_scaled": n_scaled,
             "metrics_reason": reason,
+            "metrics_reason_code": reason_code,
+            "metrics_reason_params": {"n_excluded": len(all_keys) - n_scaled, "n_series": len(all_keys),
+                                      "eval_start": str(eval_start)} if reason_code else {},
         }
 
     def _accuracy_from_registry(
@@ -203,11 +208,13 @@ class ReportsRepository:
         )
         metrics = dict(_EMPTY_METRICS)
         source, reason = "none", "Không có dự báo trùng với doanh số thực trong cửa sổ yêu cầu và không có mô hình trong registry."
+        reason_code, missing = "no_overlap_no_registry", []
         if prod_model and prod_model.metrics:
             m = prod_model.metrics
             for k in ("mae", "rmse", "mase", "wrmsse"):
                 metrics[k] = float(m[k]) if m.get(k) is not None else None
             source = "model_registry"
+            reason_code = "registry_fallback"
             missing = [k for k in ("mae", "rmse", "mase", "wrmsse") if metrics[k] is None]
             reason = (
                 "Không có dự báo trùng với doanh số thực; số liệu lấy từ model_registry"
@@ -227,6 +234,8 @@ class ReportsRepository:
             "n_skus": 0,
             "n_series_scaled": 0,
             "metrics_reason": reason,
+            "metrics_reason_code": reason_code,
+            "metrics_reason_params": {"missing_metrics": missing},
         }
 
     # ------------------------------------------------------------------ UC40
@@ -309,6 +318,7 @@ class ReportsRepository:
             "n_skus": len(records),
             "n_skus_with_demand": len(turnovers),
             "reason": reason,
+            "reason_code": "no_annual_demand" if reason else None,
         }
 
     # ------------------------------------------------------------------ simulator window helpers
@@ -335,7 +345,7 @@ class ReportsRepository:
         UC41: kết quả ĐO của bộ mô phỏng: C³-OUT (chính sách chạy) so với B0 shadow song song trên cùng nhu cầu.
         Không có CSL / fill-rate nhúng sẵn. Chưa mô phỏng -> các chỉ số null + reason.
         """
-        from app.services.dashboard_service import dashboard_service
+        from app.services.dashboard_service import dashboard_service, kpi_reason_code
 
         stores, start, end = self._sim_window(db, store_id)
         base = {
@@ -343,10 +353,11 @@ class ReportsRepository:
             "ml_stockouts": None, "stockout_reduction_pct": None, "baseline_avg_inventory": None,
             "ml_avg_inventory": None, "holding_cost_savings": None, "service_level_achieved": None,
             "source": "simulator", "as_of": str(end) if end else None, "n_skus": None,
-            "target_service_level": target_service_level, "reason": None,
+            "target_service_level": target_service_level, "reason": None, "reason_code": None,
         }
         if not stores:
             base["reason"] = "Không có sim_clock cho cửa hàng."
+            base["reason_code"] = "no_clock"
             return base
         days = (end - start).days
         base["simulated_days"] = days
@@ -354,6 +365,7 @@ class ReportsRepository:
         avail, c3_reason, b0_reason = dashboard_service._availability_by_class(db, stores, start, end, pc.REVIEW_PERIOD_DAYS)
         if c3_reason is not None:
             base["reason"] = c3_reason
+            base["reason_code"] = kpi_reason_code(c3_reason)
             return base
         n_periods = sum(a["n_periods"] for a in avail.values())
         ml_so = sum(a["c3_stockout"] for a in avail.values())
@@ -361,6 +373,7 @@ class ReportsRepository:
         base["service_level_achieved"] = round((1.0 - ml_so / n_periods) * 100.0, 2) if n_periods else None
         if b0_reason is not None:
             base["reason"] = b0_reason
+            base["reason_code"] = kpi_reason_code(b0_reason)
             return base
         b0_so = sum(a["b0_stockout"] for a in avail.values())
         base["baseline_stockouts"] = b0_so
@@ -408,9 +421,11 @@ class ReportsRepository:
             "cost_savings_amount": None, "savings_percentage": None, "category_savings": {},
             "source": "simulator", "as_of": str(end) if end else None,
             "period_start": str(start) if start else None, "period_end": str(end) if end else None, "reason": None,
+            "reason_code": None,
         }
         if not stores:
             out["reason"] = "Không có sim_clock cho phạm vi yêu cầu."
+            out["reason_code"] = "no_clock"
             return out
         cat_filter = category.strip().upper() if category and category.strip() and category.upper() != "ALL" else None
         out["total_skus"] = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id.in_(stores)).scalar() or 0
@@ -434,6 +449,7 @@ class ReportsRepository:
         c3_money, b0_money = money(InventoryDaily), money(SimShadowDaily)
         if not c3_money:
             out["reason"] = "Chưa có inventory_daily trong cửa sổ mô phỏng (đồng hồ chưa tua)."
+            out["reason_code"] = "no_simulated_days"
             return out
         c3_orders: Dict[str, float] = {}
         for c, n in (
@@ -471,6 +487,7 @@ class ReportsRepository:
         out["ml_policy"] = detail(c3_money, c3_orders, cats)
         if not b0_money:
             out["reason"] = "B0 shadow chưa được mô phỏng song song (reset đồng hồ và tua lại): chưa có đường cơ sở để so sánh."
+            out["reason_code"] = "no_shadow"
             return out
         out["baseline_policy"] = detail(b0_money, b0_orders, cats)
         sav = round(out["baseline_policy"]["total_cost"] - out["ml_policy"]["total_cost"], 2)

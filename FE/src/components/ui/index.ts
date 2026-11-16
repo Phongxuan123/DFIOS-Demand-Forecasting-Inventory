@@ -8,3 +8,4 @@ export * from './overlays.tsx';
 export * from './Toast.tsx';
 export * from './ChartFrame.tsx';
 export * from './chartTheme.tsx';
+export * from './HoldHeight.tsx';

@@ -1,3 +1,4 @@
+import copy
 from datetime import datetime, date, timedelta, timezone
 import time
 import uuid
@@ -36,41 +37,55 @@ class PipelineService:
 
     def __init__(self):
         # Cấu hình lập lịch cron mặc định chuẩn
-        self._schedules: Dict[str, Dict] = {
-            "sched-default-01": {
-                "id": "sched-default-01",
-                "name": "Daily Nightly Batch Forecast & Optimization",
-                "cron_expression": "0 2 * * *",
-                "model_name": "lightgbm",
-                "horizon": 28,
-                "store_id": "CA_1",
-                "auto_trigger_optimization": True,
-                "is_active": True,
-                "last_run_at": None,
-                "next_run_at": (datetime.now(timezone.utc).replace(hour=2, minute=0, second=0, microsecond=0) + timedelta(days=1)).isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
+        self._DEFAULT_SCHEDULE_TEMPLATE = {
+            "id": "sched-default-01",
+            "name": "Daily Nightly Batch Forecast & Optimization",
+            "cron_expression": "0 2 * * *",
+            "model_name": "lightgbm",
+            "horizon": 28,
+            "store_id": "CA_1",
+            "auto_trigger_optimization": True,
+            "is_active": True,
+            "last_run_at": None,
+            "next_run_at": (datetime.now(timezone.utc).replace(hour=2, minute=0, second=0, microsecond=0) + timedelta(days=1)).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        self._schedules: Dict[str, Dict] = {"sched-default-01": dict(self._DEFAULT_SCHEDULE_TEMPLATE)}
 
     def _get_schedules_dict(self, db: Optional[Session] = None) -> Dict[str, Dict]:
         """
         R-19: Đọc danh sách cấu hình lập lịch cron từ cơ sở dữ liệu (system_settings)
         để đảm bảo tính bền vững (persistence) khi khởi động lại ứng dụng.
+
+        R-17 (round 5): a READ never writes. The default schedule is persisted once at startup / bootstrap
+        (``ensure_default_schedule``); while the setting row does not exist yet, the default is returned in memory
+        only. A stored empty dict (every schedule deleted) stays empty - the default is not resurrected.
         """
         if db:
             from app.repositories.system_setting_repository import system_setting_repository
             setting = system_setting_repository.get_by_key(db, self.SETTINGS_KEY)
-            if setting and isinstance(setting.value, dict) and setting.value:
+            if setting is not None and isinstance(setting.value, dict):
                 self._schedules = dict(setting.value)
                 return self._schedules
-            else:
-                system_setting_repository.upsert_setting(
-                    db,
-                    key=self.SETTINGS_KEY,
-                    value=self._schedules,
-                    description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
-                )
+            return copy.deepcopy(self._default_schedules())
         return self._schedules
+
+    def _default_schedules(self) -> Dict[str, Dict]:
+        return {"sched-default-01": copy.deepcopy(self._DEFAULT_SCHEDULE_TEMPLATE)}
+
+    def ensure_default_schedule(self, db: Session) -> bool:
+        """Persist the default nightly schedule when no schedule setting exists (startup / bootstrap). Idempotent;
+        returns True when the row was created."""
+        from app.repositories.system_setting_repository import system_setting_repository
+        if system_setting_repository.get_by_key(db, self.SETTINGS_KEY) is not None:
+            return False
+        system_setting_repository.upsert_setting(
+            db,
+            key=self.SETTINGS_KEY,
+            value=copy.deepcopy(self._default_schedules()),
+            description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+        )
+        return True
 
     def _save_schedules_dict(self, schedules: Dict[str, Dict], db: Optional[Session] = None) -> None:
         """

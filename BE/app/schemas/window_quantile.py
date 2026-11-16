@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Dict, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WindowQuantileResponse(BaseModel):
@@ -18,6 +18,5 @@ class WindowQuantileResponse(BaseModel):
     tau_95: Optional[float] = Field(None, description="Mức phân vị 95% chuẩn cho chính sách đặt hàng s")
     route: str = Field("c", description="Phương thức xác định phân phối: 'c' là thực nghiệm")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 

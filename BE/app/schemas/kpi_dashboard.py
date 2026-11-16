@@ -1,6 +1,12 @@
 from datetime import date
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+
+
+class InsightDetail(BaseModel):
+    """Stable code + numbers of one Vietnamese insight sentence (same order as the text list)."""
+    code: str
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CostCurvePoint(BaseModel):
@@ -52,3 +58,9 @@ class KPIDashboardResponse(BaseModel):
     cost_reason: Optional[str] = None
     availability_reason: Optional[str] = None
     b0_reason: Optional[str] = None
+    # --- round 5: stable codes next to the Vietnamese texts (client-side i18n) ---
+    cost_reason_code: Optional[str] = None  # no_clock | no_simulated_days
+    availability_reason_code: Optional[str] = None  # no_clock | no_closed_cycle
+    b0_reason_code: Optional[str] = None  # no_clock | no_closed_cycle | no_shadow | no_shadow_cost
+    insight_details: List[InsightDetail] = Field(
+        default_factory=list, description="Same order as summary_insights: {code, params}")

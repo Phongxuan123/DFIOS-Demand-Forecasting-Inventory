@@ -5,11 +5,14 @@ import pandas as pd
 from datetime import datetime, timezone
 from typing import Any, Dict
 from fastapi import APIRouter, Depends, UploadFile, File, Query, Request, Response, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_manager_or_admin, get_current_user
 from app.core.db_bulk import replace_rows
+from app.models.forecast import Forecast
 from app.models.user import User
+from app.services import policy_config as pc
 from app.models.data_imports import DataImport
 from app.models.inventory import Inventory
 from app.models.sales_history import SalesHistory
@@ -300,10 +303,41 @@ def run_fast_inference(
     theo ngày trong tuần, sinh `horizon` ngày tương lai (h=1..horizon) kèm p10, p50, p90.
     Kết quả được ghi vào bảng `forecast` với `model_version = "fast-inference-sba"`; lần chạy sau
     thay thế nguyên tử lần chạy trước của cùng kho.
+
+    R-37: nếu kho đã có dự báo production (Ensemble) thì endpoint dùng dự báo đó (`source="production_forecast"`,
+    không sinh gì); SBA chỉ là phương án dự phòng có nhãn (`source="sba_fallback"`) cho kho chưa có dự báo production.
     """
     start_time = time.time()
     store_id = body.store_id
     horizon = body.horizon
+
+    # R-37: the production forecast (Ensemble) wins whenever the store has one; the SBA path is only a labelled
+    # fallback for stores without it (e.g. a freshly imported store) and never overwrites production rows.
+    if body.prefer_production:
+        prod = (
+            db.query(Forecast.model_version, func.count(Forecast.id), func.count(func.distinct(Forecast.item_id)),
+                     func.min(Forecast.forecast_date), func.max(Forecast.forecast_date))
+            .filter(Forecast.store_id == store_id, Forecast.model_version.ilike(pc.POINT_FORECAST_MODEL_PATTERN))
+            .group_by(Forecast.model_version)
+            .order_by(func.max(Forecast.generated_at).desc(), Forecast.model_version.desc())
+            .first()
+        )
+        if prod is not None:
+            version, n_rows, n_items, f_lo, f_hi = prod
+            duration = round(time.time() - start_time, 3)
+            return FastInferenceResponse(
+                success=True, store_id=store_id, horizon=horizon, skus_forecasted=int(n_items),
+                records_generated=0, duration_seconds=duration,
+                message=(
+                    f"Kho {store_id} đã có dự báo production ({version}: {int(n_items)} SKU, {f_lo} -> {f_hi}); "
+                    f"dùng dự báo này, không sinh dự báo SBA."
+                ),
+                source="production_forecast", model_version=version, method="production_ensemble",
+                records_available=int(n_rows), note=(
+                    "Existing production (Ensemble) forecast rows are used as is; nothing was generated. "
+                    "Send prefer_production=false to force the SBA fallback."
+                ),
+            )
 
     sales = (
         db.query(SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity)
@@ -361,4 +395,13 @@ def run_fast_inference(
         records_generated=records_saved,
         duration_seconds=duration,
         message=f"Đã hoàn thành dự báo SBA cho {skus_forecasted} SKU ({records_saved} bản ghi) trong {duration}s.",
+        source="sba_fallback",
+        model_version=FAST_INFERENCE_MODEL_VERSION,
+        method="sba_croston_dow_profile",
+        history_start=str(df_sales["sale_date"].min().date()),
+        history_end=str(df_sales["sale_date"].max().date()),
+        note=(
+            "SBA-Croston fallback (alpha 0.1) with a day-of-week profile, fitted per SKU on the store's sales history; "
+            "NOT the production ensemble (the store has no production forecast)."
+        ),
     )

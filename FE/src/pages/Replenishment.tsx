@@ -5,7 +5,8 @@ import { useStore } from '../context/StoreContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
 import { useApi } from '../hooks/useApi.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
-import { useBe } from '../i18n/useBe.ts';
+import { useBe, useBeCode } from '../i18n/useBe.ts';
+import { prefixCode } from '../i18n/beText.ts';
 import { can } from '../auth/permissions.ts';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
@@ -31,6 +32,7 @@ import {
   DataSourceNote,
   Drawer,
   EmptyState,
+  HoldHeight,
   Input,
   IconButton,
   KpiTile,
@@ -404,6 +406,7 @@ export const Replenishment: React.FC = () => {
             />
           )}
         </div>
+        <HoldHeight activeKey={tab}>
         <Table
           columns={columns}
           rows={rows}
@@ -433,6 +436,7 @@ export const Replenishment: React.FC = () => {
               : undefined
           }
         />
+        </HoldHeight>
         {tab === 'proposals' && canWrite && !active.error && rows.length > 0 && (
           <p className="rep-note" style={{ padding: 'var(--space-3) var(--space-4)' }}>
             {t('replenishment.action.select_hint')}
@@ -546,6 +550,7 @@ const ActionDialog: React.FC<{
 const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => void }> = ({ rec, onClose }) => {
   const t = useT();
   const be = useBe();
+  const beCode = useBeCode();
   const fmt = useFormat();
   const param = useApi((signal) => getPolicyParam(rec!.item_id, rec!.store_id, signal), [rec?.item_id, rec?.store_id], { enabled: !!rec });
   const calib = useApi((signal) => getCalibrationStatus(rec!.store_id, signal), [rec?.store_id], { enabled: !!rec });
@@ -643,7 +648,7 @@ const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => voi
           {rec.reason && (
             <div>
               <div className="rep-note">{t('replenishment.drawer.reason')}</div>
-              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>{be(rec.reason)}</p>
+              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>{rec.reason_code === 'ip_below_s' ? beCode(prefixCode('rep', rec.reason_code), rec.reason_params, rec.reason) : be(rec.reason)}</p>
             </div>
           )}
         </div>

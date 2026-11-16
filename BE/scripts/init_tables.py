@@ -13,6 +13,12 @@ def main() -> None:
     applied = apply_schema_upgrades(engine)
     if applied:
         print("Schema upgrades applied: " + ", ".join(applied))
+    # R-17: the default ML schedule is seeded here (and at API startup), never by a GET request
+    from app.core.database import SessionLocal
+    from app.services.pipeline_service import pipeline_service
+    with SessionLocal() as db:
+        if pipeline_service.ensure_default_schedule(db):
+            print("Default ML pipeline schedule created.")
     print("Tables created!")
 
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Download, Layers, Pencil, Sparkles } from 'lucide-react';
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -13,6 +13,7 @@ import {
   EmptyState,
   ErrorState,
   Field,
+  HoldHeight,
   Input,
   KpiTile,
   Modal,
@@ -35,9 +36,11 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useApi } from '../hooks/useApi.ts';
+import { useElapsed } from '../hooks/useElapsed.ts';
 import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT, type TKey } from '../i18n/index.tsx';
-import { useBe } from '../i18n/useBe.ts';
+import { useBe, useBeCode } from '../i18n/useBe.ts';
+import { prefixCode } from '../i18n/beText.ts';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
   bulkOverride,
@@ -167,6 +170,7 @@ const QuantileChart: React.FC<{ levels: Record<string, number>; title: string; s
 export const ForecastExplorer: React.FC = () => {
   const t = useT();
   const be = useBe();
+  const beCode = useBeCode();
   const fmt = useFormat();
   const toast = useToast();
   const chart = useChartTheme();
@@ -185,18 +189,8 @@ export const ForecastExplorer: React.FC = () => {
     const p = searchParams.get('tab');
     return p === 'route_c' || p === 'schedule' ? p : 'forecast';
   });
-  // U-15: keep the page height while a tab swaps its content, so the browser does not clamp the scroll to the top.
-  const tabBodyRef = useRef<HTMLDivElement>(null);
-  const [holdHeight, setHoldHeight] = useState<number | null>(null);
-  useEffect(() => {
-    if (holdHeight === null) return;
-    const id = window.setTimeout(() => setHoldHeight(null), 1500);
-    return () => window.clearTimeout(id);
-  }, [holdHeight, tab]);
-  const switchTab = (next: PageTab) => {
-    setHoldHeight(tabBodyRef.current?.offsetHeight ?? null);
-    setTab(next);
-  };
+  // U-15: the tab body is wrapped in <HoldHeight>, so swapping tabs never clamps the scroll to the top.
+  const switchTab = (next: PageTab) => setTab(next);
   const [horizon, setHorizon] = useState<number>(28);
   const [modelVersion, setModelVersion] = useState('');
   const [query, setQuery] = useState('');
@@ -319,6 +313,7 @@ export const ForecastExplorer: React.FC = () => {
 
   /* ------------------------------ fast inference ---------------------------- */
   const [fastBusy, setFastBusy] = useState(false);
+  const fastElapsed = useElapsed(fastBusy);
   const generateFast = async () => {
     if (!store) return;
     const ok = await confirm({
@@ -330,13 +325,25 @@ export const ForecastExplorer: React.FC = () => {
     setFastBusy(true);
     try {
       const res = await runFastInference(store, 28);
-      toast.success(
-        t('forecast.empty.fast_done', {
-          records: fmt.integer(res.records_generated),
-          skus: fmt.integer(res.skus_forecasted),
-          seconds: fmt.number(res.duration_seconds, { digits: 1 }),
-        }),
-      );
+      if (res.source === 'production_forecast') {
+        // R-37: the store already has the production (Ensemble) run; the BE generates nothing and says so.
+        toast.info(
+          t('forecast.empty.fast_production', {
+            model: res.model_version ?? '—',
+            records: fmt.integer(res.records_available ?? null),
+            skus: fmt.integer(res.skus_forecasted),
+          }),
+        );
+      } else {
+        toast.success(
+          t('forecast.empty.fast_done', {
+            records: fmt.integer(res.records_generated),
+            skus: fmt.integer(res.skus_forecasted),
+            seconds: fmt.number(res.duration_seconds, { digits: 1 }),
+          }),
+          t('forecast.empty.fast_sba_note'),
+        );
+      }
       refreshAll();
     } catch (err) {
       toast.error(apiErrorMessage(err, t));
@@ -570,16 +577,19 @@ export const ForecastExplorer: React.FC = () => {
 
   /* ---------------------------------- render -------------------------------- */
   const compareErr = compare.error;
+  const compareHasData = !!compare.data && (compare.data.metrics.data_points ?? 0) > 0 && compare.data.metrics.mae != null;
   const maeReason = compare.loading
     ? undefined
     : compareErr
       ? compareErr.kind === 'not_found' || compareErr.kind === 'validation'
         ? t('forecast.kpi.mae_missing')
         : apiErrorMessage(compareErr, t)
-      : compare.data && compare.data.metrics.data_points === 0
-        ? t('forecast.kpi.mae_missing') // the BE returns 0.0 for an empty comparison: never show it as an error of 0
+      : compare.data && !compareHasData
+        ? compare.data.metrics.metrics_reason_code || compare.data.metrics.metrics_reason
+          ? beCode(prefixCode('cmp', compare.data.metrics.metrics_reason_code), null, compare.data.metrics.metrics_reason)
+          : t('forecast.kpi.mae_missing') // old BE: 0.0 for an empty comparison, new BE: null. Never show it as an error of 0.
         : undefined;
-  const maeValue = compare.data && compare.data.metrics.data_points > 0 ? fmt.number(compare.data.metrics.mae, { digits: 3 }) : null;
+  const maeValue = compareHasData && compare.data ? fmt.number(compare.data.metrics.mae, { digits: 3 }) : null;
 
   const sigmaValue = uncertainty.data?.sigma_h ?? null;
   const sigmaReason = uncertainty.loading ? undefined : uncertainty.error ? apiErrorMessage(uncertainty.error, t) : sigmaValue === null ? t('forecast.kpi.sigma_missing') : undefined;
@@ -621,7 +631,14 @@ export const ForecastExplorer: React.FC = () => {
                   <Button leftIcon={<Sparkles size={16} />} loading={fastBusy} onClick={() => void generateFast()}>
                     {t('forecast.empty.fast_action')}
                   </Button>
-                  {fastBusy && <span style={muted}>{t('forecast.empty.fast_running')}</span>}
+                  <span style={muted} aria-live="polite">
+                    {fastBusy && t('forecast.empty.fast_running')}
+                  </span>
+                  {fastBusy && (
+                    <span style={muted} aria-hidden="true">
+                      {t('common.misc.elapsed', { seconds: fastElapsed })}
+                    </span>
+                  )}
                 </div>
               ) : (
                 <span style={muted}>{t('forecast.empty.fast_note')}</span>
@@ -689,7 +706,7 @@ export const ForecastExplorer: React.FC = () => {
             loading={compare.loading && !compare.data}
             value={maeValue}
             unavailableReason={maeReason}
-            hint={compare.data && compare.data.metrics.data_points > 0 ? t('forecast.kpi.mae_hint', { rmse: fmt.number(compare.data.metrics.rmse, { digits: 3 }), n: compare.data.metrics.data_points, mase: compare.data.metrics.mase != null ? fmt.number(compare.data.metrics.mase, { digits: 3 }) : t('forecast.kpi.mase_missing') }) : undefined}
+            hint={compareHasData && compare.data ? t('forecast.kpi.mae_hint', { rmse: fmt.number(compare.data.metrics.rmse, { digits: 3 }), n: compare.data.metrics.data_points ?? 0, mase: compare.data.metrics.mase != null ? fmt.number(compare.data.metrics.mase, { digits: 3 }) : t('forecast.kpi.mase_missing') }) : undefined}
           />
         </div>
 
@@ -704,7 +721,7 @@ export const ForecastExplorer: React.FC = () => {
           ]}
         />
 
-        <div ref={tabBodyRef} style={holdHeight ? { minHeight: holdHeight } : undefined}>
+        <HoldHeight activeKey={tab}>
         {tab === 'forecast' && (
           <>
             {kind === 'backtest' && (
@@ -906,7 +923,7 @@ export const ForecastExplorer: React.FC = () => {
             </Card>
           </>
         )}
-        </div>
+        </HoldHeight>
       </>
     );
   })();

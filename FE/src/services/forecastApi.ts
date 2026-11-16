@@ -53,7 +53,8 @@ export interface CompareResponse {
   item_id: string;
   model_version: string | null;
   model_version_source?: 'requested' | 'resolved_ensemble' | 'resolved_other' | 'none' | string;
-  metrics: { mae: number; rmse: number; mase?: number | null; mase_scale_n?: number | null; mape: number | null; total_actual: number; total_predicted: number; data_points: number };
+  /** Newer backends return null (not 0) when nothing overlaps; both shapes are handled. */
+  metrics: { mae: number | null; rmse: number | null; mase?: number | null; mase_scale_n?: number | null; mape: number | null; total_actual: number | null; total_predicted: number | null; data_points: number | null; metrics_reason?: string | null; metrics_reason_code?: string | null };
 }
 
 export interface UncertaintyResponse {
@@ -133,6 +134,11 @@ export interface FastInferenceResponse {
   records_generated: number;
   duration_seconds: number;
   message: string;
+  /** BE round 5: 'production_forecast' (nothing generated, the Ensemble run exists) | 'sba_fallback'. */
+  source?: 'production_forecast' | 'sba_fallback' | string | null;
+  model_version?: string | null;
+  records_available?: number | null;
+  note?: string | null;
 }
 
 const sku = (s: string) => encodeURIComponent(s);

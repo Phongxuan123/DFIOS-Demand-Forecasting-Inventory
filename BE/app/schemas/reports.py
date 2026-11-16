@@ -42,6 +42,10 @@ class ForecastAccuracyReportResponse(BaseModel):
     n_skus: Optional[int] = None
     n_series_scaled: Optional[int] = None
     metrics_reason: Optional[str] = None
+    # round 5: stable code (+ numbers) of metrics_reason: no_training_scale | partial_training_scale |
+    # registry_fallback | no_overlap_no_registry
+    metrics_reason_code: Optional[str] = None
+    metrics_reason_params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class InventoryItemPerformance(BaseModel):
@@ -73,6 +77,7 @@ class InventoryPerformanceReportResponse(BaseModel):
     n_skus: Optional[int] = None
     n_skus_with_demand: Optional[int] = None
     reason: Optional[str] = None
+    reason_code: Optional[str] = None  # no_annual_demand
 
 
 class BacktestRequest(BaseModel):
@@ -105,6 +110,7 @@ class BacktestResponse(BaseModel):
     n_skus: Optional[int] = None
     target_service_level: Optional[float] = None
     reason: Optional[str] = None
+    reason_code: Optional[str] = None  # no_clock | no_closed_cycle | no_shadow
 
 
 class CostPolicyDetail(BaseModel):
@@ -132,3 +138,4 @@ class CostComparisonReportResponse(BaseModel):
     period_end: Optional[str] = None
     cost_basis: str = "A3: h=0.002*price/day, b=0.35*price/lost unit, c=2/placed order"
     reason: Optional[str] = None
+    reason_code: Optional[str] = None  # no_clock | no_simulated_days | no_shadow

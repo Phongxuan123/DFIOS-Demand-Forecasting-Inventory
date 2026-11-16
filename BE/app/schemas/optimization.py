@@ -122,6 +122,7 @@ class CompareStaticResponse(BaseModel):
     avg_ss_reduction_percent: float
     total_cost_savings: Optional[float] = None
     cost_model: Optional[str] = None
+    n_items_skipped: int = 0  # round 5: SKUs without observed or parameter demand (never an invented 36.5 / year)
 
 
 # --- UC32: Cost Sensitivity Analysis ---

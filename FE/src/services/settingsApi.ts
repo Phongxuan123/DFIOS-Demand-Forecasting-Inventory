@@ -21,6 +21,10 @@ export const updateProfile = (displayName: string) =>
 export const changePassword = (oldPassword: string, newPassword: string) =>
   apiClient.post<{ message: string }>('/auth/change-password', { old_password: oldPassword, new_password: newPassword }).then((r) => r.data);
 
+/** UC05: sends a confirmation link to the NEW address; the change happens at /confirm-email. */
+export const requestEmailChange = (newEmail: string, currentPassword: string) =>
+  apiClient.post<{ message: string }>('/auth/me/email', { new_email: newEmail, current_password: currentPassword }).then((r) => r.data);
+
 /* -------------------------------- system settings ---------------------------- */
 export interface SettingItem {
   key: string;
@@ -64,6 +68,7 @@ export const listUsers = async (signal?: AbortSignal): Promise<{ items: UserReco
   const header = Number(res.headers?.['x-total-count']);
   return { items: res.data, total: Number.isFinite(header) && header >= 0 ? header : res.data.length };
 };
+export const deleteUser = (id: string) => apiClient.delete<{ message?: string }>(`/users/${encodeURIComponent(id)}`).then((r) => r.data);
 export const revokeUserTokens = (id: string) => apiClient.post<{ message?: string }>(`/users/${id}/revoke-tokens`).then((r) => r.data);
 
 export interface CreateUserBody {
@@ -78,6 +83,46 @@ export const setUserActive = (id: string, isActive: boolean) =>
   apiClient.patch<UserRecord>(`/users/${id}/status`, { is_active: isActive }).then((r) => r.data);
 export const resendActivation = (id: string) => apiClient.post<{ message: string }>(`/users/${id}/resend-activation`).then((r) => r.data);
 
+/* --------------------------------- data quality ------------------------------ */
+export interface DataQualityIssue {
+  check_type: string;
+  item_id?: string | null;
+  store_id?: string | null;
+  severity: string;
+  message: string;
+  /** Present on newer backends: stable message code + params (preferred over `message`). */
+  message_code?: string | null;
+  message_params?: Record<string, string | number | null> | null;
+  metric_value?: number | null;
+}
+export interface DataQualityRun {
+  id: string;
+  status: 'PASSED' | 'WARNING' | 'FAILED' | string;
+  passed: boolean;
+  triggered_by?: string | null;
+  summary: {
+    total_records: number;
+    missing_rate: number;
+    outliers_count: number;
+    negative_values_count: number;
+    duplicate_dates_count: number;
+    invalid_sku_count: number;
+    leakage_detected: boolean;
+  };
+  issues: DataQualityIssue[];
+  created_at: string;
+}
+export interface DataQualityRequest {
+  store_id?: string;
+  cutoff_date?: string;
+  max_missing_rate?: number;
+  outlier_threshold_std?: number;
+}
+export const runDataQuality = (body: DataQualityRequest) =>
+  apiClient.post<DataQualityRun>('/ml/data-quality/run', body, { timeout: 300000 }).then((r) => r.data);
+export const listDataQualityRuns = (signal?: AbortSignal) =>
+  getJson<{ items: DataQualityRun[]; total: number }>('/ml/data-quality', { params: { skip: 0, limit: 20 }, signal });
+
 /* ----------------------------------- audit log ------------------------------- */
 export interface AuditLog {
   id: string;
@@ -88,8 +133,20 @@ export interface AuditLog {
   /** SUCCESS | FAILURE, derived by the BE from the action text (no status column). */
   result?: 'SUCCESS' | 'FAILURE' | string | null;
   result_source?: string | null;
+  /** Newer backends: a real stored status (preferred over the derived `result`). */
+  status?: 'SUCCESS' | 'FAILURE' | string | null;
+  /** Newer backends: stable code + params for `details` (preferred over the Vietnamese free text). */
+  details_code?: string | null;
+  details_params?: Record<string, string | number | null> | null;
   created_at: string;
 }
+/** Stored status (newer BE) first, else the status the BE derives from the action text. */
+export const auditOutcome = (r: Pick<AuditLog, 'status' | 'result'>): string | null => {
+  const v = r.status || r.result || null;
+  // Legacy rows of the BE round-5 schema carry result="unknown" (no recorded outcome): shown as "—", never as success.
+  return v && v.toLowerCase() !== 'unknown' ? v : null;
+};
+
 export interface AuditList {
   items: AuditLog[];
   total: number;
@@ -151,6 +208,9 @@ export interface PipelineRun {
   started_at: string;
   completed_at: string;
   duration_seconds: number;
+  /** Added by the BE (Q-01): which forecasts the run used. */
+  forecast_source?: 'existing' | 'sba-croston-fallback' | 'none' | string | null;
+  forecast_note?: string | null;
 }
 export const listSchedules = (signal?: AbortSignal) => getJson<ScheduleList>('/ml/schedule', { signal });
 export const createSchedule = (body: ScheduleCreate) => apiClient.post<Schedule>('/ml/schedule', body).then((r) => r.data);
@@ -179,6 +239,9 @@ export interface RejectedRow {
   row: number;
   item_id?: string | null;
   reason: string;
+  /** Newer backends: stable code + params (preferred over the Vietnamese `reason`). */
+  reason_code?: string | null;
+  reason_params?: Record<string, string | number | null> | null;
 }
 export interface ImportResult {
   success?: boolean;

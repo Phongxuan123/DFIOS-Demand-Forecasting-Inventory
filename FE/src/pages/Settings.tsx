@@ -8,13 +8,15 @@ import { useT } from '../i18n/index.tsx';
 import { AuditTab } from './settings/AuditTab.tsx';
 import { ImportTab } from './settings/ImportTab.tsx';
 import { PrefsTab } from './settings/PrefsTab.tsx';
+import { QualityTab } from './settings/QualityTab.tsx';
+import { HoldHeight } from '../components/ui/HoldHeight.tsx';
 import { ProfileTab } from './settings/ProfileTab.tsx';
 import { SchedulesTab } from './settings/SchedulesTab.tsx';
 import { SystemTab } from './settings/SystemTab.tsx';
 import { UsersTab } from './settings/UsersTab.tsx';
 import './settings/settings.css';
 
-type TabId = 'profile' | 'preferences' | 'system' | 'schedules' | 'users' | 'audit' | 'import';
+type TabId = 'profile' | 'preferences' | 'system' | 'schedules' | 'users' | 'audit' | 'import' | 'quality';
 
 export const Settings: React.FC = () => {
   const t = useT();
@@ -33,6 +35,7 @@ export const Settings: React.FC = () => {
     if (can(role, 'users:manage')) items.push({ id: 'users', label: t('settings.tabs.users') });
     if (can(role, 'audit:view')) items.push({ id: 'audit', label: t('settings.tabs.audit') });
     if (can(role, 'data:import')) items.push({ id: 'import', label: t('settings.tabs.import') });
+    if (can(role, 'data:quality')) items.push({ id: 'quality', label: t('settings.tabs.quality') });
     return items;
   }, [user?.role, t]);
 
@@ -46,7 +49,7 @@ export const Settings: React.FC = () => {
   };
 
   // A tab id from the URL that the role may not open falls back to profile; this guard is for the explicit case.
-  const denied = requested && !tabs.some((x) => x.id === requested) && ['system', 'schedules', 'users', 'audit', 'import'].includes(requested);
+  const denied = requested && !tabs.some((x) => x.id === requested) && ['system', 'schedules', 'users', 'audit', 'import', 'quality'].includes(requested);
 
   return (
     <div className="ui-stack">
@@ -57,7 +60,7 @@ export const Settings: React.FC = () => {
       {denied ? (
         <NoPermission />
       ) : (
-        <div role="tabpanel">
+        <HoldHeight activeKey={active} role="tabpanel">
           {active === 'profile' && <ProfileTab />}
           {active === 'preferences' && <PrefsTab />}
           {active === 'system' && <SystemTab canEdit={can(user?.role, 'users:manage')} />}
@@ -65,7 +68,8 @@ export const Settings: React.FC = () => {
           {active === 'users' && <UsersTab />}
           {active === 'audit' && <AuditTab />}
           {active === 'import' && <ImportTab />}
-        </div>
+          {active === 'quality' && <QualityTab />}
+        </HoldHeight>
       )}
     </div>
   );

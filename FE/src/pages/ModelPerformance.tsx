@@ -11,6 +11,7 @@ import {
   ChartTooltip,
   DataSourceNote,
   Field,
+  HoldHeight,
   Input,
   KpiTile,
   Modal,
@@ -417,6 +418,7 @@ export const ModelPerformance: React.FC = () => {
         ]}
       />
 
+      <HoldHeight activeKey={tab} role="tabpanel" style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
       {tab === 'registry' && (
         <>
           <ChartFrame
@@ -529,6 +531,7 @@ export const ModelPerformance: React.FC = () => {
           </div>
         </Card>
       )}
+      </HoldHeight>
 
       <Modal
         open={detailId !== null}

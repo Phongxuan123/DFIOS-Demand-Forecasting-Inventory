@@ -1,5 +1,6 @@
 import json
 import math
+import warnings
 from datetime import datetime, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -204,7 +205,8 @@ class OptimizationService:
         out: Dict[str, Tuple[float, float]] = {}
         if A.shape[1] == 0:
             return out
-        with np.errstate(all="ignore"):
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows (no known day) -> NaN, skipped below
             mean = np.nanmean(A, axis=1)
             std = np.nanstd(A, axis=1)
         for iid, m, s in zip(item_ids, mean, std):
@@ -517,6 +519,7 @@ class OptimizationService:
         total_savings = 0.0
         total_cost_savings = 0.0
         ss_reduction_percents: List[float] = []
+        n_skipped = 0
 
         for p in params:
             prod = prod_map.get(p.item_id)
@@ -531,7 +534,13 @@ class OptimizationService:
             lt_days = int(p.lead_time_days or self.DEFAULT_LEAD_TIME)
             tau = float(p.service_level or 0.95)
             tau_safe = min(max(tau, 0.50), 0.999)
-            avg_daily, sigma_d = dstats.get(p.item_id, (max(0.1, float(p.annual_demand or 36.5) / 365.0), 0.0))
+            if p.item_id in dstats:
+                avg_daily, sigma_d = dstats[p.item_id]
+            elif p.annual_demand:
+                avg_daily, sigma_d = max(0.1, float(p.annual_demand) / 365.0), 0.0
+            else:  # round 5: no observed demand and no parameter demand -> not compared (no invented 36.5/year)
+                n_skipped += 1
+                continue
             sigma_d = max(0.2, sigma_d)
             z_score = float(stats.norm.ppf(tau_safe))
             static_ss = round(z_score * sigma_d * math.sqrt(lt_days), 2)
@@ -577,6 +586,7 @@ class OptimizationService:
             avg_ss_reduction_percent=round(float(np.mean(ss_reduction_percents)), 2) if ss_reduction_percents else 0.0,
             total_cost_savings=round(total_cost_savings, 2),
             cost_model="analytic estimate: holding + shortage (normal loss) + ordering, A3 rates",
+            n_items_skipped=n_skipped,
         )
 
     # --- UC32: Cost Sensitivity Analysis ---
@@ -751,11 +761,12 @@ class OptimizationService:
         cm = window_quantile_service.causal_quantile_matrix(db, store_id, item_ids, reviews, tau_q, H)
         A = build_actuals_matrix(db, store_id, item_ids, reviews[0], reviews[-1] + R)
         prices = {p.item_id: p.price for p in db.query(Product).filter(Product.item_id.in_(item_ids)).all()}
-        price = np.array([float(prices.get(i) or 10.0) for i in item_ids])
-        # keep items with complete actuals on the validation days and a quantile for every review
+        # round 5: an item without a real price is EXCLUDED (A3 costs are price-proportional; no invented price 10)
+        price = np.array([float(prices[i]) if prices.get(i) and float(prices[i]) > 0 else np.nan for i in item_ids])
+        # keep items with complete actuals on the validation days, a quantile for every review and a price
         days_idx = np.concatenate([np.arange(s - reviews[0], s - reviews[0] + R) for s in reviews])
         dem = A[:, days_idx]
-        ok = ~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1)
+        ok = ~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1) & ~np.isnan(price)
         if ok.sum() == 0:
             return None
         dem, q, point, price = dem[ok], cm["q"][ok], cm["point"][ok], price[ok]

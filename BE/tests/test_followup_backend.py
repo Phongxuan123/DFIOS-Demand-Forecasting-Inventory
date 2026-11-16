@@ -311,7 +311,7 @@ def test_revoke_tokens_users_total_and_audit_result(env):
     lu = c.get("/api/v1/users?limit=1", headers=env["admin"])
     assert len(lu.json()) == 1 and lu.headers["X-Total-Count"] == "3"
     logs = c.get("/api/v1/audit-logs?action=revoke_tokens", headers=env["admin"]).json()["items"]
-    assert logs and logs[0]["result"] == "SUCCESS" and logs[0]["result_source"] == "derived_from_action"
+    assert logs and logs[0]["result"] == "SUCCESS" and logs[0]["result_source"] == "recorded"
 
 
 def test_pipeline_pending_policy_for_import_permission_unchanged(env):

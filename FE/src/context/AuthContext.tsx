@@ -65,13 +65,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Validate the stored token once on mount.
   useEffect(() => {
     let cancelled = false;
+    // Aborted on unmount (also avoids the duplicate /auth/me of the dev StrictMode double mount, U-01).
+    const controller = new AbortController();
     const check = async () => {
       if (!getToken()) {
         setIsLoading(false);
         return;
       }
       try {
-        const me = await apiClient.get('/auth/me');
+        const me = await apiClient.get('/auth/me', { signal: controller.signal });
         if (cancelled) return;
         const normalized = normalizeUser(me.data);
         storeUser(normalized);
@@ -92,6 +94,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     void check();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, []);
 

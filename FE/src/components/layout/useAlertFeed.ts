@@ -16,6 +16,7 @@ import { useDebouncedCallback } from '../../hooks/useDebouncedCallback.ts';
 import { getAlerts, type AlertItem } from '../../services/dashboardApi.ts';
 import { listReplenishments } from '../../services/replenishmentApi.ts';
 import { ALERTS_SYNC_EVENT } from '../../utils/alertTracker.ts';
+import { NOTIF_PREFS_EVENT, readNotifPrefs, type NotifPrefs } from '../../utils/notifyPrefs.ts';
 
 export const BELL_ROWS = 5;
 
@@ -27,16 +28,31 @@ export interface AlertFeed {
   pending: number | null;
   loading: boolean;
   failed: boolean;
+  /** Stock alerts switched off in Settings > Preferences (nothing fetched, badge hidden). */
+  muted: boolean;
 }
 
 export function useAlertFeed(): AlertFeed {
   const { isAuthenticated, user } = useAuth();
   const { concreteStoreId: storeId } = useStore();
   const { version } = useClock();
-  const canSeeReplenishment = can(user?.role, 'view:replenishment');
-  const [feed, setFeed] = useState<AlertFeed>({ total: 0, rows: [], pending: null, loading: false, failed: false });
+  const [prefs, setPrefs] = useState<NotifPrefs>(readNotifPrefs);
+  const wantStock = prefs.stock;
+  const canSeeReplenishment = can(user?.role, 'view:replenishment') && prefs.replenishment;
+  const [feed, setFeed] = useState<AlertFeed>({ total: 0, rows: [], pending: null, loading: false, failed: false, muted: !prefs.stock });
   const controller = useRef<AbortController | null>(null);
   const lastSync = useRef(0);
+
+  // Settings > Preferences writes the switches; apply them at once (same tab) or on the next storage event.
+  useEffect(() => {
+    const onPrefs = () => setPrefs(readNotifPrefs());
+    window.addEventListener(NOTIF_PREFS_EVENT, onPrefs);
+    window.addEventListener('storage', onPrefs);
+    return () => {
+      window.removeEventListener(NOTIF_PREFS_EVENT, onPrefs);
+      window.removeEventListener('storage', onPrefs);
+    };
+  }, []);
 
   const sync = useCallback(() => {
     if (!storeId) return;
@@ -44,7 +60,9 @@ export function useAlertFeed(): AlertFeed {
     const ctl = new AbortController();
     controller.current = ctl;
     setFeed((f) => ({ ...f, loading: true }));
-    const alerts = getAlerts(storeId, 'CRITICAL', BELL_ROWS, ctl.signal);
+    const alerts: Promise<{ items?: AlertItem[]; total?: number; summary?: { critical_count?: number } } | null> = wantStock
+      ? getAlerts(storeId, 'CRITICAL', BELL_ROWS, ctl.signal)
+      : Promise.resolve(null);
     const pending = canSeeReplenishment
       ? listReplenishments({ skip: 0, limit: 1, store_id: storeId, status: 'PENDING' }, ctl.signal).then(
           (r) => r.total,
@@ -55,13 +73,14 @@ export function useAlertFeed(): AlertFeed {
       ([a, p]) => {
         if (ctl.signal.aborted) return;
         lastSync.current = Date.now();
-        const items = Array.isArray(a.items) ? a.items : [];
+        const items = a && Array.isArray(a.items) ? a.items : [];
         setFeed({
-          total: Number(a.summary?.critical_count ?? a.total ?? items.length),
+          total: a ? Number(a.summary?.critical_count ?? a.total ?? items.length) : 0,
           rows: items.slice(0, BELL_ROWS),
           pending: p,
           loading: false,
           failed: false,
+          muted: !a,
         });
       },
       () => {
@@ -69,7 +88,7 @@ export function useAlertFeed(): AlertFeed {
         setFeed((f) => ({ ...f, loading: false, failed: true }));
       },
     );
-  }, [storeId, canSeeReplenishment]);
+  }, [storeId, canSeeReplenishment, wantStock]);
 
   // Initial load, store change, clock advance (version).
   useEffect(() => {

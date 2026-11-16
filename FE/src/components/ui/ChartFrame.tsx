@@ -75,7 +75,13 @@ export const ChartFrame: React.FC<ChartFrameProps> = ({
   else if (unavailableReason)
     body = <EmptyState compact title={t('common.state.unavailable')} description={t('common.state.unavailable_reason', { reason: unavailableReason })} />;
   else if (empty) body = <EmptyState compact title={t('common.chart.no_data')} description="" />;
-  else body = <div style={{ height }}>{chartTheme ? children : null}</div>;
+  else
+    body = (
+      // U-07: the drawing is announced as a figure named after the card; values stay reachable in the tooltip/table.
+      <div style={{ height }} role="figure" aria-label={typeof title === 'string' ? title : undefined}>
+        {chartTheme ? children : null}
+      </div>
+    );
 
   return (
     <Card title={title} description={description} actions={actions} className={className}>

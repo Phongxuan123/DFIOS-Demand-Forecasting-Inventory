@@ -108,11 +108,18 @@ export const ChartTooltip: React.FC<ChartTooltipProps> = ({ active, label, paylo
   );
 };
 
-export const ChartLegend: React.FC<{ items: ReadonlyArray<{ label: string; color: string }>; className?: string }> = ({ items, className }) => (
+/** Legend. Pass `dash` (SVG dasharray) for line series drawn dashed, so the key matches the line shape. */
+export const ChartLegend: React.FC<{ items: ReadonlyArray<{ label: string; color: string; dash?: string }>; className?: string }> = ({ items, className }) => (
   <div className={cx('ui-chart-legend', className)}>
     {items.map((it) => (
       <span className="ui-chart-legend__item" key={it.label}>
-        <span className="ui-chart-legend__swatch" style={{ background: it.color }} />
+        {it.dash ? (
+          <svg width="18" height="8" aria-hidden="true" style={{ flex: 'none' }}>
+            <line x1="0" y1="4" x2="18" y2="4" stroke={it.color} strokeWidth="2" strokeDasharray={it.dash} />
+          </svg>
+        ) : (
+          <span className="ui-chart-legend__swatch" style={{ background: it.color }} />
+        )}
         {it.label}
       </span>
     ))}

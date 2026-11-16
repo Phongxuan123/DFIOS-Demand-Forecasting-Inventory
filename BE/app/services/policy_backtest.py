@@ -36,12 +36,18 @@ class BacktestResult:
     availability: np.ndarray  # (C,) share of available SKU-periods
     fill_rate: np.ndarray     # (C,)
     n_sku_periods: int
+    orders: Optional[np.ndarray] = None      # (C,) number of order lines placed
+    lost_units: Optional[np.ndarray] = None  # (C,)
+    demand_units: float = 0.0
 
 
-def eoq_units(mu_daily: np.ndarray, price: np.ndarray) -> np.ndarray:
-    """EOQ = sqrt(2 c D / h_annual) with D = 365 mu and h_annual = 365 * 0.002 * price  (units)."""
-    h_daily = np.maximum(pc.HOLDING_RATE_DAILY * np.asarray(price, dtype=float), 1e-9)
-    return np.maximum(1.0, np.sqrt(2.0 * pc.ORDER_COST_C * np.maximum(mu_daily, 0.0) / h_daily))
+def eoq_units(
+    mu_daily: np.ndarray, price: np.ndarray,
+    holding_rate: float = pc.HOLDING_RATE_DAILY, order_cost: float = pc.ORDER_COST_C,
+) -> np.ndarray:
+    """EOQ = sqrt(2 c D / h_annual) with D = 365 mu and h_annual = 365 * h * price  (units, >= 1)."""
+    h_daily = np.maximum(float(holding_rate) * np.asarray(price, dtype=float), 1e-9)
+    return np.maximum(1.0, np.sqrt(2.0 * float(order_cost) * np.maximum(mu_daily, 0.0) / h_daily))
 
 
 def simulate_rss_candidates(
@@ -55,8 +61,12 @@ def simulate_rss_candidates(
     lead_time: int = pc.LEAD_TIME_DAYS,
     review_period: int = pc.REVIEW_PERIOD_DAYS,
     initial_on_hand: Optional[np.ndarray] = None,
+    holding_rate: float = pc.HOLDING_RATE_DAILY,
+    stockout_rate: float = pc.STOCKOUT_PENALTY_RATE,
+    order_cost: float = pc.ORDER_COST_C,
 ) -> BacktestResult:
-    """Simulate the Cartesian grid m x kappa. See module docstring for the dynamics."""
+    """Simulate the Cartesian grid m x kappa. See module docstring for the dynamics. The cost rates default to A3
+    (h = 0.002, b = 0.35, c = 2); the what-if simulator (FR10) passes user-given rates."""
     n, T = daily_demand.shape
     K = q_hat.shape[1]
     R, L = int(review_period), int(lead_time)
@@ -68,8 +78,8 @@ def simulate_rss_candidates(
     C = len(grid_m)
     mult = np.exp(grid_m + theta)[:, None]  # (C,1)
 
-    h = (pc.HOLDING_RATE_DAILY * price)[None, :]
-    b = (pc.STOCKOUT_PENALTY_RATE * price)[None, :]
+    h = (float(holding_rate) * price)[None, :]
+    b = (float(stockout_rate) * price)[None, :]
 
     # every candidate starts from the same stock: the first review's s + EOQ for m = 0
     if initial_on_hand is None:
@@ -81,6 +91,7 @@ def simulate_rss_candidates(
     hold = np.zeros(C)
     short = np.zeros(C)
     order = np.zeros(C)
+    n_orders = np.zeros(C)
     avail_periods = np.zeros(C)
     lost_units = np.zeros(C)
     demand_total = float(daily_demand.sum())
@@ -90,7 +101,9 @@ def simulate_rss_candidates(
         S_k = s_k + np.ceil(grid_k[:, None] * eoq[:, k][None, :])
         ip = on_hand + sum(pipeline)
         qty = np.where(ip <= s_k, np.maximum(S_k - ip, 0.0), 0.0)
-        order += (qty > 0).sum(axis=1) * pc.ORDER_COST_C
+        placed = (qty > 0).sum(axis=1)
+        n_orders += placed
+        order += placed * float(order_cost)
         pipeline[L] = pipeline[L] + qty
         stocked_out = np.zeros((C, n), dtype=bool)
         for r in range(R):
@@ -111,6 +124,7 @@ def simulate_rss_candidates(
         availability=avail_periods / max(1, n * K),
         fill_rate=(1.0 - lost_units / demand_total) if demand_total > 0 else np.ones(C),
         n_sku_periods=n * K,
+        orders=n_orders, lost_units=lost_units, demand_units=demand_total,
     )
 
 

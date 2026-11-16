@@ -91,6 +91,26 @@ describe('toApiError / apiErrorMessage', () => {
     }
   });
 
+  it('reads a structured 422 detail (reason_code + reason) and keeps its code', async () => {
+    apiClient.defaults.adapter = (config: InternalAxiosRequestConfig) =>
+      Promise.reject(
+        new AxiosError('HTTP 422', 'ERR_BAD_REQUEST', config, null, {
+          status: 422,
+          statusText: '',
+          headers: {},
+          config,
+          data: { detail: { reason_code: 'unknown_code_for_test', reason: 'R = 1 is not supported', supported_review_period_days: [7] } },
+        }),
+      );
+    const err = toApiError(await apiClient.post('/simulation/what-if', {}).catch((e: unknown) => e));
+    expect(err.kind).toBe('validation');
+    expect(err.code).toBe('unknown_code_for_test');
+    expect(err.detail).toBe('R = 1 is not supported');
+    expect(err.data?.supported_review_period_days).toEqual([7]);
+    // unknown code -> the server sentence is shown, never an empty message
+    expect(apiErrorMessage(err, ((k: string) => k) as never)).toBe('R = 1 is not supported');
+  });
+
   it('uses the translated generic text for transport errors', () => {
     const t = (key: string) => `T:${key}`;
     expect(apiErrorMessage({ kind: 'network', message: 'x' }, t as never)).toBe('T:common.errors.network');

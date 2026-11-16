@@ -21,6 +21,17 @@ async def lifespan(_app: FastAPI):
             logger.warning("Schema upgrades applied: %s", ", ".join(applied))
     except Exception as exc:  # noqa: BLE001
         logger.error("Schema upgrade check failed (run scripts/init_tables.py): %s", exc)
+    # R-17: the default ML schedule is created HERE (and by scripts/init_tables.py), never by a GET
+    try:
+        import sys
+        if "pytest" not in sys.modules:  # tests use their own databases (never write to the configured one)
+            from app.core.database import SessionLocal
+            from app.services.pipeline_service import pipeline_service
+            with SessionLocal() as db:
+                if pipeline_service.ensure_default_schedule(db):
+                    logger.warning("Default ML pipeline schedule created")
+    except Exception as exc:  # noqa: BLE001 - startup must not fail on an optional seed
+        logger.error("Default schedule check failed: %s", exc)
     task = None
     try:
         from app.services.scheduler_service import scheduler_enabled, scheduler_loop

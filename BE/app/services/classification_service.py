@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.classification import SKUClassification
+from app.models.classification import CLASS_SOURCE_GROUND_TRUTH, CLASS_SOURCE_LEGACY, SKUClassification
 from app.models.product import Product
 from app.models.sales_history import SalesHistory
 from app.models.forecast import Forecast
@@ -130,6 +130,31 @@ class ClassificationService:
         item_ids = df_store["id"].astype(str).str.split("_").str[:3].str.join("_")
         classes = df_store["class"].astype(str).str.strip().str.upper()
         return {i: c for i, c in zip(item_ids, classes) if c in self.VALID_SEGMENTS}
+
+    def verify_ground_truth_labels(self, db: Session) -> int:
+        """
+        Q-15: every row labelled ``class_source = "ground_truth"`` must match the C3-OUT mapping
+        (c3ok_sku_class.csv) of its store. Rows that do not match - or every such row of a store whose mapping is
+        not available - are relabelled ``legacy_unverified`` (their class is kept, only the claim is withdrawn).
+        Returns the number of relabelled rows.
+        """
+        stores = [r[0] for r in db.query(SKUClassification.store_id)
+                  .filter(SKUClassification.class_source == CLASS_SOURCE_GROUND_TRUTH).distinct().all()]
+        relabelled = 0
+        for store in stores:
+            try:
+                gt = self._load_ground_truth_classes(store_id=store)
+            except (OSError, ValueError):
+                gt = {}
+            rows = db.query(SKUClassification.id, SKUClassification.item_id, SKUClassification.segment).filter(
+                SKUClassification.store_id == store, SKUClassification.class_source == CLASS_SOURCE_GROUND_TRUTH).all()
+            bad = [rid for rid, iid, seg in rows if gt.get(iid) != seg]
+            for k in range(0, len(bad), 900):
+                db.query(SKUClassification).filter(SKUClassification.id.in_(bad[k:k + 900])).update(
+                    {SKUClassification.class_source: CLASS_SOURCE_LEGACY}, synchronize_session=False)
+            relabelled += len(bad)
+        db.commit()
+        return relabelled
 
     def _demand_stats(self, db: Session, store_id: Optional[str]) -> Dict[str, Tuple[int, float, float]]:
         """

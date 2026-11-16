@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Download } from 'lucide-react';
+import { CheckCircle2, Download, TriangleAlert } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import {
   Alert,
@@ -12,6 +12,7 @@ import {
   DataSourceNote,
   EmptyState,
   ErrorState,
+  HoldHeight,
   KpiTile,
   PageHeader,
   Section,
@@ -29,9 +30,11 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
+import { WhatIfPanel } from './reports/WhatIfPanel.tsx';
 import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
-import { useBe } from '../i18n/useBe.ts';
+import { useBe, useBeCode } from '../i18n/useBe.ts';
+import { prefixCode } from '../i18n/beText.ts';
 import { insightTexts, policyDescription, policyLabel } from '../utils/policyText.ts';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
@@ -78,7 +81,7 @@ const PoliciesTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
   const be = useBe();
-  const { storeId } = useStore();
+  const { storeId, concreteStoreId, isGlobal } = useStore();
   const { user } = useAuth();
   const { version } = useClock();
   const isManager = can(user?.role, 'replenishment:write');
@@ -151,7 +154,19 @@ const PoliciesTab: React.FC = () => {
     { key: 'cost', header: t('reports.policy.col_total'), align: 'right', value: (r) => r.total_cost, cell: (r) => fmt.number(r.total_cost, { digits: 0 }) },
     { key: 'orders', header: t('reports.sim.col_orders'), align: 'right', value: (r) => r.total_orders, cell: (r) => fmt.integer(r.total_orders) },
     { key: 'so', header: t('reports.sim.col_stockouts'), align: 'right', value: (r) => r.total_stockouts, cell: (r) => (r.total_stockouts == null ? <span title={r.stockouts_reason_code === 'artifact_no_units' ? t('reports.sim.stockouts_artifact') : be(r.stockouts_reason) || undefined}>—</span> : fmt.integer(r.total_stockouts)) },
-    { key: 'f', header: '', value: (r) => (r.is_feasible ? 1 : 0), cell: (r) => <Badge tone={r.is_feasible ? 'success' : 'warning'}>{r.is_feasible ? t('reports.sim.feasible') : t('reports.sim.infeasible')}</Badge> },
+    {
+      key: 'f',
+      header: <span className="ui-sr-only">{t('reports.sim.col_feasible')}</span>,
+      value: (r) => (r.is_feasible == null ? -1 : r.is_feasible ? 1 : 0),
+      cell: (r) =>
+        r.is_feasible == null ? (
+          <span>—</span>
+        ) : (
+          <Badge tone={r.is_feasible ? 'success' : 'warning'}>
+            {r.is_feasible ? <CheckCircle2 size={12} aria-hidden="true" /> : <TriangleAlert size={12} aria-hidden="true" />} {r.is_feasible ? t('reports.sim.feasible') : t('reports.sim.infeasible')}
+          </Badge>
+        ),
+    },
   ];
 
   return (
@@ -278,9 +293,9 @@ const PoliciesTab: React.FC = () => {
         ) : (
           <>
             {sim.data && (
-              <div style={{ display: 'grid', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
                 <p>
-                  <Badge tone={sim.data.recommended_policy ? 'accent' : 'neutral'}>
+                  <Badge className="ui-badge--wrap" tone={sim.data.recommended_policy ? 'accent' : 'neutral'}>
                     {sim.data.recommended_policy
                       ? t('reports.sim.recommended', {
                           policy: policyLabel(t, be, sim.data.recommended_policy_key, sim.data.policies.find((x) => x.policy_id === sim.data?.recommended_policy)?.policy_name ?? sim.data.recommended_policy),
@@ -308,6 +323,12 @@ const PoliciesTab: React.FC = () => {
           </>
         )}
       </Section>
+
+      {isManager ? <WhatIfPanel storeId={concreteStoreId} isGlobal={isGlobal} /> : (
+        <Section title={t('reports.whatif.title')}>
+          <Alert tone="info">{t('reports.common.manager_only')}</Alert>
+        </Section>
+      )}
     </>
   );
 };
@@ -328,14 +349,14 @@ function pickMetric(m: Record<string, unknown> | null, algorithm: string, key: s
 const AccuracyTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
-  const be = useBe();
+  const beCode = useBeCode();
   const { storeId } = useStore();
   const { user } = useAuth();
   const isAdmin = can(user?.role, 'view:models');
   const acc = useApi((s) => getForecastAccuracy(storeId ?? '', s), [storeId], { enabled: !!storeId });
   const reg = useApi((s) => getRegistryModels(s), [], { enabled: isAdmin });
   const a = acc.data;
-  const reason = (a?.metrics_reason ? be(a.metrics_reason) : null) ?? t('reports.reason.not_loaded');
+  const reason = (a?.metrics_reason || a?.metrics_reason_code ? beCode(prefixCode('rpt', a?.metrics_reason_code), a?.metrics_reason_params, a?.metrics_reason) : null) ?? t('reports.reason.not_loaded');
   const metric = (label: string, v: number | null | undefined, digits = 4) => (
     <KpiTile
       label={label}
@@ -409,13 +430,13 @@ const AccuracyTab: React.FC = () => {
 const InventoryTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
-  const be = useBe();
+  const beCode = useBeCode();
   const { storeId } = useStore();
   const { version } = useClock();
   const p = usePagination(25);
   const inv = useApi((s) => getInventoryPerformance(storeId ?? '', p.pageSize, p.offset, s), [storeId, version, p.pageSize, p.offset], { enabled: !!storeId });
   const d = inv.data;
-  const rowReason = (d?.reason ? be(d.reason) : null) ?? t('reports.reason.not_loaded');
+  const rowReason = (d?.reason || d?.reason_code ? beCode(prefixCode('rpt', d?.reason_code), null, d?.reason) : null) ?? t('reports.reason.not_loaded');
   const tile = (label: string, v: string | null, unavailable?: string) => (
     <KpiTile label={label} loading={inv.loading && !d} value={v} unavailableReason={inv.error ? apiErrorMessage(inv.error, t) : v == null ? unavailable ?? rowReason : undefined} />
   );
@@ -472,7 +493,7 @@ const InventoryTab: React.FC = () => {
 const CostTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
-  const be = useBe();
+  const beCode = useBeCode();
   const toast = useToast();
   const { storeId } = useStore();
   const { user } = useAuth();
@@ -512,7 +533,7 @@ const CostTab: React.FC = () => {
     { key: 'b0', header: t('reports.cost.baseline'), align: 'right', value: (r) => r.b0, cell: (r) => fmt.number(r.b0, { digits: 0 }) },
     { key: 'c3', header: t('reports.cost.ml'), align: 'right', value: (r) => r.c3, cell: (r) => fmt.number(r.c3, { digits: 0 }) },
   ];
-  const btTile = (label: string, v: string | null) => <KpiTile label={label} value={v} unavailableReason={(bt?.reason ? be(bt.reason) : null) ?? t('reports.reason.not_loaded')} />;
+  const btTile = (label: string, v: string | null) => <KpiTile label={label} value={v} unavailableReason={(bt?.reason || bt?.reason_code ? beCode(prefixCode('rpt', bt?.reason_code), null, bt?.reason) : null) ?? t('reports.reason.not_loaded')} />;
 
   return (
     <>
@@ -540,17 +561,17 @@ const CostTab: React.FC = () => {
                 label={t('reports.cost.savings')}
                 loading={cost.loading && !c}
                 value={c?.cost_savings_amount != null ? fmt.currency(c.cost_savings_amount, { compact: true }) : null}
-                unavailableReason={(c?.reason ? be(c.reason) : null) ?? t('reports.reason.not_loaded')}
+                unavailableReason={(c?.reason || c?.reason_code ? beCode(prefixCode('rpt', c?.reason_code), null, c?.reason) : null) ?? t('reports.reason.not_loaded')}
               />
               <KpiTile
                 label={t('reports.cost.savings_pct')}
                 loading={cost.loading && !c}
                 value={c?.savings_percentage != null ? fmt.percent(c.savings_percentage, { scale: 'percent', digits: 1, signed: true }) : null}
-                unavailableReason={(c?.reason ? be(c.reason) : null) ?? t('reports.reason.not_loaded')}
+                unavailableReason={(c?.reason || c?.reason_code ? beCode(prefixCode('rpt', c?.reason_code), null, c?.reason) : null) ?? t('reports.reason.not_loaded')}
               />
             </div>
             <Card flush>
-              <Table columns={costCols} rows={items} rowKey={(r) => r.key} loading={cost.loading && !c} unavailableReason={c && items.length === 0 ? (c.reason ? be(c.reason) : null) ?? t('reports.reason.not_loaded') : undefined} dense />
+              <Table columns={costCols} rows={items} rowKey={(r) => r.key} loading={cost.loading && !c} unavailableReason={c && items.length === 0 ? (c.reason || c.reason_code ? beCode(prefixCode('rpt', c.reason_code), null, c.reason) : null) ?? t('reports.reason.not_loaded') : undefined} dense />
             </Card>
             {c && (
               <DataSourceNote
@@ -616,10 +637,12 @@ export const Reports: React.FC = () => {
         onChange={(v) => setTab(v as TabId)}
       />
       <div style={{ height: 'var(--space-4)' }} />
-      {tab === 'policies' && <PoliciesTab />}
-      {tab === 'accuracy' && <AccuracyTab />}
-      {tab === 'inventory' && <InventoryTab />}
-      {tab === 'cost' && <CostTab />}
+      <HoldHeight activeKey={tab} role="tabpanel">
+        {tab === 'policies' && <PoliciesTab />}
+        {tab === 'accuracy' && <AccuracyTab />}
+        {tab === 'inventory' && <InventoryTab />}
+        {tab === 'cost' && <CostTab />}
+      </HoldHeight>
     </>
   );
 };

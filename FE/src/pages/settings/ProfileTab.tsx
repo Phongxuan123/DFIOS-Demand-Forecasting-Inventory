@@ -4,7 +4,8 @@ import { roleKey } from '../../auth/permissions.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useT } from '../../i18n/index.tsx';
 import { apiErrorMessage } from '../../services/apiClient.ts';
-import { changePassword, updateProfile } from '../../services/settingsApi.ts';
+import { changePassword, requestEmailChange, updateProfile } from '../../services/settingsApi.ts';
+import { BeText } from '../../i18n/BeText.tsx';
 
 type Level = 'weak' | 'fair' | 'good' | 'strong';
 
@@ -154,9 +155,69 @@ const PasswordForm: React.FC = () => {
   );
 };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** UC05 email change: the BE emails a link to the new address; /confirm-email completes it. */
+const EmailForm: React.FC = () => {
+  const t = useT();
+  const { user } = useAuth();
+  const [email, setEmail] = useState('');
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
+  const trimmed = email.trim();
+  const fieldError = !trimmed ? null : !EMAIL_RE.test(trimmed) ? t('settings.profile.email_invalid') : trimmed.toLowerCase() === (user?.email ?? '').toLowerCase() ? t('settings.profile.email_same') : null;
+  const ready = !!trimmed && !fieldError && !!pw;
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    setSent(null);
+    try {
+      const res = await requestEmailChange(trimmed, pw);
+      setSent(res?.message ?? t('settings.profile.email_sent'));
+      setPw('');
+    } catch (e) {
+      setError(apiErrorMessage(e, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title={t('settings.profile.email_title')} description={t('settings.profile.email_description')}>
+      <form
+        className="ui-stack set-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready) void submit();
+        }}
+      >
+        <Input label={t('settings.profile.new_email')} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" error={fieldError ?? undefined} />
+        <Input type="password" label={t('settings.profile.current_password')} value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" maxLength={72} />
+        <div aria-live="polite">
+          {error && <Alert tone="danger">{error}</Alert>}
+          {sent && (
+            <Alert tone="success">
+              <BeText text={sent} /> {t('settings.profile.email_pending_note')}
+            </Alert>
+          )}
+        </div>
+        <div>
+          <Button type="submit" variant="primary" loading={busy} disabled={!ready}>
+            {t('settings.profile.email_submit')}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  );
+};
+
 export const ProfileTab: React.FC = () => (
   <div className="ui-grid ui-grid--2">
     <ProfileForm />
     <PasswordForm />
+    <EmailForm />
   </div>
 );

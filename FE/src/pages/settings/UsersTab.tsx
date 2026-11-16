@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { KeyRound, Lock, LockOpen, Mail, UserPlus } from 'lucide-react';
+import { KeyRound, Lock, LockOpen, Mail, Trash2, UserPlus } from 'lucide-react';
 import { Alert, Badge, Button, Card, DataSourceNote, IconButton, Input, Modal, SearchInput, Select, Table, useConfirm, usePagination, useToast, type Column } from '../../components/ui/index.ts';
 import { normalizeRole, roleKey } from '../../auth/permissions.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { apiErrorMessage } from '../../services/apiClient.ts';
-import { createUser, listUsers, resendActivation, revokeUserTokens, USERS_LIMIT, setUserActive, setUserRole, type CreateUserBody, type UserRecord } from '../../services/settingsApi.ts';
+import { createUser, deleteUser, listUsers, resendActivation, revokeUserTokens, USERS_LIMIT, setUserActive, setUserRole, type CreateUserBody, type UserRecord } from '../../services/settingsApi.ts';
 
 type ApiRole = CreateUserBody['role'];
 const ROLES: ApiRole[] = ['Admin', 'Warehouse Manager', 'Viewer'];
@@ -138,6 +138,16 @@ export const UsersTab: React.FC = () => {
     if (ok) await act(u, () => revokeUserTokens(u.id), t('settings.users.revoke_done', { email: u.email }));
   };
 
+  const removeUser = async (u: UserRecord) => {
+    const ok = await confirm({
+      title: t('settings.users.delete_title', { email: u.email }),
+      description: t('settings.users.delete_description'),
+      tone: 'danger',
+      confirmLabel: t('settings.users.delete'),
+    });
+    if (ok) await act(u, () => deleteUser(u.id), t('settings.users.delete_done', { email: u.email }));
+  };
+
   const columns: Column<UserRecord>[] = [
     {
       key: 'email',
@@ -174,7 +184,7 @@ export const UsersTab: React.FC = () => {
       key: 'actions',
       header: t('settings.users.col_actions'),
       align: 'right',
-      width: 140,
+      width: 176,
       cell: (u) => (
         <span className="ui-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
           {!u.is_verified && (
@@ -186,6 +196,12 @@ export const UsersTab: React.FC = () => {
             icon={u.is_active ? <Lock size={16} /> : <LockOpen size={16} />}
             disabled={isMe(u) || busyId === u.id}
             onClick={() => void toggleActive(u)}
+          />
+          <IconButton
+            label={isMe(u) ? t('settings.users.cannot_self') : t('settings.users.delete')}
+            icon={<Trash2 size={16} />}
+            disabled={isMe(u) || busyId === u.id}
+            onClick={() => void removeUser(u)}
           />
         </span>
       ),

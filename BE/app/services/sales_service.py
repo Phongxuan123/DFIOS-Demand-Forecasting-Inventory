@@ -1,7 +1,7 @@
 import csv
 import io
 from datetime import datetime, date, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status, UploadFile
 from sqlalchemy.orm import Session
 
@@ -194,7 +194,38 @@ class SalesService:
                 detail="Không có dòng dữ liệu hợp lệ nào được tìm thấy trong file CSV.",
             )
 
-        inserted_count = sales_repository.bulk_insert(db, records_to_insert)
+        # Round 5 / R-38: upsert that COUNTS updates separately (an existing (item, store, day) row is updated, never
+        # re-inserted - the old add_all both mislabelled updates as inserts and failed on the primary key).
+        # A (item, store, day) repeated inside the file keeps its LAST value and is counted once.
+        by_key: Dict[Tuple[str, str, Any], SalesHistory] = {}
+        for r in records_to_insert:
+            by_key[(r.item_id, r.store_id, r.sale_date)] = r
+        duplicate_rows = len(records_to_insert) - len(by_key)
+        existing_map: Dict[Tuple[str, str, Any], SalesHistory] = {}
+        keys = list(by_key.keys())
+        for store in {k[1] for k in keys}:
+            store_keys = [k for k in keys if k[1] == store]
+            items = sorted({k[0] for k in store_keys})
+            d_lo, d_hi = min(k[2] for k in store_keys), max(k[2] for k in store_keys)
+            for c in range(0, len(items), 900):
+                for h in db.query(SalesHistory).filter(
+                    SalesHistory.store_id == store, SalesHistory.item_id.in_(items[c:c + 900]),
+                    SalesHistory.sale_date >= d_lo, SalesHistory.sale_date <= d_hi,
+                ).all():
+                    existing_map[(h.item_id, h.store_id, h.sale_date)] = h
+        new_records: List[SalesHistory] = []
+        updated_count = 0
+        for k, rec in by_key.items():
+            old = existing_map.get(k)
+            if old is not None:
+                if float(old.quantity) != float(rec.quantity):
+                    old.quantity = rec.quantity
+                updated_count += 1
+            else:
+                new_records.append(rec)
+        db.add_all(new_records)
+        inserted_count = len(new_records)
+        records_to_insert = list(by_key.values())
 
         # N-23: Tự động khởi tạo SimClock và Inventory khi onboarding kho mới
         from app.models.sim_clock import SimClock
@@ -205,9 +236,10 @@ class SalesService:
             clock = db.query(SimClock).filter(SimClock.store_id == s_id).first()
             if not clock:
                 dates_for_store = [r.sale_date for r in records_to_insert if r.store_id == s_id]
-                max_d = max(dates_for_store)
                 min_d = min(dates_for_store)
-                db.add(SimClock(store_id=s_id, current_date=max_d, start_date=min_d, mode="replay", speed=1.0))
+                # Q-11 (same rule as POST /imports): the new clock stands AT its start date, so the imported days
+                # can still be simulated by /clock/advance (it used to start already "advanced" to the last day).
+                db.add(SimClock(store_id=s_id, current_date=min_d, start_date=min_d, mode="replay", speed=1.0))
             existing_inv = set(
                 inv[0] for inv in db.query(Inventory.item_id).filter(Inventory.store_id == s_id).all()
             )
@@ -220,14 +252,24 @@ class SalesService:
             action="sales.import_csv",
             actor_email=admin_email,
             ip_address=ip_address,
-            details=f"Import CSV bán hàng lịch sử: {inserted_count} dòng thành công, {skipped_count} dòng bỏ qua.",
+            details=(
+                f"Import CSV bán hàng lịch sử: {inserted_count} thêm mới, {updated_count} cập nhật, "
+                f"{skipped_count} dòng bỏ qua."
+            ),
         )
         db.commit()
 
         return SalesImportResponse(
-            imported_count=inserted_count,
+            imported_count=inserted_count + updated_count,
             skipped_count=skipped_count,
-            message=f"Đã import thành công {inserted_count} bản ghi bán hàng lịch sử. Bỏ qua {skipped_count} dòng không hợp lệ.",
+            inserted=inserted_count,
+            updated=updated_count,
+            rejected=skipped_count,
+            duplicate_rows=duplicate_rows,
+            message=(
+                f"Đã import {inserted_count + updated_count} bản ghi bán hàng lịch sử ({inserted_count} thêm mới, "
+                f"{updated_count} cập nhật). Bỏ qua {skipped_count} dòng không hợp lệ."
+            ),
         )
 
 

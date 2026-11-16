@@ -2,35 +2,18 @@ import React, { useState } from 'react';
 import { Alert, Card, Select, Switch } from '../../components/ui/index.ts';
 import { useI18n, useT, type Locale } from '../../i18n/index.tsx';
 import { useTheme, type ThemePreference } from '../../theme/ThemeContext.tsx';
-
-const NOTIF_KEY = 'dfios_notification_prefs';
-type NotifPrefs = { stock: boolean; replenishment: boolean; system: boolean };
-const DEFAULT_NOTIFS: NotifPrefs = { stock: true, replenishment: true, system: true };
-
-function readNotifs(): NotifPrefs {
-  try {
-    const raw = localStorage.getItem(NOTIF_KEY);
-    if (raw) return { ...DEFAULT_NOTIFS, ...(JSON.parse(raw) as Partial<NotifPrefs>) };
-  } catch {
-    /* storage unavailable or corrupt: defaults */
-  }
-  return DEFAULT_NOTIFS;
-}
+import { readNotifPrefs, writeNotifPrefs, type NotifPrefs } from '../../utils/notifyPrefs.ts';
 
 export const PrefsTab: React.FC = () => {
   const t = useT();
   const { locale, setLocale } = useI18n();
   const { preference, setPreference } = useTheme();
-  const [notifs, setNotifs] = useState<NotifPrefs>(readNotifs);
+  const [notifs, setNotifs] = useState<NotifPrefs>(readNotifPrefs);
 
   const setNotif = (key: keyof NotifPrefs, value: boolean) => {
     const next = { ...notifs, [key]: value };
     setNotifs(next);
-    try {
-      localStorage.setItem(NOTIF_KEY, JSON.stringify(next));
-    } catch {
-      /* ignore: preference stays in memory for this session */
-    }
+    writeNotifPrefs(next); // the bell listens and applies it immediately
   };
 
   return (
@@ -62,9 +45,11 @@ export const PrefsTab: React.FC = () => {
         <div className="ui-stack">
           <Switch checked={notifs.stock} onChange={(v) => setNotif('stock', v)} label={t('settings.prefs.notif_stock')} />
           <Switch checked={notifs.replenishment} onChange={(v) => setNotif('replenishment', v)} label={t('settings.prefs.notif_replenishment')} />
-          <Switch checked={notifs.system} onChange={(v) => setNotif('system', v)} label={t('settings.prefs.notif_system')} />
           <Alert tone="info">{t('settings.prefs.local_only')}</Alert>
         </div>
+      </Card>
+      <Card title={t('settings.prefs.session_title')} className="set-span">
+        <p className="set-note">{t('settings.prefs.session_note')}</p>
       </Card>
     </div>
   );

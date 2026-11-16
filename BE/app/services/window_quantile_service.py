@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import warnings
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -461,7 +462,8 @@ class WindowQuantileService:
         sales_mean: Dict[str, float] = {}
         if need_mean:
             A28 = build_actuals_matrix(db, store_id, need_mean, max(0, o_idx - 28), o_idx)
-            with np.errstate(all="ignore"):
+            with np.errstate(all="ignore"), warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN row -> NaN (no sales mean), skipped below
                 m = np.nanmean(A28, axis=1) if A28.shape[1] else np.full(len(need_mean), np.nan)
             sales_mean = {iid: float(v) for iid, v in zip(need_mean, m) if not np.isnan(v)}
 

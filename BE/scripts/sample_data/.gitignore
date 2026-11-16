@@ -1,0 +1,4 @@
+# P-45: third-party Kaggle M5 data is never committed (point M5_CALENDAR_CSV_PATH at your own copy)
+calendar.csv
+sales_train_*.csv
+sell_prices.csv

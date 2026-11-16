@@ -45,6 +45,8 @@ export const forecast: typeof Vi = {
     fast_running: 'Generating forecasts, this can take tens of seconds…',
     fast_done: 'Generated {records} SBA forecast rows for {skus} SKUs ({seconds} s)',
     fast_note: 'Only Managers and Admins can generate forecasts.',
+    fast_production: 'The store already has the production forecast ({model}: {records} rows for {skus} SKUs); nothing was generated. This SKU has no row in that run.',
+    fast_sba_note: 'SBA is a statistical fallback, NOT the production ensemble.',
   },
   model: {
     current: 'Model in view:',

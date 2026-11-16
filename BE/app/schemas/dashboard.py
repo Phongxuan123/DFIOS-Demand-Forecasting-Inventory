@@ -56,6 +56,10 @@ class InventoryAlertItem(BaseModel):
     reorder_point: float
     severity: str = Field(..., description="Mức độ cảnh báo: CRITICAL (đỏ), WARNING (vàng), HEALTHY (xanh)")
     suggested_action: str
+    suggested_action_code: Optional[str] = Field(
+        None, description="Stable code of suggested_action: out_of_stock | below_ss_and_rop | ip_below_rop | healthy")
+    suggested_action_params: Dict[str, Any] = Field(
+        default_factory=dict, description="Numbers used in the text (on_hand, safety_stock, inventory_position, reorder_point)")
     updated_at: Optional[str] = None
 
 

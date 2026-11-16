@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
+import { CheckCircle2, XCircle } from 'lucide-react';
 import { Badge, Card, DataSourceNote, Tooltip, Input, SearchInput, Select, Table, usePagination, type Column } from '../../components/ui/index.ts';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
-import { useAuditLabel, useBe } from '../../i18n/useBe.ts';
-import { listAuditActions, listAuditLogs, type AuditLog } from '../../services/settingsApi.ts';
+import { BeText } from '../../i18n/BeText.tsx';
+import { useAuditLabel, useBe, useBeCode } from '../../i18n/useBe.ts';
+import { auditOutcome, listAuditActions, listAuditLogs, type AuditLog } from '../../services/settingsApi.ts';
 
 export const AuditTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
   const be = useBe();
+  const beCode = useBeCode();
   const auditLabel = useAuditLabel();
   const pg = usePagination(25);
   const [action, setAction] = useState('');
@@ -46,12 +49,31 @@ export const AuditTab: React.FC = () => {
     { key: 'action', header: t('settings.audit.col_action'), value: (r) => r.action, cell: (r) => <span title={r.action}>{auditLabel(r.action)}</span> },
     {
       key: 'result',
-      header: <Tooltip content={t('settings.audit.result_help')}><span>{t('settings.audit.col_result')}</span></Tooltip>,
-      value: (r) => r.result ?? null,
-      cell: (r) => (r.result ? <Badge tone={r.result === 'FAILURE' ? 'danger' : 'success'}>{r.result === 'FAILURE' ? t('settings.audit.result_failure') : t('settings.audit.result_success')}</Badge> : <span className="set-note">—</span>),
-      width: 110,
+      header: (
+        <Tooltip content={t('settings.audit.result_help')}>
+          <span tabIndex={0}>{t('settings.audit.col_result')}</span>
+        </Tooltip>
+      ),
+      value: (r) => auditOutcome(r),
+      cell: (r) => {
+        const outcome = auditOutcome(r);
+        if (!outcome) return <span className="set-note">—</span>;
+        const failed = outcome === 'FAILURE';
+        return (
+          <Badge tone={failed ? 'danger' : 'success'}>
+            {failed ? <XCircle size={12} aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />}{' '}
+            {failed ? t('settings.audit.result_failure') : outcome === 'SUCCESS' ? t('settings.audit.result_success') : outcome}
+          </Badge>
+        );
+      },
+      width: 120,
     },
-    { key: 'details', header: t('settings.audit.col_details'), value: (r) => r.details, cell: (r) => be(r.details) },
+    {
+      key: 'details',
+      header: t('settings.audit.col_details'),
+      value: (r) => (r.details_code ? beCode(r.details_code, r.details_params, r.details) : be(r.details)),
+      cell: (r) => <BeText text={r.details} code={r.details_code} params={r.details_params} />,
+    },
     { key: 'ip', header: t('settings.audit.col_ip'), value: (r) => r.ip_address, width: 130 },
   ];
 

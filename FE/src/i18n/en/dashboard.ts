@@ -56,6 +56,15 @@ export const dashboard: typeof Vi = {
     wrmsse_hint: 'Forecast error metric (lower is better), not accuracy. Source: model registry.',
     wrmsse_unavailable: 'The model registry has no WRMSSE for the production model',
   },
+  demo: {
+    title: 'About this demo',
+    toggle_show: 'What does this demo show?',
+    toggle_hide: 'Hide',
+    p1: 'The simulator replays real M5 sales of store {store} day by day from {start}. Every number on this page is measured from that replay or read from the model registry; nothing is tuned or invented.',
+    p2: 'The loaded sales history is short (a few weeks), so only a few review cycles can be simulated: the clock refuses to advance past the last day with sales.',
+    p3: 'C³-OUT is a service-level controller, not a cost reducer: in this short window θ moves by only a few hundredths per review and C³-OUT can cost more than the B0 baseline. That is the honest result, not a display error.',
+    p4: 'The offline policy comparison in Reports (P-CR vs P6 on 25,950 SKUs) comes from the research artifact and is labelled as such.',
+  },
   availability_miss: {
     title: 'Availability below target',
     body: 'Availability {value} is below the {target} target after {days} simulated days. This is the simulator result for the current state, not a display problem. More review cycles (advance the clock) let the controller adapt before judging it.',
@@ -79,6 +88,7 @@ export const dashboard: typeof Vi = {
     actual: 'Actual',
     predicted: 'Forecast',
     review: 'Review {n}',
+    review_tick: 'R{n}',
     availability: 'Availability',
     target: 'Target',
     health_title: 'Inventory health',

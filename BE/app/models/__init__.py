@@ -7,7 +7,7 @@ from app.models.supplier import Supplier
 from app.models.inventory import Inventory
 from app.models.event import Event
 from app.models.email_token import EmailToken
-from app.models.audit_log import AuditLog
+from app.models.audit_log import AuditLog, LoginFailure
 from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.system_setting import SystemSetting
 from app.models.data_quality import DataQualityRun
@@ -46,6 +46,7 @@ __all__ = [
     "Event",
     "EmailToken",
     "AuditLog",
+    "LoginFailure",
     "InventoryAdjustment",
     "SystemSetting",
     "DataQualityRun",

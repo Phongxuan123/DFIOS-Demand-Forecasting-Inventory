@@ -46,6 +46,8 @@ export const forecast = {
     fast_running: 'Đang sinh dự báo, có thể mất vài chục giây…',
     fast_done: 'Đã sinh {records} dòng dự báo SBA cho {skus} SKU ({seconds} giây)',
     fast_note: 'Chỉ Manager và Admin được tạo dự báo.',
+    fast_production: 'Kho đã có dự báo production ({model}: {records} dòng cho {skus} SKU); không sinh thêm gì. SKU này không có dòng nào trong lần chạy đó.',
+    fast_sba_note: 'SBA là phương án thống kê dự phòng, KHÔNG phải mô hình ensemble production.',
   },
   model: {
     sba: 'SBA (dự phòng thống kê)',

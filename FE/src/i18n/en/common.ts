@@ -114,6 +114,8 @@ export const common: typeof Vi = {
     clear_search: 'Clear search',
   },
   misc: {
+    server_text_vi: 'Original server text (Vietnamese, no translation known)',
+    elapsed: '{seconds} s elapsed',
     yes: 'Yes',
     no: 'No',
     all: 'All',

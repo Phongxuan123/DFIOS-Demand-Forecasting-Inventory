@@ -15,6 +15,7 @@ import { LanguageToggle, ThemeToggle } from '../common/PreferenceToggles.tsx';
 import { Popover } from './Popover.tsx';
 import { countPhrase, reviewsPhrase, reviewsSinceStart } from '../../utils/simText.ts';
 import { useAlertFeed } from './useAlertFeed.ts';
+import { AdvanceProgress } from '../common/AdvanceProgress.tsx';
 import './shell.css';
 
 /* ------------------------------ Store selector ----------------------------- */
@@ -66,9 +67,9 @@ const ClockChip: React.FC = () => {
       confirmLabel: t('shell.clock.advance_days', { days }),
     });
     if (!ok) return;
-    setOpen(false);
     try {
       const res = await advance(days);
+      setOpen(false);
       toast.success(
         t('shell.clock.advanced', {
           from: fmt.date(res.previous_date),
@@ -76,6 +77,7 @@ const ClockChip: React.FC = () => {
           reviews: reviewsPhrase(t, fmt, res.reviews_executed, !!res.day0_review_executed),
           recommendations: countPhrase(t, fmt, 'recs', res.recommendations_generated),
         }),
+        typeof res.duration_seconds === 'number' ? t('shell.clock.advance_duration', { seconds: fmt.number(res.duration_seconds, { digits: 1 }) }) : undefined,
       );
     } catch (err) {
       toast.error(t('shell.clock.advance_failed'), apiErrorMessage(err, t));
@@ -95,8 +97,9 @@ const ClockChip: React.FC = () => {
         aria-expanded={open}
         title={status === 'unavailable' ? unavailableText : t('shell.clock.label')}
       >
-        <CalendarClock size={15} aria-hidden="true" />
+        {advancing ? <span className="ui-spinner" aria-hidden="true" /> : <CalendarClock size={15} aria-hidden="true" />}
         <span className="shell-chip__text ui-tabular">{label}</span>
+        {advancing && <span className="ui-sr-only">{t('shell.clock.advancing')}</span>}
       </button>
       {open && (
         <div className="shell-popover shell-popover--clock" role="dialog" aria-label={t('shell.clock.label')}>
@@ -127,6 +130,7 @@ const ClockChip: React.FC = () => {
               ))}
             </div>
           )}
+          {canAdvance && <AdvanceProgress className="shell-popover__muted" />}
         </div>
       )}
       {dialog}
@@ -137,15 +141,22 @@ const ClockChip: React.FC = () => {
 /* --------------------------- Notification bell ----------------------------- */
 const NotificationBell: React.FC = () => {
   const { t, fmt } = useI18n();
-  const { total: count, rows, pending, failed } = useAlertFeed();
+  const { total: count, rows, pending, failed, muted } = useAlertFeed();
   const { withStore } = useStore();
   const [open, setOpen] = useState(false);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <button type="button" className="ui-btn ui-btn--ghost ui-btn--icon shell-bell" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={t('common.misc.notifications')} title={t('common.misc.notifications')}>
-        <Bell size={17} />
-        {count > 0 && <span className="shell-bell__badge ui-tabular">{count > 99 ? '99+' : count}</span>}
+      <button
+        type="button"
+        className="ui-btn ui-btn--ghost ui-btn--icon shell-bell"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label={count > 0 ? `${t('common.misc.notifications')}: ${t('shell.notifications.critical', { count: fmt.integer(count) })}` : t('common.misc.notifications')}
+        title={t('common.misc.notifications')}
+      >
+        <Bell size={17} aria-hidden="true" />
+        {count > 0 && <span className="shell-bell__badge ui-tabular" aria-hidden="true">{count > 99 ? '99+' : count}</span>}
       </button>
       {open && (
         <div className="shell-popover shell-popover--alerts" role="dialog" aria-label={t('shell.notifications.title')}>
@@ -154,7 +165,12 @@ const NotificationBell: React.FC = () => {
             {count > 0 && <Badge tone="danger">{t('shell.notifications.critical', { count: fmt.integer(count) })}</Badge>}
           </div>
           {failed && <p className="shell-popover__muted">{t('shell.notifications.unavailable')}</p>}
-          {!failed && rows.length === 0 && <p className="shell-popover__muted">{t('shell.notifications.empty')}</p>}
+          {muted && !failed && (
+            <p className="shell-popover__muted">
+              {t('shell.notifications.muted')} <Link to={withStore('/settings?tab=preferences')} onClick={() => setOpen(false)}>{t('shell.notifications.muted_link')}</Link>
+            </p>
+          )}
+          {!failed && !muted && rows.length === 0 && <p className="shell-popover__muted">{t('shell.notifications.empty')}</p>}
           <ul className="shell-alert-list">
             {rows.map((a) => (
               <li key={`${a.item_id}__${a.store_id}`}>

@@ -40,6 +40,44 @@ def _reconcile_columns(engine: Engine, base) -> list[str]:
     return applied
 
 
+def _upgrade_class_source(engine: Engine) -> list[str]:
+    """
+    Q-15: ``sku_classifications.class_source`` must never claim ground truth it has not verified.
+
+    * Column missing (table of an old version): added with DEFAULT 'legacy_unverified', so every existing row is
+      labelled ``legacy_unverified`` (its source was never recorded).
+    * Column present with the OLD default 'ground_truth' (created or upgraded by a previous version, which labelled
+      every legacy / unspecified row ``ground_truth`` without checking): the default becomes 'legacy_unverified'
+      and every ``ground_truth`` row is verified once against the C3-OUT mapping ``c3ok_sku_class.csv``: a row whose
+      segment differs from the mapping (or whose SKU is not in it), or any row when the mapping file is not
+      available, is relabelled ``legacy_unverified``. Rows that match the mapping keep ``ground_truth``.
+    Nothing is deleted; the next recompute of the store writes the real source again.
+    """
+    applied: list[str] = []
+    insp = inspect(engine)
+    cols = {c["name"]: c for c in insp.get_columns("sku_classifications")}
+    if "class_source" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE sku_classifications ADD COLUMN class_source VARCHAR(20) NOT NULL "
+                "DEFAULT 'legacy_unverified'"
+            ))
+        applied.append("sku_classifications.class_source (legacy rows = legacy_unverified)")
+        return applied
+    default = str(cols["class_source"].get("default") or "")
+    if "ground_truth" not in default:
+        return applied
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE sku_classifications ALTER COLUMN class_source SET DEFAULT 'legacy_unverified'"))
+    applied.append("sku_classifications.class_source default legacy_unverified")
+    from sqlalchemy.orm import Session
+    from app.services.classification_service import classification_service
+    with Session(bind=engine) as db:
+        n = classification_service.verify_ground_truth_labels(db)
+    applied.append(f"sku_classifications ground_truth verified ({n} relabelled legacy_unverified)")
+    return applied
+
+
 def apply_schema_upgrades(engine: Engine) -> list[str]:
     """Trả về danh sách bước đã áp dụng (rỗng nếu schema đã mới)."""
     applied: list[str] = []
@@ -66,9 +104,18 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE replenishment_recommendations ADD COLUMN {col} DOUBLE PRECISION"))
                 applied.append(f"replenishment_recommendations.{col}")
+    if "audit_logs" in insp.get_table_names():
+        # Round 5: a REAL outcome column. Rows written before it existed never recorded their outcome:
+        # they are labelled "unknown" (never derived from the action text).
+        with engine.begin() as conn:
+            n = conn.execute(text("UPDATE audit_logs SET result = 'unknown' WHERE result IS NULL")).rowcount
+        if n:
+            applied.append(f"audit_logs.result backfill unknown ({n})")
     if "sku_classifications" not in insp.get_table_names():
         return applied
 
+    applied.extend(_upgrade_class_source(engine))
+    insp = inspect(engine)
     cols = {c["name"] for c in insp.get_columns("sku_classifications")}
     uniques = {u["name"] for u in insp.get_unique_constraints("sku_classifications")}
     indexes = {i["name"]: i for i in insp.get_indexes("sku_classifications")}
@@ -83,11 +130,6 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
                 "CREATE INDEX IF NOT EXISTS ix_sku_classifications_store_id ON sku_classifications (store_id)"
             ))
             applied.append("sku_classifications.store_id")
-        if "class_source" not in cols:
-            conn.execute(text(
-                "ALTER TABLE sku_classifications ADD COLUMN class_source VARCHAR(20) NOT NULL DEFAULT 'ground_truth'"
-            ))
-            applied.append("sku_classifications.class_source")
         if "threshold_segment" not in cols:
             conn.execute(text("ALTER TABLE sku_classifications ADD COLUMN threshold_segment VARCHAR(2)"))
             applied.append("sku_classifications.threshold_segment")

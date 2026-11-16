@@ -3,6 +3,8 @@ import { Play, Plus, Trash2 } from 'lucide-react';
 import { Alert, Badge, Button, Card, Checkbox, DataSourceNote, IconButton, Input, Modal, Select, Table, useConfirm, useToast, type Column } from '../../components/ui/index.ts';
 import { useStore } from '../../context/StoreContext.tsx';
 import { useApi } from '../../hooks/useApi.ts';
+import { useElapsed } from '../../hooks/useElapsed.ts';
+import { BeText } from '../../i18n/BeText.tsx';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { apiErrorMessage } from '../../services/apiClient.ts';
 import {
@@ -100,6 +102,7 @@ export const SchedulesTab: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<PipelineRun | null>(null);
+  const runElapsed = useElapsed(running);
   const { data, loading, error, refetch } = useApi((s) => listSchedules(s), [version]);
 
   const items = data?.items ?? [];
@@ -167,7 +170,13 @@ export const SchedulesTab: React.FC = () => {
               {t('settings.schedules.run_now')}
             </Button>
           </div>
-          {running && <Alert tone="info">{t('settings.schedules.run_running', { store: targetStore })}</Alert>}
+          <div aria-live="polite">
+            {running && (
+              <Alert tone="info">
+                {t('settings.schedules.run_running', { store: targetStore })} <span aria-hidden="true">{t('settings.schedules.run_elapsed', { seconds: runElapsed })}</span>
+              </Alert>
+            )}
+          </div>
           {runError && (
             <Alert tone="danger" title={t('settings.schedules.run_failed')}>
               {runError}
@@ -177,6 +186,27 @@ export const SchedulesTab: React.FC = () => {
             <Alert tone="success" title={t('settings.schedules.run_result_title', { id: lastRun.run_id })}>
               {t('settings.schedules.run_status')}: {lastRun.status} · {t('settings.schedules.run_forecasts')}: {fmt.integer(lastRun.forecasts_generated)} · {t('settings.schedules.run_params')}: {fmt.integer(lastRun.inventory_params_updated)} ·{' '}
               {t('settings.schedules.run_classes')}: {fmt.integer(lastRun.classifications_updated)} · {t('settings.schedules.run_replen')}: {fmt.integer(lastRun.replenishments_generated)}
+              {lastRun.forecast_source && (
+                <>
+                  <br />
+                  {t('settings.schedules.run_forecast_source', {
+                    source:
+                      lastRun.forecast_source === 'existing'
+                        ? t('settings.schedules.run_source_existing')
+                        : lastRun.forecast_source === 'sba-croston-fallback'
+                          ? t('settings.schedules.run_source_fallback')
+                          : lastRun.forecast_source === 'none'
+                            ? t('settings.schedules.run_source_none')
+                            : lastRun.forecast_source,
+                  })}
+                  {lastRun.forecast_note && (
+                    <>
+                      {' · '}
+                      <BeText text={lastRun.forecast_note} />
+                    </>
+                  )}
+                </>
+              )}
             </Alert>
           )}
         </div>

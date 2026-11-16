@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useT } from '../i18n/index.tsx';
 import { can } from '../auth/permissions.ts';
-import { Alert, PageHeader, Tabs, type TabItem } from '../components/ui/index.ts';
+import { Alert, HoldHeight, PageHeader, Tabs, type TabItem } from '../components/ui/index.ts';
 import { ProductsTab } from './products/ProductsTab.tsx';
 import { SuppliersTab } from './products/SuppliersTab.tsx';
 import { AdjustmentsTab } from './products/AdjustmentsTab.tsx';
@@ -33,11 +33,13 @@ export const Products: React.FC = () => {
       <PageHeader title={t('products.title')} description={t('products.description')} />
       {!storeId && <Alert tone="warning">{t('products.no_store')}</Alert>}
       <Tabs aria-label={t('products.title')} items={items} value={tab} onChange={setTab} />
-      {tab === 'products' && <ProductsTab />}
-      {tab === 'suppliers' && <SuppliersTab />}
-      {tab === 'adjustments' && isManager && <AdjustmentsTab />}
-      {tab === 'sales' && <SalesTab />}
-      {tab === 'events' && <EventsTab />}
+      <HoldHeight activeKey={tab} role="tabpanel" className="ui-stack">
+        {tab === 'products' && <ProductsTab />}
+        {tab === 'suppliers' && <SuppliersTab />}
+        {tab === 'adjustments' && isManager && <AdjustmentsTab />}
+        {tab === 'sales' && <SalesTab />}
+        {tab === 'events' && <EventsTab />}
+      </HoldHeight>
     </div>
   );
 };

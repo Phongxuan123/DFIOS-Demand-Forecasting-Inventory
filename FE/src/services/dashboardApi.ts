@@ -57,6 +57,10 @@ export interface KpiShadowDashboard {
   cost_reason: string | null;
   availability_reason: string | null;
   b0_reason: string | null;
+  /** Stable codes (BE round 5): preferred over the Vietnamese *_reason texts. */
+  cost_reason_code?: string | null;
+  availability_reason_code?: string | null;
+  b0_reason_code?: string | null;
 }
 
 export interface AlertItem {
@@ -70,6 +74,8 @@ export interface AlertItem {
   reorder_point: number;
   severity: 'CRITICAL' | 'WARNING' | 'HEALTHY' | string;
   suggested_action: string;
+  suggested_action_code?: string | null;
+  suggested_action_params?: Record<string, string | number | null> | null;
 }
 
 export interface AlertsResponse {
