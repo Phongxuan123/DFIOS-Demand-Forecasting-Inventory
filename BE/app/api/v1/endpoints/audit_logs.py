@@ -23,6 +23,8 @@ def list_audit_logs(
     actor_email: Optional[str] = Query(None, description="Lọc theo email người thực hiện"),
     start_time: Optional[datetime] = Query(None, description="Thời gian bắt đầu (ISO 8601)"),
     end_time: Optional[datetime] = Query(None, description="Thời gian kết thúc (ISO 8601)"),
+    result: Optional[str] = Query(None, pattern="^(SUCCESS|FAILURE|unknown|success|failure|UNKNOWN)$",
+                                  description="Lọc theo kết quả ghi nhận: SUCCESS | FAILURE | unknown"),
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -38,6 +40,7 @@ def list_audit_logs(
         actor_email=actor_email,
         start_time=start_time,
         end_time=end_time,
+        result=result,
     )
     return AuditLogListResponse(
         items=[AuditLogResponse.model_validate(item) for item in items],

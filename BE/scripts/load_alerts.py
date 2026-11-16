@@ -7,8 +7,8 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
 import pandas as pd
 from datetime import datetime, timezone
-from sqlalchemy import text
 from app.core.database import engine
+from app.core.db_bulk import replace_rows
 
 STORE_ID = "CA_1"
 now = datetime.now(timezone.utc)
@@ -35,8 +35,7 @@ for _, row in reorder_items.iterrows():
 if alerts:
     alerts_df = pd.DataFrame(alerts[:100])
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM alerts WHERE store_id = :s"), {"s": STORE_ID})
-    alerts_df.to_sql("alerts", engine, if_exists="append", index=False, chunksize=500, method="multi")
+        replace_rows(conn, "alerts", alerts_df, "DELETE FROM alerts WHERE store_id = :s", {"s": STORE_ID})
     print(f"Seeded {len(alerts_df)} alerts!")
 else:
     print("No alerts needed.")

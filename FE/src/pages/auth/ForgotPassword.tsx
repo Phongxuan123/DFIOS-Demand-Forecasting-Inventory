@@ -1,341 +1,135 @@
 import React, { useState } from 'react';
-import { Link, useSearchParams, useLocation } from 'react-router-dom';
-import { apiClient } from '../../services/apiClient.ts';
-import { useLanguage } from '../../context/LanguageContext.tsx';
-import { AuthBrandShell } from './AuthBrandShell.tsx';
-import { Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ArrowLeft, ArrowRight } from 'lucide-react';
-import './Login.css';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
+import { useT } from '../../i18n/index.tsx';
+import { apiClient, apiErrorMessage } from '../../services/apiClient.ts';
+import { Alert } from '../../components/ui/states.tsx';
+import { Button } from '../../components/ui/primitives.tsx';
+import { Input } from '../../components/ui/forms.tsx';
+import { AuthShell } from './AuthShell.tsx';
+import { PasswordField } from './PasswordField.tsx';
 
+/** One page, two modes: request a reset email, or set a new password with the emailed token. */
 export const ForgotPassword: React.FC = () => {
-  const { language, t } = useLanguage();
-  const isVi = language === 'vi';
+  const t = useT();
   const [searchParams] = useSearchParams();
   const location = useLocation();
-  const urlToken = searchParams.get('token') || '';
-  const isResetPath = location.pathname.includes('/reset-password') || !!urlToken;
-
-  const [mode, setMode] = useState<'request' | 'reset'>(() => (isResetPath ? 'reset' : 'request'));
-  const [resetToken, setResetToken] = useState(() => urlToken);
+  const urlToken = searchParams.get('token') ?? '';
+  const [mode, setMode] = useState<'request' | 'reset'>(() => (location.pathname.includes('reset-password') || urlToken ? 'reset' : 'request'));
   const [email, setEmail] = useState('');
-  const [isSent, setIsSent] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [capsLockActive, setCapsLockActive] = useState(false);
-  const [message, setMessage] = useState('');
+  const [token, setToken] = useState(urlToken);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [done, setDone] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setMessage('');
-
     if (mode === 'reset') {
-      if (!resetToken.trim()) {
-        setError(
-          isVi
-            ? 'Vui lòng nhập mã token đặt lại mật khẩu nhận được từ email.'
-            : 'Please enter the reset token received in your email.'
-        );
-        return;
-      }
-      if (newPassword.length < 6) {
-        setError(
-          isVi
-            ? 'Mật khẩu mới phải có độ dài tối thiểu từ 6 ký tự.'
-            : 'New password must be at least 6 characters.'
-        );
-        return;
-      }
-      if (newPassword !== confirmPassword) {
-        setError(
-          isVi
-            ? 'Mật khẩu xác nhận không khớp với mật khẩu mới.'
-            : 'Confirm password does not match new password.'
-        );
-        return;
-      }
+      if (!token.trim()) return setError(t('auth.token_required'));
+      if (password.length < 6) return setError(t('auth.password_too_short'));
+      if (password !== confirm) return setError(t('auth.password_mismatch'));
     }
-
-    setIsSubmitting(true);
+    setSubmitting(true);
     try {
       if (mode === 'reset') {
-        await apiClient.post('/auth/reset-password', {
-          token: resetToken.trim(),
-          new_password: newPassword,
-        });
-        setMessage(
-          isVi
-            ? 'Mật khẩu đã được thiết lập lại thành công. Bạn có thể đăng nhập ngay với mật khẩu mới.'
-            : 'Password reset successfully. You can now sign in with your new password.'
-        );
+        await apiClient.post('/auth/reset-password', { token: token.trim(), new_password: password });
+        setDone(true);
       } else {
         await apiClient.post('/auth/forgot-password', { email: email.trim().toLowerCase() });
-        setIsSent(true);
+        setSent(true);
       }
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(
-        detail ||
-          (isVi
-            ? 'Yêu cầu không thành công. Vui lòng kiểm tra lại thông tin.'
-            : 'Request failed. Please verify your information.')
-      );
+    } catch (err) {
+      setError(apiErrorMessage(err, t) || t('auth.request_failed'));
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
-  const handleInputChange = (setter: React.Dispatch<React.SetStateAction<string>>, val: string) => {
-    setter(val);
-    if (error) setError('');
-  };
+  const backLink = (
+    <p className="auth-links">
+      <Link to="/login">
+        <ArrowLeft size={14} /> {t('auth.back_to_login')}
+      </Link>
+    </p>
+  );
 
-  const handlePasswordKeyEvent = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    setCapsLockActive(e.getModifierState('CapsLock'));
-  };
+  if (done) {
+    return (
+      <AuthShell title={t('auth.reset.success_title')}>
+        <div className="auth-stack">
+          <Alert tone="success">{t('auth.reset.success_body')}</Alert>
+          <Link to="/login" className="ui-btn ui-btn--primary ui-btn--lg ui-btn--full">
+            {t('auth.go_to_login')}
+          </Link>
+        </div>
+      </AuthShell>
+    );
+  }
+
+  if (sent) {
+    return (
+      <AuthShell title={t('auth.forgot.sent_title')}>
+        <div className="auth-stack">
+          <Alert tone="success">{t('auth.forgot.sent_body', { email: email.trim() })}</Alert>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setMode('reset');
+              setSent(false);
+            }}
+          >
+            {t('auth.forgot.have_token')}
+          </Button>
+        </div>
+        {backLink}
+      </AuthShell>
+    );
+  }
 
   return (
-    <AuthBrandShell eyebrow={t('auth.recovery_eyebrow')}>
-      <div className="login-form-header">
-        <h2 className="login-title">
-          {mode === 'reset' ? t('auth.reset_title') : t('auth.forgot_title')}
-        </h2>
-        <p className="login-subtitle">
-          {mode === 'reset' ? t('auth.reset_subtitle') : t('auth.forgot_subtitle')}
-        </p>
-      </div>
-
-      {error && (
-        <div className="login-error-card" role="alert">
-          <AlertCircle size={16} className="login-error-icon" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {message ? (
-        <div>
-          <div className="auth-success-card" role="status">
-            <CheckCircle2 size={18} className="auth-success-icon" />
-            <span>{message}</span>
-          </div>
-          <Link to="/login" className="btn-primary login-btn">
-            <span>{t('auth.signin_new_password')}</span>
-            <ArrowRight size={15} className="login-btn-arrow" />
-          </Link>
-        </div>
-      ) : isSent ? (
-        <div>
-          <div className="auth-success-card" role="status">
-            <CheckCircle2 size={18} className="auth-success-icon" />
-            <span>
-              {isVi ? (
-                <>
-                  Hướng dẫn đặt lại mật khẩu đã được gửi đến email <strong>{email}</strong> nếu tài khoản tồn tại. Vui lòng kiểm tra hộp thư của bạn.
-                </>
-              ) : (
-                <>
-                  Password reset instructions have been sent to <strong>{email}</strong> if the account exists. Please check your inbox.
-                </>
-              )}
-            </span>
-          </div>
-          <div className="auth-actions-stack">
-            <button
-              type="button"
-              className="btn-primary login-btn"
-              onClick={() => {
-                setIsSent(false);
-                setMode('reset');
-              }}
-            >
-              <span>{t('auth.have_token_cta')}</span>
-              <ArrowRight size={15} className="login-btn-arrow" />
-            </button>
-            <Link to="/login" className="btn-secondary">
-              <ArrowLeft size={15} />
-              <span>{t('auth.back_to_signin')}</span>
-            </Link>
-          </div>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="login-form">
-          {mode === 'reset' ? (
-            <>
-              {!urlToken ? (
-                <div className="form-group">
-                  <label htmlFor="reset-token" className="form-label">
-                    {t('auth.reset_token_label')}
-                  </label>
-                  <input
-                    id="reset-token"
-                    type="text"
-                    className="form-input mono-token"
-                    value={resetToken}
-                    disabled={isSubmitting}
-                    onChange={(e) => handleInputChange(setResetToken, e.target.value.trim())}
-                    placeholder={t('auth.reset_token_placeholder')}
-                    required
-                  />
-                </div>
-              ) : (
-                <div className="auth-verified-pill">
-                  <CheckCircle2 size={15} className="auth-verified-icon" />
-                  <span>{t('auth.reset_token_verified')}</span>
-                </div>
-              )}
-
-              <div className="form-group">
-                <div className="form-label-row">
-                  <div className="form-label-inline">
-                    <label htmlFor="reset-new-password" className="form-label" style={{ marginBottom: 0 }}>
-                      {t('auth.new_password_label')}
-                    </label>
-                    {capsLockActive && (
-                      <span className="caps-lock-badge">{t('auth.caps_lock')}</span>
-                    )}
-                  </div>
-                  <span className="form-label-hint">{t('auth.min_password_hint')}</span>
-                </div>
-                <div className="password-input-wrapper">
-                  <input
-                    id="reset-new-password"
-                    type={showNewPassword ? 'text' : 'password'}
-                    autoComplete="new-password"
-                    className="form-input password-input"
-                    value={newPassword}
-                    disabled={isSubmitting}
-                    onChange={(e) => handleInputChange(setNewPassword, e.target.value)}
-                    onKeyDown={handlePasswordKeyEvent}
-                    onKeyUp={handlePasswordKeyEvent}
-                    placeholder="••••••••••••"
-                    minLength={6}
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="password-toggle"
-                    onClick={() => setShowNewPassword(!showNewPassword)}
-                    aria-label={showNewPassword ? t('auth.hide_password') : t('auth.show_password')}
-                    tabIndex={-1}
-                  >
-                    {showNewPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <div className="form-label-row">
-                  <label htmlFor="reset-confirm-password" className="form-label" style={{ marginBottom: 0 }}>
-                    {t('auth.confirm_new_password_label')}
-                  </label>
-                  {confirmPassword && newPassword !== confirmPassword && (
-                    <span className="auth-match-badge mismatch">{t('auth.mismatch')}</span>
-                  )}
-                  {confirmPassword && newPassword === confirmPassword && (
-                    <span className="auth-match-badge matched">{t('auth.matched')}</span>
-                  )}
-                </div>
-                <div className="password-input-wrapper">
-                  <input
-                    id="reset-confirm-password"
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    autoComplete="new-password"
-                    className="form-input password-input"
-                    value={confirmPassword}
-                    disabled={isSubmitting}
-                    onChange={(e) => handleInputChange(setConfirmPassword, e.target.value)}
-                    onKeyDown={handlePasswordKeyEvent}
-                    onKeyUp={handlePasswordKeyEvent}
-                    placeholder="••••••••••••"
-                    minLength={6}
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="password-toggle"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    aria-label={showConfirmPassword ? t('auth.hide_password') : t('auth.show_password')}
-                    tabIndex={-1}
-                  >
-                    {showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="form-group">
-              <label htmlFor="recovery-email" className="form-label">
-                {t('auth.corporate_email_label')}
-              </label>
-              <input
-                id="recovery-email"
-                type="email"
-                autoComplete="email"
-                className="form-input"
-                value={email}
-                disabled={isSubmitting}
-                onChange={(e) => handleInputChange(setEmail, e.target.value)}
-                placeholder="manager@dfios.com"
-                required
-              />
-            </div>
-          )}
-
-          <button type="submit" className="btn-primary login-btn" disabled={isSubmitting}>
-            {isSubmitting ? (
-              <span className="login-btn-inner">
-                <Loader2 size={16} className="login-spinner" />
-                <span>{t('auth.processing')}</span>
-              </span>
-            ) : (
-              <span className="login-btn-inner">
-                <span>
-                  {mode === 'reset' ? t('auth.confirm_reset_btn') : t('auth.send_recovery_btn')}
-                </span>
-                <ArrowRight size={15} className="login-btn-arrow" />
-              </span>
-            )}
-          </button>
-        </form>
-      )}
-
-      {!message && !isSent && (
-        <div className="auth-footer-nav">
-          {mode === 'reset' ? (
-            <button
-              type="button"
-              className="auth-mode-switch-btn"
-              onClick={() => {
-                setMode('request');
-                setError('');
-                setMessage('');
-              }}
-            >
-              {t('auth.switch_to_email_mode')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="auth-mode-switch-btn"
-              onClick={() => {
-                setMode('reset');
-                setError('');
-                setMessage('');
-              }}
-            >
-              {t('auth.switch_to_token_mode')}
-            </button>
-          )}
-
-          <Link to="/login" className="auth-back-link">
-            <ArrowLeft size={14} className="auth-back-arrow" />
-            <span>{t('auth.back_to_signin')}</span>
-          </Link>
-        </div>
-      )}
-    </AuthBrandShell>
+    <AuthShell title={t(mode === 'reset' ? 'auth.reset.title' : 'auth.forgot.title')} subtitle={t(mode === 'reset' ? 'auth.reset.subtitle' : 'auth.forgot.subtitle')}>
+      <form className="auth-form" onSubmit={onSubmit} noValidate>
+        {error && <Alert tone="danger">{error}</Alert>}
+        {mode === 'request' ? (
+          <Input
+            label={t('auth.email_label')}
+            type="email"
+            autoComplete="email"
+            inputMode="email"
+            placeholder={t('auth.email_placeholder')}
+            value={email}
+            required
+            autoFocus
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        ) : (
+          <>
+            <Input
+              label={t('auth.token_label')}
+              placeholder={t('auth.token_placeholder')}
+              value={token}
+              hint={urlToken ? t('auth.token_from_link') : undefined}
+              autoComplete="off"
+              onChange={(e) => setToken(e.target.value)}
+            />
+            <PasswordField label={t('auth.new_password_label')} autoComplete="new-password" hint={t('auth.password_hint')} value={password} onChange={(e) => setPassword(e.target.value)} />
+            <PasswordField label={t('auth.confirm_password_label')} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </>
+        )}
+        <Button type="submit" variant="primary" size="lg" fullWidth loading={submitting} disabled={mode === 'request' && !email.trim()}>
+          {submitting ? t(mode === 'reset' ? 'auth.reset.submitting' : 'auth.forgot.submitting') : t(mode === 'reset' ? 'auth.reset.submit' : 'auth.forgot.submit')}
+        </Button>
+        {mode === 'reset' && !urlToken && (
+          <Button variant="ghost" size="sm" onClick={() => setMode('request')}>
+            {t('auth.reset.need_token')}
+          </Button>
+        )}
+      </form>
+      {backLink}
+    </AuthShell>
   );
 };

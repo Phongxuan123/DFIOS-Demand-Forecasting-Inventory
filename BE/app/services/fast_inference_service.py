@@ -2,7 +2,7 @@ import math
 import numpy as np
 import pandas as pd
 from datetime import timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, Tuple
 
 
 class FastInferenceService:

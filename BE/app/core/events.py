@@ -76,10 +76,10 @@ class InMemoryEventBus(BaseEventBus):
                     if oldest_queue.full():
                         try:
                             oldest_queue.get_nowait()
-                        except (asyncio.QueueEmpty, Exception):
+                        except asyncio.QueueEmpty:
                             pass
                     oldest_queue.put_nowait(None)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - best-effort close signal, logged
                     logger.warning(f"Failed to signal close to oldest SSE connection: {e}")
 
             new_queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_maxsize)
@@ -118,7 +118,7 @@ class InMemoryEventBus(BaseEventBus):
             # Discard oldest event from queue to avoid blocking publisher
             try:
                 queue.get_nowait()
-            except (asyncio.QueueEmpty, Exception):
+            except asyncio.QueueEmpty:
                 pass
             try:
                 queue.put_nowait(event)

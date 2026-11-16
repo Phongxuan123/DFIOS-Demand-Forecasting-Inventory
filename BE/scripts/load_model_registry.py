@@ -26,9 +26,10 @@ models = [
         },
         "metrics": {
             "wrmsse": 0.4935,
-            "mase": 0.975,
-            "mae": 0.885,
-            "rmse": 1.42
+            "mase": 0.9753,
+            "mae": 0.9467,
+            "rmse": 1.8509,
+            "metrics_source": {k: "artifact:MODEL/best_params.json test_metrics h=7d" for k in ("wrmsse", "mase", "mae", "rmse")},
         },
         "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
@@ -49,10 +50,11 @@ models = [
             "learning_rate": 0.001
         },
         "metrics": {
-            "mae": 0.948,
+            "mae": None,
             "wrmsse": 0.5004,
-            "mase": 0.982,
-            "rmse": 1.51
+            "mase": None,
+            "rmse": None,
+            "metrics_source": {"wrmsse": "artifact:c3ok Result OK (h=7)", "mae": "unsourced", "mase": "unsourced", "rmse": "unsourced"},
         },
         "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
@@ -74,9 +76,10 @@ models = [
         },
         "metrics": {
             "wrmsse": 0.5083,
-            "mae": 0.962,
-            "mase": 0.991,
-            "rmse": 1.54
+            "mae": None,
+            "mase": None,
+            "rmse": None,
+            "metrics_source": {"wrmsse": "artifact:c3ok Result OK (h=7)", "mae": "unsourced", "mase": "unsourced", "rmse": "unsourced"},
         },
         "trained_by": "DFIOS ML Pipeline",
         "job_id": None,
@@ -95,10 +98,11 @@ models = [
             "seasonal_order": [1, 1, 1, 7]
         },
         "metrics": {
-            "mase": 1.12,
-            "wrmsse": 1.05,
-            "mae": 1.34,
-            "rmse": 2.15
+            "mase": None,
+            "wrmsse": None,
+            "mae": None,
+            "rmse": None,
+            "metrics_source": {k: "unsourced - no SARIMA run exists in the artifacts" for k in ("wrmsse", "mase", "mae", "rmse")},
         },
         "trained_by": "DFIOS ML Pipeline",
         "job_id": None,

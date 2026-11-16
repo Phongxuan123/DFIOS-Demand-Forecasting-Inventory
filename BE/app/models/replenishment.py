@@ -23,6 +23,10 @@ class ReplenishmentRecommendation(Base):
     order_up_to_S = Column("order_up_to_S", Float, nullable=True)
     reorder_point_s = Column(Float, nullable=True)
     inventory_position = Column(Float, nullable=True)
+    # Snapshot of the stock the proposal was computed from (IP = on_hand_at_review + on_order_at_review at
+    # review_date). The live inventory row moves on afterwards, so the current on_hand/on_order never explain IP.
+    on_hand_at_review = Column(Float, nullable=True)
+    on_order_at_review = Column(Float, nullable=True)
     eoq_quantity = Column(Float, nullable=True)
     policy_applied = Column(String(50), nullable=True, default="REFIT-RSS-EOQ-G")
     review_date = Column(Date, nullable=True)

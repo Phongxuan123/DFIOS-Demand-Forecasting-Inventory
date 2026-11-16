@@ -47,6 +47,9 @@ class ClassificationMatrixResponse(BaseModel):
     matrix: Dict[str, SegmentSummary]
     thresholds: ClassificationThresholds
     last_updated: Optional[datetime] = None
+    # P-10: kho của ma trận và số SKU theo nguồn lớp ("ground_truth" = C3-OUT A5, "thresholds" = ngưỡng UC25)
+    store_id: Optional[str] = None
+    class_sources: Dict[str, int] = Field(default_factory=dict)
 
 
 # --- UC27: Filter SKUs ---
@@ -56,6 +59,9 @@ class SKUClassificationItem(BaseModel):
 
     id: str
     item_id: str
+    store_id: Optional[str] = None
+    class_source: Optional[str] = None
+    threshold_segment: Optional[str] = None
     product_name: Optional[str] = None
     category: Optional[str] = None
     abc: str
@@ -87,6 +93,13 @@ class RecommendationResponse(BaseModel):
     replenishment_policy: str
     safety_stock_level: str
     priority: str
+    # round 5: stable codes of the Vietnamese texts above (client-side i18n)
+    description_code: Optional[str] = None
+    strategy_code: Optional[str] = None
+    replenishment_policy_code: Optional[str] = None
+    review_frequency_code: Optional[str] = None  # daily | weekly | weekly_or_event | biweekly | monthly | quarterly_or_on_demand
+    safety_stock_level_code: Optional[str] = None  # low | medium | high | standard | cautious | moderate | none_or_minimal
+    priority_code: Optional[str] = None  # critical | high | medium | medium_low | low | very_low
 
 
 class ClassificationRecomputeResponse(BaseModel):
@@ -95,3 +108,6 @@ class ClassificationRecomputeResponse(BaseModel):
     total_skus_classified: int
     thresholds: ClassificationThresholds
     recomputed_at: datetime
+    store_id: Optional[str] = None
+    source: str = "auto"
+    class_sources: Dict[str, int] = Field(default_factory=dict)

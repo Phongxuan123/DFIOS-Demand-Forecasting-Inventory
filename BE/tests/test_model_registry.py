@@ -1,3 +1,4 @@
+import os
 import unittest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -7,10 +8,13 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.models.base import Base
 from app.models.user import User
-from app.models.model_registry import ModelRegistry
 from app.models.audit_log import AuditLog
 from app.core.security import get_password_hash, create_access_token
 from app.api.deps import get_db
+
+_TFT_ARTIFACT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "MODEL", "tft_model.pth"
+)
 
 
 class TestModelRegistryEndpoints(unittest.TestCase):
@@ -262,6 +266,10 @@ class TestModelRegistryEndpoints(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 404)
 
+    @unittest.skipUnless(
+        os.path.exists(_TFT_ARTIFACT),
+        "P-37: artifact MODEL/tft_model.pth không có trên máy này (artifact được phân phối thủ công)",
+    )
     def test_validate_model_with_real_artifact_and_no_fake_constants(self):
         # 1. Đăng ký model TFT v1
         res_reg = self.client.post(
@@ -419,7 +427,27 @@ class TestModelRegistryEndpoints(unittest.TestCase):
         self.assertEqual(data_tft["metrics"]["mae"], 0.948)
         self.assertNotEqual(data_tft["metrics"]["mae"], 3.92)
 
+    def test_validate_rejects_path_traversal(self):
+        """P-25: artifact_file không được thoát khỏi thư mục MODEL/."""
+        for bad in ["../.env", "../../.env", r"..\..\.env", "/etc/passwd", "sub/../../x.json"]:
+            res_reg = self.client.post(
+                "/api/v1/ml/models",
+                json={
+                    "name": "Traversal",
+                    "version": f"v-{abs(hash(bad))}",
+                    "algorithm": "xgboost",
+                    "scope": "global",
+                    "parameters": {"artifact_file": bad},
+                },
+                headers={"Authorization": f"Bearer {self.admin_token}"},
+            )
+            self.assertEqual(res_reg.status_code, 201, res_reg.text)
+            res_val = self.client.post(
+                f"/api/v1/ml/models/{res_reg.json()['id']}/validate",
+                headers={"Authorization": f"Bearer {self.admin_token}"},
+            )
+            self.assertEqual(res_val.status_code, 400, bad)
+
 
 if __name__ == "__main__":
     unittest.main()
-

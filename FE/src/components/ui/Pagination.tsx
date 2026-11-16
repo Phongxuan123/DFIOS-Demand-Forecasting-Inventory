@@ -1,160 +1,69 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
-import { useLanguage } from '../../context/LanguageContext.tsx';
-import './Pagination.css';
+import { useFormat, useT } from '../../i18n/index.tsx';
+import { IconButton } from './primitives.tsx';
+import { Select } from './forms.tsx';
+import './ui.css';
 
 export interface PaginationProps {
-  currentPage: number;
-  totalItems: number;
+  /** 1-based. */
+  page: number;
   pageSize: number;
+  total: number;
   onPageChange: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
-  pageSizeOptions?: number[];
+  pageSizeOptions?: readonly number[];
   className?: string;
 }
 
+/**
+ * Footer pagination, i18n aware. If `page` is out of range (data shrank, filter changed)
+ * it reports the clamped page back through onPageChange (F-24).
+ */
 export const Pagination: React.FC<PaginationProps> = ({
-  currentPage,
-  totalItems,
+  page,
   pageSize,
+  total,
   onPageChange,
   onPageSizeChange,
-  pageSizeOptions = [10, 20, 50],
-  className = '',
+  pageSizeOptions = [10, 25, 50, 100],
+  className,
 }) => {
-  const { language } = useLanguage();
-  const isVi = language === 'vi';
+  const t = useT();
+  const fmt = useFormat();
+  const pages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
+  const current = Math.min(Math.max(1, page), pages);
 
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+  useEffect(() => {
+    if (current !== page) onPageChange(current);
+  }, [current, page, onPageChange]);
 
-  const startItem = totalItems === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1;
-  const endItem = Math.min(safeCurrentPage * pageSize, totalItems);
-
-  const getPageNumbers = () => {
-    const pages: (number | string)[] = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      if (safeCurrentPage <= 4) {
-        for (let i = 1; i <= 5; i++) pages.push(i);
-        pages.push('...');
-        pages.push(totalPages);
-      } else if (safeCurrentPage >= totalPages - 3) {
-        pages.push(1);
-        pages.push('...');
-        for (let i = totalPages - 4; i <= totalPages; i++) pages.push(i);
-      } else {
-        pages.push(1);
-        pages.push('...');
-        pages.push(safeCurrentPage - 1);
-        pages.push(safeCurrentPage);
-        pages.push(safeCurrentPage + 1);
-        pages.push('...');
-        pages.push(totalPages);
-      }
-    }
-    return pages;
-  };
+  const from = total === 0 ? 0 : (current - 1) * pageSize + 1;
+  const to = Math.min(total, current * pageSize);
 
   return (
-    <div className={`dfios-pagination ${className}`}>
-      <div className="dfios-pagination-info">
-        <span>
-          {isVi ? (
-            <>
-              Hiển thị <strong>{startItem.toLocaleString()}</strong> đến <strong>{endItem.toLocaleString()}</strong> trong{' '}
-              <strong>{totalItems.toLocaleString()}</strong> mục
-            </>
-          ) : (
-            <>
-              Showing <strong>{startItem.toLocaleString()}</strong> to <strong>{endItem.toLocaleString()}</strong> of{' '}
-              <strong>{totalItems.toLocaleString()}</strong> items
-            </>
-          )}
-        </span>
-
+    <nav className={`ui-pagination ${className ?? ''}`} aria-label={t('common.pagination.label')}>
+      <span className="ui-pagination__range">
+        {t('common.pagination.range', { from: fmt.integer(from), to: fmt.integer(to), total: fmt.integer(total) })}
+      </span>
+      <div className="ui-pagination__controls">
         {onPageSizeChange && (
-          <div className="dfios-page-size-selector">
-            <span className="page-size-label">{isVi ? 'Số hàng mỗi trang:' : 'Rows per page:'}</span>
-            <select
+          <div className="ui-pagination__size">
+            <Select
+              size="sm"
+              aria-label={t('common.pagination.rows_per_page')}
               value={pageSize}
-              onChange={(e) => {
-                onPageSizeChange(Number(e.target.value));
-                onPageChange(1);
-              }}
-              className="page-size-select"
-            >
-              {pageSizeOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => onPageSizeChange(Number(v))}
+              options={pageSizeOptions.map((n) => ({ value: n, label: String(n) }))}
+            />
           </div>
         )}
+        <span className="ui-tabular">{t('common.pagination.page_of', { page: fmt.integer(current), pages: fmt.integer(pages) })}</span>
+        <IconButton size="sm" label={t('common.pagination.first')} icon={<ChevronsLeft size={15} />} disabled={current <= 1} onClick={() => onPageChange(1)} />
+        <IconButton size="sm" label={t('common.pagination.previous')} icon={<ChevronLeft size={15} />} disabled={current <= 1} onClick={() => onPageChange(current - 1)} />
+        <IconButton size="sm" label={t('common.pagination.next')} icon={<ChevronRight size={15} />} disabled={current >= pages} onClick={() => onPageChange(current + 1)} />
+        <IconButton size="sm" label={t('common.pagination.last')} icon={<ChevronsRight size={15} />} disabled={current >= pages} onClick={() => onPageChange(pages)} />
       </div>
-
-      <div className="dfios-pagination-controls">
-        <button
-          type="button"
-          className="dfios-page-btn nav-btn"
-          onClick={() => onPageChange(1)}
-          disabled={safeCurrentPage === 1}
-          title={isVi ? 'Trang đầu' : 'First page'}
-        >
-          <ChevronsLeft size={15} />
-        </button>
-
-        <button
-          type="button"
-          className="dfios-page-btn nav-btn"
-          onClick={() => onPageChange(safeCurrentPage - 1)}
-          disabled={safeCurrentPage === 1}
-          title={isVi ? 'Trang trước' : 'Previous page'}
-        >
-          <ChevronLeft size={15} />
-        </button>
-
-        <div className="dfios-page-numbers">
-          {getPageNumbers().map((page, index) =>
-            typeof page === 'number' ? (
-              <button
-                key={index}
-                type="button"
-                className={`dfios-page-btn num-btn ${safeCurrentPage === page ? 'active' : ''}`}
-                onClick={() => onPageChange(page)}
-              >
-                {page}
-              </button>
-            ) : (
-              <span key={index} className="dfios-page-ellipsis">
-                ...
-              </span>
-            )
-          )}
-        </div>
-
-        <button
-          type="button"
-          className="dfios-page-btn nav-btn"
-          onClick={() => onPageChange(safeCurrentPage + 1)}
-          disabled={safeCurrentPage === totalPages}
-          title={isVi ? 'Trang sau' : 'Next page'}
-        >
-          <ChevronRight size={15} />
-        </button>
-
-        <button
-          type="button"
-          className="dfios-page-btn nav-btn"
-          onClick={() => onPageChange(totalPages)}
-          disabled={safeCurrentPage === totalPages}
-          title={isVi ? 'Trang cuối' : 'Last page'}
-        >
-          <ChevronsRight size={15} />
-        </button>
-      </div>
-    </div>
+    </nav>
   );
 };

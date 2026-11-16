@@ -199,7 +199,10 @@ class TestSalesEndpoints(unittest.TestCase):
         with self.TestingSessionLocal() as session:
             clock = session.query(SimClock).filter(SimClock.store_id == "STORE_VN_01").first()
             self.assertIsNotNone(clock)
-            self.assertEqual(clock.current_date, date(2016, 3, 2))
+            # Q-11 (round 5, same rule as POST /imports): the new clock stands at its START (first CSV day), so the
+            # imported days can still be simulated; it used to start already "advanced" to the last day (03-02).
+            self.assertEqual(clock.current_date, date(2016, 3, 1))
+            self.assertEqual(clock.start_date, date(2016, 3, 1))
 
             inv = session.query(Inventory).filter(
                 Inventory.store_id == "STORE_VN_01",

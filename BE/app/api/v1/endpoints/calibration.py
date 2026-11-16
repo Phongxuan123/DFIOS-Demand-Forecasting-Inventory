@@ -1,12 +1,12 @@
+import math
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_admin, require_manager_or_admin
+from app.api.deps import get_current_user, get_db, require_admin, require_manager_or_admin
 from app.models.user import User
 from app.schemas.calibration import (
     CalibrationStateItem,
-    ServiceOutcomeItem,
     CalibrationStepRequest,
     CalibrationStepResponse,
     CalibrationStatusResponse,
@@ -30,9 +30,19 @@ def get_calibration_status(
     **C³-OUT Calibration Status**:
     Xem trạng thái hệ số theta, hệ số nhân exp(theta), và cờ cảnh báo bão hòa biên của 9 nhóm ABC/XYZ.
     """
-    states = calibrator_service.get_latest_calibration_state(db, store_id=store_id)
-    thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
-    multipliers = calibrator_service.get_current_multipliers(db, store_id=store_id)
+    if calibrator_service.is_global(store_id):
+        # GLOBAL: mean over stores of each store's latest state per class (== that store when only one is loaded)
+        states = calibrator_service.global_latest_states(db)
+        thetas = {c: 0.0 for c in calibrator_service.ALL_CLASSES}
+        multipliers = {c: 1.0 for c in calibrator_service.ALL_CLASSES}
+        for s in states:
+            thetas[s.class_id] = float(s.theta)
+            multipliers[s.class_id] = round(math.exp(float(s.theta)), 4)
+        store_id = "GLOBAL"
+    else:
+        states = calibrator_service.get_latest_calibration_state(db, store_id=store_id)
+        thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
+        multipliers = calibrator_service.get_current_multipliers(db, store_id=store_id)
 
     at_boundary_classes = [c for c, th in thetas.items() if th >= calibrator_service.MAX_THETA]
     has_warning = len(at_boundary_classes) > 0
@@ -105,12 +115,15 @@ def get_calibration_history(
     class_id: Optional[str] = Query(None, description="Mã nhóm hàng (AX, AY, ...)"),
     limit: int = Query(100, ge=1, le=500, description="Số bản ghi tối đa"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    **Calibration History**:
+    **Calibration History** (read-only: every authenticated role, incl. Viewer; `store_id=GLOBAL|ALL` = mean over stores).
     Lấy chuỗi thời gian theta_{g, k} phục vụ vẽ biểu đồ giám sát vòng kín trên UI.
     """
+    if calibrator_service.is_global(store_id):
+        return [CalibrationStateItem.model_validate(r) for r in
+                calibrator_service.global_history(db, class_id=class_id, limit=limit)]
     records = calibrator_service.get_calibration_history(
         db=db, store_id=store_id, class_id=class_id, limit=limit
     )

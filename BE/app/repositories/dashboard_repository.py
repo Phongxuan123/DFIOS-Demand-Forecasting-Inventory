@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from sqlalchemy import func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.alert import Alert
@@ -12,6 +12,7 @@ from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
 from app.models.supplier import Supplier
 from app.models.sim_clock import SimClock
+from app.services import policy_config as pc
 
 
 class DashboardRepository:
@@ -67,7 +68,7 @@ class DashboardRepository:
             total_value = 0.0
             stockout_rate = 0.0
             reorder_alerts_count = 0
-            estimated_service_level = 95.0
+            estimated_service_level = None  # no inventory rows -> unavailable (never a made-up 95)
 
         # Đếm số đề xuất đặt hàng đang chờ duyệt (PENDING)
         rep_query = db.query(ReplenishmentRecommendation).filter(
@@ -83,7 +84,7 @@ class DashboardRepository:
         from app.models.model_registry import ModelRegistry
         prod_model = (
             db.query(ModelRegistry)
-            .filter(ModelRegistry.is_production == True)
+            .filter(ModelRegistry.is_production.is_(True))
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
@@ -99,9 +100,32 @@ class DashboardRepository:
         else:
             accuracy_display = "N/A"
 
+        production_wrmsse = None
+        if prod_model and prod_model.metrics and prod_model.metrics.get("wrmsse") is not None:
+            production_wrmsse = round(float(prod_model.metrics["wrmsse"]), 4)
+
+        # Orders placed = APPROVED + COMPLETED recommendations whose review date falls in the simulated-clock window
+        ord_q = db.query(func.count(ReplenishmentRecommendation.id)).filter(
+            ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED"])
+        )
+        clk_q = db.query(func.min(SimClock.start_date), func.max(SimClock.current_date))
+        if not is_global:
+            ord_q = ord_q.filter(ReplenishmentRecommendation.store_id == store_id.strip())
+            clk_q = clk_q.filter(SimClock.store_id == store_id.strip())
+        w_start, w_end = clk_q.one()
+        if w_start is not None and w_end is not None:
+            ord_q = ord_q.filter(
+                ReplenishmentRecommendation.review_date > w_start,
+                ReplenishmentRecommendation.review_date <= w_end,
+            )
+        orders_placed = int(ord_q.scalar() or 0)
+
         return {
             "total_skus": total_skus,
             "total_inventory_value": round(total_value, 2),
+            "production_wrmsse": production_wrmsse,
+            "production_model_id": prod_model.id if prod_model else None,
+            "orders_placed_count": orders_placed,
             "stockout_rate": stockout_rate,
             "estimated_service_level": estimated_service_level,
             "reorder_alerts_count": reorder_alerts_count,
@@ -117,9 +141,13 @@ class DashboardRepository:
         category: Optional[str] = None,
         days: int = 30,
         granularity: str = "daily",
+        meta: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         UC08: Tổng hợp chuỗi xu hướng nhu cầu thực tế và dự báo theo ngày/tuần/tháng.
+        U-04: actuals <= clock date; forecasts only when their ORIGIN (day before the first forecast date)
+        is <= clock date (a forecast run made after the clock is look-ahead and is not shown). ``meta`` (dict)
+        receives ``as_of`` and ``forecast_note``.
         """
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
 
@@ -130,13 +158,13 @@ class DashboardRepository:
             clock_date = clock.current_date if clock and clock.current_date else None
             if not clock_date:
                 max_sale = db.query(func.max(SalesHistory.sale_date)).filter(SalesHistory.store_id == target_store).scalar()
-                clock_date = max_sale if max_sale else date(2016, 5, 23)
+                clock_date = max_sale if max_sale else pc.DEMO_START_DATE  # one demo-date convention (P-35)
         else:
             clock_max = db.query(func.max(SimClock.current_date)).scalar()
             clock_date = clock_max if clock_max else None
             if not clock_date:
                 max_sale = db.query(func.max(SalesHistory.sale_date)).scalar()
-                clock_date = max_sale if max_sale else date(2016, 5, 23)
+                clock_date = max_sale if max_sale else pc.DEMO_START_DATE
 
         # 1. Truy vấn lịch sử bán hàng thực tế gần nhất (đến mốc clock_date)
         sales_q = db.query(
@@ -173,7 +201,7 @@ class DashboardRepository:
         from app.models.model_registry import ModelRegistry
         prod_model = (
             db.query(ModelRegistry)
-            .filter(ModelRegistry.is_production == True)
+            .filter(ModelRegistry.is_production.is_(True))
             .order_by(ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
             .first()
         )
@@ -195,6 +223,24 @@ class DashboardRepository:
             fc_q = fc_q.filter(Forecast.store_id == target_store, Forecast.forecast_date >= clock_date)
         else:
             fc_q = fc_q.filter(Forecast.forecast_date >= clock_date)
+        # U-04: origin of the forecast run = the day before its first forecast date
+        first_fc_date = fc_q.with_entities(func.min(Forecast.forecast_date)).scalar()
+        has_clock = (
+            db.query(SimClock.store_id).filter(SimClock.store_id == target_store).first() is not None
+            if not is_global else db.query(SimClock.store_id).first() is not None
+        )
+        forecast_hidden = bool(
+            has_clock and first_fc_date is not None and (first_fc_date - timedelta(days=1)) > clock_date
+        )
+        if meta is not None:
+            meta["as_of"] = str(clock_date)
+            meta["forecast_note"] = (
+                f"Forecasts start on {first_fc_date} (origin {first_fc_date - timedelta(days=1)}), after the "
+                f"simulated clock ({clock_date}): hidden until the clock reaches the forecast origin."
+                if forecast_hidden else None
+            )
+        if forecast_hidden:
+            fc_q = fc_q.filter(Forecast.forecast_date < date(1900, 1, 1))
 
         if category and category.strip() and category.strip().upper() != "ALL":
             fc_q = fc_q.join(Product, Forecast.item_id == Product.item_id).filter(
@@ -242,101 +288,108 @@ class DashboardRepository:
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
         """
         UC09: Bảng cảnh báo tồn kho traffic-light so sánh với SS và ROP.
+
+        Round 5 (U-01 request 3): the severity is computed IN SQL (CASE on on_hand / IP / SS / ROP), the summary is
+        ONE aggregate query (GROUP BY severity) and only the requested page is fetched (ORDER BY severity rank,
+        store, item + OFFSET/LIMIT). ``limit=5`` no longer materialises every inventory row in Python.
+        Rules (B-08/B-09, unchanged): on_hand <= 0 -> CRITICAL; on_hand <= SS and IP <= ROP -> CRITICAL;
+        IP <= ROP -> WARNING; else HEALTHY (missing SS/ROP count as 0).
         """
-        query = db.query(
-            Inventory.item_id,
-            func.coalesce(Product.name, Inventory.item_id).label("product_name"),
-            Product.cat_id.label("category"),
-            Inventory.store_id,
-            Inventory.on_hand,
-            Inventory.on_order,
-            InventoryParam.safety_stock,
-            InventoryParam.reorder_point,
-            Inventory.updated_at,
-        ).outerjoin(
-            Product, Inventory.item_id == Product.item_id
-        ).outerjoin(
-            InventoryParam,
-            (Inventory.item_id == InventoryParam.item_id)
-            & (Inventory.store_id == InventoryParam.store_id),
-        )
+        oh = func.coalesce(Inventory.on_hand, 0.0)
+        ip = oh + func.coalesce(Inventory.on_order, 0.0)
+        ss = func.coalesce(InventoryParam.safety_stock, 0.0)
+        rop = func.coalesce(InventoryParam.reorder_point, 0.0)
+        sev_rank = case(
+            (oh <= 0.0, 0),
+            (and_(oh <= ss, ip <= rop), 1),
+            (ip <= rop, 2),
+            else_=3,
+        ).label("sev_rank")  # 0/1 = CRITICAL (out of stock / below SS and ROP), 2 = WARNING, 3 = HEALTHY
 
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
-        if not is_global:
-            query = query.filter(Inventory.store_id == store_id.strip())
 
-        all_records = query.all()
+        def _scoped(q):
+            q = q.outerjoin(
+                InventoryParam,
+                (Inventory.item_id == InventoryParam.item_id) & (Inventory.store_id == InventoryParam.store_id),
+            )
+            return q if is_global else q.filter(Inventory.store_id == store_id.strip())
 
-        critical_items: List[Dict[str, Any]] = []
-        warning_items: List[Dict[str, Any]] = []
-        healthy_items: List[Dict[str, Any]] = []
+        counts = {0: 0, 1: 0, 2: 0, 3: 0}
+        for rank, n in _scoped(db.query(sev_rank, func.count()).select_from(Inventory)).group_by(sev_rank).all():
+            counts[int(rank)] = int(n)
+        summary_counts = {
+            "critical_count": counts[0] + counts[1],
+            "warning_count": counts[2],
+            "healthy_count": counts[3],
+            "total_monitored": sum(counts.values()),
+        }
 
-        for r in all_records:
+        target_sev = severity.strip().upper() if severity and severity.strip() else None
+        ranks = {"CRITICAL": (0, 1), "WARNING": (2,), "HEALTHY": (3,)}.get(target_sev or "", (0, 1, 2, 3))
+        total = sum(counts[r] for r in ranks)
+
+        page_q = _scoped(
+            db.query(
+                Inventory.item_id,
+                func.coalesce(Product.name, Inventory.item_id).label("product_name"),
+                Product.cat_id.label("category"),
+                Inventory.store_id,
+                Inventory.on_hand,
+                Inventory.on_order,
+                InventoryParam.safety_stock,
+                InventoryParam.reorder_point,
+                Inventory.updated_at,
+                sev_rank,
+            ).outerjoin(Product, Inventory.item_id == Product.item_id)
+        )
+        if len(ranks) < 4:
+            page_q = page_q.filter(sev_rank.in_(ranks))
+        # CRITICAL first (both CRITICAL ranks together), then WARNING, then HEALTHY; deterministic tiebreak
+        page_q = page_q.order_by(
+            case((sev_rank <= 1, 0), (sev_rank == 2, 1), else_=2), Inventory.store_id, Inventory.item_id
+        ).offset(offset)
+        if limit is not None:
+            page_q = page_q.limit(limit)
+
+        items: List[Dict[str, Any]] = []
+        for r in page_q.all():
             on_hand = float(r.on_hand or 0.0)
             on_order = float(r.on_order or 0.0)
-            ss = float(r.safety_stock) if r.safety_stock is not None else 0.0
-            rop = float(r.reorder_point) if r.reorder_point is not None else 0.0
-            inventory_position = on_hand + on_order
-
-            # Phân loại Traffic-light theo Inventory Position IP = on_hand + on_order (B-08, B-09)
-            if on_hand <= 0.0:
-                sev = "CRITICAL"
+            ss_v = float(r.safety_stock) if r.safety_stock is not None else 0.0
+            rop_v = float(r.reorder_point) if r.reorder_point is not None else 0.0
+            ip_v = on_hand + on_order
+            rank = int(r.sev_rank)
+            if rank == 0:
+                sev, code = "CRITICAL", "out_of_stock"
                 action = f"Rủi ro đứt hàng tức thì trên kệ (On-hand: {int(on_hand)}). Cần xử lý khẩn cấp."
-            elif on_hand <= ss and inventory_position <= rop:
-                sev = "CRITICAL"
-                action = f"Nguy cơ đứt hàng (On-hand <= SS: {int(ss)}, IP <= ROP). Cần tạo PO khẩn."
-            elif inventory_position <= rop:
-                sev = "WARNING"
-                action = f"Vị trí tồn kho IP ({int(inventory_position)}) <= ROP ({int(rop)}). Đề xuất đặt hàng bổ sung."
+            elif rank == 1:
+                sev, code = "CRITICAL", "below_ss_and_rop"
+                action = f"Nguy cơ đứt hàng (On-hand <= SS: {int(ss_v)}, IP <= ROP). Cần tạo PO khẩn."
+            elif rank == 2:
+                sev, code = "WARNING", "ip_below_rop"
+                action = f"Vị trí tồn kho IP ({int(ip_v)}) <= ROP ({int(rop_v)}). Đề xuất đặt hàng bổ sung."
             else:
-                sev = "HEALTHY"
+                sev, code = "HEALTHY", "healthy"
                 action = "Tồn kho trong ngưỡng an toàn."
-
-            item_dict = {
+            items.append({
                 "item_id": r.item_id,
                 "product_name": r.product_name,
                 "category": r.category or "General",
                 "store_id": r.store_id,
                 "on_hand": on_hand,
                 "on_order": on_order,
-                "safety_stock": ss,
-                "reorder_point": rop,
+                "safety_stock": ss_v,
+                "reorder_point": rop_v,
                 "severity": sev,
                 "suggested_action": action,
+                "suggested_action_code": code,
+                "suggested_action_params": {
+                    "on_hand": on_hand, "safety_stock": ss_v, "inventory_position": ip_v, "reorder_point": rop_v,
+                },
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-            }
-
-            if sev == "CRITICAL":
-                critical_items.append(item_dict)
-            elif sev == "WARNING":
-                warning_items.append(item_dict)
-            else:
-                healthy_items.append(item_dict)
-
-        summary_counts = {
-            "critical_count": len(critical_items),
-            "warning_count": len(warning_items),
-            "healthy_count": len(healthy_items),
-            "total_monitored": len(all_records),
-        }
-
-        # Lọc theo severity nếu có
-        if severity and severity.strip():
-            target_sev = severity.strip().upper()
-            if target_sev == "CRITICAL":
-                combined = critical_items
-            elif target_sev == "WARNING":
-                combined = warning_items
-            elif target_sev == "HEALTHY":
-                combined = healthy_items
-            else:
-                combined = critical_items + warning_items + healthy_items
-        else:
-            combined = critical_items + warning_items + healthy_items
-
-        total = len(combined)
-        paginated_items = combined[offset : offset + limit] if limit is not None else combined[offset:]
-        return paginated_items, summary_counts, total
+            })
+        return items, summary_counts, total
 
     def find_or_create_alert(
         self,
@@ -365,7 +418,7 @@ class DashboardRepository:
                 Alert.item_id == item_id,
                 Alert.store_id == store_id,
                 Alert.type.in_(list(alias_types)),
-                Alert.is_read == False,
+                Alert.is_read.is_(False),
             )
             .first()
         )

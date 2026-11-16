@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, List
 from fastapi import HTTPException, status
@@ -12,49 +13,193 @@ class InMemoryRateLimiter:
     """
     Bộ giới hạn tần suất yêu cầu (Rate Limiter) lưu trong bộ nhớ.
     Được thiết kế độc lập để dễ dàng thay thế bằng Redis RateLimiter khi mở rộng.
+
+    P-09 / N-12: key hết hạn được dọn định kỳ (không để dict phình vô hạn), thao tác có khóa
+    để an toàn khi nhiều worker thread cùng gọi.
     """
+
+    SWEEP_INTERVAL_SECONDS = 300
+    MAX_WINDOW_SECONDS = 24 * 3600
+
     def __init__(self):
         self._requests: Dict[str, List[float]] = {}
+        self._windows: Dict[str, int] = {}
+        self._lock = threading.Lock()
+        self._last_sweep = 0.0
+
+    @staticmethod
+    def _now() -> float:
+        return datetime.now(timezone.utc).timestamp()
+
+    def _prune_key(self, key: str, now: float, window_seconds: int) -> List[float]:
+        cutoff = now - window_seconds
+        kept = [t for t in self._requests.get(key, []) if t > cutoff]
+        if kept:
+            self._requests[key] = kept
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+        else:
+            self._requests.pop(key, None)
+            self._windows.pop(key, None)
+        return kept
+
+    def _maybe_sweep(self, now: float) -> None:
+        if now - self._last_sweep < self.SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_sweep = now
+        for key in list(self._requests.keys()):
+            window = self._windows.get(key, self.MAX_WINDOW_SECONDS)
+            self._prune_key(key, now, window)
+
+    def sweep(self) -> None:
+        """Dọn ngay toàn bộ key đã hết hạn (dùng cho test hoặc tác vụ định kỳ)."""
+        with self._lock:
+            self._last_sweep = 0.0
+            self._maybe_sweep(self._now())
+
+    def __len__(self) -> int:
+        return len(self._requests)
 
     def is_rate_limited(self, key: str, max_requests: int = 5, window_seconds: int = 3600) -> bool:
-        now = datetime.now(timezone.utc).timestamp()
-        if key not in self._requests:
-            self._requests[key] = []
-
-        # Lọc bỏ các mốc thời gian đã quá window_seconds
-        cutoff = now - window_seconds
-        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
-
-        if len(self._requests[key]) >= max_requests:
-            return True
-
-        self._requests[key].append(now)
-        return False
+        with self._lock:
+            now = self._now()
+            self._maybe_sweep(now)
+            kept = self._prune_key(key, now, window_seconds)
+            if len(kept) >= max_requests:
+                return True
+            self._requests[key] = kept + [now]
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+            return False
 
     def check_limit(self, key: str, max_requests: int = 5, window_seconds: int = 3600) -> bool:
         """Kiểm tra xem key đã chạm ngưỡng giới hạn hay chưa mà không tự động tăng bộ đếm."""
-        now = datetime.now(timezone.utc).timestamp()
-        if key not in self._requests:
-            return False
-        cutoff = now - window_seconds
-        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
-        return len(self._requests[key]) >= max_requests
+        with self._lock:
+            now = self._now()
+            self._maybe_sweep(now)
+            return len(self._prune_key(key, now, window_seconds)) >= max_requests
 
     def record_attempt(self, key: str, window_seconds: int = 3600) -> None:
         """Ghi nhận một lần thử (ví dụ thất bại xác thực) vào lịch sử."""
-        now = datetime.now(timezone.utc).timestamp()
-        if key not in self._requests:
-            self._requests[key] = []
-        cutoff = now - window_seconds
-        self._requests[key] = [t for t in self._requests[key] if t > cutoff]
-        self._requests[key].append(now)
+        with self._lock:
+            now = self._now()
+            kept = self._prune_key(key, now, window_seconds)
+            self._requests[key] = kept + [now]
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+
+    def reserve(self, key: str, max_requests: int, window_seconds: int) -> Optional[float]:
+        """
+        R5B-01: atomically check AND count one attempt (under the lock). Returns the reserved timestamp, or None
+        when the key already used its budget. A parallel burst therefore cannot pass more than ``max_requests``.
+        """
+        with self._lock:
+            now = self._now()
+            self._maybe_sweep(now)
+            kept = self._prune_key(key, now, window_seconds)
+            if len(kept) >= max_requests:
+                return None
+            self._requests[key] = kept + [now]
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+            return now
+
+    def release(self, key: str, stamp: Optional[float]) -> None:
+        """Gives back one reserved attempt (the attempt turned out not to be a failure)."""
+        if stamp is None:
+            return
+        with self._lock:
+            items = self._requests.get(key)
+            if items and stamp in items:
+                items.remove(stamp)
+                if not items:
+                    self._requests.pop(key, None)
+                    self._windows.pop(key, None)
 
     def clear(self, key: str) -> None:
         """Xóa toàn bộ lịch sử của key (ví dụ khi đăng nhập thành công)."""
-        self._requests.pop(key, None)
+        with self._lock:
+            self._requests.pop(key, None)
+            self._windows.pop(key, None)
 
 
 rate_limiter = InMemoryRateLimiter()
+
+
+class DbLoginFailureCounter:
+    """
+    Q-17: failure counter shared by ALL API processes (table ``login_failures``). The in-memory limiter above is
+    per process, so with N uvicorn workers an attacker would get N x the budget; the per-email login budget is
+    therefore also enforced from the database. Any database error degrades to the in-memory limiter only
+    (returns None / does nothing) - it never blocks a login by itself.
+    """
+
+    @staticmethod
+    def count(db: Session, key: str, window_seconds: int) -> Optional[int]:
+        from sqlalchemy import func
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+        try:
+            return int(db.query(func.count(LoginFailure.id))
+                       .filter(LoginFailure.key == key, LoginFailure.created_at > cutoff).scalar() or 0)
+        except SQLAlchemyError:
+            db.rollback()
+            return None
+
+    @staticmethod
+    def reserve(db: Session, key: str, window_seconds: int, max_failures: int) -> Tuple[Optional[bool], Optional[str]]:
+        """
+        R5B-01: insert-then-count, so the budget holds under a parallel burst. The attempt row is COMMITTED first,
+        then the window is counted: the k-th committed attempt always sees at least k rows, so at most
+        ``max_failures`` attempts are let through. Returns (allowed, row_id):
+        * (True, id)   attempt reserved (kept as the failure record if the login fails, released otherwise);
+        * (False, None) budget used up (the extra row is removed again);
+        * (None, None) database error: the in-memory limiter alone decides (never blocks a login by itself).
+        Expired rows of EVERY key are pruned here (R5B-07: stale typed emails do not stay forever).
+        """
+        from sqlalchemy import func
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=window_seconds)
+        try:
+            db.query(LoginFailure).filter(LoginFailure.created_at <= cutoff).delete(synchronize_session=False)
+            row = LoginFailure(key=key, created_at=now)
+            db.add(row)
+            db.commit()
+            n = int(db.query(func.count(LoginFailure.id))
+                    .filter(LoginFailure.key == key, LoginFailure.created_at > cutoff).scalar() or 0)
+            if n > max_failures:
+                db.query(LoginFailure).filter(LoginFailure.id == row.id).delete(synchronize_session=False)
+                db.commit()
+                return False, None
+            return True, row.id
+        except SQLAlchemyError:
+            db.rollback()
+            return None, None
+
+    @staticmethod
+    def release(db: Session, row_id: Optional[str]) -> None:
+        """Removes one reserved attempt (correct password)."""
+        if not row_id:
+            return
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        try:
+            db.query(LoginFailure).filter(LoginFailure.id == row_id).delete(synchronize_session=False)
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+
+    @staticmethod
+    def clear(db: Session, key: str) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        try:
+            db.query(LoginFailure).filter(LoginFailure.key == key).delete(synchronize_session=False)
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+
+
+db_login_failures = DbLoginFailureCounter()
 
 
 class EmailTokenService:

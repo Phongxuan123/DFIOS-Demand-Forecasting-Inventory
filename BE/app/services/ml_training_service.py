@@ -1,7 +1,7 @@
 import math
 import logging
 import numpy as np
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import BackgroundTasks, HTTPException, status
 from sqlalchemy import func
@@ -19,6 +19,8 @@ from app.schemas.ml_training import (
     ModelBenchmarkMetrics,
     SUPPORTED_MODELS,
     ROADMAP_MODELS,
+    MODEL_ALIASES,
+    MODEL_IMPLEMENTATION,
 )
 from app.repositories.ml_training_repository import ml_training_repository
 from app.services.audit_service import audit_service
@@ -166,7 +168,14 @@ class MLTrainingService:
         job = MLTrainingJob(
             triggered_by=admin_email,
             status="pending",
-            parameters=request.model_dump(mode="json"),
+            parameters={
+                **request.model_dump(mode="json"),
+                # R-03: say what actually runs; "lightgbm"/"xgboost" are legacy aliases of two presets
+                "implementation": {
+                    m.lower().strip(): MODEL_IMPLEMENTATION.get(MODEL_ALIASES.get(m.lower().strip(), m.lower().strip()))
+                    for m in request.models
+                },
+            },
         )
         saved = ml_training_repository.create(db, job)
 
@@ -217,7 +226,7 @@ class MLTrainingService:
             ml_training_repository.update_job_status(db, job_id, status="running")
 
             params = job.parameters or {}
-            models_to_train = [m.lower().strip() for m in params.get("models", SUPPORTED_MODELS)]
+            models_to_train = [m.lower().strip() for m in params.get("models", ["gbdt_lags", "gbdt_trend", "baseline_naive"])]
             horizon = int(params.get("horizon", 28))
             item_ids = params.get("item_ids")
             store_id = params.get("store_id")
@@ -256,13 +265,10 @@ class MLTrainingService:
                 if fc_rows:
                     series = [(row[0], float(row[1])) for row in fc_rows]
                 else:
-                    # Tạo chuỗi tham chiếu chuẩn từ M5 Walmart phân phối
-                    import datetime as dt
-                    base_d = date(2026, 1, 1)
-                    series = [
-                        (base_d + dt.timedelta(days=i), float(15.0 + 5.0 * math.sin(i / 7.0) + (i % 3)))
-                        for i in range(60)
-                    ]
+                    raise ValueError(
+                        "Không đủ dữ liệu để huấn luyện: cần >= 14 ngày trong sales_history hoặc dữ liệu forecast. "
+                        "Hệ thống không tự bịa chuỗi tham chiếu."
+                    )
 
             # 2. Lấy covariate sự kiện từ bảng events (UC16)
             event_dates = {e.event_date for e in db.query(Event.event_date).all()}
@@ -301,13 +307,14 @@ class MLTrainingService:
             # yêu cầu rõ ràng (register_candidate = True), tránh làm ô nhiễm bảng ModelRegistry chính thức
             if params.get("register_candidate", False) and best_model_name:
                 from app.models.model_registry import ModelRegistry
+                canonical = MODEL_ALIASES.get(best_model_name, best_model_name)
                 model_ver_entry = ModelRegistry(
-                    name=f"{best_model_name.upper()}-Candidate",
+                    name=f"{canonical}-Candidate",
                     version=f"v{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
-                    algorithm=best_model_name,
+                    algorithm=canonical,
                     scope=store_id or "global",
                     is_production=False,
-                    parameters=params,
+                    parameters={**params, "implementation": MODEL_IMPLEMENTATION.get(canonical)},
                     metrics=metrics_result.get(best_model_name),
                     trained_by=job.triggered_by,
                     job_id=job.id,
@@ -322,7 +329,7 @@ class MLTrainingService:
             )
             db.commit()
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - background job: any failure marks the job failed
             try:
                 db.rollback()
                 ml_training_repository.update_job_status(
@@ -331,12 +338,12 @@ class MLTrainingService:
                     status="failed",
                     error_message=str(e),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - status update is best-effort
                 pass
         finally:
             try:
                 db.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - close is best-effort
                 pass
             if gen is not None:
                 try:
@@ -354,16 +361,16 @@ class MLTrainingService:
         """
         R-03: Dự báo trên tập test dựa trên mô hình thật:
         - baseline_naive: Seasonal lag 7 naive persistence.
-        - lightgbm: Thuật toán GBDT đa cây quyết định (histogram-style binning, l2 lá 0.5, lr=0.10, depth 4).
-        - xgboost: Thuật toán GBDT đa cây quyết định với phạt l2 1.5, độ sâu 3, lr=0.08, đặc trưng chênh lệch và xu thế.
+        - gbdt_lags (alias cũ: lightgbm): Thuật toán GBDT đa cây quyết định (histogram-style binning, l2 lá 0.5, lr=0.10, depth 4).
+        - gbdt_trend (alias cũ: xgboost): Thuật toán GBDT đa cây quyết định với phạt l2 1.5, độ sâu 3, lr=0.08, đặc trưng chênh lệch và xu thế.
         """
         n_test = len(test_set)
         train_y = [item[1] for item in train_set]
+        preset_a = MODEL_ALIASES.get(model_name, model_name) == "gbdt_lags"
 
         if not train_y:
             return [0.0] * n_test
 
-        last_val = train_y[-1]
         mean_val = sum(train_y) / len(train_y)
 
         if model_name == "baseline_naive":
@@ -386,12 +393,12 @@ class MLTrainingService:
                 trend_val = t / float(len(train_set))
                 mean_7 = sum(train_set[k][1] for k in range(t - 7, t)) / 7.0
 
-                if model_name == "lightgbm":
-                    # LightGBM style: Tree GBDT lag 1, lag 7, lag 14, mean 7, dow, evt
+                if preset_a:
+                    # preset A: Tree GBDT lag 1, lag 7, lag 14, mean 7, dow, evt
                     l14 = train_set[t - 14][1] if t >= 14 else l7
                     X_rows.append([l1, l7, l14, mean_7, dow, evt])
                 else:
-                    # XGBoost style: Tree GBDT lag 1, lag 7, diff 7, mean 7, trend, dow, evt
+                    # preset B: Tree GBDT lag 1, lag 7, diff 7, mean 7, trend, dow, evt
                     diff_7 = l1 - l7
                     X_rows.append([l1, l7, diff_7, mean_7, trend_val, dow, evt])
                 y_vals.append(val)
@@ -400,14 +407,14 @@ class MLTrainingService:
             y = np.array(y_vals, dtype=float)
 
             try:
-                if model_name == "lightgbm":
+                if preset_a:
                     gbdt = TinyGBDTRegressor(
                         n_estimators=25,
                         learning_rate=0.10,
                         max_depth=4,
                         l2_reg=0.5,
                     )
-                else:  # xgboost
+                else:  # preset B
                     gbdt = TinyGBDTRegressor(
                         n_estimators=25,
                         learning_rate=0.08,
@@ -427,7 +434,7 @@ class MLTrainingService:
                     trend_val = (len(train_set) + i) / float(len(train_set) + n_test)
                     mean_7 = sum(current_hist[-7:]) / 7.0
 
-                    if model_name == "lightgbm":
+                    if preset_a:
                         l14 = current_hist[-14] if len(current_hist) >= 14 else l7
                         feat = np.array([[l1, l7, l14, mean_7, dow, evt]])
                     else:
@@ -438,7 +445,7 @@ class MLTrainingService:
                     predictions.append(round(pred_step, 2))
                     current_hist.append(pred_step)
                 return predictions
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001 - model fallback, logged
                 logger.warning(f"MLTraining: GBDT failed for {model_name}: {ex}")
 
         # Mặc định fallback khi mẫu huấn luyện quá ngắn (<8)

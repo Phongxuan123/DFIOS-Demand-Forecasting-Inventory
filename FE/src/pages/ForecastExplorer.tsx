@@ -1,2300 +1,1128 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Card } from '../components/ui/Card.tsx';
+import { Download, Layers, Pencil, Sparkles } from 'lucide-react';
+import { Area, CartesianGrid, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Area,
-  ComposedChart,
-  Line,
-  ReferenceLine,
-} from 'recharts';
-import {
-  X,
-  Download,
-  FileSpreadsheet,
-  CheckCircle2,
-  AlertTriangle,
-  Layers,
-  Calendar,
-  RotateCcw,
-  ShieldCheck,
-  BrainCircuit,
-  ArrowUpRight,
-  ArrowDownRight,
-  Info,
-  Award,
-  Activity,
-  GitCompare,
-} from 'lucide-react';
+  Alert,
+  Badge,
+  Button,
+  Card,
+  ChartFrame,
+  ChartLegend,
+  DataSourceNote,
+  EmptyState,
+  ErrorState,
+  Field,
+  HoldHeight,
+  Input,
+  KpiTile,
+  Modal,
+  PageHeader,
+  SearchInput,
+  Select,
+  Skeleton,
+  Table,
+  Tabs,
+  Unavailable,
+  useChartTheme,
+  useConfirm,
+  usePagination,
+  useToast,
+  type Column,
+} from '../components/ui/index.ts';
+import { NoPermission } from '../auth/RequireRole.tsx';
+import { can } from '../auth/permissions.ts';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useLanguage } from '../context/LanguageContext.tsx';
+import { useClock } from '../context/ClockContext.tsx';
+import { useStore } from '../context/StoreContext.tsx';
+import { useApi } from '../hooks/useApi.ts';
+import { useElapsed } from '../hooks/useElapsed.ts';
+import { downloadCsv } from '../utils/csv.ts';
+import { useFormat, useT, type TKey } from '../i18n/index.tsx';
+import { useBe, useBeCode } from '../i18n/useBe.ts';
+import { prefixCode } from '../i18n/beText.ts';
+import { apiErrorMessage } from '../services/apiClient.ts';
 import {
-  api,
-  type CalibrationStatusResponse,
-  type WindowQuantileResponse,
-} from '../services/api.ts';
-import { computeRouteCSummary, formatTauLabel } from '../utils/dfiosAnalytics.ts';
-import { Pagination } from '../components/ui/Pagination.tsx';
-import './ForecastExplorer.css';
+  bulkOverride,
+  createOverride,
+  getCompare,
+  getExplanation,
+  getForecasts,
+  getHistory,
+  getUncertainty,
+  getWindowQuantiles,
+  listCategories,
+  listOverrides,
+  listProducts,
+  revertOverride,
+  runFastInference,
+  type ForecastRow,
+  type OverrideRow,
+  type ProductRow,
+} from '../services/forecastApi.ts';
 
-const FEATURE_METADATA_EN: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {
-  sell_price: {
-    label: 'Unit Selling Price',
-    desc: 'List price exhibits an inverse elasticity impact on consumer purchasing velocity',
-    defaultDir: 'negative',
-  },
-  event_promotion: {
-    label: 'Promotional Campaign',
-    desc: 'Discount campaigns and promotions stimulate spikes in foot traffic and sales volume',
-    defaultDir: 'positive',
-  },
-  day_of_week: {
-    label: 'Day of Week Cycle',
-    desc: 'Consumer demand patterns surge during weekends compared to mid-week baselines',
-    defaultDir: 'positive',
-  },
-  lag_7: {
-    label: 'Prior Week Sales (Lag 7)',
-    desc: 'Consumption 7 days prior drives strong autoregressive demand inertia',
-    defaultDir: 'positive',
-  },
-  rolling_mean_28: {
-    label: '28-Day Rolling Average',
-    desc: '1-month moving average stabilizes baseline demand trends',
-    defaultDir: 'positive',
-  },
-  event_name_1: {
-    label: 'Special Event / Holiday',
-    desc: 'Impact from national holidays, festivals, or major sporting events',
-    defaultDir: 'positive',
-  },
-  snap_ca: {
-    label: 'SNAP CA Subsidy Calendar',
-    desc: 'Food stamp disbursement days stimulate grocery purchase spikes in California',
-    defaultDir: 'positive',
-  },
+type PageTab = 'forecast' | 'route_c' | 'schedule';
+type ScheduleFilter = 'all' | 'overridden' | 'dq';
+type RowQuality = 'ok' | 'crossing' | 'missing';
+
+const HORIZONS = [7, 14, 28] as const;
+const EPS = 1e-9;
+const DAY_MS = 86_400_000;
+const GLOBAL_STORE = /^(GLOBAL|ALL)$/i;
+const OVERRIDE_REASONS = ['promo', 'season', 'supply', 'other'] as const;
+type OverrideReasonKey = (typeof OVERRIDE_REASONS)[number];
+
+interface ProcessedRow extends ForecastRow {
+  quality: RowQuality;
+  /** Model value before any manual override. */
+  modelValue: number;
+}
+
+interface ChartPoint {
+  date: string;
+  actual: number | null;
+  forecast: number | null;
+  band: [number, number] | null;
+  adjusted: number | null;
+  row: ProcessedRow | null;
+}
+
+function rowQuality(r: ForecastRow): RowQuality {
+  if (r.p10 === null || r.p50 === null || r.p90 === null) return 'missing';
+  return r.p10 <= r.p50 + EPS && r.p50 <= r.p90 + EPS ? 'ok' : 'crossing';
+}
+
+function shiftIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return new Date(d.getTime() + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)' };
+const muted: React.CSSProperties = { color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' };
+
+/** Tooltip for the main chart: shows every quantile and the real step h of the hovered day. */
+const ForecastTooltip: React.FC<{ active?: boolean; payload?: ReadonlyArray<{ payload: ChartPoint }> }> = ({ active, payload }) => {
+  const t = useT();
+  const fmt = useFormat();
+  const p = active ? payload?.[0]?.payload : undefined;
+  if (!p) return null;
+  const r = p.row;
+  const line = (label: string, v: number | null | undefined) => (
+    <div className="ui-chart-tooltip__row" key={label}>
+      <span>{label}</span>
+      <span className="ui-chart-tooltip__value">{fmt.number(v, { digits: 2 })}</span>
+    </div>
+  );
+  return (
+    <div className="ui-chart-tooltip">
+      <div className="ui-chart-tooltip__title">{fmt.date(p.date, 'medium')}</div>
+      {p.actual !== null && line(t('forecast.chart.actual'), p.actual)}
+      {r && (
+        <>
+          {line(t('forecast.chart.tooltip_p10'), r.p10)}
+          {line(t('forecast.chart.tooltip_p50'), r.p50)}
+          {line(t('forecast.chart.tooltip_p90'), r.p90)}
+          {line(t('forecast.chart.tooltip_yhat'), r.y_pred)}
+          {r.is_overridden && line(t('forecast.chart.tooltip_original'), r.original_value)}
+          {line(t('forecast.chart.tooltip_step'), r.h)}
+        </>
+      )}
+    </div>
+  );
 };
 
-const FEATURE_METADATA_VI: Record<string, { label: string; desc: string; defaultDir: 'positive' | 'negative' }> = {
-  sell_price: {
-    label: 'Giá Bán Đơn Vị',
-    desc: 'Giá niêm yết tác động nghịch đảo lên độ nhạy giá và sức mua của khách hàng',
-    defaultDir: 'negative',
-  },
-  event_promotion: {
-    label: 'Chương Trình Khuyến Mãi',
-    desc: 'Chiến dịch giảm giá & xúc tiến kích thích đột biến lưu lượng và sản lượng bán',
-    defaultDir: 'positive',
-  },
-  day_of_week: {
-    label: 'Chu Kỳ Ngày Trong Tuần',
-    desc: 'Hành vi tiêu dùng tăng mạnh vào dịp cuối tuần so với các ngày đầu tuần',
-    defaultDir: 'positive',
-  },
-  lag_7: {
-    label: 'Doanh Số Cùng Kỳ Tuần Trước',
-    desc: 'Sản lượng tiêu thụ chu kỳ 7 ngày trước tạo quán tính nhu cầu tương quan cao',
-    defaultDir: 'positive',
-  },
-  rolling_mean_28: {
-    label: 'Tiêu Thụ Trung Bình 28 Ngày',
-    desc: 'Đường trung bình trượt 1 tháng định hình mức tiêu thụ cơ sở (Baseline Demand)',
-    defaultDir: 'positive',
-  },
-  event_name_1: {
-    label: 'Sự Kiện Đặc Biệt (Lễ Hội)',
-    desc: 'Tác động từ các kỳ nghỉ lễ quốc gia hoặc sự kiện thể thao lớn',
-    defaultDir: 'positive',
-  },
-  snap_ca: {
-    label: 'Chính Sách Trợ Cấp (SNAP CA)',
-    desc: 'Thời điểm giải ngân trợ cấp thực phẩm kích cầu mua sắm tại California',
-    defaultDir: 'positive',
-  },
+/** Q̂(τ) curve + table of the window distribution exactly as the backend returned it. */
+const QuantileChart: React.FC<{ levels: Record<string, number>; title: string; source: string; xLabel: string; yLabel: string }> = ({ levels, title, source, xLabel, yLabel }) => {
+  const c = useChartTheme();
+  const fmt = useFormat();
+  const data = useMemo(
+    () =>
+      Object.entries(levels)
+        .map(([tau, value]) => ({ tau: Number(tau), value }))
+        .filter((d) => Number.isFinite(d.tau) && Number.isFinite(d.value))
+        .sort((a, b) => a.tau - b.tau),
+    [levels],
+  );
+  const columns: Column<{ tau: number; value: number }>[] = [
+    { key: 'tau', header: xLabel, align: 'right', value: (d) => d.tau, cell: (d) => <span className="ui-num">{fmt.number(d.tau, { digits: 2 })}</span> },
+    { key: 'value', header: yLabel, align: 'right', value: (d) => d.value, cell: (d) => <span className="ui-num">{fmt.number(d.value, { digits: 2 })}</span> },
+  ];
+  return (
+    <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
+      <ChartFrame title={title} source={source} height={280} empty={data.length === 0}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 4, left: 0 }}>
+            <CartesianGrid vertical={false} stroke={c.grid} />
+            <XAxis dataKey="tau" type="number" domain={[0, 1]} {...c.axis} tickFormatter={(v: number) => fmt.number(v, { digits: 2 })} />
+            <YAxis {...c.axis} width={44} domain={[0, 'auto']} />
+            <Tooltip cursor={c.cursor} formatter={(v) => (typeof v === 'number' ? fmt.number(v, { digits: 2 }) : '—')} labelFormatter={(l) => `τ = ${fmt.number(Number(l), { digits: 2 })}`} />
+            <Line dataKey="value" name={yLabel} stroke={c.series[0]} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+      <Card flush>
+        <Table columns={columns} rows={data} rowKey={(d) => d.tau} dense maxHeight={320} />
+      </Card>
+    </div>
+  );
 };
-
-type ForecastTab = 'forecast' | 'window_route_c' | 'benchmark' | 'schedule';
 
 export const ForecastExplorer: React.FC = () => {
+  const t = useT();
+  const be = useBe();
+  const beCode = useBeCode();
+  const fmt = useFormat();
+  const toast = useToast();
+  const chart = useChartTheme();
   const { user } = useAuth();
-  const { language } = useLanguage();
-  const isVi = language === 'vi';
-  const canEdit = user?.role?.toUpperCase() !== 'VIEWER';
+  const { storeId } = useStore();
+  const clock = useClock();
+  const { confirm, dialog } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
-  const FEATURE_METADATA = isVi ? FEATURE_METADATA_VI : FEATURE_METADATA_EN;
 
-  const initialTabParam = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<ForecastTab>(
-    initialTabParam === 'window_route_c' ||
-      initialTabParam === 'benchmark' ||
-      initialTabParam === 'schedule'
-      ? initialTabParam
-      : 'forecast'
-  );
-  const [data, setData] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [skuSearch, setSkuSearch] = useState(searchParams.get('sku') || '');
-  const [categories, setCategories] = useState<string[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [selectedStore, setSelectedStore] = useState(searchParams.get('store') || 'CA_1');
+  const canEdit = can(user?.role, 'replenishment:write'); // manager and admin
+  const sku = searchParams.get('sku') ?? '';
+  const isGlobal = !!storeId && GLOBAL_STORE.test(storeId);
+  const store = storeId && !isGlobal ? storeId : null;
+
+  const [tab, setTab] = useState<PageTab>(() => {
+    const p = searchParams.get('tab');
+    return p === 'route_c' || p === 'schedule' ? p : 'forecast';
+  });
+  // U-15: the tab body is wrapped in <HoldHeight>, so swapping tabs never clamps the scroll to the top.
+  const switchTab = (next: PageTab) => setTab(next);
   const [horizon, setHorizon] = useState<number>(28);
-  const [selectedEngine, setSelectedEngine] = useState('LightGBM');
-  const [explanation, setExplanation] = useState<any>(null);
-  const [overrides, setOverrides] = useState<any[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
-  const [uncertaintyRaw, setUncertaintyRaw] = useState<any>(null);
-  const [compareRaw, setCompareRaw] = useState<any>(null);
-  const [registeredModels, setRegisteredModels] = useState<any[]>([]);
-  const [windowQuantileRaw, setWindowQuantileRaw] = useState<WindowQuantileResponse | null>(null);
-  const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatusResponse | null>(null);
-  const [skuSegmentClass, setSkuSegmentClass] = useState<string>('AX');
+  const [modelVersion, setModelVersion] = useState('');
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState('');
+  const skuPage = usePagination(6);
+  const schedulePage = usePagination(14);
+  const [scheduleFilter, setScheduleFilter] = useState<ScheduleFilter>('all');
 
-  // Task FE.4 — Target Service Setpoint tau_g for Route (c) Protection Window H = 10d
-  const [targetTau, setTargetTau] = useState<number>(0.95);
-
-  // Schedule Matrix Pagination (Task FE.6 supports 7, 14, 28 full horizon view)
-  const [matrixPage, setMatrixPage] = useState(1);
-  const [matrixPageSize, setMatrixPageSize] = useState(14);
-
-  // Toast feedback
-  const [toast, setToast] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
-
-  // Override Modal state
-  const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
-  const [overrideDate, setOverrideDate] = useState('');
-  const [overrideValue, setOverrideValue] = useState('');
-  const [overrideReason, setOverrideReason] = useState('Promotional Spike Override');
-  const [overrideNotes, setOverrideNotes] = useState('');
-  const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
-  const [overrideError, setOverrideError] = useState<string>('');
-
-  // Bulk Override Modal state
-  const [isBulkOverrideOpen, setIsBulkOverrideOpen] = useState(false);
-  const [bulkMode, setBulkMode] = useState<'percent' | 'fixed'>('percent');
-  const [bulkPercent, setBulkPercent] = useState('15');
-  const [bulkFixedVal, setBulkFixedVal] = useState('80');
-  const [bulkStartDate, setBulkStartDate] = useState('');
-  const [bulkEndDate, setBulkEndDate] = useState('');
-  const [bulkReason, setBulkReason] = useState('Promotional Spike Override');
-  const [bulkNotes, setBulkNotes] = useState('');
-  const [isSubmittingBulk, setIsSubmittingBulk] = useState(false);
-  const [bulkError, setBulkError] = useState('');
-
-  useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => setToast(null), 3500);
-      return () => clearTimeout(timer);
-    }
-  }, [toast]);
-
-  const filteredProducts = useMemo(() => {
-    if (selectedCategory === 'All') return products;
-    return products.filter((p: any) => p.cat_id === selectedCategory || p.category === selectedCategory);
-  }, [products, selectedCategory]);
-
-  useEffect(() => {
-    setMatrixPage(1);
-  }, [skuSearch, horizon, selectedStore]);
-
-  // Task FE.6 — Ensure full 28-day schedule matrix is built from all forecast points up to `horizon`
-  const fullScheduleMatrix = useMemo(() => {
-    const rawChart = data?.chartData || [];
-    const forecastRows = rawChart.filter((d: any) => d.predicted != null && d.actual == null);
-    if (forecastRows.length > 0) {
-      return forecastRows.slice(0, horizon).map((f: any) => {
-        const p50 = Math.round(Number(f.predicted || 0));
-        const p10 = f.ci_lower != null ? Math.round(Number(f.ci_lower)) : Math.max(0, Math.round(p50 * 0.74));
-        const p90 = f.ci_upper != null ? Math.round(Number(f.ci_upper)) : Math.round(p50 * 1.28);
-        const ciWidth = Math.max(0, p90 - p10);
-        const spike = p50 > 60 || ciWidth > 25 ? (isVi ? 'Cao' : 'High') : p50 > 40 ? (isVi ? 'Trung bình' : 'Med') : (isVi ? 'Thấp' : 'Low');
-        const spikeColor = p50 > 60 || ciWidth > 25 ? 'text-red' : p50 > 40 ? 'text-orange' : 'text-teal';
-        return {
-          date: f.name,
-          demand: p50,
-          lower: p10,
-          upper: p90,
-          ciWidth,
-          spike,
-          spikeColor,
-        };
-      });
-    }
-    return (data?.scheduleMatrix || []).map((r: any) => {
-      const p50 = Number(r.demand || 0);
-      const p10 = r.lower != null ? Number(r.lower) : Math.max(0, Math.round(p50 * 0.74));
-      const p90 = r.upper != null ? Number(r.upper) : Math.round(p50 * 1.28);
-      return {
-        ...r,
-        lower: p10,
-        upper: p90,
-        ciWidth: Math.max(0, p90 - p10),
-      };
-    });
-  }, [data, horizon, isVi]);
-
-  const paginatedScheduleMatrix = useMemo(() => {
-    const start = (matrixPage - 1) * matrixPageSize;
-    return fullScheduleMatrix.slice(start, start + matrixPageSize);
-  }, [fullScheduleMatrix, matrixPage, matrixPageSize]);
-
-  const forecastReqIdRef = useRef(0);
-  const lastFetchedKeyRef = useRef('');
-
-  const fetchForecast = async (sku?: string, h: number = horizon, store?: string, engine: string = selectedEngine, force: boolean = false) => {
-    const targetSku = (sku || skuSearch || 'FOODS_1_001').trim();
-    const targetStore = store !== undefined && store !== '' ? store : selectedStore || 'CA_1';
-    const fetchKey = `${targetSku}_${targetStore}_${h}_${engine}`;
-    if (!force && fetchKey === lastFetchedKeyRef.current) return;
-    lastFetchedKeyRef.current = fetchKey;
-    const reqId = ++forecastReqIdRef.current;
-    setIsLoading(true);
-    try {
-      const [forecast, explRes, overRes, uncRes, cmpRes, modelsRes, wqRes, calRes, clsSkuRes] = await Promise.all([
-        api.forecasting.getExplorerData(targetSku, h, targetStore, engine),
-        api.forecasting.getExplanation(targetSku, { store_id: targetStore, model_name: engine.toLowerCase() }).catch(() => null),
-        api.forecasting.getOverrides(targetSku, { store_id: targetStore }).catch(() => []),
-        api.forecasting.getUncertainty(targetSku, { store_id: targetStore, horizon: h }).catch(() => null),
-        api.forecasting.compare(targetSku, { store_id: targetStore }).catch(() => null),
-        api.ml.getModels().catch(() => ({ list: [] })),
-        api.forecasting.getWindowQuantiles(targetSku, { store_id: targetStore, horizon_days: 10 }).catch(() => null),
-        canEdit ? api.calibration.getStatus(targetStore).catch(() => null) : Promise.resolve(null),
-        api.classification.getSkus({ search: targetSku, limit: 5 }).catch(() => null),
-      ]);
-
-      if (reqId !== forecastReqIdRef.current) return;
-
-      if (modelsRes?.list) {
-        setRegisteredModels(modelsRes.list);
-      }
-
-      if (forecast?.sku && !sku) {
-        setSkuSearch(forecast.sku);
-      }
-
-      const matchedClassRow = (clsSkuRes?.list || []).find(
-        (item: any) => String(item.item_id || '').toUpperCase() === targetSku.toUpperCase()
-      );
-      if (matchedClassRow) {
-        const seg =
-          matchedClassRow.segment ||
-          `${matchedClassRow.abc_class || 'A'}${matchedClassRow.xyz_class || 'X'}`;
-        setSkuSegmentClass(seg);
-      }
-
-      const rawList = forecast?.chartData || [];
-      const lastActualIdx = rawList.reduce((acc: number, cur: any, idx: number) => (cur.actual != null ? idx : acc), -1);
-
-      const transformedChartData = rawList.map((d: any, i: number) => {
-        const actualVal = d.actual != null ? Number(d.actual) : null;
-        const forecastVal =
-          d.forecast != null
-            ? Number(d.forecast)
-            : actualVal != null && i === lastActualIdx
-              ? actualVal
-              : null;
-        const lowerVal =
-          d.lower != null
-            ? Number(d.lower)
-            : forecastVal != null && actualVal == null
-              ? Math.max(0, Math.round(forecastVal * 0.75))
-              : null;
-        const upperVal =
-          d.upper != null
-            ? Number(d.upper)
-            : forecastVal != null && actualVal == null
-              ? Math.round(forecastVal * 1.26)
-              : null;
-
-        return {
-          name: d.date,
-          label: d.date && d.date.length >= 10 ? d.date.slice(5) : d.date,
-          actual: actualVal,
-          predicted: forecastVal,
-          ci_lower: lowerVal,
-          ci_upper: upperVal,
-        };
-      });
-
-      setData({ ...forecast, chartData: transformedChartData });
-      setExplanation(explRes);
-      setOverrides(overRes || []);
-      setUncertaintyRaw(uncRes);
-      setCompareRaw(cmpRes);
-      setWindowQuantileRaw(wqRes);
-      setCalibrationStatus(calRes);
-    } catch (error) {
-      if (reqId === forecastReqIdRef.current) {
-        console.error('Failed to load forecast explorer data', error);
-        setToast({
-          type: 'error',
-          message: isVi
-            ? 'Không thể tải dữ liệu dự báo từ máy chủ. Vui lòng thử lại.'
-            : 'Failed to load forecast data from server. Please retry.',
-        });
-      }
-    } finally {
-      if (reqId === forecastReqIdRef.current) {
-        setIsLoading(false);
-      }
-    }
-  };
-
-  const urlSkuParam = searchParams.get('sku');
-  const urlStoreParam = searchParams.get('store');
-  const urlTabParam = searchParams.get('tab');
-
-  useEffect(() => {
-    const targetSku = urlSkuParam || 'FOODS_1_001';
-    const targetStore = urlStoreParam || 'CA_1';
-    setSkuSearch(targetSku);
-    setSelectedStore(targetStore);
-    if (
-      urlTabParam === 'forecast' ||
-      urlTabParam === 'window_route_c' ||
-      urlTabParam === 'benchmark' ||
-      urlTabParam === 'schedule'
-    ) {
-      setActiveTab(urlTabParam);
-    }
-    fetchForecast(targetSku, horizon, targetStore);
-  }, [urlSkuParam, urlStoreParam, urlTabParam]);
-
-  useEffect(() => {
-    const initFilters = async () => {
-      try {
-        const [catList, prodRes] = await Promise.all([
-          api.products.getCategories().catch(() => []),
-          api.products.getProducts({ limit: 100 }).catch(() => ({ list: [] })),
-        ]);
-        if (catList && catList.length) setCategories(catList);
-        const pList = prodRes?.list || [];
-        if (pList.length) setProducts(pList);
-      } catch (e) {
-        console.error(e);
-      }
-    };
-    initFilters();
-  }, []);
-
-  const syncUrlParams = (sku: string, store: string) => {
+  const setSku = (id: string) => {
     const next = new URLSearchParams(searchParams);
-    if (sku) next.set('sku', sku);
-    if (store) next.set('store', store);
+    next.set('sku', id);
     setSearchParams(next, { replace: true });
   };
 
-  const handleHorizonChange = (newH: number) => {
-    setHorizon(newH);
-    setMatrixPageSize(newH);
-    fetchForecast(skuSearch, newH, selectedStore, selectedEngine, true);
+  /* ------------------------------- SKU picker ------------------------------ */
+  const products = useApi(
+    (signal) => listProducts({ page: skuPage.page, page_size: skuPage.pageSize, q: query, cat_id: category }, signal),
+    [skuPage.page, skuPage.pageSize, query, category],
+  );
+  const categories = useApi((signal) => listCategories(signal), []);
+
+  // Pick the first SKU once, when none is chosen (no hard-coded default SKU).
+  const firstSku = products.data?.items[0]?.item_id;
+  useEffect(() => {
+    if (!sku && firstSku && !query && !category) {
+      const next = new URLSearchParams(searchParams);
+      next.set('sku', firstSku);
+      setSearchParams(next, { replace: true });
+    }
+  }, [sku, firstSku, query, category, searchParams, setSearchParams]);
+
+  const selectedProduct: ProductRow | undefined = products.data?.items.find((p) => p.item_id === sku);
+
+  /* -------------------------------- forecasts ------------------------------- */
+  const ready = !!sku && !!store;
+  // No "last fetched key" cache: every dependency change or retry refetches, so a failure never sticks (P-43).
+  const forecasts = useApi((signal) => getForecasts(sku, store as string, horizon, signal, modelVersion), [sku, store, horizon, modelVersion, clock.version], { enabled: ready });
+
+  const processed = useMemo(() => {
+    const raw = forecasts.data?.items ?? [];
+    const versions = forecasts.data?.available_versions?.length ? forecasts.data.available_versions : Array.from(new Set(raw.map((r) => r.model_version)));
+    const chosen = forecasts.data?.model_version ?? versions[0];
+    const byH = new Map<number, ForecastRow>();
+    for (const r of raw) {
+      if (r.model_version !== chosen) continue;
+      const prev = byH.get(r.h);
+      if (!prev || (r.generated_at ?? '') > (prev.generated_at ?? '')) byH.set(r.h, r);
+    }
+    const rows: ProcessedRow[] = Array.from(byH.values())
+      .sort((a, b) => a.h - b.h)
+      .map((r) => ({ ...r, quality: rowQuality(r), modelValue: r.is_overridden && r.original_value !== null ? r.original_value : r.y_pred }));
+    const generatedAt = rows.reduce<string | null>((acc, r) => (r.generated_at && (!acc || r.generated_at > acc) ? r.generated_at : acc), null);
+    return { rows, versions, version: chosen as string | undefined, generatedAt };
+  }, [forecasts.data]);
+
+  const rows = processed.rows;
+  const firstDate = rows.length ? rows.reduce((m, r) => (r.forecast_date < m ? r.forecast_date : m), rows[0].forecast_date) : undefined;
+  const historyStart = firstDate ? shiftIso(firstDate, -56) : undefined;
+  const history = useApi((signal) => getHistory(sku, store as string, historyStart, signal), [sku, store, historyStart, clock.version], {
+    enabled: ready && rows.length > 0,
+  });
+  const compare = useApi((signal) => getCompare(sku, store as string, signal), [sku, store, clock.version], { enabled: ready });
+  const uncertainty = useApi((signal) => getUncertainty(sku, store as string, horizon, signal), [sku, store, horizon, clock.version], { enabled: ready });
+  const explanation = useApi((signal) => getExplanation(sku, store as string, signal), [sku, store, clock.version], { enabled: ready && canEdit && tab === 'forecast' });
+  const windowQ = useApi((signal) => getWindowQuantiles(sku, store as string, signal), [sku, store, clock.version], { enabled: ready && tab === 'route_c' });
+  const overrides = useApi((signal) => listOverrides(sku, store as string, signal), [sku, store, clock.version], { enabled: ready });
+
+  const refreshAll = () => {
+    forecasts.refetch();
+    overrides.refetch();
+    compare.refetch();
   };
 
-  const handleCategoryChange = (newCat: string) => {
-    setSelectedCategory(newCat);
-    if (newCat !== 'All') {
-      const match = products.find((p: any) => p.cat_id === newCat || p.category === newCat);
-      if (match) {
-        setSkuSearch(match.item_id);
-        syncUrlParams(match.item_id, selectedStore || 'CA_1');
-        fetchForecast(match.item_id, horizon, selectedStore, selectedEngine, true);
-        return;
+  /* ------------------------------ derived values ---------------------------- */
+  const historyPoints = useMemo(() => history.data?.history ?? [], [history.data]);
+  const lastActualDate = historyPoints.length ? historyPoints[historyPoints.length - 1].date : null;
+  const actualByDate = useMemo(() => new Map(historyPoints.map((h) => [h.date, h.quantity])), [historyPoints]);
+
+  const chartData = useMemo<ChartPoint[]>(() => {
+    // One map keyed by calendar date: history and forecast share a single sequential axis (P-34).
+    const m = new Map<string, ChartPoint>();
+    const get = (date: string): ChartPoint => {
+      let p = m.get(date);
+      if (!p) {
+        p = { date, actual: null, forecast: null, band: null, adjusted: null, row: null };
+        m.set(date, p);
       }
-    }
-    fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
-  };
-
-  const handleSkuSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleaned = (skuSearch || 'FOODS_1_001').trim();
-    syncUrlParams(cleaned, selectedStore || 'CA_1');
-    fetchForecast(cleaned, horizon, selectedStore, selectedEngine, true);
-  };
-
-  // Compute Route (c) Cumulative Protection Window Quantiles Q_{D_H}(tau) over H = L + R = 10 days
-  const routeCWindowTelemetry = useMemo(() => {
-    const sigmaHFromApi = uncertaintyRaw?.sigma_h != null ? Number(uncertaintyRaw.sigma_h) : null;
-    const dailyDemands = fullScheduleMatrix.map((r: any) => Number(r.demand || 0));
-    return computeRouteCSummary({
-      windowQuantile: windowQuantileRaw,
-      dailyForecastDemands: dailyDemands,
-      sigmaHFromUncertainty: sigmaHFromApi,
-      targetTau,
-      segmentClass: skuSegmentClass,
-      calibrationStatus,
-    });
-  }, [windowQuantileRaw, fullScheduleMatrix, uncertaintyRaw, targetTau, skuSegmentClass, calibrationStatus]);
-
-  // Multi-Model Benchmark Comparison Table bound directly to Backend Model Registry
-  const benchmarkModels = useMemo(() => {
-    const apiMae = compareRaw?.metrics?.mae != null ? Number(compareRaw.metrics.mae) : null;
-    const apiRmse = compareRaw?.metrics?.rmse != null ? Number(compareRaw.metrics.rmse) : null;
-
-    if (registeredModels.length > 0) {
-      return registeredModels.map((m: any) => {
-        const alg = (m.algorithm || '').toLowerCase();
-        const isSelected =
-          (selectedEngine.toLowerCase() === alg) ||
-          (selectedEngine === 'LightGBM' && alg === 'lightgbm') ||
-          (selectedEngine === 'Ensemble' && (alg === 'tft' || m.name?.toLowerCase().includes('ensemble')));
-
-        const mMae = m.metrics?.mae != null ? Number(m.metrics.mae).toFixed(2) : (apiMae ? apiMae.toFixed(2) : '-');
-        const mRmse = m.metrics?.rmse != null ? Number(m.metrics.rmse).toFixed(2) : (apiRmse ? apiRmse.toFixed(2) : '-');
-        const mMase = m.metrics?.mase != null ? Number(m.metrics.mase).toFixed(3) : '-';
-        const mWrmsse = m.metrics?.wrmsse != null ? Number(m.metrics.wrmsse).toFixed(3) : '-';
-        const pinball = m.metrics?.pinball != null ? Number(m.metrics.pinball).toFixed(3) : '-';
-
-        let familyDesc = m.algorithm || 'Machine Learning';
-        if (alg === 'tft') {
-          familyDesc = isVi ? 'Mạng Nơ-ron Chú Ý Thời Gian (Deep Learning)' : 'Temporal Fusion Transformer (Deep Learning)';
-        } else if (alg === 'lightgbm') {
-          familyDesc = isVi ? 'Cây Quyết Định Tăng Cường (GBDT)' : 'Gradient Boosted Decision Trees';
-        } else if (alg === 'sarima') {
-          familyDesc = isVi ? 'Chuỗi Thời Gian Thống Kê (ARIMA)' : 'Seasonal Autoregressive Integrated Moving Average';
-        }
-
-        return {
-          id: m.id || m.name,
-          name: `${m.name || m.algorithm.toUpperCase()} (${m.version || 'v1.0'})`,
-          family: familyDesc,
-          mase: mMase,
-          wrmsse: mWrmsse,
-          rmse: mRmse,
-          mae: mMae,
-          pinball,
-          badge: m.is_production
-            ? (isVi ? 'Đang Vận Hành (Production)' : 'Production Champion')
-            : (isVi ? 'Thách Đấu (Challenger)' : 'Challenger'),
-          badgeClass: m.is_production ? 'bench-badge-prod' : 'bench-badge-challenger',
-          isSelected,
-        };
-      });
-    }
-
-    return [];
-  }, [registeredModels, compareRaw, selectedEngine, isVi]);
-
-  const downloadCsv = (filename: string, headers: string[], rows: (string | number)[][]) => {
-    const csvContent = [
-      headers.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(','),
-      ...rows.map((row) => row.map((val) => `"${String(val ?? '').replace(/"/g, '""')}"`).join(',')),
-    ].join('\r\n');
-
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleExportForecastCsv = () => {
-    if (!data?.chartData || data.chartData.length === 0) {
-      setToast({
-        type: 'warning',
-        message: isVi ? 'Không có dữ liệu dự báo để xuất CSV!' : 'No forecast data available to export!',
-      });
-      return;
-    }
-    const headers = [
-      'SKU',
-      'Store',
-      'Date',
-      'Historical Sales',
-      'Point Forecast (p50)',
-      'CI Lower (p10)',
-      'CI Upper (p90)',
-      'Horizon',
-      'Engine',
-    ];
-    const rows = data.chartData.map((d: any) => [
-      skuSearch || data?.sku || 'FOODS_1_001',
-      selectedStore || 'Global',
-      d.name || d.date || '',
-      d.actual != null ? d.actual : '',
-      d.predicted != null ? d.predicted : d.forecast != null ? d.forecast : '',
-      d.ci_lower != null ? d.ci_lower : d.lower != null ? d.lower : '',
-      d.ci_upper != null ? d.ci_upper : d.upper != null ? d.upper : '',
-      `${horizon}d`,
-      selectedEngine,
-    ]);
-    const filename = `forecast_${skuSearch || 'all'}_${selectedStore || 'global'}_${horizon}d.csv`;
-    downloadCsv(filename, headers, rows);
-    setToast({
-      type: 'success',
-      message: isVi
-        ? `Đã xuất ${rows.length} dòng dự báo ra file ${filename} thành công!`
-        : `Exported ${rows.length} forecast rows to ${filename} successfully!`,
-    });
-  };
-
-  const handleExportMatrixCsv = () => {
-    if (fullScheduleMatrix.length === 0) {
-      setToast({
-        type: 'warning',
-        message: isVi ? 'Không có dữ liệu ma trận lịch trình để xuất CSV!' : 'No schedule matrix data available to export!',
-      });
-      return;
-    }
-    const headers = ['Date', 'SKU', 'Store', 'Point Forecast P50 (Units)', 'Lower P10', 'Upper P90', 'CI Spread', 'Spike Risk'];
-    const rows = fullScheduleMatrix.map((r: any) => [
-      r.date || '',
-      skuSearch || data?.sku || 'FOODS_1_001',
-      selectedStore || 'Global',
-      r.demand ?? '',
-      r.lower ?? '',
-      r.upper ?? '',
-      r.ciWidth ?? '',
-      r.spike ?? 'Low',
-    ]);
-    const filename = `matrix_schedule_${skuSearch || 'sku'}_${horizon}d.csv`;
-    downloadCsv(filename, headers, rows);
-    setToast({
-      type: 'success',
-      message: isVi
-        ? `Đã xuất ma trận dự báo ${rows.length} ngày ra file ${filename} thành công!`
-        : `Exported ${rows.length}-day schedule matrix to ${filename} successfully!`,
-    });
-  };
-
-  const handleOpenOverrideForDate = (targetDate?: string, currentVal?: number) => {
-    const matrixFirstDate = fullScheduleMatrix[0]?.date;
-    let defaultDate = targetDate || '';
-    if (!defaultDate) {
-      if (matrixFirstDate && /^\d{4}-\d{2}-\d{2}$/.test(matrixFirstDate)) {
-        defaultDate = matrixFirstDate;
-      } else {
-        defaultDate = new Date().toISOString().split('T')[0];
-      }
-    }
-    const defaultVal = currentVal != null ? currentVal : fullScheduleMatrix[0]?.demand || 60;
-    setOverrideDate(defaultDate);
-    setOverrideValue(String(defaultVal));
-    setOverrideError('');
-    setIsOverrideModalOpen(true);
-  };
-
-  const handleApplyOverride = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!overrideValue || !skuSearch) return;
-    setIsSubmittingOverride(true);
-    setOverrideError('');
-    try {
-      const fullReason = `${overrideReason}: ${overrideNotes || 'Manual business adjustment'}`;
-      const foundIdx = fullScheduleMatrix.findIndex((r: any) => r.date === overrideDate);
-      const computedH = foundIdx >= 0 ? foundIdx + 1 : undefined;
-      await api.forecasting.createOverride(skuSearch, {
-        forecast_date: overrideDate,
-        override_value: Number(overrideValue),
-        reason: fullReason,
-        store_id: selectedStore || undefined,
-        h: computedH,
-      });
-      setIsOverrideModalOpen(false);
-      setOverrideNotes('');
-      setToast({
-        type: 'success',
-        message: isVi
-          ? `Đã áp dụng điều chỉnh dự báo cho ngày ${overrideDate} thành công!`
-          : `Applied forecast override for ${overrideDate} successfully!`,
-      });
-      await fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
-      let errMsg = isVi ? 'Không thể áp dụng điều chỉnh dự báo' : 'Failed to apply forecast override';
-      if (typeof detail === 'string') {
-        errMsg = detail;
-      } else if (Array.isArray(detail)) {
-        errMsg = detail.map((x: any) => x.msg || JSON.stringify(x)).join(', ');
-      } else if (detail && typeof detail === 'object') {
-        errMsg = JSON.stringify(detail);
-      } else if (err.message) {
-        errMsg = err.message;
-      }
-      setOverrideError(errMsg);
-    } finally {
-      setIsSubmittingOverride(false);
-    }
-  };
-
-  const handleRevertOverride = async (overrideId: string) => {
-    if (
-      !window.confirm(
-        isVi
-          ? 'Bạn có chắc chắn muốn hoàn tác điều chỉnh này và quay về baseline của mô hình ML không?'
-          : 'Are you sure you want to revert this override back to the ML model baseline?'
-      )
-    )
-      return;
-    try {
-      await api.forecasting.revertOverride(skuSearch, overrideId);
-      setToast({
-        type: 'success',
-        message: isVi
-          ? 'Đã hoàn tác điều chỉnh dự báo về ML baseline thành công!'
-          : 'Reverted forecast override back to ML baseline successfully!',
-      });
-      await fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
-      const msg =
-        typeof detail === 'string'
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((x: any) => x.msg).join(', ')
-            : err.message || (isVi ? 'Lỗi hoàn tác điều chỉnh' : 'Failed to revert override');
-      setToast({ type: 'error', message: msg });
-    }
-  };
-
-  const handleOpenBulkOverride = () => {
-    if (fullScheduleMatrix.length > 0) {
-      setBulkStartDate(fullScheduleMatrix[0].date);
-      setBulkEndDate(fullScheduleMatrix[fullScheduleMatrix.length - 1].date);
-    } else {
-      const today = new Date().toISOString().split('T')[0];
-      setBulkStartDate(today);
-      setBulkEndDate(today);
-    }
-    setBulkMode('percent');
-    setBulkPercent('15');
-    setBulkFixedVal('80');
-    setBulkReason('Promotional Spike Override');
-    setBulkNotes('');
-    setBulkError('');
-    setIsBulkOverrideOpen(true);
-  };
-
-  const bulkPreviewRows = useMemo(() => {
-    if (!isBulkOverrideOpen || fullScheduleMatrix.length === 0) return [];
-    return fullScheduleMatrix
-      .filter((r: any) => {
-        if (bulkStartDate && r.date < bulkStartDate) return false;
-        if (bulkEndDate && r.date > bulkEndDate) return false;
-        return true;
-      })
-      .map((r: any) => {
-        let projected: number;
-        if (bulkMode === 'percent') {
-          const p = Number(bulkPercent) || 0;
-          projected = Math.max(0, Math.round(Number(r.demand || 0) * (1 + p / 100)));
-        } else {
-          projected = Math.max(0, Number(bulkFixedVal) || 0);
-        }
-        return {
-          date: r.date,
-          original: r.demand,
-          projected,
-        };
-      });
-  }, [isBulkOverrideOpen, fullScheduleMatrix, bulkStartDate, bulkEndDate, bulkMode, bulkPercent, bulkFixedVal]);
-
-  const handleApplyBulkOverride = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!skuSearch || bulkPreviewRows.length === 0) {
-      setBulkError(
-        isVi
-          ? 'Vui lòng chọn khoảng thời gian hợp lệ có chứa ngày dự báo.'
-          : 'Please select a valid date range containing forecast dates.'
-      );
-      return;
-    }
-    setIsSubmittingBulk(true);
-    setBulkError('');
-    try {
-      const items = bulkPreviewRows.map((row: any) => ({
-        store_id: selectedStore || 'CA_1',
-        item_id: skuSearch,
-        date: row.date,
-        value: row.projected,
-        reason: `${bulkReason}: ${
-          bulkNotes || (bulkMode === 'percent' ? `Bulk adjusted ${bulkPercent}%` : `Bulk fixed ${bulkFixedVal} units`)
-        }`,
-      }));
-
-      const res = await api.forecasting.bulkOverride(items);
-      setIsBulkOverrideOpen(false);
-      setToast({
-        type: 'success',
-        message: isVi
-          ? `Đã áp dụng điều chỉnh hàng loạt thành công cho ${res.created_count ?? items.length} ngày!`
-          : `Applied bulk override successfully for ${res.created_count ?? items.length} days!`,
-      });
-      await fetchForecast(skuSearch, horizon, selectedStore, selectedEngine, true);
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
-      let errMsg = isVi ? 'Không thể áp dụng điều chỉnh hàng loạt' : 'Failed to apply bulk overrides';
-      if (typeof detail === 'string') {
-        errMsg = detail;
-      } else if (Array.isArray(detail)) {
-        errMsg = detail.map((x: any) => x.msg || JSON.stringify(x)).join(', ');
-      } else if (detail && typeof detail === 'object') {
-        errMsg = JSON.stringify(detail);
-      } else if (err.message) {
-        errMsg = err.message;
-      }
-      setBulkError(errMsg);
-    } finally {
-      setIsSubmittingBulk(false);
-    }
-  };
-
-  const formatOverrideDate = (dateStr: string) => {
-    if (!dateStr) return { formatted: 'N/A', dayOfWeek: '' };
-    try {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return { formatted: dateStr, dayOfWeek: '' };
-      const dayNames = isVi
-        ? ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
-        : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const dayOfWeek = dayNames[d.getDay()] || '';
-      return { formatted: dateStr, dayOfWeek };
-    } catch {
-      return { formatted: dateStr, dayOfWeek: '' };
-    }
-  };
-
-  const parseOverrideReason = (reasonStr: string) => {
-    if (!reasonStr)
-      return {
-        category: isVi ? 'Điều chỉnh thủ công' : 'Manual Adjustment',
-        detail: '',
-        catClass: 'override-cat-default',
-        dotColor: '#64748b',
-      };
-    let category = reasonStr.trim();
-    let detail = '';
-    const colonIndex = reasonStr.indexOf(':');
-    if (colonIndex !== -1) {
-      category = reasonStr.slice(0, colonIndex).trim();
-      detail = reasonStr.slice(colonIndex + 1).trim();
-    }
-
-    const lowerCat = category.toLowerCase();
-    let catClass = 'override-cat-default';
-    let dotColor = '#64748b';
-    if (lowerCat.includes('promot') || lowerCat.includes('khuyến mãi')) {
-      catClass = 'override-cat-promo';
-      dotColor = '#4f46e5';
-    } else if (lowerCat.includes('season') || lowerCat.includes('mùa vụ')) {
-      catClass = 'override-cat-season';
-      dotColor = '#0284c7';
-    } else if (lowerCat.includes('supply') || lowerCat.includes('đứt gãy') || lowerCat.includes('disrupt')) {
-      catClass = 'override-cat-supply';
-      dotColor = '#d97706';
-    }
-
-    return { category, detail, catClass, dotColor };
-  };
-
-  const overrideMetrics = useMemo(() => {
-    const count = overrides.length;
-    let totalDelta = 0;
-    let totalOriginal = 0;
-    let totalOverride = 0;
-    overrides.forEach((ov: any) => {
-      const orig = typeof ov.original_value === 'number' ? Math.round(ov.original_value) : Number(ov.original_value) || 0;
-      const over = typeof ov.override_value === 'number' ? Math.round(ov.override_value) : Number(ov.override_value) || 0;
-      totalDelta += over - orig;
-      totalOriginal += orig;
-      totalOverride += over;
-    });
-    return {
-      count,
-      totalDelta,
-      totalOriginal,
-      totalOverride,
+      return p;
     };
-  }, [overrides]);
-
-  const { maxShapScore, totalShapSum } = useMemo(() => {
-    if (!explanation?.features || explanation.features.length === 0) {
-      return { maxShapScore: 1, totalShapSum: 1 };
+    for (const h of historyPoints) get(h.date).actual = h.quantity;
+    for (const r of rows) {
+      const p = get(r.forecast_date);
+      p.row = r;
+      p.forecast = r.p50 ?? r.y_pred;
+      p.band = r.quality === 'ok' ? [r.p10 as number, r.p90 as number] : null;
+      p.adjusted = r.is_overridden ? r.y_pred : null;
     }
-    let max = 0.001;
-    let sum = 0;
-    explanation.features.forEach((f: any) => {
-      const score = Math.abs(
-        typeof f.importance_score === 'number'
-          ? f.importance_score
-          : typeof f.importance === 'number'
-            ? f.importance
-            : 0
-      );
-      if (score > max) max = score;
-      sum += score;
+    const sorted = Array.from(m.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    // R5F-04: the category axis must not hide calendar gaps (e.g. clock Apr 25 -> first forecast May 23):
+    // every missing day in between becomes an empty point, so the distance on screen is the distance in time.
+    if (sorted.length < 2) return sorted;
+    const day = 86_400_000;
+    const t0 = Date.parse(`${sorted[0].date}T00:00:00Z`);
+    const t1 = Date.parse(`${sorted[sorted.length - 1].date}T00:00:00Z`);
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || (t1 - t0) / day > 800) return sorted;
+    for (let t = t0; t <= t1; t += day) get(new Date(t).toISOString().slice(0, 10));
+    return Array.from(m.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }, [historyPoints, rows]);
+
+  /** Days without any actual or forecast between the last actual and the first forecast after it (R5F-04). */
+  const forecastGap = useMemo(() => {
+    if (!historyPoints.length || !rows.length) return null;
+    const last = historyPoints[historyPoints.length - 1].date;
+    const next = rows.map((r) => r.forecast_date).filter((d) => d > last).sort()[0];
+    if (!next) return null;
+    const days = Math.round((Date.parse(`${next}T00:00:00Z`) - Date.parse(`${last}T00:00:00Z`)) / 86_400_000) - 1;
+    return days > 0 ? { days, from: last, to: next } : null;
+  }, [historyPoints, rows]);
+
+  // U-04: the simulation clock is the "today" of the demo. Anything dated after it is shown, but marked.
+  const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : null;
+  const afterClockStart = clockDate ? chartData.find((p) => p.date > clockDate)?.date ?? null : null;
+  const afterClockEnd = chartData.length ? chartData[chartData.length - 1].date : null;
+  const actualsBeyondClock = clockDate && lastActualDate ? lastActualDate > clockDate : false;
+  const clockInRange = clockDate && chartData.length > 0 && chartData[0].date <= clockDate && afterClockStart !== null;
+
+  const crossing = rows.filter((r) => r.quality === 'crossing');
+  const missingQ = rows.filter((r) => r.quality === 'missing');
+  const missingP50 = rows.filter((r) => r.p50 === null);
+  const backtestCount = lastActualDate ? rows.filter((r) => r.forecast_date <= lastActualDate).length : 0;
+  const kind: 'backtest' | 'future' | 'mixed' | null = !rows.length || !history.data ? null : backtestCount === rows.length ? 'backtest' : backtestCount === 0 ? 'future' : 'mixed';
+
+  const totalDemand = rows.length ? rows.reduce((s, r) => s + r.y_pred, 0) : null;
+  const validBands = rows.filter((r) => r.quality === 'ok');
+  const meanBand = validBands.length ? validBands.reduce((s, r) => s + ((r.p90 as number) - (r.p10 as number)), 0) / validBands.length : null;
+
+  const isStatsModel = (v: string | undefined) => !!v && /sba/i.test(v);
+  const modelLabel = (v: string | undefined) => (!v ? '' : isStatsModel(v) ? t('forecast.model.sba') : v);
+
+  /* ------------------------------ fast inference ---------------------------- */
+  const [fastBusy, setFastBusy] = useState(false);
+  const fastElapsed = useElapsed(fastBusy);
+  const generateFast = async () => {
+    if (!store) return;
+    const ok = await confirm({
+      title: t('forecast.empty.fast_confirm_title'),
+      description: t('forecast.empty.fast_confirm_desc', { store }),
+      confirmLabel: t('forecast.empty.fast_action'),
     });
-    return { maxShapScore: max, totalShapSum: sum || 1 };
-  }, [explanation]);
+    if (!ok) return;
+    setFastBusy(true);
+    try {
+      const res = await runFastInference(store, 28);
+      if (res.source === 'production_forecast') {
+        // R-37: the store already has the production (Ensemble) run; the BE generates nothing and says so.
+        toast.info(
+          t('forecast.empty.fast_production', {
+            model: res.model_version ?? '—',
+            records: fmt.integer(res.records_available ?? null),
+            skus: fmt.integer(res.skus_forecasted),
+          }),
+        );
+      } else {
+        toast.success(
+          t('forecast.empty.fast_done', {
+            records: fmt.integer(res.records_generated),
+            skus: fmt.integer(res.skus_forecasted),
+            seconds: fmt.number(res.duration_seconds, { digits: 1 }),
+          }),
+          t('forecast.empty.fast_sba_note'),
+        );
+      }
+      refreshAll();
+    } catch (err) {
+      toast.error(apiErrorMessage(err, t));
+    } finally {
+      setFastBusy(false);
+    }
+  };
+
+  /* ------------------------------- CSV export ------------------------------- */
+  const exportCsv = () => {
+    if (!rows.length) {
+      toast.warning(t('forecast.ctl.export_none'));
+      return;
+    }
+    const filename = `forecast_${sku}_${store}_${horizon}d.csv`;
+    downloadCsv(
+      filename,
+      ['SKU', 'Store', 'Date', 'h', 'P10', 'P50', 'P90', 'y_pred', 'original_value', 'is_overridden', 'actual', 'model_version'],
+      rows.map((r) => [sku, store, r.forecast_date, r.h, r.p10, r.p50, r.p90, r.y_pred, r.original_value, r.is_overridden, actualByDate.get(r.forecast_date), r.model_version]),
+    );
+    toast.success(t('forecast.ctl.export_done', { n: rows.length, file: filename }));
+  };
+
+  /* ------------------------------ override dialogs -------------------------- */
+  const [ovRow, setOvRow] = useState<ProcessedRow | null>(null);
+  const [ovValue, setOvValue] = useState('');
+  const [ovReason, setOvReason] = useState<OverrideReasonKey>('promo');
+  const [ovNotes, setOvNotes] = useState('');
+  const [ovBusy, setOvBusy] = useState(false);
+  const [ovError, setOvError] = useState<string | null>(null);
+
+  const reasonText = (key: OverrideReasonKey, notes: string) => {
+    const label = t(`forecast.override.reason_${key}` as TKey);
+    return notes.trim() ? `${label}: ${notes.trim()}` : label;
+  };
+
+  const openOverride = (r: ProcessedRow) => {
+    setOvRow(r);
+    setOvValue(String(r.y_pred));
+    setOvReason('promo');
+    setOvNotes('');
+    setOvError(null);
+  };
+
+  const submitOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ovRow || !store) return;
+    const value = Number(ovValue);
+    if (ovValue.trim() === '' || !Number.isFinite(value) || value < 0 || value > 100000) {
+      setOvError(t('forecast.override.invalid_value'));
+      return;
+    }
+    if (ovReason === 'other' && !ovNotes.trim()) {
+      setOvError(t('forecast.override.notes_required'));
+      return;
+    }
+    setOvBusy(true);
+    setOvError(null);
+    try {
+      // `h` is the real step of the API row, not an index in a filtered list (P-32 / F-13).
+      await createOverride(sku, { forecast_date: ovRow.forecast_date, override_value: value, reason: reasonText(ovReason, ovNotes), store_id: store, h: ovRow.h });
+      toast.success(t('forecast.override.success', { h: ovRow.h, date: fmt.date(ovRow.forecast_date) }));
+      setOvRow(null);
+      refreshAll();
+    } catch (err) {
+      setOvError(apiErrorMessage(err, t));
+    } finally {
+      setOvBusy(false);
+    }
+  };
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState<'percent' | 'fixed'>('percent');
+  const [bulkValue, setBulkValue] = useState('10');
+  const [bulkFrom, setBulkFrom] = useState('');
+  const [bulkTo, setBulkTo] = useState('');
+  const [bulkReason, setBulkReason] = useState<OverrideReasonKey>('promo');
+  const [bulkNotes, setBulkNotes] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
+  const openBulk = () => {
+    setBulkFrom(rows[0]?.forecast_date ?? '');
+    setBulkTo(rows[rows.length - 1]?.forecast_date ?? '');
+    setBulkMode('percent');
+    setBulkValue('10');
+    setBulkReason('promo');
+    setBulkNotes('');
+    setBulkError(null);
+    setBulkOpen(true);
+  };
+
+  const bulkNumber = Number(bulkValue);
+  const bulkValid = bulkValue.trim() !== '' && Number.isFinite(bulkNumber) && (bulkMode === 'percent' ? bulkNumber > -100 : bulkNumber >= 0 && bulkNumber <= 100000);
+  const bulkPreview = useMemo(() => {
+    if (!bulkOpen || !bulkValid) return [];
+    return rows
+      .filter((r) => (!bulkFrom || r.forecast_date >= bulkFrom) && (!bulkTo || r.forecast_date <= bulkTo))
+      .map((r) => ({ row: r, value: Math.min(100000, Math.max(0, bulkMode === 'percent' ? Math.round(r.y_pred * (1 + bulkNumber / 100) * 100) / 100 : bulkNumber)) }));
+  }, [bulkOpen, bulkValid, rows, bulkFrom, bulkTo, bulkMode, bulkNumber]);
+
+  const submitBulk = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!store) return;
+    if (!bulkValid) {
+      setBulkError(t('forecast.bulk.invalid_value'));
+      return;
+    }
+    if (bulkReason === 'other' && !bulkNotes.trim()) {
+      setBulkError(t('forecast.override.notes_required'));
+      return;
+    }
+    if (!bulkPreview.length) {
+      setBulkError(t('forecast.bulk.none_in_range'));
+      return;
+    }
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      const reason = reasonText(bulkReason, bulkNotes);
+      const res = await bulkOverride(bulkPreview.map((p) => ({ store_id: store, item_id: sku, date: p.row.forecast_date, h: p.row.h, value: p.value, reason })));
+      if (res.skipped_count > 0) toast.warning(t('forecast.bulk.skipped', { created: res.created_count, skipped: res.skipped_count }));
+      else toast.success(t('forecast.bulk.success', { created: res.created_count }));
+      setBulkOpen(false);
+      refreshAll();
+    } catch (err) {
+      setBulkError(apiErrorMessage(err, t));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const doRevert = async (o: OverrideRow) => {
+    const ok = await confirm({
+      title: t('forecast.history.revert_title'),
+      description: t('forecast.history.revert_description', { date: fmt.date(o.forecast_date), value: fmt.number(o.original_value, { digits: 2 }) }),
+      tone: 'danger',
+      confirmLabel: t('forecast.history.revert'),
+    });
+    if (!ok) return;
+    try {
+      await revertOverride(sku, o.id);
+      toast.success(t('forecast.history.revert_done'));
+      refreshAll();
+    } catch (err) {
+      toast.error(apiErrorMessage(err, t));
+    }
+  };
+
+  /* --------------------------------- columns -------------------------------- */
+  const qCell = (v: number | null) => (v === null ? <Unavailable /> : <span className="ui-num">{fmt.number(v, { digits: 2 })}</span>);
+
+  const skuColumns: Column<ProductRow>[] = [
+    { key: 'item_id', header: t('forecast.sku.col_sku'), cell: (p) => <span style={mono}>{p.item_id}</span> },
+    { key: 'name', header: t('forecast.sku.col_name'), value: (p) => p.name },
+    { key: 'cat', header: t('forecast.sku.col_category'), value: (p) => p.cat_id },
+  ];
+
+  const filteredRows = useMemo(
+    () => rows.filter((r) => (scheduleFilter === 'overridden' ? r.is_overridden : scheduleFilter === 'dq' ? r.quality !== 'ok' : true)),
+    [rows, scheduleFilter],
+  );
+
+  const scheduleColumns: Column<ProcessedRow>[] = [
+    { key: 'h', header: t('forecast.schedule.col_h'), align: 'right', sortable: true, value: (r) => r.h },
+    { key: 'date', header: t('forecast.schedule.col_date'), sortable: true, value: (r) => r.forecast_date, cell: (r) => fmt.date(r.forecast_date) },
+    { key: 'p10', header: t('forecast.schedule.col_p10'), align: 'right', value: (r) => r.p10, cell: (r) => qCell(r.p10) },
+    { key: 'p50', header: t('forecast.schedule.col_p50'), align: 'right', value: (r) => r.p50, cell: (r) => qCell(r.p50) },
+    { key: 'p90', header: t('forecast.schedule.col_p90'), align: 'right', value: (r) => r.p90, cell: (r) => qCell(r.p90) },
+    { key: 'pred', header: t('forecast.schedule.col_pred'), align: 'right', sortable: true, value: (r) => r.y_pred, cell: (r) => <strong className="ui-num">{fmt.number(r.y_pred, { digits: 2 })}</strong> },
+    { key: 'actual', header: t('forecast.schedule.col_actual'), align: 'right', cell: (r) => qCell(actualByDate.get(r.forecast_date) ?? null) },
+    {
+      key: 'status',
+      header: t('forecast.schedule.col_status'),
+      cell: (r) =>
+        r.is_overridden ? (
+          <Badge tone="accent">{t('forecast.schedule.status_overridden')}</Badge>
+        ) : r.quality === 'crossing' ? (
+          <Badge tone="warning">{t('forecast.schedule.status_dq')}</Badge>
+        ) : r.quality === 'missing' ? (
+          <Badge tone="neutral">{t('forecast.schedule.status_missing')}</Badge>
+        ) : (
+          <Badge tone="success">{t('forecast.schedule.status_ok')}</Badge>
+        ),
+    },
+    ...(canEdit
+      ? [
+          {
+            key: 'actions',
+            header: t('forecast.schedule.col_actions'),
+            align: 'right' as const,
+            cell: (r: ProcessedRow) => (
+              <Button size="sm" variant="secondary" leftIcon={<Pencil size={14} />} onClick={() => openOverride(r)}>
+                {t('forecast.schedule.adjust')}
+              </Button>
+            ),
+          },
+        ]
+      : []),
+  ];
+
+  const overrideColumns: Column<OverrideRow>[] = [
+    { key: 'date', header: t('forecast.history.col_date'), sortable: true, value: (o) => o.forecast_date, cell: (o) => fmt.date(o.forecast_date) },
+    { key: 'h', header: t('forecast.history.col_h'), align: 'right', value: (o) => o.h },
+    { key: 'orig', header: t('forecast.history.col_original'), align: 'right', value: (o) => o.original_value, cell: (o) => qCell(o.original_value) },
+    { key: 'new', header: t('forecast.history.col_new'), align: 'right', value: (o) => o.override_value, cell: (o) => qCell(o.override_value) },
+    { key: 'reason', header: t('forecast.history.col_reason'), value: (o) => o.reason },
+    { key: 'by', header: t('forecast.history.col_by'), value: (o) => o.created_by },
+    { key: 'created', header: t('forecast.history.col_created'), value: (o) => o.created_at, cell: (o) => fmt.dateTime(o.created_at) },
+    {
+      key: 'status',
+      header: t('forecast.history.col_status'),
+      cell: (o) => <Badge tone={o.is_active ? 'accent' : 'neutral'}>{o.is_active ? t('forecast.history.active') : t('forecast.history.reverted')}</Badge>,
+    },
+    ...(canEdit
+      ? [
+          {
+            key: 'actions',
+            header: '',
+            align: 'right' as const,
+            cell: (o: OverrideRow) =>
+              o.is_active ? (
+                <Button size="sm" variant="ghost" onClick={() => void doRevert(o)}>
+                  {t('forecast.history.revert')}
+                </Button>
+              ) : null,
+          },
+        ]
+      : []),
+  ];
+
+  /* ---------------------------------- render -------------------------------- */
+  const compareErr = compare.error;
+  const compareHasData = !!compare.data && (compare.data.metrics.data_points ?? 0) > 0 && compare.data.metrics.mae != null;
+  const maeReason = compare.loading
+    ? undefined
+    : compareErr
+      ? compareErr.kind === 'not_found' || compareErr.kind === 'validation'
+        ? t('forecast.kpi.mae_missing')
+        : apiErrorMessage(compareErr, t)
+      : compare.data && !compareHasData
+        ? compare.data.metrics.metrics_reason_code || compare.data.metrics.metrics_reason
+          ? beCode(prefixCode('cmp', compare.data.metrics.metrics_reason_code), null, compare.data.metrics.metrics_reason)
+          : t('forecast.kpi.mae_missing') // old BE: 0.0 for an empty comparison, new BE: null. Never show it as an error of 0.
+        : undefined;
+  const maeValue = compareHasData && compare.data ? fmt.number(compare.data.metrics.mae, { digits: 3 }) : null;
+
+  const sigmaValue = uncertainty.data?.sigma_h ?? null;
+  const sigmaReason = uncertainty.loading ? undefined : uncertainty.error ? apiErrorMessage(uncertainty.error, t) : sigmaValue === null ? t('forecast.kpi.sigma_missing') : undefined;
+
+  const maxShap = Math.max(...(explanation.data?.features ?? []).map((f) => Math.abs(f.importance_score)), 0) || 1;
+
+  const dataQuality = (
+    <>
+      {crossing.length > 0 && (
+        <Alert tone="warning" title={t('forecast.dq.title')}>
+          {t('forecast.dq.crossing', { n: crossing.length, steps: crossing.slice(0, 8).map((r) => r.h).join(', ') + (crossing.length > 8 ? '…' : '') })}
+        </Alert>
+      )}
+      {actualsBeyondClock && clockDate && lastActualDate && (
+        <Alert tone="info" title={t('forecast.dq.beyond_clock_title')}>
+          {t('forecast.dq.beyond_clock', { clock: fmt.date(clockDate), last: fmt.date(lastActualDate) })}
+        </Alert>
+      )}
+      {missingQ.length > 0 && <Alert tone="info">{t('forecast.dq.missing_q', { n: missingQ.length })}</Alert>}
+      {missingP50.length > 0 && <Alert tone="info">{t('forecast.dq.missing_p50', { n: missingP50.length })}</Alert>}
+      {processed.versions.length > 1 && <Alert tone="warning">{t('forecast.dq.mixed', { versions: processed.versions.join(', '), version: processed.version ?? '' })}</Alert>}
+      {rows.length > 0 && rows.length < horizon && <Alert tone="info">{t('forecast.dq.partial', { n: rows.length, h: horizon })}</Alert>}
+    </>
+  );
+
+  const body = (() => {
+    if (isGlobal) return <EmptyState title={t('forecast.global.title')} description={t('forecast.global.description')} />;
+    if (!sku) return <EmptyState title={t('forecast.sku.none_selected')} />;
+    if (forecasts.error && !forecasts.data) return <ErrorState error={forecasts.error} onRetry={forecasts.refetch} />;
+    if (!forecasts.loading && forecasts.data && rows.length === 0) {
+      return (
+        <Card>
+          <EmptyState
+            title={t('forecast.empty.title')}
+            description={t('forecast.empty.description', { sku, store: store ?? '' })}
+            action={
+              canEdit ? (
+                <div style={{ display: 'grid', gap: 'var(--space-2)', justifyItems: 'center' }}>
+                  <Button leftIcon={<Sparkles size={16} />} loading={fastBusy} onClick={() => void generateFast()}>
+                    {t('forecast.empty.fast_action')}
+                  </Button>
+                  <span style={muted} aria-live="polite">
+                    {fastBusy && t('forecast.empty.fast_running')}
+                  </span>
+                  {fastBusy && (
+                    <span style={muted} aria-hidden="true">
+                      {t('common.misc.elapsed', { seconds: fastElapsed })}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <span style={muted}>{t('forecast.empty.fast_note')}</span>
+              )
+            }
+          />
+        </Card>
+      );
+    }
+    return (
+      <>
+        <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'end', flexWrap: 'wrap' }}>
+          {processed.version && (
+            <span style={muted}>
+              {t('forecast.model.current')} <Badge tone="accent">{modelLabel(processed.version)}</Badge>
+              {forecasts.data?.source && (
+                <>
+                  {' '}
+                  <Badge tone="neutral">{['production_artifact', 'backtest', 'forecast_table'].includes(forecasts.data.source) ? t(`forecast.source.${forecasts.data.source}` as TKey) : forecasts.data.source}</Badge>
+                </>
+              )}
+              {forecasts.data?.backtest != null && (
+                <>
+                  {' '}
+                  <Badge tone={forecasts.data.backtest ? 'info' : 'success'}>{forecasts.data.backtest ? t('forecast.model.backtest') : t('forecast.model.future')}</Badge>
+                </>
+              )}
+            </span>
+          )}
+          {processed.versions.length > 1 && (
+            <Select
+              label={t('forecast.model.pick')}
+              value={modelVersion || processed.version || ''}
+              onChange={(v) => setModelVersion(v)}
+              options={processed.versions.map((v) => ({ value: v, label: modelLabel(v) }))}
+            />
+          )}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+          <KpiTile
+            label={t('forecast.kpi.demand')}
+            loading={forecasts.loading && !forecasts.data}
+            value={totalDemand !== null ? fmt.number(totalDemand, { digits: 1 }) : null}
+            unit={t('forecast.kpi.units')}
+            unavailableReason={totalDemand === null && !forecasts.loading ? t('forecast.kpi.demand_none') : undefined}
+            hint={t('forecast.kpi.demand_hint', { n: rows.length })}
+          />
+          <KpiTile
+            label={t('forecast.kpi.band')}
+            loading={forecasts.loading && !forecasts.data}
+            value={meanBand !== null ? fmt.number(meanBand, { digits: 2 }) : null}
+            unit={t('forecast.kpi.units')}
+            unavailableReason={meanBand === null && !forecasts.loading ? t('forecast.kpi.band_missing') : undefined}
+            hint={t('forecast.kpi.band_hint')}
+          />
+          <KpiTile
+            label={t('forecast.kpi.sigma')}
+            loading={uncertainty.loading && !uncertainty.data}
+            value={sigmaValue !== null ? fmt.number(sigmaValue, { digits: 3 }) : null}
+            unavailableReason={sigmaReason}
+            hint={t('forecast.kpi.sigma_hint')}
+          />
+          <KpiTile
+            label={t('forecast.kpi.mae')}
+            loading={compare.loading && !compare.data}
+            value={maeValue}
+            unavailableReason={maeReason}
+            hint={compareHasData && compare.data ? t('forecast.kpi.mae_hint', { rmse: fmt.number(compare.data.metrics.rmse, { digits: 3 }), n: compare.data.metrics.data_points ?? 0, mase: compare.data.metrics.mase != null ? fmt.number(compare.data.metrics.mase, { digits: 3 }) : t('forecast.kpi.mase_missing') }) : undefined}
+          />
+        </div>
+
+        <Tabs
+          aria-label={t('forecast.page.title')}
+          value={tab}
+          onChange={switchTab}
+          items={[
+            { id: 'forecast', label: t('forecast.tabs.forecast') },
+            { id: 'route_c', label: t('forecast.tabs.route_c') },
+            { id: 'schedule', label: t('forecast.tabs.schedule'), count: overrides.data?.filter((o) => o.is_active).length },
+          ]}
+        />
+
+        <HoldHeight activeKey={tab}>
+        {tab === 'forecast' && (
+          <>
+            {kind === 'backtest' && (
+              <Alert tone="info" title={t('forecast.kind.backtest')}>
+                {t('forecast.kind.backtest_note')}
+              </Alert>
+            )}
+            {dataQuality}
+            <ChartFrame
+              title={t('forecast.chart.title')}
+              description={t('forecast.chart.description')}
+              source={t('forecast.chart.source')}
+              height={340}
+              loading={(forecasts.loading && !forecasts.data) || (history.loading && !history.data)}
+              error={history.error}
+              onRetry={history.refetch}
+              empty={chartData.length === 0}
+              footer={
+                <>
+                  <ChartLegend
+                    items={[
+                      { label: t('forecast.chart.actual'), color: chart.series[1] },
+                      { label: t('forecast.chart.forecast'), color: chart.series[0] },
+                      { label: t('forecast.chart.band'), color: chart.series[0] },
+                      ...(rows.some((r) => r.is_overridden) ? [{ label: t('forecast.chart.adjusted'), color: chart.series[2] }] : []),
+                    ]}
+                  />
+                  {forecastGap && (
+                    <p className="ui-muted" style={{ margin: 'var(--space-2) 0 0', fontSize: 'var(--text-xs)' }}>
+                      {t('forecast.chart.gap', { days: fmt.integer(forecastGap.days), from: fmt.date(forecastGap.from, 'short'), to: fmt.date(forecastGap.to, 'short') })}
+                    </p>
+                  )}
+                </>
+              }
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData} margin={{ top: 12, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid vertical={false} stroke={chart.grid} />
+                  <XAxis dataKey="date" {...chart.axis} minTickGap={28} tickFormatter={(d: string) => fmt.date(d, 'axis')} />
+                  <YAxis {...chart.axis} width={44} domain={[0, 'auto']} />
+                  <Tooltip cursor={chart.cursor} content={<ForecastTooltip />} />
+                  {clockInRange && afterClockStart && afterClockEnd && (
+                    <ReferenceArea
+                      x1={afterClockStart}
+                      x2={afterClockEnd}
+                      fill={chart.reference}
+                      fillOpacity={0.12}
+                      stroke="none"
+                      label={{ value: t('forecast.chart.after_clock'), fill: chart.tick, fontSize: 11, position: 'insideTopRight' }}
+                    />
+                  )}
+                  {clockDate && chartData.some((p) => p.date === clockDate) && (
+                    <ReferenceLine
+                      x={clockDate}
+                      stroke={chart.series[2]}
+                      strokeWidth={1.5}
+                      label={{ value: t('forecast.chart.clock_line', { date: fmt.date(clockDate, 'short') }), fill: chart.tick, fontSize: 11, position: 'insideTopRight' }}
+                    />
+                  )}
+                  {lastActualDate && lastActualDate !== clockDate && chartData.some((p) => p.date === lastActualDate) && (
+                    <ReferenceLine
+                      x={lastActualDate}
+                      stroke={chart.reference}
+                      strokeDasharray="4 4"
+                      label={{ value: t('forecast.chart.last_actual', { date: fmt.date(lastActualDate, 'short') }), fill: chart.tick, fontSize: 11, position: 'insideBottomRight' }}
+                    />
+                  )}
+                  <Area dataKey="band" name={t('forecast.chart.band')} stroke="none" fill={chart.series[0]} fillOpacity={chart.bandOpacity} isAnimationActive={false} connectNulls={false} />
+                  <Line dataKey="actual" name={t('forecast.chart.actual')} stroke={chart.series[1]} strokeWidth={2} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
+                  <Line dataKey="forecast" name={t('forecast.chart.forecast')} stroke={chart.series[0]} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
+                  <Line dataKey="adjusted" name={t('forecast.chart.adjusted')} stroke="none" dot={{ r: 5, fill: chart.series[2], stroke: chart.surface, strokeWidth: 1 }} activeDot={false} isAnimationActive={false} legendType="none" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+
+            <Card title={t('forecast.shap.title')} description={t('forecast.shap.description')}>
+              {!canEdit ? (
+                <Alert tone="info">{t('forecast.shap.restricted')}</Alert>
+              ) : explanation.loading && !explanation.data ? (
+                <Skeleton height={120} />
+              ) : explanation.error ? (
+                <ErrorState compact error={explanation.error} onRetry={explanation.refetch} />
+              ) : !explanation.data || explanation.data.available !== true ? (
+                <EmptyState
+                  compact
+                  title={t('forecast.shap.unavailable_title')}
+                  description={explanation.data?.reason && !explanation.data.reason_code ? `${t('forecast.shap.unavailable_body')} ${be(explanation.data.reason)}` : t('forecast.shap.unavailable_body')}
+                />
+              ) : explanation.data.features.length === 0 ? (
+                <EmptyState compact title={t('forecast.shap.empty_title')} />
+              ) : (
+                <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                  <div style={muted}>
+                    {t('forecast.shap.model', { name: explanation.data.model_name, version: explanation.data.model_version })} · {t('forecast.shap.base')}:{' '}
+                    <span className="ui-num">{fmt.number(explanation.data.base_value, { digits: 3 })}</span>
+                  </div>
+                  {explanation.data.features.slice(0, 8).map((f) => (
+                    <div key={f.feature_name} style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', fontSize: 'var(--text-sm)' }}>
+                        <span style={mono}>
+                          {f.feature_name}{' '}
+                          {f.direction && <Badge tone="neutral">{/pos/i.test(f.direction) ? t('forecast.shap.direction_positive') : /neg/i.test(f.direction) ? t('forecast.shap.direction_negative') : f.direction}</Badge>}
+                        </span>
+                        <span className="ui-num">{fmt.number(f.importance_score, { digits: 3 })}</span>
+                      </div>
+                      <div style={{ height: 6, borderRadius: 'var(--radius-full)', background: 'var(--color-surface-sunken)' }}>
+                        <div style={{ height: '100%', width: `${(Math.abs(f.importance_score) / maxShap) * 100}%`, borderRadius: 'var(--radius-full)', background: chart.series[0] }} />
+                      </div>
+                      {f.description && <span style={muted}>{be(f.description)}</span>}
+                    </div>
+                  ))}
+                  <DataSourceNote source={explanation.data.source ? `${t('forecast.shap.source')} · ${explanation.data.source}` : t('forecast.shap.source')} />
+                </div>
+              )}
+            </Card>
+          </>
+        )}
+
+        {tab === 'route_c' &&
+          (windowQ.loading && !windowQ.data ? (
+            <Skeleton height={220} />
+          ) : windowQ.error ? (
+            <ErrorState error={windowQ.error} onRetry={windowQ.refetch} />
+          ) : !windowQ.data ? (
+            <EmptyState title={t('forecast.route.empty')} />
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-4)' }}>
+                <KpiTile label={t('forecast.route.point_window')} value={fmt.number(windowQ.data.point_window, { digits: 2 })} unit={t('forecast.kpi.units')} />
+                <KpiTile label={t('forecast.route.tau95')} value={fmt.number(windowQ.data.tau_95, { digits: 2 })} unit={t('forecast.kpi.units')} />
+                <KpiTile label={t('forecast.route.origin')} value={fmt.date(windowQ.data.origin_date)} />
+                <KpiTile label={t('forecast.route.horizon_days')} value={t('forecast.route.days', { n: windowQ.data.horizon_days })} hint={`${t('forecast.route.route_label')}: ${windowQ.data.route}`} />
+              </div>
+              <Alert tone={windowQ.data.route === 'c' ? 'info' : 'warning'} title={t('forecast.route.note_title')}>
+                {windowQ.data.route === 'c'
+                  ? t('forecast.route.note_empirical')
+                  : windowQ.data.route === 'c_fb'
+                    ? t('forecast.route.note_fallback')
+                    : t('forecast.route.note_unknown', { route: windowQ.data.route })}
+              </Alert>
+              <QuantileChart levels={windowQ.data.q_levels} title={t('forecast.route.q_chart')} source={t('forecast.route.source')} xLabel={t('forecast.route.level')} yLabel={t('forecast.route.value')} />
+            </>
+          ))}
+
+        {tab === 'schedule' && (
+          <>
+            {dataQuality}
+            <Card
+              title={t('forecast.schedule.title')}
+              description={t('forecast.schedule.description')}
+              flush
+              actions={
+                <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Select<ScheduleFilter>
+                    aria-label={t('forecast.schedule.filter')}
+                    size="sm"
+                    value={scheduleFilter}
+                    onChange={(v) => {
+                      setScheduleFilter(v);
+                      schedulePage.setPage(1);
+                    }}
+                    options={[
+                      { value: 'all', label: t('forecast.schedule.filter_all') },
+                      { value: 'overridden', label: t('forecast.schedule.filter_overridden') },
+                      { value: 'dq', label: t('forecast.schedule.filter_dq') },
+                    ]}
+                  />
+                  {canEdit && (
+                    <Button size="sm" variant="secondary" leftIcon={<Layers size={14} />} onClick={openBulk} disabled={rows.length === 0}>
+                      {t('forecast.schedule.bulk')}
+                    </Button>
+                  )}
+                </div>
+              }
+            >
+              <Table
+                columns={scheduleColumns}
+                rows={filteredRows}
+                rowKey={(r) => r.id}
+                loading={forecasts.loading && !forecasts.data}
+                error={forecasts.error}
+                onRetry={forecasts.refetch}
+                filtered={scheduleFilter !== 'all'}
+                emptyTitle={scheduleFilter !== 'all' ? t('forecast.schedule.empty_filtered') : undefined}
+                pagination={{ page: schedulePage.page, pageSize: schedulePage.pageSize, onPageChange: schedulePage.setPage, onPageSizeChange: schedulePage.setPageSize, pageSizeOptions: [7, 14, 28] }}
+                dense
+              />
+            </Card>
+
+            <Card title={t('forecast.history.title')} description={t('forecast.history.description')} flush>
+              <Table
+                columns={overrideColumns}
+                rows={overrides.data ?? []}
+                rowKey={(o) => o.id}
+                loading={overrides.loading && !overrides.data}
+                error={overrides.error}
+                onRetry={overrides.refetch}
+                emptyTitle={t('forecast.history.empty_title')}
+                emptyDescription={t('forecast.history.empty_description')}
+                dense
+                wrap
+              />
+              <div style={{ padding: '0 var(--space-4) var(--space-3)' }}>
+                <DataSourceNote source={t('forecast.history.source')} />
+              </div>
+            </Card>
+          </>
+        )}
+        </HoldHeight>
+      </>
+    );
+  })();
 
   return (
-    <div className="animate-fade-in mb-6">
-      {/* Toast Notification */}
-      {toast && (
-        <div className={`forecast-toast toast-${toast.type}`}>
-          <div className="toast-icon">
-            {toast.type === 'success' && <CheckCircle2 size={16} />}
-            {toast.type === 'warning' && <AlertTriangle size={16} />}
-            {toast.type === 'error' && <AlertTriangle size={16} />}
+    <div style={{ display: 'grid', gap: 'var(--space-5)' }}>
+      <PageHeader
+        title={t('forecast.page.title')}
+        description={t('forecast.page.description')}
+        actions={
+          <Button variant="secondary" leftIcon={<Download size={16} />} onClick={exportCsv} disabled={rows.length === 0}>
+            {t('forecast.ctl.export')}
+          </Button>
+        }
+        meta={
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center' }}>
+            <DataSourceNote source={t('forecast.page.source')} />
+            {store && (
+              <Badge tone="neutral">
+                {t('forecast.ctl.store')}: {store}
+              </Badge>
+            )}
+            {processed.version && (
+              <Badge tone={isStatsModel(processed.version) ? 'warning' : 'accent'}>
+                {t('forecast.ctl.model')}: {modelLabel(processed.version)}
+              </Badge>
+            )}
+            {processed.generatedAt && (
+              <Badge tone="neutral">
+                {t('forecast.ctl.generated')}: {fmt.dateTime(processed.generatedAt)}
+              </Badge>
+            )}
+            {kind && <Badge tone={kind === 'future' ? 'success' : 'info'}>{t(`forecast.kind.${kind}` as TKey)}</Badge>}
           </div>
-          <span className="toast-text">{toast.message}</span>
-          <button className="toast-close" onClick={() => setToast(null)}>
-            <X size={14} />
-          </button>
-        </div>
-      )}
+        }
+      />
 
-      {/* Filters Bar */}
-      <Card className="mb-6 p-6">
-        <div className="forecast-filters">
-          <form className="filter-group" onSubmit={handleSkuSearchSubmit} style={{ flex: 1 }}>
-            <div className="filter-item">
-              <label className="filter-label">{isVi ? 'Danh Mục Sản Phẩm' : 'Product Category'}</label>
-              <select
-                className="filter-select"
-                value={selectedCategory}
-                onChange={(e) => handleCategoryChange(e.target.value)}
-              >
-                <option value="All">{isVi ? 'Tất cả danh mục' : 'All Categories'}</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="filter-item" style={{ minWidth: '220px' }}>
-              <label className="filter-label">{isVi ? 'Mã Định Danh SKU' : 'SKU Identifier'}</label>
-              <div className="filter-input-wrapper">
-                <input
-                  type="text"
-                  list="forecast-sku-options"
-                  className="filter-input"
-                  placeholder={isVi ? 'Nhập hoặc chọn mã SKU...' : 'Enter or select SKU...'}
-                  value={skuSearch}
-                  onChange={(e) => setSkuSearch(e.target.value)}
-                />
-                <datalist id="forecast-sku-options">
-                  {filteredProducts.slice(0, 30).map((p: any) => (
-                    <option key={p.item_id} value={p.item_id}>
-                      {p.item_id} {p.name ? `- ${p.name}` : ''}
-                    </option>
-                  ))}
-                </datalist>
-                {skuSearch && (
-                  <button
-                    type="button"
-                    className="clear-input-btn"
-                    onClick={() => {
-                      setSkuSearch('');
-                    }}
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="filter-item" style={{ alignSelf: 'flex-end' }}>
-              <button type="submit" className="search-btn">
-                {isVi ? 'Tra Cứu' : 'Search'}
-              </button>
-            </div>
-          </form>
-
-          <div className="filter-group" style={{ flex: 'none' }}>
-            {/* Horizon Selector (7, 14, 28 days) */}
-            <div className="filter-item">
-              <label className="filter-label">{isVi ? 'Chu Kỳ Dự Báo (Horizon)' : 'Forecast Horizon'}</label>
-              <div className="horizon-toggle">
-                <button
-                  type="button"
-                  className={`horizon-btn ${horizon === 7 ? 'active' : ''}`}
-                  onClick={() => handleHorizonChange(7)}
-                >
-                  7d
-                </button>
-                <button
-                  type="button"
-                  className={`horizon-btn ${horizon === 14 ? 'active' : ''}`}
-                  onClick={() => handleHorizonChange(14)}
-                >
-                  14d
-                </button>
-                <button
-                  type="button"
-                  className={`horizon-btn ${horizon === 28 ? 'active' : ''}`}
-                  onClick={() => handleHorizonChange(28)}
-                >
-                  28d
-                </button>
-              </div>
-            </div>
-
-            <div className="filter-item">
-              <label className="filter-label">{isVi ? 'Kiến Trúc Mô Hình ML' : 'ML Engine Selector'}</label>
-              <select
-                className="ml-engine-select"
-                value={selectedEngine}
-                onChange={(e) => {
-                  const newEngine = e.target.value;
-                  setSelectedEngine(newEngine);
-                  fetchForecast(skuSearch, horizon, selectedStore, newEngine);
-                  setToast({
-                    type: 'success',
-                    message: isVi ? `Đã chuyển sang mô hình ${newEngine}` : `Switched active engine to ${newEngine}`,
-                  });
+      <Card title={t('forecast.sku.title')}>
+        <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)', alignItems: 'end' }}>
+            <Field label={t('forecast.sku.search_label')}>
+              <SearchInput
+                value={query}
+                onChange={(v) => {
+                  setQuery(v);
+                  skuPage.setPage(1);
                 }}
-              >
-                <option value="Ensemble">
-                  {isVi ? 'Ensemble NNLS (LightGBM+XGB+TFT)' : 'Ensemble NNLS (SOTA)'}
-                </option>
-                <option value="LightGBM">
-                  {isVi ? 'LightGBM Direct Quantile (Production)' : 'LightGBM (Champion)'}
-                </option>
-                <option value="XGBoost">
-                  {isVi ? 'XGBoost Multi-Step (Challenger)' : 'XGBoost (Challenger)'}
-                </option>
-                <option value="Baseline">
-                  {isVi ? 'Seasonal Naive / Holt-Winters (B₀)' : 'Statistical Baseline (B₀)'}
-                </option>
-              </select>
-            </div>
-
-            {/* Export CSV Button */}
-            <div className="filter-item" style={{ alignSelf: 'flex-end' }}>
-              <button
-                type="button"
-                className="export-csv-btn"
-                onClick={handleExportForecastCsv}
-                title={isVi ? 'Xuất file CSV dự báo thời gian thực' : 'Export real-time forecast CSV'}
-              >
-                <FileSpreadsheet size={15} />
-                <span>{isVi ? 'Xuất CSV' : 'Export CSV'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* 4 Executive KPI Summary Cards */}
-      <div className="fe-kpi-grid">
-        <div className="fe-kpi-card">
-          <span className="fe-kpi-label">{isVi ? `Tổng Cầu Dự Báo (${horizon}d)` : `Predicted ${horizon}d Demand`}</span>
-          <strong className="fe-kpi-val text-teal">{data?.stats?.predictedDemand || '—'}</strong>
-          <span className="fe-kpi-sub">{isVi ? 'Tổng nhu cầu chu kỳ' : 'Total horizon demand'}</span>
-        </div>
-        <div className="fe-kpi-card">
-          <span className="fe-kpi-label">{isVi ? 'Biên Độ Bất Định' : 'Uncertainty Spread'}</span>
-          <strong className="fe-kpi-val">{data?.stats?.ci || '±18%'}</strong>
-          <span className="fe-kpi-sub">{isVi ? 'Dải tin cậy P10 – P90' : 'P10 – P90 interval'}</span>
-        </div>
-        <div className="fe-kpi-card">
-          <span className="fe-kpi-label">{isVi ? 'Tồn Kho An Toàn (SS)' : 'Safety Stock (SS)'}</span>
-          <strong className="fe-kpi-val">{data?.stats?.safetyStock || '—'}</strong>
-          <span className="fe-kpi-sub">{isVi ? `ROP: ${data?.stats?.reorderPoint || '—'}` : `ROP: ${data?.stats?.reorderPoint || '—'}`}</span>
-        </div>
-        <div className="fe-kpi-card">
-          <span className="fe-kpi-label">{isVi ? 'Sai Số Chuẩn Hóa (MASE)' : 'Evaluated MASE'}</span>
-          <strong className="fe-kpi-val text-emerald">{data?.stats?.mase && data.stats.mase !== '-' ? data.stats.mase : '0.81'}</strong>
-          <span className="fe-kpi-sub">{isVi ? 'Tốt hơn Naive (< 1.0)' : 'Outperforms Naive (< 1.0)'}</span>
-        </div>
-      </div>
-
-      {/* Sub-Navigation Tabs Bar */}
-      <div className="fe-subnav-row">
-        <div className="fe-tabs-bar" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'forecast'}
-            className={`fe-tab-btn ${activeTab === 'forecast' ? 'active' : ''}`}
-            onClick={() => setActiveTab('forecast')}
-          >
-            <Activity size={14} />
-            <span>{isVi ? 'Dự báo & Động lực SHAP' : 'Forecast & SHAP'}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'window_route_c'}
-            className={`fe-tab-btn ${activeTab === 'window_route_c' ? 'active' : ''}`}
-            onClick={() => setActiveTab('window_route_c')}
-          >
-            <GitCompare size={14} />
-            <span>{isVi ? 'Phân phối Cửa sổ Route (c)' : 'Route (c) Protection Window'}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'benchmark'}
-            className={`fe-tab-btn ${activeTab === 'benchmark' ? 'active' : ''}`}
-            onClick={() => setActiveTab('benchmark')}
-          >
-            <Award size={14} />
-            <span>{isVi ? 'Đối sánh Mô hình' : 'Model Benchmark'}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'schedule'}
-            className={`fe-tab-btn ${activeTab === 'schedule' ? 'active' : ''}`}
-            onClick={() => setActiveTab('schedule')}
-          >
-            <Calendar size={14} />
-            <span>{isVi ? 'Lịch Dự báo & Ghi đè' : 'Schedule & Overrides'}</span>
-            {overrides.length > 0 && <span className="fe-tab-count">{overrides.length}</span>}
-          </button>
-        </div>
-
-        <div className="fe-subnav-meta">
-          <span className="fe-subnav-tag">
-            {selectedEngine} • {skuSearch || 'FOODS_1_001'} ({selectedStore || 'CA_1'})
-          </span>
-        </div>
-      </div>
-
-      {/* TAB 1: FORECAST & SHAP ATTRIBUTION */}
-      {activeTab === 'forecast' && (
-        <>
-          <Card className="mb-6 p-6">
-            <div className="chart-header">
-              <div className="chart-title-area">
-                <h3>
-                  {isVi
-                    ? 'Lịch Sử Bán Hàng & Quỹ Đạo Dự Báo Nhu Cầu ML (P10 / P50 / P90)'
-                    : 'Historical Sales & ML Demand Forecast Trajectory (P10 / P50 / P90)'}
-                </h3>
-                <p>
-                  {isVi ? (
-                    <>
-                      Dải màu xanh ngọc thể hiện khoảng bất định dự báo 80%–90% (từ phân vị P10 đến P90) cho mã SKU{' '}
-                      <strong>{skuSearch || 'FOODS_1_001'}</strong> trên chu kỳ <strong>{horizon} ngày</strong>.
-                    </>
-                  ) : (
-                    <>
-                      Shaded teal band represents the predictive uncertainty interval (P10 to P90) for SKU{' '}
-                      <strong>{skuSearch || 'FOODS_1_001'}</strong> across the <strong>{horizon}-day</strong> production horizon.
-                    </>
-                  )}
-                </p>
-              </div>
-              <div className="chart-legend">
-                <div className="legend-item">
-                  <div className="legend-line-actual"></div>
-                  <span>{isVi ? 'Doanh số Lịch sử (Actual)' : 'Historical Sales'}</span>
-                </div>
-                <div className="legend-item">
-                  <div className="legend-line-predicted"></div>
-                  <span>{isVi ? 'Dự báo Điểm (P50)' : 'Point Forecast (P50)'}</span>
-                </div>
-                <div className="legend-item">
-                  <div className="legend-box-ci"></div>
-                  <span>{isVi ? 'Dải tin cậy (P10 – P90)' : 'Uncertainty Band (P10 – P90)'}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="chart-area">
-              {isLoading || !data ? (
-                <div className="chart-loading-state">
-                  {isVi ? 'Đang tải quỹ đạo dự báo nhu cầu...' : 'Loading forecast trajectory...'}
-                </div>
-              ) : (
-                <div className="chart-wrapper">
-                  <ResponsiveContainer width="100%" height={330}>
-                    <ComposedChart data={data?.chartData || []} margin={{ top: 14, right: 16, left: 4, bottom: 4 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                      <XAxis
-                        dataKey="label"
-                        stroke="#64748b"
-                        axisLine={false}
-                        tickLine={false}
-                        tick={{ fontSize: 11, fill: '#64748b', fontFamily: 'IBM Plex Mono, monospace' }}
-                        minTickGap={18}
-                      />
-                      <YAxis
-                        stroke="#64748b"
-                        axisLine={false}
-                        tickLine={false}
-                        width={46}
-                        tick={{ fontSize: 11, fill: '#64748b', fontFamily: 'IBM Plex Mono, monospace' }}
-                      />
-                      <Tooltip
-                        cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '4 4' }}
-                        labelFormatter={(_, payload) => payload?.[0]?.payload?.name || ''}
-                        contentStyle={{
-                          backgroundColor: '#0f172a',
-                          borderColor: '#1e293b',
-                          color: '#f8fafc',
-                          borderRadius: '4px',
-                          fontSize: '12px',
-                        }}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="ci_upper"
-                        name={isVi ? 'Cận trên (P90)' : 'CI Upper (P90)'}
-                        fill="#ccfbf1"
-                        fillOpacity={0.75}
-                        stroke="#5eead4"
-                        strokeWidth={1}
-                        connectNulls
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="ci_lower"
-                        name={isVi ? 'Cận dưới (P10)' : 'CI Lower (P10)'}
-                        fill="#ffffff"
-                        fillOpacity={1}
-                        stroke="#99f6e4"
-                        strokeWidth={1}
-                        connectNulls
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="actual"
-                        name={isVi ? 'Doanh số Thực tế' : 'Historical Sales'}
-                        stroke="#334155"
-                        strokeWidth={2.25}
-                        dot={{ r: 2, fill: '#334155' }}
-                        activeDot={{ r: 4 }}
-                        connectNulls
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="predicted"
-                        name={isVi ? 'Dự báo Điểm (P50)' : 'Point Forecast (P50)'}
-                        stroke="#0f766e"
-                        strokeWidth={2.5}
-                        strokeDasharray="5 3"
-                        dot={{ r: 2.5, fill: '#0f766e' }}
-                        activeDot={{ r: 5 }}
-                        connectNulls
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-          </Card>
-
-          {/* Stats & SHAP Attribution Card */}
-          <Card className="p-6 mb-6">
-            <div className="perf-card-header">
-              <div>
-                <h3 className="perf-card-title">
-                  {isVi ? 'Động Lực Dự Báo (SHAP Feature Attribution)' : 'Demand Drivers (SHAP Feature Attribution)'}
-                </h3>
-                <p className="engine-desc" style={{ marginBottom: 0 }}>
-                  {isVi
-                    ? 'Giải thích tác động của các biến đặc trưng (giá, khuyến mãi, lịch tuần) lên lượng cầu.'
-                    : 'Explainability of key features (price elasticity, promotions, seasonality) on demand volume.'}
-                </p>
-              </div>
-              <span className="perf-engine-badge">
-                {selectedEngine} • TreeSHAP
-              </span>
-            </div>
-
-            <div className="shap-section" style={{ marginTop: '0.75rem' }}>
-              <div className="shap-header">
-                <div className="shap-title-wrapper">
-                  <div className="shap-icon-box">
-                    <BrainCircuit size={16} />
-                  </div>
-                  <div>
-                    <div className="shap-title-row">
-                      <h4 className="shap-title">
-                        {isVi ? 'Mức Độ Đóng Góp Đặc Trưng' : 'Feature Importance Rankings'}
-                      </h4>
-                      <span className="shap-tag-tech">TreeSHAP</span>
-                    </div>
-                  </div>
-                </div>
-                {explanation?.base_value != null && (
-                  <div
-                    className="shap-base-val-chip"
-                    title={
-                      isVi
-                        ? 'Giá trị kỳ vọng cơ sở của mô hình khi chưa xét tác động đặc trưng'
-                        : 'Baseline expected model output before feature contributions'
-                    }
-                  >
-                    <span className="shap-base-label">Base E[f(x)]:</span>
-                    <span className="shap-base-num">
-                      {explanation.base_value} {isVi ? 'đv' : 'units'}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {explanation?.features && explanation.features.length > 0 ? (
-                <div className="shap-compact-table">
-                  {explanation.features.slice(0, 5).map((f: any, idx: number) => {
-                    const rawScore =
-                      typeof f.importance_score === 'number'
-                        ? f.importance_score
-                        : typeof f.importance === 'number'
-                          ? f.importance
-                          : 0;
-                    const meta = FEATURE_METADATA[f.feature_name] || {
-                      label: f.feature_name
-                        ? f.feature_name.replace(/_/g, ' ')
-                        : isVi
-                          ? `Đặc trưng ${idx + 1}`
-                          : `Feature ${idx + 1}`,
-                      desc:
-                        (isVi ? f.description : null) ||
-                        (isVi
-                          ? 'Đặc trưng hồi quy trong mô hình Machine Learning'
-                          : 'Regression feature in Machine Learning model'),
-                      defaultDir: rawScore >= 0 ? 'positive' : 'negative',
-                    };
-                    const isNeg =
-                      f.direction === 'negative' ||
-                      (f.direction == null && (rawScore < 0 || meta.defaultDir === 'negative'));
-                    const absScore = Math.abs(rawScore);
-                    const barWidth =
-                      maxShapScore > 0 ? Math.min(100, Math.round((absScore / maxShapScore) * 100)) : 20;
-                    const sharePct = totalShapSum > 0 ? Math.round((absScore / totalShapSum) * 100) : 0;
-                    const descText = meta.desc || (isVi ? f.description : '');
-
-                    return (
-                      <div key={idx} className="shap-row">
-                        <div className="shap-col-info">
-                          <div className="shap-name-line">
-                            <span className="shap-rank-badge">#{idx + 1}</span>
-                            <span className="shap-name-text">{meta.label}</span>
-                            <span className="shap-code-tag">{f.feature_name}</span>
-                          </div>
-                          {descText && (
-                            <div className="shap-desc-line" title={descText}>
-                              {descText}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="shap-col-bar">
-                          <div className="shap-bar-track-compact">
-                            <div
-                              className={`shap-bar-fill-compact ${isNeg ? 'fill-neg' : 'fill-pos'}`}
-                              style={{ width: `${barWidth}%` }}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="shap-col-metrics">
-                          <span className={`shap-impact-val ${isNeg ? 'impact-neg' : 'impact-pos'}`}>
-                            {isNeg ? (
-                              <ArrowDownRight size={13} className="shap-impact-arrow" />
-                            ) : (
-                              <ArrowUpRight size={13} className="shap-impact-arrow" />
-                            )}
-                            <span>{isNeg ? `-${absScore.toFixed(2)}` : `+${absScore.toFixed(2)}`}</span>
-                          </span>
-                          <span className="shap-share-badge">{sharePct}%</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="shap-empty-state">
-                  <Info size={16} />
-                  <span>
-                    {isVi
-                      ? 'Chưa có dữ liệu phân tích SHAP giải thích cho mô hình hiện tại'
-                      : 'No SHAP explainability data available for the current model'}
-                  </span>
-                </div>
-              )}
-
-              {/* Footer explanation note */}
-              <div className="shap-footer-legend">
-                <div className="shap-legend-item">
-                  <span className="shap-legend-dot pos" />
-                  <span>{isVi ? 'Dương (+): Kích thích tăng sản lượng' : 'Positive (+): Stimulates demand'}</span>
-                </div>
-                <div className="shap-legend-item">
-                  <span className="shap-legend-dot neg" />
-                  <span>{isVi ? 'Âm (-): Độ co giãn kìm hãm nhu cầu' : 'Negative (-): Dampens demand'}</span>
-                </div>
-                <div className="shap-legend-item ml-auto">
-                  <span className="shap-legend-text">
-                    {isVi ? `Mô hình ${selectedEngine} (TreeSHAP)` : `${selectedEngine} Model (TreeSHAP)`}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </Card>
-        </>
-      )}
-
-      {/* TAB 2: ROUTE (C) PROTECTION WINDOW */}
-      {activeTab === 'window_route_c' && (
-        <Card className="mb-6 p-6 route-c-card">
-        <div className="route-c-header">
-          <div className="route-c-title-block">
-            <div className="route-c-title-row">
-              <Activity size={17} className="text-teal" />
-              <h3 className="route-c-title">
-                {isVi
-                  ? 'Phân Phối Nhu Cầu Tích Lũy Cửa Sổ Bảo Vệ Route (c) — H = L + R = 10 Ngày'
-                  : 'Route (c) Cumulative Protection Window Demand Distribution — H = L + R = 10 Days'}
-              </h3>
-              <span className="route-c-formula-badge">
-                D_H = Σ y_(T+t) | {routeCWindowTelemetry.isLive ? `${routeCWindowTelemetry.quantileCount}-Quantile Grid (Live BE)` : 'Quantile Grid Preview'}
-              </span>
-              <span
-                className={`route-c-source-badge ${routeCWindowTelemetry.isLive ? 'live' : 'fallback'}`}
-                title={routeCWindowTelemetry.modelRunId || undefined}
-              >
-                {routeCWindowTelemetry.isLive
-                  ? (isVi
-                      ? `Dữ liệu thực • Origin ${routeCWindowTelemetry.originDate || 'N/A'} • ${routeCWindowTelemetry.segmentClass}`
-                      : `Live API • Origin ${routeCWindowTelemetry.originDate || 'N/A'} • Seg ${routeCWindowTelemetry.segmentClass}`)
-                  : (isVi
-                      ? 'Ước lượng dự phòng (chưa có dữ liệu Route c từ batch)'
-                      : 'Estimated Preview (no persisted Route c quantiles yet)')}
-              </span>
-            </div>
-            <p className="route-c-subtitle">
-              {isVi
-                ? `Ước lượng trực tiếp hàm phân vị tích lũy Q̂_{D_H}(τ) trên toàn cửa sổ bảo vệ H = ${routeCWindowTelemetry.H} ngày kết hợp hiệu chỉnh Conformal C³-OUT (${routeCWindowTelemetry.segmentClass}) cho SKU ${skuSearch || 'FOODS_1_001'}.`
-                : `Direct cumulative window quantile estimation Q̂_{D_H}(τ) over the ${routeCWindowTelemetry.H}-day protection window with C³-OUT closed-loop conformal calibration (${routeCWindowTelemetry.segmentClass}) for SKU ${skuSearch || 'FOODS_1_001'}.`}
-            </p>
-          </div>
-
-          <div className="route-c-setpoint-selector">
-            <span className="route-c-setpoint-label">
-              {isVi ? 'Mục tiêu phục vụ τ_g:' : 'Target Setpoint τ_g:'}
-            </span>
-            <div className="horizon-toggle">
-              {[
-                { tau: 0.90, label: '90% (Seg C)' },
-                { tau: 0.95, label: '95% (Seg B)' },
-                { tau: 0.98, label: '97.5% (Seg A)' },
-                { tau: 0.99, label: '99% (Crit)' },
-              ].map((opt) => {
-                const mappedTau = opt.tau === 0.98 ? 0.975 : opt.tau;
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    className={`horizon-btn ${Math.abs(targetTau - mappedTau) < 0.001 ? 'active' : ''}`}
-                    onClick={() => setTargetTau(mappedTau)}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Route (c) Telemetry KPI Strip */}
-        <div className="route-c-kpi-strip">
-          <div className="route-c-kpi-box">
-            <span className="route-c-kpi-label">
-              {isVi ? 'Kỳ Vọng Cửa Sổ Bảo Vệ (μ̂_H)' : 'Window Mean Demand (μ̂_H)'}
-            </span>
-            <strong className="route-c-kpi-val">{routeCWindowTelemetry.muH} units</strong>
-            <span className="route-c-kpi-sub">
-              {isVi ? `Cửa sổ H = L(3d) + R(7d) = 10 ngày` : `Protection window H = L(3d) + R(7d) = 10d`}
-            </span>
-          </div>
-
-          <div className="route-c-kpi-box">
-            <span className="route-c-kpi-label">
-              {isVi ? `Phân Vị Gốc Route (c) Q̂_{D_H}(${targetTau})` : `Route (c) Base Quantile Q̂_{D_H}(${targetTau})`}
-            </span>
-            <strong className="route-c-kpi-val text-teal">{routeCWindowTelemetry.sBase} units</strong>
-            <span className="route-c-kpi-sub">
-              {isVi
-                ? `So với cộng phân vị ngày Route (b): ${routeCWindowTelemetry.routeBAtTarget} u`
-                : `vs. Route (b) daily quantile sum: ${routeCWindowTelemetry.routeBAtTarget} u`}
-            </span>
-          </div>
-
-          <div className="route-c-kpi-box">
-            <span className="route-c-kpi-label">
-              {isVi ? 'Bù Hiệu Chỉnh Conformal (θ_g · σ̂_H)' : 'Conformal Offset (θ_g · σ̂_H)'}
-            </span>
-            <strong className="route-c-kpi-val">
-              +{routeCWindowTelemetry.conformalOffset} units
-            </strong>
-            <span className="route-c-kpi-sub">
-              θ_g = {routeCWindowTelemetry.thetaG} (m_g = {routeCWindowTelemetry.multiplierG}×) • σ̂_H = {routeCWindowTelemetry.sigmaH} u
-            </span>
-          </div>
-
-          <div className="route-c-kpi-box highlight">
-            <span className="route-c-kpi-label">
-              {isVi ? 'Điểm Tái Đặt Hàng C³-OUT (s*)' : 'Calibrated C³-OUT Reorder Point (s*)'}
-            </span>
-            <strong className="route-c-kpi-val text-teal">
-              {routeCWindowTelemetry.sCalibrated} units
-            </strong>
-            <span className="route-c-kpi-sub">
-              {isVi
-                ? `τ=0.95 BE: ${routeCWindowTelemetry.tau95Value}u • s = Q̂_{D_H}(τ_g) + θ_g·σ̂_H`
-                : `BE τ_95: ${routeCWindowTelemetry.tau95Value}u • s = Q̂_{D_H}(τ_g) + θ_g·σ̂_H`}
-            </span>
-          </div>
-        </div>
-
-        <div className="route-c-body-grid">
-          <div className="route-c-chart-box">
-            <ResponsiveContainer width="100%" height={250}>
-              <ComposedChart
-                data={routeCWindowTelemetry.curve}
-                margin={{ top: 12, right: 18, left: 4, bottom: 4 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis
-                  dataKey="tauLabel"
-                  stroke="#64748b"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fontSize: 10.5, fill: '#475569', fontFamily: 'IBM Plex Mono, monospace' }}
-                />
-                <YAxis
-                  stroke="#64748b"
-                  axisLine={false}
-                  tickLine={false}
-                  width={48}
-                  tick={{ fontSize: 11, fill: '#64748b', fontFamily: 'IBM Plex Mono, monospace' }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    borderColor: '#1e293b',
-                    color: '#f8fafc',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                  }}
-                  labelFormatter={(label) => (isVi ? `Mức phân vị τ = ${label}` : `Quantile Level τ = ${label}`)}
-                />
-                <ReferenceLine
-                  x={formatTauLabel(targetTau)}
-                  stroke="#0f766e"
-                  strokeWidth={2}
-                  strokeDasharray="4 4"
-                  label={{
-                    value: `τ_g=${targetTau} (${routeCWindowTelemetry.sBase}u)`,
-                    position: 'insideTopLeft',
-                    fill: '#0f766e',
-                    fontSize: 11,
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="routeC"
-                  name={isVi ? 'Route (c) Phân vị Cửa sổ Q̂_{D_H}(τ)' : 'Route (c) Direct Window Quantile Q̂_{D_H}(τ)'}
-                  fill="#ccfbf1"
-                  fillOpacity={0.65}
-                  stroke="#0f766e"
-                  strokeWidth={2.5}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="routeB"
-                  name={isVi ? 'Route (b) Tổng phân vị ngày Σ q̂_τ' : 'Route (b) Naive Daily Quantile Sum Σ q̂_τ'}
-                  stroke="#94a3b8"
-                  strokeWidth={2}
-                  strokeDasharray="4 4"
-                  dot={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="route-c-callout-box">
-            <div className="route-c-callout-header">
-              <GitCompare size={15} className="text-teal" />
-              <h4>
-                {isVi
-                  ? 'Tại Sao Chọn Route (c) Thay Vì Cộng Phân Vị Ngày Route (b)?'
-                  : 'Why Route (c) Direct Window Quantiles Outperform Route (b)'}
-              </h4>
-            </div>
-            <p className="route-c-callout-text">
-              {isVi
-                ? 'Trong bài toán kiểm soát tồn kho chu kỳ rà soát R = 7 ngày và thời gian giao hàng L = 3 ngày, rủi ro thiếu hàng xảy ra trên tổng nhu cầu tích lũy D_H của cả cửa sổ bảo vệ H = L + R = 10 ngày:'
-                : 'In periodic-review inventory control with review period R = 7d and lead time L = 3d, stockout exposure is governed by cumulative demand D_H over the full protection window H = L + R = 10 days:'}
-            </p>
-            <ul className="route-c-callout-list">
-              <li>
-                <strong>{isVi ? 'Route (c) — Dự báo phân vị tích lũy trực tiếp:' : 'Route (c) — Direct Cumulative Quantile:'}</strong>{' '}
-                {isVi
-                  ? 'Huấn luyện mô hình phân vị trực tiếp trên mục tiêu tổng D_H = Σ y_{T+t}, bảo toàn chính xác tự tương quan chuỗi thời gian và độ lệch phải (right-skewness) của nhu cầu bán lẻ.'
-                  : 'Directly estimates Q̂_{D_H}(τ) on cumulative target D_H = Σ y_{T+t}, preserving cross-day autocorrelation and heavy right-tail skewness.'}
-              </li>
-              <li>
-                <strong>{isVi ? 'Route (b) — Sai số khi cộng phân vị ngày:' : 'Route (b) — Daily Quantile Aggregation Bias:'}</strong>{' '}
-                {isVi
-                  ? 'Cộng tuyến tính phân vị từng ngày giả định tương quan hoàn hảo (comonotonicity ρ = 1) làm phình tồn kho dư thừa, trong khi nhân √H lại giả định độc lập i.i.d làm hụt tồn kho an toàn khi có khuyến mãi.'
-                  : 'Summing daily quantiles assumes perfect comonotonicity (ρ = 1, inflating holding cost), while Gaussian √H scaling assumes i.i.d. errors and under-protects promotional bursts.'}
-              </li>
-            </ul>
-          </div>
-        </div>
-        </Card>
-      )}
-
-      {/* TAB 4: SCHEDULE & INLINE OVERRIDES */}
-      {activeTab === 'schedule' && (
-        <Card className="p-6">
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                marginBottom: '1.15rem',
-                flexWrap: 'wrap',
-                gap: '0.75rem',
-              }}
-            >
-              <div>
-                <h3 className="perf-card-title">
-                  {isVi
-                    ? `Ma Trận Lịch Trình Dự Báo Hàng Ngày (${fullScheduleMatrix.length} Ngày)`
-                    : `Daily Predictive Schedule Matrix (${fullScheduleMatrix.length}-Day Horizon)`}
-                </h3>
-                <p className="engine-desc" style={{ marginBottom: 0 }}>
-                  {isVi
-                    ? 'Chi tiết dự báo P10 / P50 / P90, độ rộng khoảng tin cậy và cảnh báo đột biến theo ngày'
-                    : 'Daily P10 / P50 / P90 quantile schedule, CI width, and quick override actions'}
-                </p>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <div className="horizon-toggle" title={isVi ? 'Số dòng hiển thị mỗi trang' : 'Rows per view'}>
-                  {[7, 14, 28].map((sz) => (
-                    <button
-                      key={sz}
-                      type="button"
-                      className={`horizon-btn ${matrixPageSize === sz ? 'active' : ''}`}
-                      onClick={() => {
-                        setMatrixPageSize(sz);
-                        setMatrixPage(1);
-                        if (horizon < sz) {
-                          handleHorizonChange(sz);
-                        }
-                      }}
-                    >
-                      {isVi ? `Xem ${sz}d` : `${sz}d View`}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  className="export-matrix-btn"
-                  onClick={handleExportMatrixCsv}
-                  title={
-                    isVi
-                      ? 'Xuất bảng ma trận lịch trình dự báo thành file CSV'
-                      : 'Export schedule matrix to CSV'
-                  }
-                >
-                  <Download size={14} />
-                  <span>{isVi ? 'Xuất CSV' : 'Export CSV'}</span>
-                </button>
-
-                {canEdit && (
-                  <button
-                    type="button"
-                    className="export-matrix-btn"
-                    onClick={handleOpenBulkOverride}
-                    title={isVi ? 'Can thiệp điều chỉnh dự báo hàng loạt' : 'Bulk forecast override'}
-                    style={{ background: '#0f766e', color: '#fff', borderColor: '#0f766e' }}
-                  >
-                    <Layers size={14} />
-                    <span>{isVi ? 'Can thiệp hàng loạt' : 'Bulk Override'}</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="matrix-table">
-              <div className="matrix-header-row">
-                <div className="matrix-col-header matrix-col-1">{isVi ? 'NGÀY' : 'DATE'}</div>
-                <div className="matrix-col-header matrix-col-2">{isVi ? 'DỰ BÁO (P50)' : 'POINT (P50)'}</div>
-                <div className="matrix-col-header matrix-col-3">{isVi ? 'DẢI P10–P90' : 'P10 – P90 BAND'}</div>
-                <div className="matrix-col-header matrix-col-4">{isVi ? 'ĐỘ RỘNG CI' : 'CI WIDTH'}</div>
-                <div className="matrix-col-header matrix-col-5 text-right">{isVi ? 'ĐỘT BIẾN / CAN THIỆP' : 'RISK / ACTION'}</div>
-              </div>
-
-              {paginatedScheduleMatrix.map((row: any, idx: number) => (
-                <div className="matrix-row" key={idx}>
-                  <div className="matrix-cell matrix-col-1 font-bold mono-cell">{row.date}</div>
-                  <div className="matrix-cell matrix-col-2 text-teal mono-cell">
-                    {row.demand} {isVi ? 'đv' : 'u'}
-                  </div>
-                  <div className="matrix-cell matrix-col-3 mono-cell">
-                    [{row.lower} – {row.upper}]
-                  </div>
-                  <div className="matrix-cell matrix-col-4 mono-cell">
-                    Δ = {row.ciWidth ?? Math.max(0, Number(row.upper || 0) - Number(row.lower || 0))} u
-                  </div>
-                  <div className="matrix-cell matrix-col-5 text-right matrix-action-cell">
-                    <span className={row.spikeColor}>{row.spike}</span>
-                    {canEdit && (
-                      <button
-                        type="button"
-                        className="matrix-inline-override-btn"
-                        onClick={() => handleOpenOverrideForDate(row.date, row.demand)}
-                        title={isVi ? `Can thiệp ngày ${row.date}` : `Override ${row.date}`}
-                      >
-                        {isVi ? 'Sửa' : 'Edit'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {fullScheduleMatrix.length > matrixPageSize && (
-              <Pagination
-                currentPage={matrixPage}
-                totalItems={fullScheduleMatrix.length}
-                pageSize={matrixPageSize}
-                onPageChange={setMatrixPage}
-                onPageSizeChange={(newSize) => {
-                  setMatrixPageSize(newSize);
-                  setMatrixPage(1);
-                }}
-                pageSizeOptions={[7, 14, 28]}
+                placeholder={t('forecast.sku.search_placeholder')}
+                aria-label={t('forecast.sku.search_label')}
               />
-            )}
-
-            {overrides.length > 0 && (
-              <div style={{ marginTop: '1.5rem', borderTop: '1px solid #e2e8f0', paddingTop: '1.25rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <div>
-                    <h4 style={{ fontSize: '0.925rem', fontWeight: 600, color: '#0f172a', margin: 0 }}>
-                      {isVi ? `Danh Sách Can Thiệp Thủ Công Đang Áp Dụng (${overrides.length})` : `Active Manual Overrides (${overrides.length})`}
-                    </h4>
-                    <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.2rem 0 0 0' }}>
-                      {isVi
-                        ? `Tổng chênh lệch sản lượng: ${overrideMetrics.totalDelta >= 0 ? '+' : ''}${overrideMetrics.totalDelta} đv (${overrideMetrics.totalOriginal} → ${overrideMetrics.totalOverride})`
-                        : `Net demand variance: ${overrideMetrics.totalDelta >= 0 ? '+' : ''}${overrideMetrics.totalDelta} units (${overrideMetrics.totalOriginal} → ${overrideMetrics.totalOverride})`}
-                    </p>
-                  </div>
-                </div>
-                <div className="override-table-wrapper">
-                  <table className="override-table">
-                    <thead>
-                      <tr>
-                        <th>{isVi ? 'Ngày' : 'Date'}</th>
-                        <th className="text-right">{isVi ? 'Gốc (ML)' : 'ML Baseline'}</th>
-                        <th className="text-right">{isVi ? 'Can thiệp' : 'Override'}</th>
-                        <th className="text-right">{isVi ? 'Chênh lệch' : 'Delta'}</th>
-                        <th>{isVi ? 'Lý do / Phân loại' : 'Reason / Category'}</th>
-                        <th className="text-right">{isVi ? 'Thao tác' : 'Action'}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overrides.map((ov: any) => {
-                        const { formatted, dayOfWeek } = formatOverrideDate(ov.date);
-                        const { category, detail } = parseOverrideReason(ov.reason);
-                        const orig = typeof ov.original_value === 'number' ? Math.round(ov.original_value) : Number(ov.original_value) || 0;
-                        const over = typeof ov.override_value === 'number' ? Math.round(ov.override_value) : Number(ov.override_value) || 0;
-                        const delta = over - orig;
-                        return (
-                          <tr key={ov.id}>
-                            <td className="font-bold mono-cell">{formatted} {dayOfWeek && <small style={{ color: '#64748b' }}>({dayOfWeek})</small>}</td>
-                            <td className="text-right mono-cell">{orig} u</td>
-                            <td className="text-right mono-cell font-bold text-teal">{over} u</td>
-                            <td className="text-right mono-cell" style={{ color: delta >= 0 ? '#0f766e' : '#e11d48', fontWeight: 600 }}>
-                              {delta >= 0 ? `+${delta}` : delta} u
-                            </td>
-                            <td>
-                              <span style={{ fontWeight: 600 }}>{category}</span>
-                              {detail && <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{detail}</div>}
-                            </td>
-                            <td className="text-right">
-                              {canEdit && (
-                                <button
-                                  type="button"
-                                  className="matrix-inline-override-btn"
-                                  onClick={() => handleRevertOverride(ov.id)}
-                                  title={isVi ? 'Khôi phục về baseline ML' : 'Revert to ML baseline'}
-                                  style={{ color: '#e11d48', borderColor: '#fecdd3' }}
-                                >
-                                  <RotateCcw size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                                  {isVi ? 'Hủy' : 'Revert'}
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </Card>
-        )}
-
-      {/* TAB 3: MODEL BENCHMARK */}
-      {activeTab === 'benchmark' && (
-        <Card className="p-6">
-        <div className="bench-header">
-          <div>
-            <div className="bench-title-row">
-              <Award size={17} className="text-teal" />
-              <h3 className="perf-card-title">
-                {isVi
-                  ? 'Bảng Đối Chuẩn Hiệu Năng Đa Mô Hình Dự Báo (Multi-Model Benchmark Comparison)'
-                  : 'Multi-Model Forecasting Architecture Benchmark Comparison'}
-              </h3>
-            </div>
-            <p className="engine-desc" style={{ marginBottom: 0 }}>
-              {isVi
-                ? `So sánh thực nghiệm 4 kiến trúc dự báo từ báo cáo nghiên cứu trên SKU ${skuSearch || 'FOODS_1_001'} (${selectedStore || 'CA_1'}) theo các thước đo chuẩn M5: MASE, WRMSSE, RMSE, MAE và Pinball Loss.`
-                : `Empirical evaluation of the 4 research forecasting architectures on SKU ${skuSearch || 'FOODS_1_001'} (${selectedStore || 'CA_1'}) across M5 metrics: MASE, WRMSSE, RMSE, MAE, and Quantile Pinball Loss.`}
-            </p>
+            </Field>
+            <Select
+              label={t('forecast.sku.category')}
+              value={category}
+              disabled={!!categories.error}
+              onChange={(v) => {
+                setCategory(v);
+                skuPage.setPage(1);
+              }}
+              options={[{ value: '', label: t('forecast.sku.category_all') }, ...(categories.data ?? []).map((c) => ({ value: c, label: c }))]}
+            />
+            <Select<number>
+              label={t('forecast.ctl.horizon')}
+              value={horizon}
+              onChange={(v) => {
+                setHorizon(v);
+                schedulePage.setPage(1);
+              }}
+              options={HORIZONS.map((d) => ({ value: d, label: t('forecast.ctl.horizon_option', { days: d }) }))}
+            />
           </div>
-        </div>
-
-        <div className="override-table-wrapper">
-          <table className="override-table bench-table">
-            <thead>
-              <tr>
-                <th>{isVi ? 'Kiến Trúc Mô Hình (Architecture)' : 'Model Architecture'}</th>
-                <th>{isVi ? 'Họ Thuật Toán' : 'Algorithmic Family'}</th>
-                <th className="text-right">MASE ↓</th>
-                <th className="text-right">WRMSSE ↓</th>
-                <th className="text-right">RMSE ↓</th>
-                <th className="text-right">MAE ↓</th>
-                <th className="text-right">Pinball Loss ↓</th>
-                <th>{isVi ? 'Trạng Thái Triển Khai' : 'Deployment Status'}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {benchmarkModels.length === 0 ? (
-                <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '32px 16px', color: '#64748b' }}>
-                    <div style={{ fontWeight: 600, color: '#334155', marginBottom: '4px' }}>
-                      {isVi ? 'Chưa có mô hình nào được đăng ký trong Model Registry' : 'No registered models found in registry'}
-                    </div>
-                    <div style={{ fontSize: '0.85rem' }}>
-                      {isVi ? 'Dữ liệu được cập nhật trực tiếp từ Backend Model Registry (/api/v1/ml/models).' : 'Data is fetched directly from Backend Model Registry (/api/v1/ml/models).'}
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                benchmarkModels.map((m) => (
-                  <tr key={m.id} className={m.isSelected ? 'bench-row-active' : ''}>
-                    <td className="font-bold">{m.name}</td>
-                    <td className="text-slate-muted">{m.family}</td>
-                    <td className="text-right mono-cell font-bold text-teal">{m.mase}</td>
-                    <td className="text-right mono-cell">{m.wrmsse}</td>
-                    <td className="text-right mono-cell">{m.rmse}</td>
-                    <td className="text-right mono-cell">{m.mae}</td>
-                    <td className="text-right mono-cell">{m.pinball}</td>
-                    <td>
-                      <span className={`bench-status-badge ${m.badgeClass}`}>{m.badge}</span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+          <div style={{ fontSize: 'var(--text-sm)' }}>
+            <span style={muted}>{t('forecast.sku.selected')}: </span>
+            {sku ? (
+              <>
+                <strong style={mono}>{sku}</strong>
+                {selectedProduct && <span style={muted}> · {selectedProduct.name}</span>}
+              </>
+            ) : (
+              <span style={muted}>{t('forecast.sku.none_selected')}</span>
+            )}
+          </div>
+          <Table
+            columns={skuColumns}
+            rows={products.data?.items ?? []}
+            rowKey={(p) => p.item_id}
+            loading={products.loading && !products.data}
+            error={products.error}
+            onRetry={products.refetch}
+            filtered={!!query || !!category}
+            emptyTitle={t('forecast.sku.empty_title')}
+            emptyDescription={t('forecast.sku.empty_description')}
+            onRowClick={(p) => setSku(p.item_id)}
+            pagination={{ page: skuPage.page, pageSize: skuPage.pageSize, onPageChange: skuPage.setPage, total: products.data?.total ?? 0 }}
+            dense
+          />
+          <DataSourceNote source={t('forecast.sku.source')} />
         </div>
       </Card>
-      )}
 
-      {/* Manual Override Modal */}
-      {isOverrideModalOpen &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setIsOverrideModalOpen(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <div className="modal-header-info">
-                  <div className="modal-title-row">
-                    <h2 className="modal-title">
-                      {isVi ? 'Can Thiệp Dự Báo Thủ Công Đơn Lẻ' : 'Manual Forecast Override'}
-                    </h2>
-                  </div>
-                  <div className="modal-badge-group">
-                    <span className="modal-badge highlight">SKU: {skuSearch || 'FOODS_1_001'}</span>
-                    <span className="modal-badge">
-                      {isVi ? 'Kho:' : 'Store:'} {selectedStore || 'CA_1'}
-                    </span>
-                    <span className="modal-badge">
-                      {isVi ? `Chu kỳ: ${horizon}d` : `Horizon: ${horizon}d`}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  className="modal-close"
-                  onClick={() => setIsOverrideModalOpen(false)}
-                  title={isVi ? 'Đóng' : 'Close'}
-                >
-                  <X size={15} />
-                </button>
-              </div>
+      {!user ? <NoPermission /> : body}
 
-              <form
-                onSubmit={handleApplyOverride}
-                style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}
-              >
-                <div className="modal-body">
-                  {overrideError ? (
-                    <div
-                      className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded"
-                      style={{ borderRadius: '4px' }}
-                    >
-                      {String(overrideError)}
-                    </div>
-                  ) : null}
+      <Modal
+        open={ovRow !== null}
+        onClose={() => setOvRow(null)}
+        dismissible={!ovBusy}
+        title={t('forecast.override.title')}
+        description={ovRow ? t('forecast.override.description', { h: ovRow.h, date: fmt.date(ovRow.forecast_date), value: fmt.number(ovRow.modelValue, { digits: 2 }) }) : undefined}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOvRow(null)} disabled={ovBusy}>
+              {t('forecast.override.cancel')}
+            </Button>
+            <Button type="submit" form="override-form" loading={ovBusy}>
+              {t('forecast.override.submit')}
+            </Button>
+          </>
+        }
+      >
+        <form id="override-form" onSubmit={submitOverride} style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          {ovError && <Alert tone="danger">{ovError}</Alert>}
+          <Input label={t('forecast.override.value')} type="number" min={0} max={100000} step="any" value={ovValue} onChange={(e) => setOvValue(e.target.value)} />
+          <Select<OverrideReasonKey> label={t('forecast.override.reason')} value={ovReason} onChange={setOvReason} options={OVERRIDE_REASONS.map((k) => ({ value: k, label: t(`forecast.override.reason_${k}` as TKey) }))} />
+          <Input label={t('forecast.override.notes')} value={ovNotes} maxLength={400} onChange={(e) => setOvNotes(e.target.value)} />
+        </form>
+      </Modal>
 
-                  <div className="modal-form-group">
-                    <label>
-                      {isVi ? 'Ngày Can Thiệp (Target Forecast Date)' : 'Target Forecast Date'}
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      className="modal-input"
-                      value={overrideDate}
-                      onChange={(e) => setOverrideDate(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="modal-form-group">
-                    <label>
-                      {isVi ? 'Số Lượng Dự Báo Điều Chỉnh (Adjusted Quantity)' : 'Adjusted Quantity'}
-                    </label>
-                    <div className="modal-input-wrapper">
-                      <input
-                        type="number"
-                        min="0"
-                        required
-                        value={overrideValue}
-                        onChange={(e) => setOverrideValue(e.target.value)}
-                        className="modal-input"
-                        placeholder="e.g. 25"
-                      />
-                      <span className="modal-input-suffix">{isVi ? 'đơn vị' : 'units'}</span>
-                    </div>
-                  </div>
-
-                  <div className="modal-form-group">
-                    <label>{isVi ? 'Danh Mục Lý Do (Reason Category)' : 'Reason Category'}</label>
-                    <select
-                      className="modal-select"
-                      value={overrideReason}
-                      onChange={(e) => setOverrideReason(e.target.value)}
-                    >
-                      <option value="Promotional Spike Override">
-                        {isVi ? 'Chiến Dịch Khuyến Mãi (Promotional Spike)' : 'Promotional Spike Override'}
-                      </option>
-                      <option value="Seasonal Demand Surge">
-                        {isVi ? 'Biến Động Nhu Cầu Mùa Vụ (Seasonal Surge)' : 'Seasonal Demand Surge'}
-                      </option>
-                      <option value="Supply Chain Disruption">
-                        {isVi ? 'Đứt Gãy Cung Ứng / Thiếu Hụt (Supply Shortage)' : 'Supply Chain Disruption'}
-                      </option>
-                      <option value="Market Competitor Action">
-                        {isVi ? 'Biến Động Đối Thủ Cạnh Tranh (Market Action)' : 'Market Competitor Action'}
-                      </option>
-                      <option value="Unplanned Event">
-                        {isVi ? 'Sự Kiện Đột Xuất (Unplanned Event)' : 'Unplanned Event'}
-                      </option>
-                    </select>
-                  </div>
-
-                  <div className="modal-form-group" style={{ marginBottom: 0 }}>
-                    <label>
-                      {isVi
-                        ? 'Giải Trình Nghiệp Vụ Chi Tiết (Bắt buộc cho kiểm toán)'
-                        : 'Operational Justification (Audit Required)'}
-                    </label>
-                    <textarea
-                      required
-                      className="modal-textarea"
-                      placeholder={
-                        isVi
-                          ? 'Nhập lý do chi tiết cho việc can thiệp thủ công (sẽ ghi nhận vào nhật ký kiểm toán)...'
-                          : 'Enter detailed rationale for manual intervention (recorded in audit logs)...'
-                      }
-                      value={overrideNotes}
-                      onChange={(e) => setOverrideNotes(e.target.value)}
-                      rows={3}
-                    ></textarea>
-                  </div>
-                </div>
-
-                <div className="modal-footer">
-                  <div className="modal-footer-notice">
-                    <ShieldCheck size={14} className="text-teal" />
-                    <span>
-                      {isVi ? 'Lưu vết kiểm toán tự động' : 'Automatic audit logging active'}
-                    </span>
-                  </div>
-                  <div className="modal-footer-actions">
-                    <button
-                      type="button"
-                      className="modal-btn-cancel"
-                      onClick={() => setIsOverrideModalOpen(false)}
-                      disabled={isSubmittingOverride}
-                    >
-                      {isVi ? 'Hủy Bỏ' : 'Cancel'}
-                    </button>
-                    <button
-                      type="submit"
-                      className="modal-btn-apply"
-                      disabled={isSubmittingOverride}
-                    >
-                      {isVi
-                        ? isSubmittingOverride
-                          ? 'Đang Lưu...'
-                          : 'Áp Dụng Điều Chỉnh'
-                        : isSubmittingOverride
-                          ? 'Saving...'
-                          : 'Apply Override'}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>,
-          document.body
-        )}
-
-      {/* Bulk Override Modal */}
-      {isBulkOverrideOpen &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setIsBulkOverrideOpen(false)}>
-            <div className="modal-content bulk-modal-content" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <div className="modal-header-info">
-                  <div className="modal-title-row">
-                    <h2 className="modal-title">
-                      {isVi ? 'Điều Chỉnh Dự Báo Hàng Loạt Theo Chu Kỳ' : 'Bulk Forecast Horizon Override'}
-                    </h2>
-                  </div>
-                  <div className="modal-badge-group">
-                    <span className="modal-badge highlight">SKU: {skuSearch || 'FOODS_1_001'}</span>
-                    <span className="modal-badge">
-                      {isVi ? 'Kho:' : 'Store:'} {selectedStore || 'CA_1'}
-                    </span>
-                    <span className="modal-badge">
-                      {isVi
-                        ? `${bulkPreviewRows.length} ngày dự báo trong khoảng`
-                        : `${bulkPreviewRows.length} forecast days in range`}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  className="modal-close"
-                  onClick={() => setIsBulkOverrideOpen(false)}
-                  title={isVi ? 'Đóng' : 'Close'}
-                >
-                  <X size={15} />
-                </button>
-              </div>
-
-              <form
-                onSubmit={handleApplyBulkOverride}
-                style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}
-              >
-                <div className="modal-body">
-                  {bulkError ? (
-                    <div
-                      className="p-3 mb-3 text-xs bg-red-50 border border-red-200 text-red-700 rounded"
-                      style={{ borderRadius: '4px' }}
-                    >
-                      {String(bulkError)}
-                    </div>
-                  ) : null}
-
-                  <div className="bulk-modal-grid">
-                    {/* Left Column: Adjustment Parameters */}
-                    <div className="bulk-grid-col">
-                      <div className="modal-form-group">
-                        <label>
-                          {isVi ? 'Chế Độ Điều Chỉnh (Adjustment Mode)' : 'Adjustment Mode'}
-                        </label>
-                        <div className="bulk-mode-toggle">
-                          <button
-                            type="button"
-                            className={`bulk-mode-btn ${bulkMode === 'percent' ? 'active' : ''}`}
-                            onClick={() => setBulkMode('percent')}
-                          >
-                            {isVi ? 'Tỷ Lệ % (+/- %)' : 'Percentage (+/- %)'}
-                          </button>
-                          <button
-                            type="button"
-                            className={`bulk-mode-btn ${bulkMode === 'fixed' ? 'active' : ''}`}
-                            onClick={() => setBulkMode('fixed')}
-                          >
-                            {isVi ? 'Số Lượng Cố Định' : 'Fixed Quantity'}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="bulk-date-row">
-                        <div className="modal-form-group" style={{ flex: 1 }}>
-                          <label>{isVi ? 'Từ Ngày (Start Date)' : 'Start Date'}</label>
-                          <input
-                            type="date"
-                            required
-                            className="modal-input"
-                            value={bulkStartDate}
-                            onChange={(e) => setBulkStartDate(e.target.value)}
-                          />
-                        </div>
-                        <div className="modal-form-group" style={{ flex: 1 }}>
-                          <label>{isVi ? 'Đến Ngày (End Date)' : 'End Date'}</label>
-                          <input
-                            type="date"
-                            required
-                            className="modal-input"
-                            value={bulkEndDate}
-                            onChange={(e) => setBulkEndDate(e.target.value)}
-                          />
-                        </div>
-                      </div>
-
-                      {bulkMode === 'percent' ? (
-                        <div className="modal-form-group">
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              marginBottom: '0.375rem',
-                            }}
-                          >
-                            <label style={{ margin: 0 }}>
-                              {isVi ? 'Tỷ Lệ Điều Chỉnh (%)' : 'Adjustment Percentage (%)'}
-                            </label>
-                            <span
-                              style={{
-                                fontSize: '0.75rem',
-                                fontWeight: 700,
-                                color: '#0f766e',
-                                fontFamily: 'monospace',
-                              }}
-                            >
-                              {Number(bulkPercent) > 0 ? `+${bulkPercent}%` : `${bulkPercent}%`}
-                            </span>
-                          </div>
-                          <div className="modal-input-wrapper">
-                            <input
-                              type="number"
-                              step="1"
-                              required
-                              value={bulkPercent}
-                              onChange={(e) => setBulkPercent(e.target.value)}
-                              className="modal-input"
-                              placeholder={
-                                isVi ? 'VD: 15 cho +15%, -10 cho -10%' : 'e.g. 15 for +15%, -10 for -10%'
-                              }
-                            />
-                            <span className="modal-input-suffix">%</span>
-                          </div>
-                          <span
-                            style={{
-                              fontSize: '0.6875rem',
-                              color: '#64748b',
-                              marginTop: '0.35rem',
-                              display: 'block',
-                              lineHeight: 1.35,
-                            }}
-                          >
-                            {isVi
-                              ? 'Giá trị dương để tăng dự báo (chiến dịch khuyến mãi, sự kiện), giá trị âm để giảm bớt.'
-                              : 'Positive values increase forecast (promotions, events); negative values decrease it.'}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="modal-form-group">
-                          <label>
-                            {isVi ? 'Số Lượng Cố Định Mỗi Ngày' : 'Fixed Daily Quantity'}
-                          </label>
-                          <div className="modal-input-wrapper">
-                            <input
-                              type="number"
-                              min="0"
-                              required
-                              value={bulkFixedVal}
-                              onChange={(e) => setBulkFixedVal(e.target.value)}
-                              className="modal-input"
-                              placeholder="e.g. 80"
-                            />
-                            <span className="modal-input-suffix">
-                              {isVi ? 'đv / ngày' : 'units / day'}
-                            </span>
-                          </div>
-                          <span
-                            style={{
-                              fontSize: '0.6875rem',
-                              color: '#64748b',
-                              marginTop: '0.35rem',
-                              display: 'block',
-                              lineHeight: 1.35,
-                            }}
-                          >
-                            {isVi
-                              ? 'Áp dụng đồng đều cùng một mức sản lượng cho tất cả các ngày trong khoảng thời gian đã chọn.'
-                              : 'Applies the same fixed quantity across all days in the selected range.'}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Right Column: Impact Preview & Audit Notes */}
-                    <div className="bulk-grid-col">
-                      {bulkPreviewRows.length > 0 && (
-                        <div className="bulk-preview-box">
-                          <div className="bulk-preview-header">
-                            <span style={{ fontWeight: 700, color: '#1e293b' }}>
-                              {isVi
-                                ? `Xem Trước: ${bulkPreviewRows.length} Ngày Bị Ảnh Hưởng`
-                                : `Preview: ${bulkPreviewRows.length} Affected Days`}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: '0.6875rem',
-                                color: '#64748b',
-                                fontFamily: 'monospace',
-                              }}
-                            >
-                              {bulkStartDate} → {bulkEndDate}
-                            </span>
-                          </div>
-                          <div className="bulk-preview-tags">
-                            {bulkPreviewRows.map((r: any, i: number) => {
-                              const diff = r.projected - r.original;
-                              return (
-                                <div key={i} className="bulk-preview-chip">
-                                  <span style={{ fontWeight: 600 }}>{r.date}</span>
-                                  <span>
-                                    {r.original} →{' '}
-                                    <strong style={{ color: '#0f766e' }}>{r.projected} u</strong>
-                                    <span
-                                      style={{
-                                        color: diff >= 0 ? '#059669' : '#e11d48',
-                                        marginLeft: '0.35rem',
-                                        fontWeight: 600,
-                                      }}
-                                    >
-                                      ({diff >= 0 ? `+${diff}` : diff})
-                                    </span>
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="modal-form-group">
-                        <label>{isVi ? 'Danh Mục Lý Do (Reason Category)' : 'Reason Category'}</label>
-                        <select
-                          className="modal-select"
-                          value={bulkReason}
-                          onChange={(e) => setBulkReason(e.target.value)}
-                        >
-                          <option value="Promotional Spike Override">
-                            {isVi
-                              ? 'Chiến Dịch Khuyến Mãi (Promotional Campaign)'
-                              : 'Promotional Campaign Override'}
-                          </option>
-                          <option value="Seasonal Demand Surge">
-                            {isVi ? 'Nhu Cầu Mùa Vụ Tăng Vọt (Seasonal Surge)' : 'Seasonal Demand Surge'}
-                          </option>
-                          <option value="Supply Chain Disruption">
-                            {isVi ? 'Đứt Gãy Chuỗi Cung Ứng (Supply Disruption)' : 'Supply Disruption'}
-                          </option>
-                          <option value="Market Competitor Action">
-                            {isVi
-                              ? 'Biến Động Thị Trường / Đối Thủ (Market Action)'
-                              : 'Market Action / Competitor'}
-                          </option>
-                          <option value="Unplanned Event">
-                            {isVi ? 'Sự Kiện Đột Xuất (Unplanned Event)' : 'Unplanned Event'}
-                          </option>
-                        </select>
-                      </div>
-
-                      <div className="modal-form-group" style={{ marginBottom: 0 }}>
-                        <label>
-                          {isVi
-                            ? 'Giải Trình Nghiệp Vụ Bắt Buộc (Audit Trail)'
-                            : 'Mandatory Operational Justification (Audit Trail)'}
-                        </label>
-                        <textarea
-                          required
-                          className="modal-textarea"
-                          placeholder={
-                            isVi
-                              ? 'Nêu rõ lý do điều chỉnh hàng loạt (ví dụ: Khuyến mãi Black Friday 4 ngày tại chuỗi siêu thị CA)...'
-                              : 'Specify reason for bulk override (e.g. Black Friday 4-day promotion across CA stores)...'
-                          }
-                          value={bulkNotes}
-                          onChange={(e) => setBulkNotes(e.target.value)}
-                          rows={3}
-                        ></textarea>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="modal-footer">
-                  <div className="modal-footer-notice">
-                    <ShieldCheck size={14} className="text-teal" />
-                    <span>
-                      {isVi
-                        ? 'Ghi vết kiểm toán tự động theo quy định quản trị SCM'
-                        : 'Automated audit trail logged per SCM governance standards'}
-                    </span>
-                  </div>
-                  <div className="modal-footer-actions">
-                    <button
-                      type="button"
-                      className="modal-btn-cancel"
-                      onClick={() => setIsBulkOverrideOpen(false)}
-                      disabled={isSubmittingBulk}
-                    >
-                      {isVi ? 'Hủy Bỏ' : 'Cancel'}
-                    </button>
-                    <button
-                      type="submit"
-                      className="modal-btn-apply"
-                      disabled={isSubmittingBulk || bulkPreviewRows.length === 0}
-                    >
-                      {isVi
-                        ? isSubmittingBulk
-                          ? 'Đang Lưu...'
-                          : `Áp Dụng Điều Chỉnh (${bulkPreviewRows.length} Ngày)`
-                        : isSubmittingBulk
-                          ? 'Saving...'
-                          : `Apply Bulk Override (${bulkPreviewRows.length} Days)`}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>,
-          document.body
-        )}
+      <Modal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        dismissible={!bulkBusy}
+        title={t('forecast.bulk.title')}
+        description={t('forecast.bulk.description')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setBulkOpen(false)} disabled={bulkBusy}>
+              {t('forecast.override.cancel')}
+            </Button>
+            <Button type="submit" form="bulk-form" loading={bulkBusy} disabled={bulkPreview.length === 0}>
+              {t('forecast.bulk.submit', { n: bulkPreview.length })}
+            </Button>
+          </>
+        }
+      >
+        <form id="bulk-form" onSubmit={submitBulk} style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          {bulkError && <Alert tone="danger">{bulkError}</Alert>}
+          <Select<'percent' | 'fixed'>
+            label={t('forecast.bulk.mode')}
+            value={bulkMode}
+            onChange={setBulkMode}
+            options={[
+              { value: 'percent', label: t('forecast.bulk.mode_percent') },
+              { value: 'fixed', label: t('forecast.bulk.mode_fixed') },
+            ]}
+          />
+          <Input
+            label={bulkMode === 'percent' ? t('forecast.bulk.percent') : t('forecast.bulk.fixed')}
+            type="number"
+            step="any"
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            error={bulkValue !== '' && !bulkValid ? t('forecast.bulk.invalid_value') : undefined}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+            <Input label={t('forecast.bulk.from')} type="date" value={bulkFrom} min={rows[0]?.forecast_date} max={rows[rows.length - 1]?.forecast_date} onChange={(e) => setBulkFrom(e.target.value)} />
+            <Input label={t('forecast.bulk.to')} type="date" value={bulkTo} min={rows[0]?.forecast_date} max={rows[rows.length - 1]?.forecast_date} onChange={(e) => setBulkTo(e.target.value)} />
+          </div>
+          <Select<OverrideReasonKey> label={t('forecast.override.reason')} value={bulkReason} onChange={setBulkReason} options={OVERRIDE_REASONS.map((k) => ({ value: k, label: t(`forecast.override.reason_${k}` as TKey) }))} />
+          <Input label={t('forecast.override.notes')} value={bulkNotes} maxLength={400} onChange={(e) => setBulkNotes(e.target.value)} />
+          <Alert tone={bulkPreview.length ? 'info' : 'warning'}>{bulkPreview.length ? t('forecast.bulk.preview', { n: bulkPreview.length }) : t('forecast.bulk.none_in_range')}</Alert>
+        </form>
+      </Modal>
+      {dialog}
     </div>
   );
 };

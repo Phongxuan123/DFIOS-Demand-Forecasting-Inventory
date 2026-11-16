@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, Query, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, Request, Response, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin, get_client_ip
@@ -20,14 +20,28 @@ router = APIRouter()
 def list_users(
     skip: int = Query(0, ge=0, description="Số lượng bản ghi bỏ qua"),
     limit: int = Query(100, ge=1, le=500, description="Số lượng bản ghi tối đa lấy về"),
+    response: Response = None,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
     """
     **UC06 - List Users (Admin only)**:
-    Lấy danh sách tất cả các tài khoản người dùng trong hệ thống.
+    Lấy danh sách tất cả các tài khoản người dùng trong hệ thống. Tổng số tài khoản nằm ở header `X-Total-Count`.
     """
+    if response is not None:
+        response.headers["X-Total-Count"] = str(db.query(User).count())
     return user_service.list_users(db, skip=skip, limit=limit)
+
+
+@router.post("/{user_id}/revoke-tokens", response_model=MessageResponse, summary="UC06 - Thu hồi mọi phiên đăng nhập của một tài khoản (Admin only)")
+def revoke_user_tokens(
+    user_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Tăng `token_version` của người dùng: mọi JWT đã phát hành cho tài khoản này bị vô hiệu ngay lập tức."""
+    return user_service.revoke_user_tokens(db, user_id=user_id, admin_email=admin.email, ip_address=get_client_ip(request))
 
 
 @router.post("", response_model=UserResponse, summary="UC06 - Tạo tài khoản mới & gán vai trò")
@@ -115,6 +129,7 @@ def update_user(
 def toggle_status(
     user_id: str,
     req_body: UserStatusUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -122,12 +137,14 @@ def toggle_status(
     **UC06 - Toggle User Active Status (Admin only)**:
     Admin kích hoạt (True) hoặc vô hiệu hóa (False) tài khoản người dùng.
     """
-    return user_service.toggle_user_status(db, user_id=user_id, request=req_body, current_admin=admin)
+    return user_service.toggle_user_status(db, user_id=user_id, request=req_body, current_admin=admin,
+                                           ip_address=get_client_ip(request))
 
 
 @router.delete("/{user_id}", response_model=MessageResponse, summary="UC06 - Xóa tài khoản")
 def delete_user(
     user_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -135,4 +152,4 @@ def delete_user(
     **UC06 - Delete User (Admin only)**:
     Admin xóa vĩnh viễn một tài khoản khỏi hệ thống.
     """
-    return user_service.delete_user(db, current_admin=admin, user_id=user_id)
+    return user_service.delete_user(db, current_admin=admin, user_id=user_id, ip_address=get_client_ip(request))

@@ -14,7 +14,7 @@ class CalibrationStateItem(BaseModel):
     review_date: date
     theta: float
     multiplier: float
-    error_rate: float
+    error_rate: Optional[float] = None
     at_boundary: bool
     setpoint: float
     eta: float

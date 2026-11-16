@@ -105,6 +105,14 @@ class CompareParamItem(BaseModel):
     rop_difference: float
     eoq_difference: float
     holding_cost_savings: float  # static_holding_cost - ml_holding_cost
+    # R-13: shortage + ordering + total (analytic estimate, A3 rates); additive fields
+    ml_annual_shortage_cost: Optional[float] = None
+    ml_annual_ordering_cost: Optional[float] = None
+    ml_annual_total_cost: Optional[float] = None
+    static_annual_shortage_cost: Optional[float] = None
+    static_annual_ordering_cost: Optional[float] = None
+    static_annual_total_cost: Optional[float] = None
+    total_cost_savings: Optional[float] = None  # static_total - ml_total (may be negative)
 
 
 class CompareStaticResponse(BaseModel):
@@ -112,6 +120,9 @@ class CompareStaticResponse(BaseModel):
     total_items: int
     total_holding_cost_savings: float
     avg_ss_reduction_percent: float
+    total_cost_savings: Optional[float] = None
+    cost_model: Optional[str] = None
+    n_items_skipped: int = 0  # round 5: SKUs without observed or parameter demand (never an invented 36.5 / year)
 
 
 # --- UC32: Cost Sensitivity Analysis ---
@@ -168,13 +179,32 @@ class PolicySelectionItem(BaseModel):
     kappa_g: float
     val_cost: Optional[float] = None
     val_service: Optional[float] = None
-    setpoint: float = 0.96
+    setpoint: float = 0.95
+    is_feasible: Optional[bool] = None
+    n_items: Optional[int] = None
+    n_validation_reviews: Optional[int] = None
+    c3out_active: Optional[bool] = None
+    # additive (Q-06/Q-07/Q-08)
+    search_mode: Optional[str] = None  # kappa_only | m_grid (which candidate was persisted)
+    source: Optional[str] = None  # j5_backtest | artifact | None
+    kappa_only_m_g: Optional[float] = None
+    kappa_only_kappa_g: Optional[float] = None
+    kappa_only_val_cost: Optional[float] = None
+    kappa_only_val_service: Optional[float] = None
+    kappa_only_is_feasible: Optional[bool] = None
+    m_grid_m_g: Optional[float] = None
+    m_grid_kappa_g: Optional[float] = None
+    m_grid_val_cost: Optional[float] = None
+    m_grid_val_service: Optional[float] = None
+    m_grid_is_feasible: Optional[bool] = None
 
 
 class RefitPoliciesRequest(BaseModel):
     store_id: Optional[str] = Field("CA_1", description="Mã kho hàng")
     selection_id: Optional[str] = Field(None, description="Mã chu kỳ (ví dụ: quarter_2015_Q3)")
-    target_availability: Optional[float] = Field(0.96, ge=0.85, le=0.999, description="Mức Availability mục tiêu")
+    target_availability: Optional[float] = Field(None, ge=0.85, le=0.999, description="Mức Availability mục tiêu (mặc định: cấu hình hệ thống default_service_level)")
+    c3out_active: Optional[bool] = Field(None, description="True: giữ m_g = 0 (P6), chỉ chọn kappa. Mặc định theo setting c3out_active (True)")
+    search_mode: Optional[str] = Field(None, description="auto (mặc định) | kappa_only | m_grid: kết quả nào được lưu vào policy_selection; cả hai luôn được trả về")
 
 
 class RefitPoliciesResponse(BaseModel):

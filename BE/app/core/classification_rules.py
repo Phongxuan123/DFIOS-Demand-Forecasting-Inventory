@@ -1,5 +1,16 @@
 from typing import Dict, Any
 
+# Round 5 (U-06): language-independent codes of the Vietnamese policy texts below (client-side i18n).
+# description_code / strategy_code / replenishment_policy_code are per segment ("abc_A_xyz_X", "strategy_AX", ...);
+# the enumerations below are shared by several segments.
+_REVIEW_FREQUENCY_CODE = {"AX": "daily", "AY": "weekly", "AZ": "weekly_or_event", "BX": "biweekly",
+                          "BY": "biweekly", "BZ": "monthly", "CX": "monthly", "CY": "monthly",
+                          "CZ": "quarterly_or_on_demand"}
+_SAFETY_STOCK_CODE = {"AX": "low", "AY": "medium", "AZ": "high", "BX": "standard", "BY": "medium",
+                      "BZ": "cautious", "CX": "high", "CY": "moderate", "CZ": "none_or_minimal"}
+_PRIORITY_CODE = {"AX": "critical", "AY": "high", "AZ": "high", "BX": "medium", "BY": "medium",
+                  "BZ": "medium_low", "CX": "low", "CY": "low", "CZ": "very_low"}
+
 # Bảng luật chính sách và khuyến nghị chiến lược tồn kho cho 9 phân khúc ma trận ABC/XYZ (UC28)
 # Lưu tập trung tại config/seed, không hardcode rải rác
 CLASSIFICATION_RECOMMENDATIONS: Dict[str, Dict[str, Any]] = {
@@ -85,3 +96,13 @@ CLASSIFICATION_RECOMMENDATIONS: Dict[str, Dict[str, Any]] = {
         "priority": "Rất thấp (Very Low)",
     },
 }
+
+for _seg, _rec in CLASSIFICATION_RECOMMENDATIONS.items():
+    _rec.update({
+        "description_code": f"abc_{_seg[0]}_xyz_{_seg[1]}",
+        "strategy_code": f"strategy_{_seg}",
+        "replenishment_policy_code": f"replenishment_{_seg}",
+        "review_frequency_code": _REVIEW_FREQUENCY_CODE[_seg],
+        "safety_stock_level_code": _SAFETY_STOCK_CODE[_seg],
+        "priority_code": _PRIORITY_CODE[_seg],
+    })

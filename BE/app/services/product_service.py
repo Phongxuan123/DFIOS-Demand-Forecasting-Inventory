@@ -1,9 +1,12 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.product import Product
+from app.models.inventory import Inventory
+from app.models.inventory_param import InventoryParam
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -29,12 +32,38 @@ class ProductService:
         search: Optional[str] = None,
         dept_id: Optional[str] = None,
         cat_id: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: str = "asc",
+        store_id: Optional[str] = None,
     ) -> ProductListResponse:
         items, total = product_repository.list_products(
-            db, skip=skip, limit=limit, search=search, dept_id=dept_id, cat_id=cat_id
+            db, skip=skip, limit=limit, search=search, dept_id=dept_id, cat_id=cat_id,
+            sort_by=sort_by, sort_dir=sort_dir,
         )
+        ids = [p.item_id for p in items]
+        stock: dict = {}
+        params: dict = {}
+        if ids:
+            q = db.query(Inventory.item_id, func.sum(Inventory.on_hand)).filter(Inventory.item_id.in_(ids))
+            if store_id:
+                q = q.filter(Inventory.store_id == store_id)
+            stock = {i: float(v or 0) for i, v in q.group_by(Inventory.item_id).all()}
+            pq = db.query(InventoryParam.item_id, func.avg(InventoryParam.s), func.avg(InventoryParam.S)).filter(
+                InventoryParam.item_id.in_(ids))
+            if store_id:
+                pq = pq.filter(InventoryParam.store_id == store_id)
+            params = {i: (s, S) for i, s, S in pq.group_by(InventoryParam.item_id).all()}
+        rows = []
+        for p in items:
+            r = ProductResponse.model_validate(p)
+            r.on_hand = stock.get(p.item_id)
+            s_S = params.get(p.item_id)
+            if s_S:
+                r.s = round(float(s_S[0]), 2) if s_S[0] is not None else None
+                r.S = round(float(s_S[1]), 2) if s_S[1] is not None else None
+            rows.append(r)
         return ProductListResponse(
-            items=[ProductResponse.model_validate(p) for p in items],
+            items=rows,
             total=total,
             skip=skip,
             limit=limit,

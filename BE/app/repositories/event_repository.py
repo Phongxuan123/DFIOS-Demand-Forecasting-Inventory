@@ -1,6 +1,5 @@
 from datetime import date
 from typing import List, Optional, Tuple
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.event import Event

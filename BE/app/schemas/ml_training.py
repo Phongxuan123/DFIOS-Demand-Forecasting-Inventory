@@ -2,14 +2,22 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
-SUPPORTED_MODELS = ["lightgbm", "xgboost", "baseline_naive"]
+# R-03: honest names. "gbdt_lags" / "gbdt_trend" are two presets of the SAME built-in pure-numpy GBDT
+# (no LightGBM / XGBoost library is used). "lightgbm" / "xgboost" are kept only as legacy aliases.
+SUPPORTED_MODELS = ["lightgbm", "xgboost", "baseline_naive", "gbdt_lags", "gbdt_trend"]
+MODEL_ALIASES = {"lightgbm": "gbdt_lags", "xgboost": "gbdt_trend"}
+MODEL_IMPLEMENTATION = {
+    "gbdt_lags": "TinyGBDT (pure numpy) preset A: lags 1/7/14, mean7, dow, event; depth 4, lr 0.10, l2 0.5",
+    "gbdt_trend": "TinyGBDT (pure numpy) preset B: lags 1/7, diff7, mean7, trend, dow, event; depth 3, lr 0.08, l2 1.5",
+    "baseline_naive": "Seasonal naive (lag 7)",
+}
 ROADMAP_MODELS = ["arima", "lstm", "tft"]
 
 
 class TrainJobRequest(BaseModel):
     models: List[str] = Field(
-        default=["lightgbm", "xgboost", "baseline_naive"],
-        description="Danh sách mô hình cần huấn luyện & benchmark (lightgbm, xgboost, baseline_naive)",
+        default=["gbdt_lags", "gbdt_trend", "baseline_naive"],
+        description="Mô hình cần benchmark: gbdt_lags, gbdt_trend, baseline_naive. 'lightgbm'/'xgboost' là alias cũ của gbdt_lags/gbdt_trend (cùng một GBDT numpy tự cài, KHÔNG dùng thư viện LightGBM/XGBoost)",
     )
     item_ids: Optional[List[str]] = Field(None, description="Danh sách SKU cần huấn luyện (None = tất cả)")
     store_id: Optional[str] = Field(None, description="Mã cửa hàng/kho cần huấn luyện")

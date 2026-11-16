@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,7 +9,7 @@ from app.main import app
 from app.models.base import Base
 from app.models.user import User
 from app.models.product import Product
-from app.models.forecast import Forecast, ForecastSigma, ForecastOverride, ForecastExplanation
+from app.models.forecast import Forecast, ForecastSigma, ForecastOverride
 from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.sales_history import SalesHistory
 from app.models.audit_log import AuditLog
@@ -335,8 +335,11 @@ class TestForecastEndpoints(unittest.TestCase):
         )
         self.assertEqual(res_mgr.status_code, 200)
         data = res_mgr.json()
-        self.assertEqual(data["model_name"], "lightgbm")
-        self.assertGreater(len(data["features"]), 0)
+        # U-03: nothing is stored for this SKU -> explicit "unavailable", no fabricated SHAP numbers
+        self.assertFalse(data["available"])
+        self.assertEqual(data["features"], [])
+        self.assertTrue(data["reason"])
+        self.assertEqual(data["reason_code"], "no_stored_shap")
 
         # ARIMA model -> 404 Not Found kèm thông báo rõ ràng
         res_arima = self.client.get(
@@ -409,7 +412,7 @@ class TestForecastEndpoints(unittest.TestCase):
         # Kiểm tra Audit Log đã ghi nhận cả 2 thao tác override và revert
         with self.TestingSessionLocal() as session:
             logs = session.query(AuditLog).all()
-            actions = [l.action for l in logs]
+            actions = [lg.action for lg in logs]
             self.assertIn("forecast.override", actions)
             self.assertIn("forecast.revert_override", actions)
 
@@ -832,6 +835,14 @@ class TestForecastEndpoints(unittest.TestCase):
     def test_r17_get_window_quantiles_has_no_database_side_effects(self):
         """R-17: Đảm bảo GET window-quantiles trả về phân phối hợp lệ nhưng không gây tác dụng phụ ghi/tạo bản ghi vào DB."""
         with self.TestingSessionLocal() as session:
+            # P-24: only the Tier-1 Ensemble feeds F_hat; give the SKU one Ensemble run at the origin
+            for h in range(1, 11):
+                session.add(Forecast(
+                    id=f"ens_{h}", item_id="FOODS_1_001", store_id="CA_1",
+                    forecast_date=date(2016, 5, 23) + timedelta(days=h - 1), h=h, y_pred=3.0,
+                    p10=2.0, p50=3.0, p90=4.0, available=True, model_version="Ensemble bundle 1.0",
+                ))
+            session.commit()
             count_before = session.query(ForecastWindowQuantile).count()
 
         res = self.client.get(

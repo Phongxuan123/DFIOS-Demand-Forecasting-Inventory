@@ -1,3 +1,8 @@
+# DFIOS local stack.
+#   docker compose up -d                      -> chỉ PostgreSQL (mặc định)
+#   docker compose --profile app up -d --build -> thêm backend (cổng 8000) và frontend (cổng 5173)
+# Mật khẩu DB: đặt POSTGRES_PASSWORD trong môi trường hoặc file .env cạnh docker-compose.yml
+# (mặc định dfios123 chỉ dùng cho máy cục bộ; nhớ cập nhật DATABASE_URL tương ứng).
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,12 +10,44 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: dfios
-      POSTGRES_PASSWORD: dfios123
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dfios123}
       POSTGRES_DB: dfios
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - dfios_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dfios -d dfios"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    profiles: ["app"]
+    build:
+      context: ./BE
+      dockerfile: Dockerfile
+    container_name: dfios-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://dfios:${POSTGRES_PASSWORD:-dfios123}@postgres:5432/dfios
+    env_file:
+      - ./BE/.env
+    ports:
+      - "8000:8000"
+
+  frontend:
+    profiles: ["app"]
+    build:
+      context: ./FE
+      dockerfile: Dockerfile
+    container_name: dfios-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
 
 volumes:
   dfios_pgdata:

@@ -1,6 +1,8 @@
 import math
+import re
+from types import SimpleNamespace
 from datetime import datetime, date, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -11,6 +13,15 @@ from app.models.classification import SKUClassification
 from app.models.inventory_daily import InventoryDaily
 from app.models.policy_selection import PolicySelection
 from app.models.sim_clock import SimClock
+from app.services import policy_config as pc
+
+_KNOWN_STORE_RE = re.compile(r"(^|_)([A-Z]{2}_\d)(_|$)")
+
+
+def selection_store(selection_id: Optional[str]) -> Optional[str]:
+    """Store encoded in a selection_id (e.g. 'CA_1_quarter_2016_Q2'), or None for a global selection."""
+    m = _KNOWN_STORE_RE.search(selection_id or "")
+    return m.group(2) if m else None
 
 
 class CalibratorService:
@@ -18,34 +29,73 @@ class CalibratorService:
     Module C³-OUT (Closed-Loop Continuous Calibrator) – Giai đoạn 5 (Task C3.1):
     Bộ điều khiển tích phân chuẩn bounded integral control (research.md §8.1):
       theta_{g, k} = theta_{g, k-1} + eta * ( e~_{g, k-d} - (1 - setpoint_g) )
-    - Setpoint chuẩn: 0.96 (Target 0.95 + Guard 0.01)
+    - Setpoint chuẩn: lấy từ policy_selection.setpoint (mặc định = target 0.95, guard chỉ áp 1 lần ở J5)
     - Hệ số khuếch đại: eta = 1.0
     - Trễ thông tin chu kỳ: d = ceil((L + R) / R)
     - Kẹp biên hai phía chuẩn: theta_g in [-2.0, 2.0] (research.md §8.1)
     - Quy ước biên chống bão hòa (Anti-windup): e~ = 0 khi theta >= 2.0, e~ = 1 khi theta <= -2.0
     """
 
-    ALL_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
-    DEFAULT_SETPOINT = 0.96
-    DEFAULT_ETA = 1.0
-    MAX_THETA = 2.0
-    MIN_THETA = -2.0
+    ALL_CLASSES = list(pc.ALL_CLASSES)
+    DEFAULT_SETPOINT = pc.TARGET_AVAILABILITY
+    DEFAULT_ETA = pc.CONTROLLER_ETA
+    MAX_THETA = pc.THETA_MAX
+    MIN_THETA = pc.THETA_MIN
 
-    def get_current_thetas(self, db: Session, store_id: str = "CA_1") -> Dict[str, float]:
+    def latest_states(
+        self, db: Session, store_id: Optional[str] = "CA_1", as_of: Optional[date] = None
+    ) -> Dict[str, CalibrationState]:
         """
-        Lấy hệ số theta hiện tại của cả 9 nhóm hàng phục vụ tính s = ceil( Q_hat * exp(m_g + theta_g) ).
+        Latest calibration state per class (P-02): ORDER BY review_index DESC, review_date DESC,
+        created_at DESC, id DESC => deterministic; first row per class wins. States dated after
+        ``as_of`` (future of the simulated clock) are ignored. store_id=None -> all stores.
         """
+        q = db.query(CalibrationState)
+        if store_id:
+            q = q.filter(CalibrationState.store_id == store_id)
+        if as_of is not None:
+            q = q.filter(CalibrationState.review_date <= as_of)
+        rows = q.order_by(
+            CalibrationState.review_index.desc(),
+            CalibrationState.review_date.desc(),
+            CalibrationState.created_at.desc(),
+            CalibrationState.id.desc(),
+        ).all()
+        latest: Dict[str, CalibrationState] = {}
+        for r in rows:
+            if r.class_id not in latest:
+                latest[r.class_id] = r
+        return latest
+
+    def get_current_thetas(
+        self, db: Session, store_id: Optional[str] = "CA_1", as_of: Optional[date] = None
+    ) -> Dict[str, float]:
+        """theta_g (latest) for the 9 classes, used by s = ceil(Q_hat * exp(theta_g))."""
         thetas = {c: 0.0 for c in self.ALL_CLASSES}
-        for c in self.ALL_CLASSES:
-            latest = (
-                db.query(CalibrationState)
-                .filter(CalibrationState.store_id == store_id, CalibrationState.class_id == c)
-                .order_by(CalibrationState.review_index.desc())
-                .first()
-            )
-            if latest and latest.theta is not None:
-                thetas[c] = float(latest.theta)
+        for c, rec in self.latest_states(db, store_id, as_of).items():
+            if rec.theta is not None and c in thetas:
+                thetas[c] = float(rec.theta)
         return thetas
+
+    def resolve_policies(
+        self, db: Session, store_id: Optional[str] = "CA_1"
+    ) -> Dict[str, PolicySelection]:
+        """
+        Policy per class: store-specific selections first, else global ones (selection_id without a
+        store tag; selections of OTHER stores are ignored). Newest row wins in both cases (P-23, R-30).
+        """
+        rows = db.query(PolicySelection).order_by(
+            PolicySelection.created_at.desc(), PolicySelection.selection_id.desc()
+        ).all()
+        specific: Dict[str, PolicySelection] = {}
+        generic: Dict[str, PolicySelection] = {}
+        for p in rows:
+            st = selection_store(p.selection_id)
+            if st is None:
+                generic.setdefault(p.class_id, p)
+            elif st == store_id:
+                specific.setdefault(p.class_id, p)
+        return {**generic, **specific}
 
     def get_current_multipliers(self, db: Session, store_id: str = "CA_1") -> Dict[str, float]:
         """
@@ -57,20 +107,9 @@ class CalibratorService:
     def get_latest_calibration_state(
         self, db: Session, store_id: str = "CA_1"
     ) -> List[CalibrationState]:
-        """
-        Lấy danh sách bản ghi trạng thái calibrator mới nhất của 9 nhóm hàng.
-        """
-        states: List[CalibrationState] = []
-        for c in self.ALL_CLASSES:
-            rec = (
-                db.query(CalibrationState)
-                .filter(CalibrationState.store_id == store_id, CalibrationState.class_id == c)
-                .order_by(CalibrationState.review_index.desc())
-                .first()
-            )
-            if rec:
-                states.append(rec)
-        return states
+        """Latest calibrator state of each of the 9 classes."""
+        latest = self.latest_states(db, store_id)
+        return [latest[c] for c in self.ALL_CLASSES if c in latest]
 
     def record_cycle_outcome(
         self,
@@ -97,38 +136,38 @@ class CalibratorService:
 
         outcomes: List[ServiceOutcome] = []
 
-        for class_id in self.ALL_CLASSES:
-            skus = (
-                db.query(SKUClassification.item_id)
-                .join(
-                    Inventory,
-                    (SKUClassification.item_id == Inventory.item_id)
-                    & (Inventory.store_id == store_id),
-                )
-                .filter(SKUClassification.segment == class_id)
-                .all()
+        # SKUs of the store grouped by class (R-30: only SKUs stocked in THIS store)
+        class_rows = (
+            db.query(SKUClassification.item_id, SKUClassification.segment)
+            .join(
+                Inventory,
+                (SKUClassification.item_id == Inventory.item_id) & (Inventory.store_id == store_id),
             )
-            sku_ids = [s[0] for s in skus]
-            n_sku = len(sku_ids)
+            .all()
+        )
+        skus_by_class: Dict[str, List[str]] = {}
+        for item_id, seg in class_rows:
+            skus_by_class.setdefault(seg, []).append(item_id)
 
-            n_stockout = 0
-            if sku_ids:
-                # Đếm số SKU có ít nhất 1 ngày stockout trong chu kỳ
-                stockout_query = (
-                    db.query(InventoryDaily.item_id)
-                    .filter(
-                        InventoryDaily.store_id == store_id,
-                        InventoryDaily.item_id.in_(sku_ids),
-                        InventoryDaily.date >= cycle_start,
-                        InventoryDaily.date <= cycle_end,
-                        (InventoryDaily.stockout == True) | (
-                            (InventoryDaily.on_hand_end <= 0) & (InventoryDaily.lost_sales > 0)
-                        ),
-                    )
-                    .distinct()
-                    .all()
-                )
-                n_stockout = len(stockout_query)
+        # P-14: OBSERVED availability (research.md §7.3 / §8.1). A SKU-period is unavailable when at
+        # least one day ended with on_hand = 0, whether or not demand was lost that day.
+        stocked_out = {
+            r[0]
+            for r in db.query(InventoryDaily.item_id)
+            .filter(
+                InventoryDaily.store_id == store_id,
+                InventoryDaily.date >= cycle_start,
+                InventoryDaily.date <= cycle_end,
+                InventoryDaily.on_hand_end <= 0,
+            )
+            .distinct()
+            .all()
+        }
+
+        for class_id in self.ALL_CLASSES:
+            sku_ids = skus_by_class.get(class_id, [])
+            n_sku = len(sku_ids)
+            n_stockout = sum(1 for i in sku_ids if i in stocked_out)
 
             # Tính tỷ lệ lỗi e~ thực tế
             error_rate = round(n_stockout / max(1, n_sku), 4) if n_sku > 0 else 0.0
@@ -178,7 +217,7 @@ class CalibratorService:
           d = ceil((L + R) / R)
           theta_{g, k} = theta_{g, k-1} + eta * ( e~_{g, k-d} - (1 - setpoint_g) )
         - e~_{g, k-d}: Đọc từ bảng service_outcomes của chu kỳ k-d đã chín.
-        - Kẹp biên: theta_g in [0.0, 2.0].
+        - Kẹp biên: theta_g in [-2.0, 2.0].
         - Nếu theta_g >= 2.0: Cảnh báo mô hình dự báo suy giảm.
         """
         cid = calibrator_id or f"c3out_main_{store_id}"
@@ -205,42 +244,8 @@ class CalibratorService:
         updated_states: List[CalibrationState] = []
         warnings: List[str] = []
 
-        # 4. Truy vấn policy_selection (R-30): ưu tiên store-specific selection, fallback sang global
-        store_policies = (
-            db.query(PolicySelection)
-            .filter(
-                (PolicySelection.selection_id.like(f"{store_id}_%"))
-                | (PolicySelection.selection_id.like(f"%_{store_id}"))
-                | (PolicySelection.selection_id == store_id)
-            )
-            .order_by(PolicySelection.created_at.desc())
-            .all()
-        )
-        store_policy_map = {p.class_id: p for p in store_policies}
-
-        missing_classes = [c for c in self.ALL_CLASSES if c not in store_policy_map]
-        if missing_classes:
-            all_candidate_policies = (
-                db.query(PolicySelection)
-                .filter(PolicySelection.class_id.in_(missing_classes))
-                .order_by(PolicySelection.created_at.desc())
-                .all()
-            )
-            for p in all_candidate_policies:
-                sid = p.selection_id or ""
-                # Bỏ qua nếu selection_id mang nhãn của một cửa hàng khác
-                if any(
-                    s in sid
-                    for s in [
-                        "CA_1", "CA_2", "CA_3", "CA_4",
-                        "TX_1", "TX_2", "TX_3",
-                        "WI_1", "WI_2", "WI_3",
-                    ]
-                    if s != store_id
-                ):
-                    continue
-                if p.class_id not in store_policy_map:
-                    store_policy_map[p.class_id] = p
+        # 4. policy_selection per class: store-specific first, then global; NEWEST row wins (P-23, R-30)
+        store_policy_map = self.resolve_policies(db, store_id)
 
         for class_id in self.ALL_CLASSES:
             policy = store_policy_map.get(class_id)
@@ -256,7 +261,7 @@ class CalibratorService:
                     CalibrationState.class_id == class_id,
                     CalibrationState.review_index < review_index,
                 )
-                .order_by(CalibrationState.review_index.desc())
+                .order_by(CalibrationState.review_index.desc(), CalibrationState.created_at.desc())
                 .first()
             )
             prev_theta = float(prev_state.theta) if prev_state and prev_state.theta is not None else 0.0
@@ -353,6 +358,53 @@ class CalibratorService:
         if class_id:
             query = query.filter(CalibrationState.class_id == class_id)
         return query.order_by(CalibrationState.review_index.desc()).limit(limit).all()
+
+    # ---- GLOBAL (all stores) aggregation (FE request: GLOBAL scope) ----------------------------------
+    GLOBAL_KEYS = ("GLOBAL", "ALL")
+
+    @classmethod
+    def is_global(cls, store_id: Optional[str]) -> bool:
+        return bool(store_id) and store_id.strip().upper() in cls.GLOBAL_KEYS
+
+    @staticmethod
+    def _aggregate(rows: List[CalibrationState], class_id: str, review_index: int) -> SimpleNamespace:
+        n = len(rows)
+        mean = lambda xs: sum(xs) / len(xs)  # noqa: E731
+        top = max(rows, key=lambda r: (r.review_date, r.created_at or datetime.min))
+        return SimpleNamespace(
+            id=f"GLOBAL_{class_id}_rev_{review_index}", calibrator_id="global_mean_of_stores", store_id="GLOBAL",
+            class_id=class_id, review_index=review_index, review_date=top.review_date,
+            theta=mean([float(r.theta or 0.0) for r in rows]),
+            multiplier=mean([float(r.multiplier if r.multiplier is not None else 1.0) for r in rows]),
+            error_rate=mean([float(r.error_rate or 0.0) for r in rows]),
+            at_boundary=any(bool(r.at_boundary) for r in rows),
+            setpoint=mean([float(r.setpoint or 0.0) for r in rows]),
+            eta=mean([float(r.eta or 0.0) for r in rows]),
+            created_at=top.created_at or datetime.now(timezone.utc), n_stores=n,
+        )
+
+    def global_latest_states(self, db: Session) -> List[SimpleNamespace]:
+        """Per class: mean over stores of each store's latest state (one store => equals that store)."""
+        stores = [s for (s,) in db.query(CalibrationState.store_id).distinct().all()]
+        per_class: Dict[str, List[CalibrationState]] = {}
+        for st in stores:
+            for c, rec in self.latest_states(db, st).items():
+                per_class.setdefault(c, []).append(rec)
+        return [
+            self._aggregate(per_class[c], c, max(r.review_index for r in per_class[c]))
+            for c in self.ALL_CLASSES if c in per_class
+        ]
+
+    def global_history(self, db: Session, class_id: Optional[str] = None, limit: int = 100) -> List[SimpleNamespace]:
+        q = db.query(CalibrationState)
+        if class_id:
+            q = q.filter(CalibrationState.class_id == class_id)
+        groups: Dict[Tuple[str, int], List[CalibrationState]] = {}
+        for r in q.all():
+            groups.setdefault((r.class_id, r.review_index), []).append(r)
+        out = [self._aggregate(rows, c, k) for (c, k), rows in groups.items()]
+        out.sort(key=lambda r: (-r.review_index, r.class_id))
+        return out[:limit]
 
 
 calibrator_service = CalibratorService()

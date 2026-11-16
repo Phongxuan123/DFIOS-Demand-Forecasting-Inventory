@@ -60,6 +60,9 @@ class StockAlertData(BaseModel):
     at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+INVENTORY_EVENT_ROLES = ("Admin", "Warehouse Manager")
+
+
 class SystemEvent(BaseModel):
     """
     Model sự kiện hệ thống chuẩn hóa theo định dạng SSE (Server-Sent Events).

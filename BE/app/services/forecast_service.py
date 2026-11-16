@@ -1,15 +1,14 @@
-import json
 import logging
 import math
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
-logger = logging.getLogger(__name__)
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.forecast import Forecast, ForecastOverride, ForecastExplanation
+from app.models.forecast import Forecast, ForecastOverride
 from app.models.user import User
 from app.schemas.forecast import (
     ForecastItemResponse,
@@ -35,6 +34,11 @@ from app.repositories.product_repository import product_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.repositories.model_registry_repository import model_registry_repository
 from app.services.audit_service import audit_service
+from app.models.sim_clock import SimClock
+from app.models.sales_history import SalesHistory
+from types import SimpleNamespace
+
+logger = logging.getLogger(__name__)
 
 
 class ForecastService:
@@ -65,6 +69,7 @@ class ForecastService:
         limit: int = 50,
         sort_by: str = "forecast_date",
         order: str = "asc",
+        model_name: Optional[str] = None,
     ) -> ForecastListResponse:
         """
         UC17, UC18, UC19: Xem, chọn horizon và lọc danh sách dự báo nhu cầu.
@@ -73,23 +78,19 @@ class ForecastService:
         if horizon is not None:
             if horizon not in allowed_horizons:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Khoảng dự báo horizon={horizon} không hợp lệ. Các giá trị hợp lệ: {allowed_horizons}.",
                 )
             selected_horizon = horizon
         else:
             selected_horizon = max(allowed_horizons) if allowed_horizons else 28
 
-        # Kiểm tra model production nếu chưa chỉ định version
-        active_version = model_version
-        if not active_version:
-            prod_model = (
-                db.query(model_registry_repository.model)
-                .filter(model_registry_repository.model.is_production.is_(True))
-                .first()
-            )
-            if prod_model and prod_model.version:
-                active_version = prod_model.version
+        self._reject_global(store_id, "GET /forecasts")
+        target_store = store_id.strip() if store_id and store_id.strip() else "CA_1"
+
+        # ONE version only (never mixed): explicit version > model_name filter > production algorithm > Ensemble > newest
+        available = self._available_versions(db, target_store, item_id, model_name)
+        active_version = model_version or self._pick_version(db, available, model_name)
 
         total, records = forecast_repository.get_forecasts(
             db,
@@ -99,30 +100,15 @@ class ForecastService:
             store_id=store_id,
             start_date=start_date,
             end_date=end_date,
-            model_version=active_version,
+            model_version=active_version or "__no_matching_version__",
             skip=skip,
             limit=limit,
             sort_by=sort_by,
             order=order,
         )
 
-        # Nếu lọc theo production model version mà không có dữ liệu, fallback sang phiên bản có sẵn
-        if total == 0 and active_version is not None:
-            total, records = forecast_repository.get_forecasts(
-                db,
-                horizon=selected_horizon,
-                item_id=item_id,
-                category=category,
-                store_id=store_id,
-                start_date=start_date,
-                end_date=end_date,
-                model_version=None,
-                skip=skip,
-                limit=limit,
-                sort_by=sort_by,
-                order=order,
-            )
-            active_version = records[0][0].model_version if records else active_version
+        clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
+        clock_date = clock.current_date if clock and clock.current_date else None
 
         # Lấy overrides đang hoạt động để áp dụng lên kết quả
         active_overrides = forecast_repository.get_active_overrides_dict(
@@ -166,6 +152,8 @@ class ForecastService:
                     category=p_cat,
                     model_version=fc.model_version,
                     generated_at=fc.generated_at,
+                    backtest=bool(clock_date and fc.forecast_date <= clock_date),
+                    source=self._source_label(fc.model_version, bool(clock_date and fc.forecast_date <= clock_date)),
                 )
             )
 
@@ -173,10 +161,65 @@ class ForecastService:
             items=items,
             total=total,
             horizon=selected_horizon,
+            model_name=model_name,
+            store_id=target_store,
+            source=self._source_label(active_version, False) if active_version else "none",
+            backtest=any(i.backtest for i in items),
+            available_versions=available,
             model_version=active_version,
             skip=skip,
             limit=limit,
         )
+
+    @staticmethod
+    def _is_global(store_id: Optional[str]) -> bool:
+        return bool(store_id) and store_id.strip().upper() in ("GLOBAL", "ALL")
+
+    def _reject_global(self, store_id: Optional[str], what: str) -> None:
+        """GLOBAL/ALL has no aggregated forecast: 422 instead of silently answering with CA_1."""
+        if self._is_global(store_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"{what}: store_id={store_id} (GLOBAL/ALL) chưa hỗ trợ dự báo gộp; hãy chọn một cửa hàng cụ thể.",
+            )
+
+    @staticmethod
+    def _source_label(model_version: Optional[str], backtest: bool) -> str:
+        if backtest:
+            return "backtest"
+        if model_version and model_version.lower().startswith("ensemble"):
+            return "production_artifact"
+        return "forecast_table"
+
+    def _available_versions(self, db: Session, store_id: str, item_id: Optional[str], model_name: Optional[str]) -> List[str]:
+        q = db.query(Forecast.model_version, func.max(Forecast.generated_at)).filter(Forecast.store_id == store_id)
+        if item_id:
+            q = q.filter(Forecast.item_id == item_id)
+        if model_name:
+            q = q.filter(Forecast.model_version.ilike(f"%{model_name.strip()}%"))
+        rows = q.group_by(Forecast.model_version).all()
+        rows.sort(key=lambda r: r[1] or datetime.min, reverse=True)
+        return [r[0] for r in rows if r[0]]
+
+    def _pick_version(self, db: Session, available: List[str], model_name: Optional[str]) -> Optional[str]:
+        if not available:
+            return None
+        if model_name:
+            return available[0]  # newest version matching the name
+        prod = (
+            db.query(model_registry_repository.model)
+            .filter(model_registry_repository.model.is_production.is_(True))
+            .order_by(model_registry_repository.model.promoted_at.desc())
+            .first()
+        )
+        if prod:
+            for v in available:
+                if prod.version == v or (prod.algorithm and prod.algorithm.lower() in v.lower()):
+                    return v
+        for v in available:
+            if v.lower().startswith("ensemble"):
+                return v
+        return available[0]
 
     def get_historical_demand(
         self,
@@ -194,7 +237,7 @@ class ForecastService:
         valid_granularities = ["daily", "weekly", "monthly"]
         if granularity.lower() not in valid_granularities:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"granularity='{granularity}' không hợp lệ. Chỉ chấp nhận: {valid_granularities}.",
             )
 
@@ -206,9 +249,19 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
+        is_global = self._is_global(store_id)
+        cap = self.clock_cap(db, store_id)
+        bounded = bool(cap is not None and (end_date is None or end_date > cap))
+        if bounded:
+            end_date = cap
         sales = forecast_repository.get_historical_sales(
-            db, item_id=sku, store_id=store_id, start_date=start_date, end_date=end_date
+            db, item_id=sku, store_id=None if is_global else store_id, start_date=start_date, end_date=end_date
         )
+        if is_global:  # real aggregate: demand of the SKU summed over all stores, per day
+            agg: Dict[date, float] = {}
+            for s in sales:
+                agg[s.sale_date] = agg.get(s.sale_date, 0.0) + float(s.quantity)
+            sales = [SimpleNamespace(sale_date=d, quantity=q) for d, q in sorted(agg.items())]
 
         if not sales:
             return HistoricalDemandResponse(
@@ -221,6 +274,8 @@ class ForecastService:
                 max_quantity=0.0,
                 count=0,
                 history=[],
+                as_of=str(cap) if cap else None,
+                bounded_by_clock=bounded,
             )
 
         gran = granularity.lower()
@@ -265,7 +320,41 @@ class ForecastService:
             max_quantity=round(max_qty, 2),
             count=count,
             history=history_points,
+            as_of=str(cap) if cap else None,
+            bounded_by_clock=bounded,
         )
+
+    def clock_cap(self, db: Session, store_id: Optional[str]) -> Optional[date]:
+        """U-04: actuals after the simulated clock date are the "future" and are never returned.
+        store -> its clock; GLOBAL -> the latest clock; no clock row -> no cap."""
+        if not store_id or not store_id.strip() or self._is_global(store_id):
+            return db.query(func.max(SimClock.current_date)).scalar()
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id.strip()).first()
+        return clock.current_date if clock and clock.current_date else None
+
+    def _resolve_forecast_version(self, db: Session, sku: str, store_id: str) -> Optional[str]:
+        """B-05: one model_version for a SKU/store: the Tier-1 Ensemble if present, else the production
+        registry version if the SKU has forecasts of it, else the newest forecast version."""
+        rows = (
+            db.query(Forecast.model_version, func.max(Forecast.generated_at))
+            .filter(Forecast.item_id == sku, Forecast.store_id == store_id)
+            .group_by(Forecast.model_version)
+            .all()
+        )
+        if not rows:
+            return None
+        versions = {r[0]: r[1] for r in rows}
+        ens = [v for v in versions if v and v.lower().startswith("ensemble")]
+        if ens:
+            return max(ens, key=lambda v: versions[v] or datetime.min)
+        prod_model = (
+            db.query(model_registry_repository.model)
+            .filter(model_registry_repository.model.is_production.is_(True))
+            .first()
+        )
+        if prod_model and prod_model.version in versions:
+            return prod_model.version
+        return max(versions, key=lambda v: versions[v] or datetime.min)
 
     def compare_actual_vs_predicted(
         self,
@@ -287,24 +376,14 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
-        target_store = (
-            store_id.strip()
-            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
-            else "CA_1"
-        )
+        self._reject_global(store_id, "GET /forecasts/{sku}/compare")
+        target_store = store_id.strip() if store_id and store_id.strip() else "CA_1"
 
-        active_version = model_version
-        if not active_version:
-            prod_model = (
-                db.query(model_registry_repository.model)
-                .filter(model_registry_repository.model.is_production.is_(True))
-                .first()
-            )
-            if prod_model and prod_model.version:
-                active_version = prod_model.version
-            else:
-                active_version = forecast_repository.get_latest_model_version(db)
+        active_version = model_version or self._resolve_forecast_version(db, sku, target_store)
 
+        cap = self.clock_cap(db, target_store)
+        if cap is not None and (end_date is None or end_date > cap):
+            end_date = cap  # U-04: no actuals from the simulated future
         sales = forecast_repository.get_historical_sales(
             db, item_id=sku, store_id=target_store, start_date=start_date, end_date=end_date
         )
@@ -393,23 +472,63 @@ class ForecastService:
                 )
 
         n = len(comparison)
-        mae = round(sum(abs_errors) / n, 2) if n > 0 else 0.0
-        rmse = round(math.sqrt(sum(e**2 for e in errors) / n), 2) if n > 0 else 0.0
+        # no overlapping (actual, forecast) day -> the error is UNKNOWN, never 0.0
+        mae = round(sum(abs_errors) / n, 2) if n > 0 else None
+        rmse = round(math.sqrt(sum(e**2 for e in errors) / n), 2) if n > 0 else None
         mape = round(sum(pct_errors) / len(pct_errors), 2) if pct_errors else None
+        if n > 0:
+            metrics_reason_code = metrics_reason = None
+        elif not forecast_by_date:
+            metrics_reason_code = "no_forecast"
+            metrics_reason = "Không có dự báo nào trong khoảng thời gian yêu cầu: chưa tính được sai số."
+        elif not actual_map:
+            metrics_reason_code = "no_actuals"
+            metrics_reason = "Chưa có doanh số thực tế (tới ngày đồng hồ mô phỏng) trong khoảng yêu cầu: chưa tính được sai số."
+        else:
+            metrics_reason_code = "no_overlap"
+            metrics_reason = "Không có ngày nào có đồng thời doanh số thực tế và dự báo: chưa tính được sai số."
+
+        # MASE: scale = mean |y_t - y_(t-1)| of the TRAINING history (sales strictly before the first compared day)
+        mase = None
+        scale_n = 0
+        if comparison:
+            first_day = min(c.date for c in comparison)
+            hist = (
+                db.query(SalesHistory.sale_date, SalesHistory.quantity)
+                .filter(SalesHistory.item_id == sku, SalesHistory.store_id == target_store,
+                        SalesHistory.sale_date < first_day)
+                .order_by(SalesHistory.sale_date.asc()).all()
+            )
+            ys = [float(q) for _, q in hist]
+            scale_n = len(ys)
+            if scale_n >= 2:
+                scale = sum(abs(ys[i] - ys[i - 1]) for i in range(1, scale_n)) / (scale_n - 1)
+                if scale > 0:
+                    mase = round((sum(abs_errors) / n) / scale, 4)
 
         metrics = CompareMetrics(
+            mase=mase,
+            mase_scale_n=scale_n,
             mae=mae,
             rmse=rmse,
             mape=mape,
             total_actual=round(total_actual, 2),
             total_predicted=round(total_pred, 2),
             data_points=n,
+            metrics_reason=metrics_reason,
+            metrics_reason_code=metrics_reason_code,
         )
 
         return ForecastCompareResponse(
             item_id=sku,
             store_id=store_id,
             model_version=selected_model_version,
+            model_version_source=(
+                "requested" if model_version
+                else "none" if not selected_model_version
+                else "resolved_ensemble" if str(selected_model_version).lower().startswith("ensemble")
+                else "resolved_other"
+            ),
             metrics=metrics,
             comparison=comparison,
         )
@@ -429,7 +548,7 @@ class ForecastService:
         if horizon is not None:
             if horizon not in allowed_horizons:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Khoảng dự báo horizon={horizon} không hợp lệ. Chỉ chấp nhận {allowed_horizons}.",
                 )
             selected_horizon = horizon
@@ -443,8 +562,15 @@ class ForecastService:
                 detail=f"Không tìm thấy SKU sản phẩm '{sku}'.",
             )
 
+        self._reject_global(store_id, "GET /forecasts/{sku}/uncertainty")
+        _store_for_version = (
+            store_id.strip()
+            if store_id and store_id.strip() and store_id.strip().upper() not in ("GLOBAL", "ALL")
+            else "CA_1"
+        )
         forecasts = forecast_repository.get_forecasts_for_sku(
-            db, item_id=sku, store_id=store_id, horizon=selected_horizon
+            db, item_id=sku, store_id=store_id, horizon=selected_horizon,
+            model_version=self._resolve_forecast_version(db, sku, _store_for_version),
         )
 
         sigma_obj = forecast_repository.get_sigma(db, sku)
@@ -505,32 +631,26 @@ class ForecastService:
                 effective_pred = float(ov.override_value) if ov else fc.y_pred
                 residuals.append(round(sales_map[fc.forecast_date] - effective_pred, 2))
 
-        # UC22: Phân bố sai số dự báo thực nghiệm r = y - y_hat (B-06)
-        # Khi có dữ liệu thực tế trùng với ngày dự báo, tính chuẩn xác trên residual thực tế.
-        # Khi toàn bộ horizon nằm ở tương lai (chưa có actual), dùng độ rộng dải bất định (p90 - p10) làm fallback.
-        eval_metrics = residuals if residuals else spreads
-        err_dist: Optional[ErrorDistribution] = None
-        if eval_metrics:
-            sorted_vals = sorted(eval_metrics)
-            m = sum(sorted_vals) / len(sorted_vals)
-            variance = sum((x - m) ** 2 for x in sorted_vals) / len(sorted_vals)
-            std = math.sqrt(variance)
+        # B-06: error_distribution = REAL residuals r = actual - prediction only. The p90-p10 band width has
+        # its own field; it is never reported as a forecast error.
+        def _dist(vals: List[float]) -> Optional[ErrorDistribution]:
+            if not vals:
+                return None
+            sv = sorted(vals)
+            m = sum(sv) / len(sv)
+            std = math.sqrt(sum((x - m) ** 2 for x in sv) / len(sv))
 
-            def get_percentile(arr: List[float], p: float) -> float:
-                idx = int(p * (len(arr) - 1))
-                return arr[idx]
+            def pct(p: float) -> float:
+                return sv[int(p * (len(sv) - 1))]
 
-            err_dist = ErrorDistribution(
-                mean=round(m, 2),
-                std=round(std, 2),
-                min=round(sorted_vals[0], 2),
-                max=round(sorted_vals[-1], 2),
-                p10=round(get_percentile(sorted_vals, 0.10), 2),
-                p25=round(get_percentile(sorted_vals, 0.25), 2),
-                p50=round(get_percentile(sorted_vals, 0.50), 2),
-                p75=round(get_percentile(sorted_vals, 0.75), 2),
-                p90=round(get_percentile(sorted_vals, 0.90), 2),
+            return ErrorDistribution(
+                mean=round(m, 2), std=round(std, 2), min=round(sv[0], 2), max=round(sv[-1], 2),
+                p10=round(pct(0.10), 2), p25=round(pct(0.25), 2), p50=round(pct(0.50), 2),
+                p75=round(pct(0.75), 2), p90=round(pct(0.90), 2),
             )
+
+        err_dist = _dist(residuals)
+        band_dist = _dist(spreads)
 
         return ForecastUncertaintyResponse(
             item_id=sku,
@@ -539,6 +659,8 @@ class ForecastService:
             sigma_h=round(sigma_val, 2) if sigma_val is not None else None,
             points=points,
             error_distribution=err_dist,
+            error_distribution_n=len(residuals),
+            band_width_distribution=band_dist,
         )
 
     def get_forecast_explanation(
@@ -554,6 +676,7 @@ class ForecastService:
         Mức đóng góp của feature (giá, sự kiện, thời điểm).
         Mô hình ARIMA trả 404 kèm thông báo rõ.
         """
+        self._reject_global(store_id, "GET /forecasts/{sku}/explanation")
         # Kiểm tra nếu người dùng hoặc hệ thống đang dùng mô hình ARIMA
         if model_name and "arima" in model_name.lower():
             raise HTTPException(
@@ -584,54 +707,23 @@ class ForecastService:
                 )
                 for e in db_explanations
             ]
-            m_name = db_explanations[0].model_name
-            m_ver = db_explanations[0].model_version
-            base_val = 10.0
-        else:
-            # SHAP baseline đặc trưng cho chuỗi Walmart M5 (LightGBM default)
-            m_name = "lightgbm"
-            m_ver = model_version or "v1.0.0"
-            base_val = 12.5
-            features = [
-                SHAPFeatureContribution(
-                    feature_name="sell_price",
-                    importance_score=0.3245,
-                    direction="negative",
-                    description="Giá bán cao hơn tác động làm giảm nhu cầu tiêu thụ",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="event_promotion",
-                    importance_score=0.2812,
-                    direction="positive",
-                    description="Sự kiện khuyến mãi kích thích mạnh mẽ sản lượng bán ra",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="day_of_week",
-                    importance_score=0.1876,
-                    direction="positive",
-                    description="Hiệu ứng tiêu dùng cuối tuần thúc đẩy sức mua",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="lag_7",
-                    importance_score=0.1430,
-                    direction="positive",
-                    description="Doanh số cùng kỳ tuần trước tạo đà tương quan cao",
-                ),
-                SHAPFeatureContribution(
-                    feature_name="rolling_mean_28",
-                    importance_score=0.0821,
-                    direction="positive",
-                    description="Mức tiêu thụ trung bình tháng định hình xu hướng nhu cầu nền",
-                ),
-            ]
+            return ForecastExplanationResponse(
+                item_id=sku, store_id=store_id, model_name=db_explanations[0].model_name,
+                model_version=db_explanations[0].model_version, base_value=None, features=features,
+                available=True, source="stored_explanations",
+                reason=None,
+            )
 
+        # U-03: no explanation was computed for this SKU. The previous canned SHAP values (identical for every
+        # SKU) were fabricated; the production forecast is an ensemble artifact without per-SKU attributions
+        # in this database, so we say so instead of inventing numbers.
         return ForecastExplanationResponse(
-            item_id=sku,
-            store_id=store_id,
-            model_name=m_name,
-            model_version=m_ver,
-            base_value=base_val,
-            features=features,
+            item_id=sku, store_id=store_id, model_name="n/a", model_version=model_version or "n/a",
+            base_value=None, features=[], available=False, source="none", reason_code="no_stored_shap",
+            reason=(
+                "No per-SKU feature attribution is available: the production forecast is an ensemble artifact "
+                "(no SHAP values are stored for this SKU and none are fabricated)."
+            ),
         )
 
     def create_override(
@@ -692,17 +784,6 @@ class ForecastService:
         saved = forecast_repository.create_override(db, override)
 
         # Ghi audit log
-        audit_details = json.dumps(
-            {
-                "sku": sku,
-                "store_id": target_store,
-                "forecast_date": str(request.forecast_date),
-                "original_y_pred": original_fc.y_pred,
-                "override_y_pred": request.override_value,
-                "reason": request.reason.strip(),
-            },
-            ensure_ascii=False,
-        )
         audit_service.log(
             db,
             action="forecast.override",
@@ -850,7 +931,7 @@ class ForecastService:
 
         if validation_errors:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=validation_errors,
             )
 
@@ -927,6 +1008,7 @@ class ForecastService:
                         ForecastWindowQuantile.origin_date == affected_origin,
                     ).delete()
                 affected_keys = {(it.item_id, it.store_id) for it in request.items}
+                by_store: Dict[str, List[str]] = {}
                 for affected_sku, affected_store in affected_keys:
                     clock = db.query(SimClock).filter(SimClock.store_id == affected_store).first()
                     if clock and clock.current_date:
@@ -935,7 +1017,10 @@ class ForecastService:
                             ForecastWindowQuantile.item_id == affected_sku,
                             ForecastWindowQuantile.origin_date == clock.current_date,
                         ).delete()
-                    optimization_service.recompute_parameters(db, store_id=affected_store, item_id=affected_sku)
+                    by_store.setdefault(affected_store, []).append(affected_sku)
+                # P-27: ONE bulk recompute per store, not one per SKU
+                for affected_store, skus in by_store.items():
+                    optimization_service.recompute_parameters(db, store_id=affected_store, item_ids=skus)
                 db.commit()
             except Exception as e:
                 db.rollback()

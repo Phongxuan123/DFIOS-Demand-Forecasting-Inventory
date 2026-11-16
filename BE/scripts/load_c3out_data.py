@@ -4,16 +4,14 @@ import os
 if sys.stdout.encoding != 'utf-8':
     try:
         sys.stdout.reconfigure(encoding='utf-8')
-    except Exception:
+    except (AttributeError, ValueError, OSError):
         pass
 if sys.stderr.encoding != 'utf-8':
     try:
         sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
+    except (AttributeError, ValueError, OSError):
         pass
 
-import math
-import uuid
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
@@ -33,24 +31,12 @@ if not os.path.exists(C3_CLASS_FILE):
 
 TIER2_INPUT_FILE = os.path.join(SCRIPT_DIR, "tier2_input.parquet")
 
-STORE_ID = "CA_1"
-LEAD_TIME = 7
-TAU = 0.95
-ORDER_COST = 2.0  # Chuẩn A3: c = 2.0 $/đơn (research.md §7.2)
-HOLDING_RATE_DAILY = 0.002  # Chuẩn A3: h = 0.2% * giá/ngày => h_annual = 0.73 * unit_price
+from app.services import policy_config as pc
 
-C3_EXP_THETA = {
-    "AX": 1.095,
-    "AY": 1.201,
-    "AZ": 1.481,
-    "BX": 1.094,
-    "BY": 1.172,
-    "BZ": 1.468,
-    "CX": 1.149,
-    "CY": 1.133,
-    "CZ": 1.397,
-}
-DEFAULT_EXP_THETA = 1.15
+STORE_ID = pc.DEMO_STORE_ID
+LEAD_TIME = ARTIFACT_WINDOW_DAYS = 7  # the artifact tier2_input / production_forecast columns are 7-day windows
+# B-20: this script no longer computes safety stock / ROP / EOQ (it used L = 7 and a formula that differed from
+# load_inventory_params). inventory_params are produced ONLY by OptimizationService (L=3, R=7, H=10).
 
 
 def main():
@@ -90,37 +76,14 @@ def main():
 
     merged = pd.merge(tier2_ca1, class_ca1[["item_id", "class"]], on="item_id", how="left")
     merged["class"] = merged["class"].fillna("BY")
-    merged["exp_theta"] = merged["class"].map(C3_EXP_THETA).fillna(DEFAULT_EXP_THETA)
 
-    # R-13: Lấy giá sản phẩm thật từ database để tính chi phí A3
+    # real product prices (no invented price)
     with engine.connect() as conn:
         price_df = pd.read_sql("SELECT item_id, coalesce(price, 3.50) as unit_price FROM products", conn)
-
     merged = pd.merge(merged, price_df, on="item_id", how="left")
     merged["unit_price"] = merged["unit_price"].fillna(3.50)
-    # h_annual = 0.002 * 365 * unit_price (A3: 0.2% giá/ngày)
-    merged["holding_cost"] = (HOLDING_RATE_DAILY * 365.0 * merged["unit_price"]).round(4)
-    merged["order_cost"] = ORDER_COST
-
-    # B-20: Thống nhất công thức tính SS chuẩn lý thuyết: SS = safety_stock_h7 * exp(theta)
-    merged["safety_stock"] = (merged["safety_stock_h7"] * merged["exp_theta"]).round(2).clip(lower=0.0)
-    merged["reorder_point"] = (merged["demand_h7"] + merged["safety_stock"]).round(2).clip(lower=0.0)
-    merged["annual_demand"] = ((merged["demand_h7"] / LEAD_TIME) * 365.0).round(2).clip(lower=1.0)
-    # EOQ = sqrt( 2 * c * D / h )
-    merged["eoq"] = np.sqrt((2.0 * merged["annual_demand"] * merged["order_cost"]) / merged["holding_cost"]).round(1).clip(lower=1.0)
-
+    merged["annual_demand"] = ((merged["demand_h7"] / ARTIFACT_WINDOW_DAYS) * 365.0).round(2).clip(lower=1.0)
     now = datetime.now(timezone.utc)
-    merged["id"] = STORE_ID + "_" + merged["item_id"]
-    merged["service_level"] = TAU
-    merged["lead_time_days"] = LEAD_TIME
-    merged["source"] = "c3out"
-    merged["updated_at"] = now
-
-    final_params = merged[[
-        "id", "item_id", "store_id", "service_level", "lead_time_days",
-        "safety_stock", "reorder_point", "eoq", "annual_demand",
-        "holding_cost", "order_cost", "unit_price", "source", "updated_at"
-    ]]
 
     # Xây dựng danh sách sku_classifications
     sku_classes = []
@@ -142,13 +105,15 @@ def main():
         rev_share = (rev / total_rev) * 100.0 if total_rev > 0 else 0.0
         cum_share += rev_share
 
-        mean_d = float(row["demand_h7"] / LEAD_TIME)
+        mean_d = float(row["demand_h7"] / ARTIFACT_WINDOW_DAYS)
         std_d = float(row["sigma_d_h7"]) if "sigma_d_h7" in row and pd.notnull(row["sigma_d_h7"]) else 1.0
         cv_val = float(std_d / mean_d) if mean_d > 0.001 else 1.0
 
         sku_classes.append({
-            "id": f"class_{item_id}",
+            "id": f"class_{item_id}_{STORE_ID}",
             "item_id": item_id,
+            "store_id": STORE_ID,
+            "class_source": "ground_truth",
             "abc_class": abc,
             "xyz_class": xyz,
             "segment": seg,
@@ -162,100 +127,49 @@ def main():
         })
     sku_classes_df = pd.DataFrame(sku_classes)
 
-    # R-09: Khởi tạo tồn kho và đề xuất khoa học, không dùng quy tắc tùy ý idx % 4 == 0
+    # Initial stock: keep what is in the DB; otherwise cover H = L + R = 10 days of the artifact demand rate.
     with engine.connect() as conn:
         inv_existing = pd.read_sql(f"SELECT item_id, on_hand, on_order FROM inventory WHERE store_id = '{STORE_ID}'", conn)
-        suppliers_res = conn.execute(text("SELECT id FROM suppliers")).fetchall()
-        supplier_ids = [r[0] for r in suppliers_res] if suppliers_res else ["SUP-001"]
-
-    inv_map = {}
-    if not inv_existing.empty:
-        for _, inv_r in inv_existing.iterrows():
-            inv_map[inv_r["item_id"]] = (float(inv_r["on_hand"] or 0.0), float(inv_r["on_order"] or 0.0))
-
+    inv_map = {r["item_id"]: (float(r["on_hand"] or 0.0), float(r["on_order"] or 0.0))
+               for _, r in inv_existing.iterrows()}
     inventory_rows = []
-    recommendation_rows = []
-
-    for idx, row in merged.iterrows():
+    for _, row in merged.iterrows():
         item_id = row["item_id"]
-        rop = float(row["reorder_point"])
-        ss = float(row["safety_stock"])
-        eoq = float(row["eoq"])
-
-        # Sử dụng tồn kho đã có trong DB nếu có; nếu chưa có, khởi tạo bao phủ 10 ngày nhu cầu (L+R=10)
         if item_id in inv_map:
             on_hand, on_order = inv_map[item_id]
         else:
-            mean_d = float(row["demand_h7"] / LEAD_TIME)
-            on_hand = float(round(mean_d * 10.0))
+            on_hand = float(round(row["demand_h7"] / ARTIFACT_WINDOW_DAYS * pc.HORIZON_DAYS))
             on_order = 0.0
-
-        inventory_rows.append({
-            "item_id": item_id,
-            "store_id": STORE_ID,
-            "on_hand": on_hand,
-            "on_order": on_order,
-            "updated_at": now
-        })
-
-        # Chỉ sinh đề xuất đặt hàng khi On_hand + On_order <= ROP theo đúng chính sách (s, S)
-        if (on_hand + on_order) <= rop:
-            rec_id = str(uuid.uuid4())
-            priority = "CRITICAL" if on_hand == 0 else ("HIGH" if on_hand <= ss else "MEDIUM")
-            reason = f"Chính sách (s, S) kích hoạt: Tồn khả dụng ({on_hand + on_order:.1f}) <= ROP ({rop:.1f}) [Nhóm {row['class']}]"
-            sup_id = supplier_ids[idx % len(supplier_ids)]
-
-            recommendation_rows.append({
-                "id": rec_id,
-                "item_id": item_id,
-                "store_id": STORE_ID,
-                "supplier_id": sup_id,
-                "recommended_qty": eoq,
-                "final_qty": eoq,
-                "priority": priority,
-                "status": "PENDING",
-                "reason": reason,
-                "decided_by": None,
-                "created_at": now,
-                "decided_at": None
-            })
-
+        inventory_rows.append({"item_id": item_id, "store_id": STORE_ID, "on_hand": on_hand,
+                               "on_order": on_order, "updated_at": now})
     inventory_df = pd.DataFrame(inventory_rows)
-    recs_df = pd.DataFrame(recommendation_rows)
 
-    print("\n--- Synchronizing C3-OUT inventory data ---")
+    print("1. Updating inventory levels...")
     with engine.begin() as conn:
-        print("1. Deleting stale replenishment recommendations...")
-        conn.execute(text("DELETE FROM replenishment_recommendations WHERE store_id = :s"), {"s": STORE_ID})
-
-        print("2. Deleting stale inventory parameters...")
-        conn.execute(text("DELETE FROM inventory_params WHERE store_id = :s"), {"s": STORE_ID})
-
-        print("3. Updating inventory levels...")
         conn.execute(text("DELETE FROM inventory WHERE store_id = :s"), {"s": STORE_ID})
+        print("2. Replacing SKU classifications of this store (ground truth, other stores untouched)...")
+        conn.execute(text("DELETE FROM sku_classifications WHERE store_id = :s"), {"s": STORE_ID})
 
-        print("4. Deleting stale SKU classifications...")
-        conn.execute(text("DELETE FROM sku_classifications"))
-
-    print(f"5. Seeding {len(sku_classes_df)} rows into sku_classifications...")
+    print(f"3. Seeding {len(sku_classes_df)} rows into sku_classifications...")
     sku_classes_df.to_sql("sku_classifications", engine, if_exists="append", index=False, method=psql_insert_copy)
 
-    print(f"6. Seeding {len(final_params)} rows into inventory_params...")
-    final_params.to_sql("inventory_params", engine, if_exists="append", index=False, method=psql_insert_copy)
-
-    print(f"7. Seeding {len(inventory_df)} rows into inventory...")
+    print(f"4. Seeding {len(inventory_df)} rows into inventory...")
     inventory_df.to_sql("inventory", engine, if_exists="append", index=False, method=psql_insert_copy)
 
-    if not recs_df.empty:
-        print(f"8. Seeding {len(recs_df)} recommendations into replenishment_recommendations...")
-        recs_df.to_sql("replenishment_recommendations", engine, if_exists="append", index=False, method=psql_insert_copy)
+    print("5. Recomputing inventory_params with the single REFIT-RSS-EOQ-G formula (L=3, R=7)...")
+    from app.core.database import SessionLocal
+    from app.services.optimization_service import optimization_service
+    db = SessionLocal()
+    try:
+        n = optimization_service.recompute_parameters(db, store_id=STORE_ID)
+    finally:
+        db.close()
 
     print("=" * 60)
     print("C3-OUT synchronization completed successfully!")
     print(f"- 9 ABC/XYZ segments: {len(sku_classes_df)} SKUs")
-    print(f"- C3-OUT parameters: {len(final_params)} SKUs (Model A3: h=0.002*price, c=2.0, b=0.35*price)")
+    print(f"- inventory_params: {n} SKUs (Model A3: h=0.002*price, c=2.0, b=0.35*price)")
     print(f"- Inventory levels: {len(inventory_df)} SKUs")
-    print(f"- Replenishment recommendations: {len(recs_df)} PENDING orders (strict IP <= ROP)")
     print("=" * 60)
 
 

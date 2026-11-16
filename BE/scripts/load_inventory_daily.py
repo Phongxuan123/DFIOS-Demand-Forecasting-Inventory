@@ -8,6 +8,7 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 import pandas as pd
 from sqlalchemy import text
 from app.core.database import engine
+from app.core.db_bulk import replace_rows
 
 STORE_ID = "CA_1"
 START_DATE = "2015-05-24"
@@ -45,9 +46,8 @@ if not inv_df.empty:
     insert_df = daily_df[["store_id", "item_id", "date", "on_hand_end", "on_order", "sales", "lost_sales", "stockout", "created_at"]]
 
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM inventory_daily WHERE store_id = :s AND date = :d"), {"s": STORE_ID, "d": START_DATE})
-
-    insert_df.to_sql("inventory_daily", engine, if_exists="append", index=False, chunksize=1000, method="multi")
+        replace_rows(conn, "inventory_daily", insert_df,
+                     "DELETE FROM inventory_daily WHERE store_id = :s AND date = :d", {"s": STORE_ID, "d": START_DATE})
     print(f"Seeded {len(insert_df)} inventory_daily initial records for {STORE_ID} on {START_DATE}!")
 else:
     print(f"No inventory found for {STORE_ID} to seed inventory_daily.")

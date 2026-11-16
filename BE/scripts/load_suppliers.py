@@ -1,4 +1,6 @@
-import sys, os, uuid
+import sys
+import os
+import uuid
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 

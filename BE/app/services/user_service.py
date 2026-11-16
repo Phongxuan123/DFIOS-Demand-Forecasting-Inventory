@@ -213,7 +213,7 @@ class UserService:
             (request.role is not None and request.role != "Admin") or (request.is_active is False)
         ):
             active_admin_count = (
-                db.query(User).filter(User.role == "Admin", User.is_active == True).count()
+                db.query(User).filter(User.role == "Admin", User.is_active.is_(True)).count()
             )
             if active_admin_count <= 1:
                 raise HTTPException(
@@ -243,8 +243,24 @@ class UserService:
         db.commit()
         return UserResponse.model_validate(updated_user)
 
+    def revoke_user_tokens(self, db: Session, user_id: str, admin_email: str, ip_address: Optional[str] = None) -> MessageResponse:
+        """Admin: invalidate every JWT / email token of one user (token_version + 1)."""
+        user = user_repository.get_by_id(db, user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Không tìm thấy người dùng có ID '{user_id}'",
+            )
+        user.token_version = getattr(user, "token_version", 1) + 1
+        email_token_service.revoke_all_user_tokens(db, user.id)
+        audit_service.log(db, action="admin.revoke_tokens", actor_email=admin_email, ip_address=ip_address,
+                          details=f"user={user.email}")
+        user_repository.update(db, user)
+        return MessageResponse(message=f"Đã thu hồi mọi phiên đăng nhập của {user.email}.")
+
     def toggle_user_status(
-        self, db: Session, user_id: str, request: UserStatusUpdateRequest, current_admin: User
+        self, db: Session, user_id: str, request: UserStatusUpdateRequest, current_admin: User,
+        ip_address: Optional[str] = None,
     ) -> UserResponse:
         """
         UC06: Kích hoạt / Vô hiệu hóa tài khoản (Admin không được tự khóa chính mình)
@@ -267,9 +283,20 @@ class UserService:
             user.token_version = getattr(user, "token_version", 1) + 1
             email_token_service.revoke_all_user_tokens(db, user.id)
         updated_user = user_repository.update(db, user)
+        # R5F-01: every admin action on an account is audited
+        audit_service.log(
+            db,
+            action="admin.unlock_user" if request.is_active else "admin.lock_user",
+            actor_email=current_admin.email,
+            ip_address=ip_address,
+            details=f"Admin {'mở khóa' if request.is_active else 'khóa'} tài khoản {user.email}",
+        )
+        db.commit()
         return UserResponse.model_validate(updated_user)
 
-    def delete_user(self, db: Session, current_admin: User, user_id: str) -> MessageResponse:
+    def delete_user(
+        self, db: Session, current_admin: User, user_id: str, ip_address: Optional[str] = None
+    ) -> MessageResponse:
         """
         UC06: Xóa vĩnh viễn tài khoản
         """
@@ -284,8 +311,16 @@ class UserService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy người dùng có ID '{user_id}'",
             )
-        user_repository.delete(db, user)
-        return MessageResponse(message=f"Đã xóa vĩnh viễn tài khoản {user.email}.")
+        email = user.email
+        user_repository.delete(db, user.id)  # repository API nhận id, không nhận object
+        # R5F-01: the deletion is audited (the deleted account's earlier audit rows are kept: they hold emails,
+        # not a foreign key)
+        audit_service.log(
+            db, action="admin.delete_user", actor_email=current_admin.email, ip_address=ip_address,
+            details=f"Admin xóa vĩnh viễn tài khoản {email}",
+        )
+        db.commit()
+        return MessageResponse(message=f"Đã xóa vĩnh viễn tài khoản {email}.")
 
 
 user_service = UserService()

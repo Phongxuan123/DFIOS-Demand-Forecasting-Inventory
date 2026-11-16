@@ -7,7 +7,7 @@ from app.models.supplier import Supplier
 from app.models.inventory import Inventory
 from app.models.event import Event
 from app.models.email_token import EmailToken
-from app.models.audit_log import AuditLog
+from app.models.audit_log import AuditLog, LoginFailure
 from app.models.inventory_adjustment import InventoryAdjustment
 from app.models.system_setting import SystemSetting
 from app.models.data_quality import DataQualityRun
@@ -28,8 +28,11 @@ from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
 from app.models.data_imports import DataImport
 from app.models.forecast_backtest import ForecastBacktest
+from app.models.sim_state import SimSnapshot, SimShadowDaily
 
 __all__ = [
+    "SimSnapshot",
+    "SimShadowDaily",
     "Base",
     "User",
     "Product",
@@ -43,6 +46,7 @@ __all__ = [
     "Event",
     "EmailToken",
     "AuditLog",
+    "LoginFailure",
     "InventoryAdjustment",
     "SystemSetting",
     "DataQualityRun",

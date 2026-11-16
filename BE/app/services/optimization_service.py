@@ -1,24 +1,31 @@
 import json
 import math
-from datetime import datetime, timezone, date, timedelta
+import warnings
+from datetime import datetime, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-import pandas as pd
+from fastapi import HTTPException
 import scipy.stats as stats
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from app.models.product import Product
 from app.models.supplier import Supplier
-from app.models.forecast import Forecast, ForecastSigma
+from app.models.forecast import Forecast
+from app.models.forecast_backtest import ForecastBacktest
 from app.models.sales_history import SalesHistory
 from app.models.inventory_param import InventoryParam
 from app.models.user import User
 from app.models.policy_selection import PolicySelection
-from app.models.calibration_state import CalibrationState
 from app.models.classification import SKUClassification
 from app.models.sim_clock import SimClock
-from app.services.window_quantile_service import window_quantile_service
+from app.services import policy_config as pc
+from app.services import policy_backtest
+from app.services.calibrator_service import calibrator_service, selection_store
+from app.services.window_quantile_service import (
+    WindowQuantileService,
+    build_actuals_matrix,
+    window_quantile_service,
+)
 from app.repositories.inventory_param_repository import inventory_param_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.services.audit_service import audit_service
@@ -27,7 +34,6 @@ from app.schemas.optimization import (
     ServiceLevelConfigUpdate,
     InventoryParamItem,
     InventoryParamsListResponse,
-    RecomputeResponse,
     CompareParamItem,
     CompareStaticResponse,
     SensitivityScenario,
@@ -38,25 +44,19 @@ from app.schemas.optimization import (
 
 class OptimizationService:
     SETTINGS_KEY = "target_service_level_config"
-    # Giả định chi phí chuẩn A3 (research.md §3)
-    ORDER_COST_C = 2.0  # c = 2 đơn vị tiền mỗi dòng đơn (A3)
-    HOLDING_RATE_DAILY = 0.002  # h = 0.2% giá/đơn vị/ngày => h_annual = 0.73 * unit_price (A3)
-    STOCKOUT_PENALTY_RATE = 0.35  # b = 35% giá/đơn vị (A3)
-    DEFAULT_HOLDING_COST = 2.5  # Tham chiếu trung bình khi thiếu giá
-    DEFAULT_ORDER_COST = 2.0  # c = 2.0 (A3)
-    DEFAULT_LEAD_TIME = 3  # L = 3 ngày (research.md §3)
-    DEFAULT_REVIEW_PERIOD = 7  # R = 7 ngày => H = L + R = 10 ngày (research.md §3)
+    # A3 cost assumptions and timing: single source = policy_config (R-28, B-20)
+    ORDER_COST_C = pc.ORDER_COST_C
+    HOLDING_RATE_DAILY = pc.HOLDING_RATE_DAILY
+    STOCKOUT_PENALTY_RATE = pc.STOCKOUT_PENALTY_RATE
+    DEFAULT_HOLDING_COST = 2.5
+    DEFAULT_ORDER_COST = pc.ORDER_COST_C
+    DEFAULT_LEAD_TIME = pc.LEAD_TIME_DAYS
+    DEFAULT_REVIEW_PERIOD = pc.REVIEW_PERIOD_DAYS
 
+    # Neutral starting policy (P6 / C3-OUT: m_g = 0 so the closed-loop theta is not applied twice, N-05).
+    # val_cost / val_service are NOT invented: they stay empty until J5 measures them.
     DEFAULT_OPTIMAL_POLICIES = {
-        "AX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
-        "AY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
-        "AZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 66254.19,  "val_service": 0.9490},
-        "BX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 64478.95,  "val_service": 0.9499},
-        "BY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 421200.50, "val_service": 0.9491},
-        "BZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 156711.20, "val_service": 0.9489},
-        "CX": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 2907.45,   "val_service": 0.9483},
-        "CY": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 176043.10, "val_service": 0.9492},
-        "CZ": {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 491428.00, "val_service": 0.9479},
+        c: {"m_g": 0.0, "kappa_g": 1.0, "val_cost": None, "val_service": None} for c in pc.ALL_CLASSES
     }
 
     # --- UC29: Target Service Level Configuration ---
@@ -146,243 +146,242 @@ class OptimizationService:
             return config.category_service_levels[category]
         return config.default_service_level
 
-    def _resolve_lead_time(self, db: Session, item_id: str) -> int:
-        """
-        R-28: Xác định Lead Time (L) chuẩn cho SKU:
-        Ưu tiên nhà cung cấp theo ngành hàng (FOODS/HOBBIES/HOUSEHOLD).
-        Nếu không có, tuân thủ chuẩn nghiên cứu L = 3 ngày (research.md §3) để đảm bảo H = L + R = 10 ngày.
-        """
-        prod = db.query(Product).filter(Product.item_id == item_id).first()
-        if prod and prod.cat_id:
-            cat_keyword_map = {
-                "FOODS": "Thực phẩm",
-                "HOBBIES": "Sở thích",
-                "HOUSEHOLD": "Gia dụng",
-            }
-            kw = cat_keyword_map.get(prod.cat_id.upper())
-            if kw:
-                supp = db.query(Supplier).filter(Supplier.name.ilike(f"%{kw}%")).first()
-                if supp and supp.lead_time_days:
-                    return max(1, int(supp.lead_time_days))
+    # ------------------------------------------------------------------------------------
+    # lead time (R-28 / B-20): ONE source, policy_config (L = 3, R = 7, H = 10)
+    # ------------------------------------------------------------------------------------
+    def _use_supplier_lead_time(self, db: Session) -> bool:
+        s = system_setting_repository.get_by_key(db, "use_supplier_lead_time")
+        if not s:
+            return False
+        v = s.value
+        if isinstance(v, dict):
+            v = v.get("enabled", v.get("value", False))
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
 
+    @staticmethod
+    def _supplier_lt_map(db: Session) -> Dict[str, int]:
+        keywords = {"FOODS": ("thực phẩm", "food"), "HOBBIES": ("sở thích", "hobbi"), "HOUSEHOLD": ("gia dụng", "household")}
+        out: Dict[str, int] = {}
+        for supp in db.query(Supplier).all():
+            if not supp.lead_time_days:
+                continue
+            name = (supp.name or "").lower()
+            for cat, kws in keywords.items():
+                if any(k in name for k in kws) and cat not in out:
+                    out[cat] = max(1, int(supp.lead_time_days))
+        return out
+
+    def _resolve_lead_time(self, db: Session, item_id: str) -> int:
+        """L = 3 for every SKU (research.md §3) unless the operator opted in to supplier lead times
+        through the system setting ``use_supplier_lead_time``."""
+        if self._use_supplier_lead_time(db):
+            prod = db.query(Product).filter(Product.item_id == item_id).first()
+            if prod and prod.cat_id:
+                lt = self._supplier_lt_map(db).get(prod.cat_id.upper())
+                if lt:
+                    return lt
         return self.DEFAULT_LEAD_TIME
 
-    # --- UC30: View & Recompute Safety Stock / ROP / EOQ ---
+    # ------------------------------------------------------------------------------------
+    # UC30: parameters. ONE code path for per-SKU and bulk (P-02: bulk == per-SKU by construction)
+    # ------------------------------------------------------------------------------------
+    @staticmethod
+    def _store_origin(db: Session, store_id: str) -> date:
+        """The origin of every quantile / theta lookup is the simulated clock date of the store (R-07)."""
+        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+        if clock and clock.current_date:
+            return clock.current_date
+        # U-17: ONE demo origin (never min(forecast_date)): the forecast table starts one month later and a
+        # second origin would create a second set of window-quantile rows.
+        return pc.DEMO_START_DATE
 
-    def _calculate_ml_params(
+    def _demand_stats(
+        self, db: Session, store_id: str, item_ids: List[str], origin_date: date, days: int
+    ) -> Dict[str, Tuple[float, float]]:
+        """(mean, std) of daily demand over the ``days`` days BEFORE the origin (causal). Missing days
+        are skipped, never treated as 0."""
+        o_idx = pc.date_to_day_index(origin_date)
+        A = build_actuals_matrix(db, store_id, item_ids, max(0, o_idx - days), o_idx)
+        out: Dict[str, Tuple[float, float]] = {}
+        if A.shape[1] == 0:
+            return out
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows (no known day) -> NaN, skipped below
+            mean = np.nanmean(A, axis=1)
+            std = np.nanstd(A, axis=1)
+        for iid, m, s in zip(item_ids, mean, std):
+            if not np.isnan(m):
+                out[iid] = (float(m), float(s))
+        return out
+
+    def _forecast_backed_items(self, db: Session, store_id: str, item_ids: List[str]) -> set:
+        """Items with a real Tier-1 Ensemble forecast or a causal backtest forecast (P-24)."""
+        found = set()
+        for k in range(0, len(item_ids), 900):
+            chunk = item_ids[k:k + 900]
+            found.update(
+                r[0] for r in db.query(Forecast.item_id)
+                .filter(Forecast.store_id == store_id, Forecast.item_id.in_(chunk),
+                        Forecast.model_version.ilike(pc.POINT_FORECAST_MODEL_PATTERN))
+                .distinct().all()
+            )
+            found.update(
+                r[0] for r in db.query(ForecastBacktest.item_id)
+                .filter(ForecastBacktest.store_id == store_id, ForecastBacktest.item_id.in_(chunk))
+                .distinct().all()
+            )
+        return found
+
+    def _compute_params_batch(
         self,
         db: Session,
-        item_id: str,
+        products: List[Product],
         store_id: str,
-        lead_time_days: int,
-        tau: float,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Giai đoạn 4 (Task OPT.1) - Tính toán tham số tồn kho theo chính sách REFIT-RSS-EOQ-G:
-        - Route (c) Window Quantile Q_hat(tau) trên cửa sổ bảo vệ H = L + R (mặc định L=3, R=7 -> H=10).
-        - Reorder point: s_i = ceil( Q_hat(tau) * exp(m_g + theta_g) ).
-        - EOQ_i = max(1.0, round( sqrt( (2 * c * mu_i * 365) / h ), 1 )).
-        - Order-up-to level: S_i = s_i + ceil( kappa_g * EOQ_i ).
-        - Safety stock: SS_i = max(0.0, s_i - d_L).
-        """
-        # Xác định ngày mô phỏng hiện tại từ sim_clock
-        sim_clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-        if sim_clock and sim_clock.current_date:
-            origin_date = sim_clock.current_date
-        else:
-            first_fc = (
-                db.query(Forecast.forecast_date)
-                .filter(Forecast.item_id == item_id, Forecast.store_id == store_id)
-                .order_by(Forecast.forecast_date.asc())
-                .first()
-            )
-            origin_date = first_fc[0] if first_fc else date.today()
-
-        # Kiểm tra xem SKU có dữ liệu dự báo hoặc doanh số không
-        has_forecast = (
-            db.query(Forecast.id)
-            .filter(Forecast.item_id == item_id, Forecast.store_id == store_id)
-            .first()
-        ) is not None
-        has_sales = (
-            db.query(SalesHistory.id)
-            .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
-            .first()
-        ) is not None
-
-        if not has_forecast:
-            return None
-
-        # 1. Xác định phân nhóm ABC-XYZ của SKU
-        cls_record = (
-            db.query(SKUClassification)
-            .filter(SKUClassification.item_id == item_id)
-            .first()
-        )
-        segment = cls_record.segment if cls_record and cls_record.segment else "AX"
-
-        # 2. Lấy bộ tham số chính sách (m_g, kappa_g) cho phân nhóm
-        policy = (
-            db.query(PolicySelection)
-            .filter(PolicySelection.class_id == segment)
-            .order_by(PolicySelection.created_at.desc())
-            .first()
-        )
-        if policy:
-            m_g = policy.m_g
-            kappa_g = policy.kappa_g
-        else:
-            def_policy = self.DEFAULT_OPTIMAL_POLICIES.get(segment, {"m_g": 0.0, "kappa_g": 1.0})
-            m_g = def_policy["m_g"]
-            kappa_g = def_policy["kappa_g"]
-
-        # 3. Lấy hệ số vòng kín theta_g từ bảng calibration_state (mặc định 0.0)
-        calib = (
-            db.query(CalibrationState)
-            .filter(CalibrationState.store_id == store_id, CalibrationState.class_id == segment)
-            .order_by(CalibrationState.review_index.desc())
-            .first()
-        )
-        theta_g = calib.theta if calib and calib.theta is not None else 0.0
-
-        # 4. Tính / lấy Route (c) Window Quantile Q_hat(tau) trên cửa sổ H = L + R
-        horizon_days = lead_time_days + self.DEFAULT_REVIEW_PERIOD
-        q_hat = window_quantile_service.get_tau_quantile_value(
-            db=db,
-            store_id=store_id,
-            item_id=item_id,
-            origin_date=origin_date,
-            tau=tau,
-            horizon_days=horizon_days,
-        )
-
-        # 5. Mức sàn Reorder Point: s = ceil( Q_hat * exp(m_g + theta_g) )
-        multiplier = math.exp(m_g + theta_g)
-        s_val = float(math.ceil(q_hat * multiplier))
-
-        # 6. Nhu cầu trung bình ngày mu_i trên 56 ngày gần nhất
-        past_56_cutoff = origin_date - timedelta(days=56)
-        avg_sales = (
-            db.query(func.avg(SalesHistory.quantity))
-            .filter(
-                SalesHistory.item_id == item_id,
-                SalesHistory.store_id == store_id,
-                SalesHistory.sale_date <= origin_date,
-                SalesHistory.sale_date >= past_56_cutoff,
-            )
-            .scalar()
-        )
-        if avg_sales is not None and avg_sales > 0:
-            mean_demand = float(avg_sales)
-        else:
-            mean_demand = max(0.1, q_hat / max(1, horizon_days))
-
-        # 7. Thông tin đơn giá và chi phí theo Giả định A3 (research.md §3)
-        prod = db.query(Product).filter(Product.item_id == item_id).first()
-        unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
-        # Lưu kho năm h_annual = 0.2% * unit_price * 365 = 0.73 * unit_price
-        h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
-        s_cost = self.ORDER_COST_C  # c = 2.0 mỗi dòng đơn (A3)
-        annual_demand = max(1.0, round(mean_demand * 365, 2))
-
-        # 8. Lô kinh tế EOQ chuẩn tắc: sqrt( 2 * c * D / h )
-        eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 1))
-
-        # 9. Mức trần Order-Up-To: S = s + ceil( kappa_g * EOQ )
-        S_val = float(s_val + math.ceil(kappa_g * eoq))
-
-        # 10. Dự báo nhu cầu Lead Time (d_L) và Tồn kho an toàn (SS)
-        d_l = round(mean_demand * lead_time_days, 2)
-        safety_stock = max(0.0, round(s_val - d_l, 2))
-        reorder_point = s_val
-
-        return {
-            "safety_stock": safety_stock,
-            "reorder_point": reorder_point,
-            "eoq": eoq,
-            "s": s_val,
-            "S": S_val,
-            "model_run_id": "REFIT-RSS-EOQ-G",
-            "annual_demand": annual_demand,
-            "holding_cost": h_cost,
-            "order_cost": s_cost,
-            "unit_price": unit_price,
-            "source": "ml",
-            "d_l": d_l,
-            "sigma_l": round(math.sqrt(lead_time_days) * max(0.2, mean_demand * 0.3), 2),
-            "sigma_d": round(max(0.2, mean_demand * 0.3), 2),
-            "segment": segment,
-            "m_g": m_g,
-            "kappa_g": kappa_g,
-            "theta_g": theta_g,
-            "q_hat": q_hat,
+        config: ServiceLevelConfig,
+        force_static: bool = False,
+        tau_override: Optional[float] = None,
+        persist_quantiles: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """REFIT-RSS-EOQ-G (ML) parameters, falling back per SKU to the static formula."""
+        origin_date = self._store_origin(db, store_id)
+        item_ids = [p.item_id for p in products]
+        use_supplier = self._use_supplier_lead_time(db)
+        supp_map = self._supplier_lt_map(db) if use_supplier else {}
+        lt_of = {
+            p.item_id: supp_map.get((p.cat_id or "").upper(), self.DEFAULT_LEAD_TIME) if use_supplier
+            else self.DEFAULT_LEAD_TIME
+            for p in products
+        }
+        tau_of = {
+            p.item_id: (tau_override if tau_override is not None
+                        else self._resolve_service_level(config, p.item_id, p.cat_id))
+            for p in products
         }
 
-    def _calculate_static_params(
-        self,
-        db: Session,
-        item_id: str,
-        store_id: str,
-        lead_time_days: int,
-        tau: float,
+        ml_ids: List[str] = [] if force_static else sorted(self._forecast_backed_items(db, store_id, item_ids))
+        ml_set = set(ml_ids)
+
+        results: List[Dict[str, Any]] = []
+        if ml_ids:
+            segs = {
+                r[0]: r[1] for r in db.query(SKUClassification.item_id, SKUClassification.segment)
+                .filter(SKUClassification.store_id == store_id).all()
+            }
+            policies = calibrator_service.resolve_policies(db, store_id)
+            thetas = calibrator_service.get_current_thetas(db, store_id, as_of=origin_date)
+            # one quantile record per (item, origin = clock date, H); computed in ONE vectorised pass
+            recs: Dict[str, Any] = {}
+            by_h: Dict[int, List[str]] = {}
+            for iid in ml_ids:
+                by_h.setdefault(lt_of[iid] + self.DEFAULT_REVIEW_PERIOD, []).append(iid)
+            for H, ids in by_h.items():
+                recs.update(window_quantile_service.get_or_create_window_quantiles_bulk(
+                    db, store_id, ids, origin_date, H, persist=persist_quantiles))
+            stats_map = self._demand_stats(db, store_id, ml_ids, origin_date, 56)
+            price_of = {p.item_id: p for p in products}
+            for iid in ml_ids:
+                prod = price_of[iid]
+                lt = lt_of[iid]
+                H = lt + self.DEFAULT_REVIEW_PERIOD
+                rec = recs.get(iid)
+                if rec is None:
+                    ml_set.discard(iid)
+                    continue
+                q_hat = WindowQuantileService.tau_value(rec.q_levels or {}, tau_of[iid], rec.point_window)
+                segment = segs.get(iid, "AX")
+                pol = policies.get(segment)
+                m_g = float(pol.m_g) if pol and pol.m_g is not None else 0.0
+                kappa = float(pol.kappa_g) if pol and pol.kappa_g is not None else 1.0
+                theta = float(thetas.get(segment, 0.0))
+                s_val = float(math.ceil(q_hat * math.exp(m_g + theta)))
+                mean_d, std_d = stats_map.get(iid, (None, None))
+                if mean_d is None or mean_d <= 0:
+                    mean_d = max(0.1, float(rec.point_window) / max(1, H))  # forecast-implied rate, not a constant
+                    std_d = std_d if std_d is not None else 0.0
+                results.append(self._finish_params(
+                    prod, store_id, lt, tau_of[iid], s_val, kappa, mean_d, std_d or 0.0,
+                    source="ml", model_run_id="REFIT-RSS-EOQ-G",
+                    extra={"segment": segment, "m_g": m_g, "kappa_g": kappa, "theta_g": theta, "q_hat": q_hat},
+                ))
+        static_ids = [p for p in products if p.item_id not in ml_set]
+        if static_ids:
+            stats_map = self._demand_stats(db, store_id, [p.item_id for p in static_ids], origin_date, 90)
+            for p in static_ids:
+                results.append(self._static_from_stats(
+                    p, store_id, lt_of[p.item_id], tau_of[p.item_id], stats_map.get(p.item_id)))
+        return results
+
+    def _finish_params(
+        self, prod: Product, store_id: str, lt: int, tau: float, s_val: float, kappa: float,
+        mean_demand: float, std_demand: float, source: str, model_run_id: str,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Tính toán tham số tồn kho theo công thức tĩnh truyền thống (Moving Average).
-        """
-        sales = (
-            db.query(SalesHistory)
-            .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
-            .order_by(SalesHistory.sale_date.desc())
-            .limit(90)
-            .all()
-        )
+        """EOQ, S = s + ceil(kappa * EOQ), SS, costs (A3) from s. Shared by ML and static paths."""
+        unit_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
+        annual_demand = max(1.0, round(mean_demand * 365.0, 2))
+        eoq = max(1.0, round(math.sqrt((2.0 * annual_demand * self.ORDER_COST_C) / h_cost), 1))
+        S_val = float(s_val + math.ceil(kappa * eoq))
+        d_l = round(mean_demand * lt, 2)
+        out = {
+            "item_id": prod.item_id,
+            "safety_stock": max(0.0, round(s_val - d_l, 2)),
+            "reorder_point": s_val, "eoq": eoq, "s": s_val, "S": S_val,
+            "model_run_id": model_run_id, "annual_demand": annual_demand,
+            "holding_cost": h_cost, "order_cost": self.ORDER_COST_C, "unit_price": unit_price,
+            "source": source, "d_l": d_l, "lead_time_days": lt, "service_level": tau,
+            "sigma_d": round(max(0.2, std_demand), 2),
+            "sigma_l": round(max(0.2, std_demand) * math.sqrt(lt), 2),
+        }
+        if extra:
+            out.update(extra)
+        return out
 
-        if sales:
-            quantities = [s.quantity for s in sales]
-            avg_daily = float(np.mean(quantities))
-            sigma_d = float(np.std(quantities)) if len(quantities) > 1 else 1.0
-        else:
-            avg_daily = 10.0
-            sigma_d = 2.0
-
-        avg_daily = max(0.1, avg_daily)
+    def _static_from_stats(
+        self, prod: Product, store_id: str, lt: int, tau: float, stats_pair: Optional[Tuple[float, float]]
+    ) -> Dict[str, Any]:
+        avg_daily, sigma_d = stats_pair if stats_pair else (0.0, 0.0)
+        avg_daily = max(0.1, avg_daily)  # numerical floor only, no invented demand level
         sigma_d = max(0.2, sigma_d)
-
-        d_l = avg_daily * lead_time_days
-        sigma_l = sigma_d * math.sqrt(lead_time_days)
-
         tau_safe = min(max(float(tau), 0.50), 0.999)
         z_tau = float(stats.norm.ppf(tau_safe))
+        sigma_l = sigma_d * math.sqrt(lt)
         safety_stock = max(0.0, round(z_tau * sigma_l, 2))
-        reorder_point = max(0.0, round(d_l + safety_stock, 2))
+        reorder_point = max(0.0, round(avg_daily * lt + safety_stock, 2))
+        res = self._finish_params(
+            prod, store_id, lt, tau, float(math.ceil(reorder_point)), 1.0, avg_daily, sigma_d,
+            source="static", model_run_id="static-moving-avg",
+        )
+        res.update({"safety_stock": safety_stock, "reorder_point": reorder_point, "d_l": avg_daily * lt,
+                    "sigma_l": sigma_l, "sigma_d": sigma_d})
+        return res
 
+    def _calculate_ml_params(
+        self, db: Session, item_id: str, store_id: str, lead_time_days: int, tau: float
+    ) -> Optional[Dict[str, Any]]:
+        """Per-SKU REFIT-RSS-EOQ-G parameters (None when the SKU has no Tier-1 forecast). Same code path
+        as the bulk recompute."""
         prod = db.query(Product).filter(Product.item_id == item_id).first()
-        unit_price = float(prod.price) if prod and prod.price and prod.price > 0 else 10.0
+        if prod is None:
+            return None
+        res = self._compute_params_batch(db, [prod], store_id, self.get_service_level_config(db), tau_override=tau, persist_quantiles=False)
+        return res[0] if res and res[0]["source"] == "ml" else None
 
-        annual_demand = max(1.0, round(avg_daily * 365, 2))
-        h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
-        s_cost = self.ORDER_COST_C
-        eoq = max(1.0, round(math.sqrt((2 * annual_demand * s_cost) / h_cost), 1))
-
-        s_val = float(math.ceil(reorder_point))
-        S_val = float(s_val + math.ceil(eoq))
-
-        return {
-            "safety_stock": safety_stock,
-            "reorder_point": reorder_point,
-            "eoq": eoq,
-            "s": s_val,
-            "S": S_val,
-            "model_run_id": "static-moving-avg",
-            "annual_demand": annual_demand,
-            "holding_cost": h_cost,
-            "order_cost": s_cost,
-            "unit_price": unit_price,
-            "source": "static",
-            "d_l": d_l,
-            "sigma_l": sigma_l,
-            "sigma_d": sigma_d,
-        }
+    def _calculate_static_params(
+        self, db: Session, item_id: str, store_id: str, lead_time_days: int, tau: float
+    ) -> Dict[str, Any]:
+        """Traditional moving-average (R,s,S) formula, used as fallback and as the UC31 baseline."""
+        prod = db.query(Product).filter(Product.item_id == item_id).first() or Product(item_id=item_id, price=10.0)
+        origin = self._store_origin(db, store_id)
+        stats_pair = self._demand_stats(db, store_id, [item_id], origin, 90).get(item_id)
+        if stats_pair is None:  # sales newer than the clock (e.g. no clock yet): use the latest rows
+            q = (db.query(SalesHistory.quantity)
+                 .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
+                 .order_by(SalesHistory.sale_date.desc()).limit(90).all())
+            if q:
+                arr = np.array([float(r[0] or 0.0) for r in q])
+                stats_pair = (float(arr.mean()), float(arr.std()) if len(arr) > 1 else 0.0)
+        return self._static_from_stats(prod, store_id, lead_time_days, tau, stats_pair)
 
     def recompute_parameters(
         self,
@@ -390,202 +389,47 @@ class OptimizationService:
         store_id: str = "CA_1",
         item_id: Optional[str] = None,
         force_static: bool = False,
+        item_ids: Optional[List[str]] = None,
     ) -> int:
         """
-        UC30 - Tính toán và lưu trữ các tham số SS, ROP, EOQ vào bảng inventory_params.
-        Có cơ chế Fallback 'static' khi chưa có dự báo ML.
-        R-18: Tối ưu hóa tính toán hàng loạt (Bulk Vectorized Recompute) khi item_id is None,
-        giảm thời gian tính toán toàn kho 3.049 SKU từ 138s xuống dưới 8s (tránh FE timeout 15s).
+        UC30 - compute and store s, S, SS, ROP, EOQ in ``inventory_params``.
+        Per-SKU and whole-store use the same computation (``_compute_params_batch``); the whole-store
+        call writes all rows in one transaction (R-18, P-02).
         """
         config = self.get_service_level_config(db)
-
         query = db.query(Product)
         if item_id:
             query = query.filter(Product.item_id == item_id)
+        elif item_ids is not None:  # P-27: a SET of SKUs is recomputed once, in bulk
+            query = query.filter(Product.item_id.in_(list(item_ids)))
         products = query.all()
-
         if not products:
             return 0
-
-        # R-18: Tối ưu hóa Bulk Recompute khi tính cho toàn bộ danh mục (> 10 SKU)
-        if item_id is None and len(products) > 10:
-            return self._bulk_recompute_parameters(db, products, store_id, config, force_static)
-
-        computed_count = 0
+        results = self._compute_params_batch(db, products, store_id, config, force_static)
         now = datetime.now(timezone.utc)
-
-        for p in products:
-            tau = self._resolve_service_level(config, p.item_id, p.cat_id)
-            lt_days = self._resolve_lead_time(db, p.item_id)
-
-            params = None
-            if not force_static:
-                params = self._calculate_ml_params(
-                    db, p.item_id, store_id, lt_days, tau
-                )
-
-            if not params:
-                params = self._calculate_static_params(
-                    db, p.item_id, store_id, lt_days, tau
-                )
-
-            param_id = f"{store_id}_{p.item_id}"
-            inv_param = InventoryParam(
-                id=param_id,
-                item_id=p.item_id,
-                store_id=store_id,
-                service_level=tau,
-                lead_time_days=lt_days,
-                safety_stock=params["safety_stock"],
-                reorder_point=params["reorder_point"],
-                eoq=params["eoq"],
-                s=params.get("s", params["reorder_point"]),
-                S=params.get("S", params["reorder_point"] + params["eoq"]),
-                model_run_id=params.get("model_run_id", "REFIT-RSS-EOQ-G"),
-                annual_demand=params["annual_demand"],
-                holding_cost=params["holding_cost"],
-                order_cost=params["order_cost"],
-                unit_price=params["unit_price"],
-                source=params["source"],
-                updated_at=now,
-            )
-            inventory_param_repository.upsert(db, inv_param)
-            computed_count += 1
-
-        return computed_count
+        cols = ("item_id", "safety_stock", "reorder_point", "eoq", "s", "S", "model_run_id", "annual_demand",
+                "holding_cost", "order_cost", "unit_price", "source", "lead_time_days", "service_level")
+        if item_id is None and (item_ids is not None or len(results) > 10):
+            rows = [{**{c: r[c] for c in cols}, "id": f"{store_id}_{r['item_id']}", "store_id": store_id,
+                     "updated_at": now} for r in results]
+            old = db.query(InventoryParam).filter(InventoryParam.store_id == store_id)
+            if item_ids is not None:
+                old = old.filter(InventoryParam.item_id.in_([r["item_id"] for r in rows]))
+            old.delete(synchronize_session=False)
+            db.bulk_insert_mappings(InventoryParam, rows)
+            db.commit()
+            return len(rows)
+        for r in results:
+            inventory_param_repository.upsert(db, InventoryParam(
+                id=f"{store_id}_{r['item_id']}", store_id=store_id, updated_at=now, **{c: r[c] for c in cols}))
+        return len(results)
 
     def _bulk_recompute_parameters(
-        self,
-        db: Session,
-        products: List[Product],
-        store_id: str,
-        config: ServiceLevelConfig,
+        self, db: Session, products: List[Product], store_id: str, config: ServiceLevelConfig,
         force_static: bool = False,
     ) -> int:
-        """
-        R-18: Tính toán tham số tồn kho đồng loạt cho toàn kho (3.049 SKU):
-        - Prefetch trước toàn bộ bảng sim_clock, classification, policies, calibrations, quantiles, sales_56, suppliers.
-        - Tính toán in-memory hoàn toàn và ghi dữ liệu hàng loạt qua psql_insert_copy.
-        """
-        from app.models.sim_clock import SimClock
-        from app.models.classification import SKUClassification
-        from app.models.policy_selection import PolicySelection
-        from app.models.calibration_state import CalibrationState
-        from app.models.forecast_window_quantile import ForecastWindowQuantile
-        from app.models.sales_history import SalesHistory
-        from app.models.supplier import Supplier
-        from app.models.inventory_param import InventoryParam
-        from app.core.db_bulk import psql_insert_copy
-
-        clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-        origin_date = clock.current_date if clock and clock.current_date else date(2016, 5, 23)
-        past_56 = origin_date - timedelta(days=56)
-
-        # Prefetch suppliers for category lead time resolution
-        suppliers = db.query(Supplier).all()
-        cat_lt_map = {}
-        for supp in suppliers:
-            if supp.lead_time_days:
-                name_lower = supp.name.lower()
-                if "thực phẩm" in name_lower or "food" in name_lower:
-                    cat_lt_map["FOODS"] = max(1, int(supp.lead_time_days))
-                elif "sở thích" in name_lower or "hobbi" in name_lower:
-                    cat_lt_map["HOBBIES"] = max(1, int(supp.lead_time_days))
-                elif "gia dụng" in name_lower or "household" in name_lower:
-                    cat_lt_map["HOUSEHOLD"] = max(1, int(supp.lead_time_days))
-
-        classes = dict(db.query(SKUClassification.item_id, SKUClassification.segment).all())
-        policies = {p[0]: (float(p[1]), float(p[2])) for p in db.query(PolicySelection.class_id, PolicySelection.m_g, PolicySelection.kappa_g).all()}
-        thetas = {c[0]: float(c[1]) for c in db.query(CalibrationState.class_id, CalibrationState.theta).filter(CalibrationState.store_id == store_id).all()}
-        fwq_records = db.query(ForecastWindowQuantile.item_id, ForecastWindowQuantile.q_levels, ForecastWindowQuantile.point_window).filter(ForecastWindowQuantile.store_id == store_id).all()
-        fwq_map = {q[0]: (q[1], float(q[2])) for q in fwq_records}
-        sales_56 = dict(
-            db.query(SalesHistory.item_id, func.avg(SalesHistory.quantity))
-            .filter(SalesHistory.store_id == store_id, SalesHistory.sale_date <= origin_date, SalesHistory.sale_date >= past_56)
-            .group_by(SalesHistory.item_id)
-            .all()
-        )
-
-        now = datetime.now(timezone.utc)
-        table_cols = {c.name for c in InventoryParam.__table__.columns}
-        s_col = "order_up_to_S" if "order_up_to_S" in table_cols else "S"
-
-        records_to_save = []
-        for p in products:
-            tau = self._resolve_service_level(config, p.item_id, p.cat_id)
-            tau_str = str(tau)
-            segment = classes.get(p.item_id, "AX")
-
-            if segment in policies:
-                m_g, kappa_g = policies[segment]
-            else:
-                def_p = self.DEFAULT_OPTIMAL_POLICIES.get(segment, {"m_g": 0.0, "kappa_g": 1.0})
-                m_g, kappa_g = def_p["m_g"], def_p["kappa_g"]
-
-            theta_g = thetas.get(segment, 0.0)
-
-            # Quantile value
-            q_info = fwq_map.get(p.item_id)
-            if q_info and q_info[0] and isinstance(q_info[0], dict) and tau_str in q_info[0]:
-                q_hat = float(q_info[0][tau_str])
-            elif q_info and q_info[0] and isinstance(q_info[0], dict) and "0.95" in q_info[0]:
-                q_hat = float(q_info[0]["0.95"])
-            elif q_info:
-                q_hat = float(q_info[1])
-            else:
-                q_hat = 10.0
-
-            multiplier = math.exp(m_g + theta_g)
-            s_val = float(math.ceil(q_hat * multiplier))
-
-            lt_days = cat_lt_map.get(p.cat_id.upper() if p.cat_id else "", self.DEFAULT_LEAD_TIME)
-            horizon_days = lt_days + self.DEFAULT_REVIEW_PERIOD
-
-            # Mean demand
-            avg_s = sales_56.get(p.item_id)
-            if avg_s is not None and avg_s > 0:
-                mean_demand = float(avg_s)
-            else:
-                mean_demand = max(0.1, q_hat / float(horizon_days))
-
-            unit_price = float(p.price) if p.price and float(p.price) > 0 else 10.0
-            h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
-            s_cost = self.ORDER_COST_C
-            annual_demand = max(1.0, round(mean_demand * 365.0, 2))
-
-            eoq = max(1.0, round(math.sqrt((2.0 * annual_demand * s_cost) / h_cost), 1))
-            S_val = float(s_val + math.ceil(kappa_g * eoq))
-            d_L = mean_demand * lt_days
-            ss = max(0.0, round(s_val - d_L, 1))
-
-            records_to_save.append({
-                "id": f"{store_id}_{p.item_id}",
-                "item_id": p.item_id,
-                "store_id": store_id,
-                "service_level": tau,
-                "lead_time_days": lt_days,
-                "safety_stock": ss,
-                "reorder_point": s_val,
-                "eoq": eoq,
-                "s": s_val,
-                s_col: S_val,
-                "model_run_id": "REFIT-RSS-EOQ-G",
-                "annual_demand": annual_demand,
-                "holding_cost": h_cost,
-                "order_cost": s_cost,
-                "unit_price": unit_price,
-                "source": "ml",
-                "updated_at": now,
-            })
-
-        df_params = pd.DataFrame(records_to_save)
-        db.query(InventoryParam).filter(InventoryParam.store_id == store_id).delete()
-        db.commit()
-        bind = db.get_bind()
-        df_params.to_sql("inventory_params", bind, if_exists="append", index=False, method=psql_insert_copy)
-
-        return len(records_to_save)
-
+        """Kept for backward compatibility: same computation as the per-SKU path."""
+        return self.recompute_parameters(db, store_id=store_id, item_id=None, force_static=force_static)
 
     def get_parameters(
         self,
@@ -597,196 +441,152 @@ class OptimizationService:
         category: Optional[str] = None,
         source: Optional[str] = None,
     ) -> InventoryParamsListResponse:
-        """
-        UC30 - Lấy danh sách tham số tồn kho tối ưu đã tính toán.
-        """
-        # Nếu bảng chưa có bản ghi nào, tự động tính toán khởi tạo
+        """UC30 - list the computed inventory parameters."""
         existing_count = db.query(InventoryParam).count()
         if existing_count == 0:
             self.recompute_parameters(db)
 
         items, total = inventory_param_repository.get_multi(
-            db,
-            skip=skip,
-            limit=limit,
-            store_id=store_id,
-            item_id=item_id,
-            category=category,
-            source=source,
+            db, skip=skip, limit=limit, store_id=store_id, item_id=item_id, category=category, source=source,
         )
-
-        # Lấy thông tin bổ sung tên sản phẩm và category
-        product_map = {p.item_id: p for p in db.query(Product).all()}
+        ids = [it.item_id for it in items]
+        product_map = {p.item_id: p for p in db.query(Product).filter(Product.item_id.in_(ids)).all()} if ids else {}
 
         response_items: List[InventoryParamItem] = []
         for it in items:
             prod = product_map.get(it.item_id)
             response_items.append(
                 InventoryParamItem(
-                    item_id=it.item_id,
-                    store_id=it.store_id,
-                    product_name=prod.name if prod else None,
-                    category=prod.cat_id if prod else None,
-                    service_level=it.service_level,
-                    lead_time_days=it.lead_time_days,
-                    safety_stock=it.safety_stock,
-                    reorder_point=it.reorder_point,
-                    eoq=it.eoq,
-                    s=it.s,
-                    S=it.S,
-                    model_run_id=it.model_run_id,
-                    annual_demand=it.annual_demand,
-                    holding_cost=it.holding_cost,
-                    order_cost=it.order_cost,
-                    unit_price=it.unit_price,
-                    source=it.source,
-                    updated_at=it.updated_at,
+                    item_id=it.item_id, store_id=it.store_id,
+                    product_name=prod.name if prod else None, category=prod.cat_id if prod else None,
+                    service_level=it.service_level, lead_time_days=it.lead_time_days,
+                    safety_stock=it.safety_stock, reorder_point=it.reorder_point, eoq=it.eoq,
+                    s=it.s, S=it.S, model_run_id=it.model_run_id, annual_demand=it.annual_demand,
+                    holding_cost=it.holding_cost, order_cost=it.order_cost, unit_price=it.unit_price,
+                    source=it.source, updated_at=it.updated_at,
                 )
             )
-
-        return InventoryParamsListResponse(
-            items=response_items,
-            total=total,
-            skip=skip,
-            limit=limit,
-        )
+        return InventoryParamsListResponse(items=response_items, total=total, skip=skip, limit=limit)
 
     # --- UC31: Compare ML vs Static Formula ---
 
-    def compare_ml_vs_static(
-        self, db: Session, store_id: str = "CA_1"
-    ) -> CompareStaticResponse:
+    @staticmethod
+    def _expected_annual_costs(
+        s: float, order_qty: float, mu: float, sigma_d: float, price: float, horizon: int,
+    ) -> Tuple[float, float, float]:
         """
-        UC31 - So sánh tham số tồn kho ML-driven với công thức tĩnh Moving Average.
+        Model-based estimate (A3) of the annual (holding, shortage, ordering) cost of an (R,s,S)-type policy
+        with reorder point s and order size ``order_qty`` (normal demand over the protection window H):
+          holding  = (E[on hand] ) * h,      E[on hand] ~ max(0, s - mu*H) + order_qty / 2
+          shortage = b * (365 / R) * sigma_H * G(z),  z = (s - mu*H) / sigma_H   (normal loss function)
+          ordering = c * D / order_qty
+        This is an analytic estimate, NOT a simulation (the simulator gives the measured numbers).
         """
-        # Tối ưu hóa hiệu năng: Bulk query tránh N+1 (giảm từ 297s xuống < 0.2s)
-        params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
-        # R-17: Không chạy recompute ghi đè DB trên phương thức GET thuần túy (Idempotency)
-        if not params:
-            config = self.get_service_level_config(db)
-            params = []
-            for p in db.query(Product).all():
-                tau = self._resolve_service_level(config, p.item_id, p.cat_id)
-                lt_days = self._resolve_lead_time(db, p.item_id)
-                calculated = self._calculate_ml_params(db, p.item_id, store_id, lt_days, tau)
-                if not calculated:
-                    calculated = self._calculate_static_params(db, p.item_id, store_id, lt_days, tau)
-                inv_param = InventoryParam(
-                    id=f"{store_id}_{p.item_id}",
-                    item_id=p.item_id,
-                    store_id=store_id,
-                    service_level=tau,
-                    lead_time_days=lt_days,
-                    safety_stock=calculated["safety_stock"],
-                    reorder_point=calculated["reorder_point"],
-                    eoq=calculated["eoq"],
-                    holding_cost=calculated.get("holding_cost", self.DEFAULT_HOLDING_COST),
-                    order_cost=calculated.get("order_cost", self.DEFAULT_ORDER_COST),
-                    unit_price=calculated.get("unit_price", 10.0),
-                    annual_demand=calculated.get("annual_demand", 1000.0),
-                    source=calculated.get("source", "ml"),
-                )
-                params.append(inv_param)
-        products = db.query(Product).all()
-        prod_map = {p.item_id: p for p in products}
+        h_annual = pc.HOLDING_RATE_DAILY * 365.0 * price
+        b = pc.STOCKOUT_PENALTY_RATE * price
+        sigma_h = max(1e-6, sigma_d * math.sqrt(horizon))
+        z = (s - mu * horizon) / sigma_h
+        loss = float(stats.norm.pdf(z) - z * (1.0 - stats.norm.cdf(z)))
+        holding = (max(0.0, s - mu * horizon) + order_qty / 2.0) * h_annual
+        shortage = b * (365.0 / pc.REVIEW_PERIOD_DAYS) * sigma_h * loss
+        ordering = pc.ORDER_COST_C * (mu * 365.0) / max(1.0, order_qty)
+        return holding, shortage, ordering
 
-        # Bulk query thống kê bán hàng theo SKU
-        is_sqlite = db.bind.dialect.name == "sqlite" if db.bind else False
-        if is_sqlite:
-            from collections import defaultdict
-            sales_rows = (
-                db.query(SalesHistory.item_id, SalesHistory.quantity)
-                .filter(SalesHistory.store_id == store_id)
-                .all()
-            )
-            grouped = defaultdict(list)
-            for item_id_val, qty_val in sales_rows:
-                grouped[item_id_val].append(float(qty_val or 0.0))
-            stats_map = {}
-            for item_id_val, q_list in grouped.items():
-                arr = np.array(q_list)
-                stats_map[item_id_val] = (float(np.mean(arr)), float(np.std(arr)))
-        else:
-            sales_stats = (
-                db.query(
-                    SalesHistory.item_id,
-                    func.avg(SalesHistory.quantity).label("avg_qty"),
-                    func.stddev_pop(SalesHistory.quantity).label("std_qty"),
+    def compare_ml_vs_static(self, db: Session, store_id: str = "CA_1") -> CompareStaticResponse:
+        """
+        UC31 - ML (REFIT-RSS-EOQ-G) vs static moving-average parameters. The comparison now charges
+        HOLDING + SHORTAGE + ORDERING (R-13); the holding-only fields are kept for compatibility.
+        """
+        params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
+        if not params:  # R-17: pure GET, never writes
+            config = self.get_service_level_config(db)
+            prods = db.query(Product).all()
+            params = [
+                InventoryParam(
+                    id=f"{store_id}_{r['item_id']}", store_id=store_id,
+                    **{c: r[c] for c in ("item_id", "safety_stock", "reorder_point", "eoq", "s", "S",
+                                         "annual_demand", "holding_cost", "order_cost", "unit_price",
+                                         "source", "lead_time_days", "service_level")},
                 )
-                .filter(SalesHistory.store_id == store_id)
-                .group_by(SalesHistory.item_id)
-                .all()
-            )
-            stats_map = {r[0]: (float(r[1] or 5.0), float(r[2] or 1.0)) for r in sales_stats}
+                for r in self._compute_params_batch(db, prods, store_id, config, persist_quantiles=False)
+            ]
+        prod_map = {p.item_id: p for p in db.query(Product).all()}
+        origin = self._store_origin(db, store_id)
+        ids = [p.item_id for p in params]
+        dstats = self._demand_stats(db, store_id, ids, origin, 90) if ids else {}
 
         items: List[CompareParamItem] = []
         total_savings = 0.0
+        total_cost_savings = 0.0
         ss_reduction_percents: List[float] = []
+        n_skipped = 0
 
         for p in params:
             prod = prod_map.get(p.item_id)
             prod_name = prod.name if prod else p.item_id
             cat_id = prod.cat_id if prod else "FOODS"
-
             ml_ss = float(p.safety_stock or 0.0)
             ml_rop = float(p.reorder_point or 0.0)
             ml_eoq = float(p.eoq or 1.0)
-            prod_price = float(prod.price) if prod and prod.price and prod.price > 0 else 3.5
-            h_cost = float(p.holding_cost or round(self.HOLDING_RATE_DAILY * 365.0 * prod_price, 3))
+            price = float(prod.price) if prod and prod.price and prod.price > 0 else float(p.unit_price or 10.0)
+            h_cost = float(p.holding_cost or round(self.HOLDING_RATE_DAILY * 365.0 * price, 3))
             o_cost = float(p.order_cost or self.ORDER_COST_C)
             lt_days = int(p.lead_time_days or self.DEFAULT_LEAD_TIME)
             tau = float(p.service_level or 0.95)
             tau_safe = min(max(tau, 0.50), 0.999)
-            avg_daily, sigma_d = stats_map.get(p.item_id, (5.0, 1.0))
+            if p.item_id in dstats:
+                avg_daily, sigma_d = dstats[p.item_id]
+            elif p.annual_demand:
+                avg_daily, sigma_d = max(0.1, float(p.annual_demand) / 365.0), 0.0
+            else:  # round 5: no observed demand and no parameter demand -> not compared (no invented 36.5/year)
+                n_skipped += 1
+                continue
+            sigma_d = max(0.2, sigma_d)
             z_score = float(stats.norm.ppf(tau_safe))
             static_ss = round(z_score * sigma_d * math.sqrt(lt_days), 2)
             static_rop = round(avg_daily * lt_days + static_ss, 2)
-            annual_d = avg_daily * 365.0
-            static_eoq = max(1.0, round(math.sqrt((2 * annual_d * o_cost) / h_cost), 2))
+            static_eoq = max(1.0, round(math.sqrt((2 * avg_daily * 365.0 * o_cost) / h_cost), 2))
 
             ml_holding = round((ml_ss + ml_eoq / 2.0) * h_cost, 2)
             static_holding = round((static_ss + static_eoq / 2.0) * h_cost, 2)
             savings = round(max(0.0, static_holding - ml_holding), 2)
             total_savings += savings
 
+            H = lt_days + pc.REVIEW_PERIOD_DAYS
+            ml_s = float(p.s if p.s is not None else ml_rop)
+            ml_S = float(p.S if p.S is not None else ml_s + ml_eoq)
+            ml_h, ml_b, ml_o = self._expected_annual_costs(ml_s, max(1.0, ml_S - ml_s), avg_daily, sigma_d, price, H)
+            st_h, st_b, st_o = self._expected_annual_costs(static_rop, static_eoq, avg_daily, sigma_d, price, H)
+            ml_total = round(ml_h + ml_b + ml_o, 2)
+            st_total = round(st_h + st_b + st_o, 2)
+            total_cost_savings += st_total - ml_total
+
             if static_ss > 0:
-                reduct_pct = max(0.0, (static_ss - ml_ss) / static_ss * 100.0)
-                ss_reduction_percents.append(reduct_pct)
+                ss_reduction_percents.append(max(0.0, (static_ss - ml_ss) / static_ss * 100.0))
 
-            items.append(
-                CompareParamItem(
-                    item_id=p.item_id,
-                    product_name=prod_name,
-                    store_id=store_id,
-                    category=cat_id,
-                    lead_time_days=lt_days,
-                    service_level=tau,
-                    ml_safety_stock=ml_ss,
-                    ml_reorder_point=ml_rop,
-                    ml_eoq=ml_eoq,
-                    ml_annual_holding_cost=ml_holding,
-                    static_safety_stock=static_ss,
-                    static_reorder_point=static_rop,
-                    static_eoq=static_eoq,
-                    static_annual_holding_cost=static_holding,
-                    ss_difference=round(static_ss - ml_ss, 2),
-                    rop_difference=round(static_rop - ml_rop, 2),
-                    eoq_difference=round(static_eoq - ml_eoq, 2),
-                    holding_cost_savings=savings,
-                )
-            )
-
-        avg_reduction = (
-            round(float(np.mean(ss_reduction_percents)), 2)
-            if ss_reduction_percents
-            else 0.0
-        )
+            items.append(CompareParamItem(
+                item_id=p.item_id, product_name=prod_name, store_id=store_id, category=cat_id,
+                lead_time_days=lt_days, service_level=tau,
+                ml_safety_stock=ml_ss, ml_reorder_point=ml_rop, ml_eoq=ml_eoq,
+                ml_annual_holding_cost=ml_holding,
+                static_safety_stock=static_ss, static_reorder_point=static_rop, static_eoq=static_eoq,
+                static_annual_holding_cost=static_holding,
+                ss_difference=round(static_ss - ml_ss, 2), rop_difference=round(static_rop - ml_rop, 2),
+                eoq_difference=round(static_eoq - ml_eoq, 2), holding_cost_savings=savings,
+                ml_annual_shortage_cost=round(ml_b, 2), ml_annual_ordering_cost=round(ml_o, 2),
+                ml_annual_total_cost=ml_total,
+                static_annual_shortage_cost=round(st_b, 2), static_annual_ordering_cost=round(st_o, 2),
+                static_annual_total_cost=st_total,
+                total_cost_savings=round(st_total - ml_total, 2),
+            ))
 
         return CompareStaticResponse(
-            items=items,
-            total_items=len(items),
+            items=items, total_items=len(items),
             total_holding_cost_savings=round(total_savings, 2),
-            avg_ss_reduction_percent=avg_reduction,
+            avg_ss_reduction_percent=round(float(np.mean(ss_reduction_percents)), 2) if ss_reduction_percents else 0.0,
+            total_cost_savings=round(total_cost_savings, 2),
+            cost_model="analytic estimate: holding + shortage (normal loss) + ordering, A3 rates",
+            n_items_skipped=n_skipped,
         )
 
     # --- UC32: Cost Sensitivity Analysis ---
@@ -916,183 +716,169 @@ class OptimizationService:
 
     # --- Job J5: Quarterly Policy Selection (Task OPT.2) ---
 
+    def _c3out_active(self, db: Session) -> bool:
+        """P6 (C3-OUT) is the deployed controller unless the setting ``c3out_active`` says otherwise."""
+        s = system_setting_repository.get_by_key(db, "c3out_active")
+        if not s:
+            return True
+        v = s.value
+        if isinstance(v, dict):
+            v = v.get("enabled", v.get("value", True))
+        return str(v).strip().lower() not in ("0", "false", "no", "off")
+
+    def _validation_reviews(
+        self, db: Session, store_id: str, item_ids: List[str], o_idx: int, n_periods: int
+    ) -> List[int]:
+        """Last ``n_periods`` consecutive (spacing R) backtest reviews whose period [s, s+R) is fully observed
+        before the origin."""
+        days = sorted({
+            r[0] for r in db.query(ForecastBacktest.review_day)
+            .filter(ForecastBacktest.store_id == store_id, ForecastBacktest.item_id.in_(item_ids[:900]))
+            .distinct().all()
+        })
+        eligible = [d for d in days if d + pc.REVIEW_PERIOD_DAYS <= o_idx]
+        if not eligible:
+            return []
+        chain = [eligible[-1]]
+        have = set(eligible)
+        while len(chain) < n_periods and chain[-1] - pc.REVIEW_PERIOD_DAYS in have:
+            chain.append(chain[-1] - pc.REVIEW_PERIOD_DAYS)
+        return sorted(chain)
+
+    def evaluate_class_candidates(
+        self, db: Session, store_id: str, class_id: str, o_idx: int, n_periods: int, tau_q: float,
+        m_values: List[float], kappa_values: List[float], theta: float = 0.0,
+    ) -> Optional[Tuple[policy_backtest.BacktestResult, int, List[int]]]:
+        """Score every (m, kappa) of one class with the numpy (R,s,S) backtest over validation reviews."""
+        item_ids = [r[0] for r in db.query(SKUClassification.item_id)
+                    .filter(SKUClassification.store_id == store_id, SKUClassification.segment == class_id).all()]
+        if not item_ids:
+            return None
+        reviews = self._validation_reviews(db, store_id, item_ids, o_idx, n_periods)
+        if len(reviews) < 2:
+            return None
+        R, H = pc.REVIEW_PERIOD_DAYS, pc.HORIZON_DAYS
+        cm = window_quantile_service.causal_quantile_matrix(db, store_id, item_ids, reviews, tau_q, H)
+        A = build_actuals_matrix(db, store_id, item_ids, reviews[0], reviews[-1] + R)
+        prices = {p.item_id: p.price for p in db.query(Product).filter(Product.item_id.in_(item_ids)).all()}
+        # round 5: an item without a real price is EXCLUDED (A3 costs are price-proportional; no invented price 10)
+        price = np.array([float(prices[i]) if prices.get(i) and float(prices[i]) > 0 else np.nan for i in item_ids])
+        # keep items with complete actuals on the validation days, a quantile for every review and a price
+        days_idx = np.concatenate([np.arange(s - reviews[0], s - reviews[0] + R) for s in reviews])
+        dem = A[:, days_idx]
+        ok = ~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1) & ~np.isnan(price)
+        if ok.sum() == 0:
+            return None
+        dem, q, point, price = dem[ok], cm["q"][ok], cm["point"][ok], price[ok]
+        eoq = np.stack([policy_backtest.eoq_units(point[:, k] / H, price) for k in range(len(reviews))], axis=1)
+        res = policy_backtest.simulate_rss_candidates(dem, q, eoq, price, m_values, kappa_values, theta=theta)
+        return res, int(ok.sum()), reviews
+
+    @staticmethod
+    def tag_selection_id(selection_id: str, store_id: str) -> str:
+        """Q-05: a J5 selection always carries its store (CA_1_quarter_2016_Q2) so refitting one store never
+        changes the policy of another (resolve_policies ignores selections of other stores)."""
+        return selection_id if selection_store(selection_id) else f"{store_id}_{selection_id}"
+
     def refit_quarterly_policies(
         self,
         db: Session,
         store_id: str = "CA_1",
         selection_id: Optional[str] = None,
-        target_availability: float = 0.96,
+        target_availability: Optional[float] = None,
+        c3out_active: Optional[bool] = None,
+        search_mode: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Job J5 - Tái chọn tham số chính sách (m_g, kappa_g) định kỳ theo Quý (Giai đoạn 4 / Task OPT.2):
-        - Quét lưới candidate (m in [0.0..0.4], kappa in [0.0..2.0]).
-        - Chọn cặp (m_g, kappa_g) có chi phí lưu kho + đặt hàng thấp nhất với Availability >= 0.96.
-        - Lưu kết quả vào bảng policy_selection.
+        Job J5 - re-select (m_g, kappa_g) per ABC-XYZ class with a REAL vectorised (R,s,S) backtest over the
+        last validation reviews (research.md 7.4; R-10, N-07, R-11):
+          * the full grid m in [-0.7, 2.0] x kappa in {0.5, 1, 1.5, 2} is simulated once (daily lost-sales
+            dynamics, A3 costs h/b/c, observed availability) at the quantile level tau = target (Q-06);
+          * choose the cheapest candidate with availability >= target + guard (guard applied ONCE, here);
+            if none is feasible, return the most available one with is_feasible = False;
+          * BOTH selections are reported per class (Q-08): kappa_only_* (m_g = 0, the C3-OUT mode: the
+            closed-loop theta carries the level so e^(m_g + theta) is never applied twice, N-05) and
+            m_grid_* (full 7.4 search). search_mode picks which one is PERSISTED:
+            kappa_only | m_grid | auto (default: kappa_only while C3-OUT is active, else m_grid);
+          * the controller setpoint is A_g + guard (research.md 8.2), refreshed on every refit (Q-06);
+          * selection ids are store-scoped (Q-05).
         """
+        if target_availability is None:
+            target_availability = float(self.get_service_level_config(db).default_service_level)
+        if c3out_active is None:
+            c3out_active = self._c3out_active(db)
+        mode = (search_mode or "auto").lower()
+        if mode not in ("auto", "kappa_only", "m_grid"):
+            raise HTTPException(status_code=422, detail="search_mode must be auto | kappa_only | m_grid")
+        persist_kappa_only = (mode == "kappa_only") or (mode == "auto" and c3out_active)
+        origin = self._store_origin(db, store_id)
         if not selection_id:
-            clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-            curr_date = clock.current_date if clock and clock.current_date else date.today()
-            q_num = (curr_date.month - 1) // 3 + 1
-            selection_id = f"quarter_{curr_date.year}_Q{q_num}"
-
-        # Lưới tham số ứng viên theo nghiên cứu §7.4
-        M_GRID = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-        KAPPA_GRID = [0.5, 1.0, 1.5, 2.0]
-
-        all_classes = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
-        results: List[Dict[str, Any]] = []
+            selection_id = f"quarter_{origin.year}_Q{(origin.month - 1) // 3 + 1}"
+        selection_id = self.tag_selection_id(selection_id, store_id)
+        o_idx = pc.date_to_day_index(origin)
+        tau_q = min(0.999, max(0.5, float(target_availability)))
+        setpoint = min(0.999, float(target_availability) + pc.GUARD)
         now = datetime.now(timezone.utc)
+        results: List[Dict[str, Any]] = []
 
-        for class_id in all_classes:
-            default_spec = self.DEFAULT_OPTIMAL_POLICIES.get(
-                class_id,
-                {"m_g": 0.0, "kappa_g": 1.0, "val_cost": 10000.0, "val_service": 0.949},
+        def _fields(prefix: str, c: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            return {
+                f"{prefix}_m_g": None if c is None else c["m"],
+                f"{prefix}_kappa_g": None if c is None else c["kappa"],
+                f"{prefix}_val_cost": None if c is None else c["cost"],
+                f"{prefix}_val_service": None if c is None else c["availability"],
+                f"{prefix}_is_feasible": None if c is None else c["is_feasible"],
+            }
+
+        for class_id in pc.ALL_CLASSES:
+            default = self.DEFAULT_OPTIMAL_POLICIES[class_id]
+            scored = self.evaluate_class_candidates(
+                db, store_id, class_id, o_idx, pc.VALIDATION_PERIODS, tau_q,
+                list(pc.M_GRID), list(pc.KAPPA_GRID), theta=0.0,
             )
+            k_best = m_best = None
+            if scored is None:
+                # no validation data: neutral policy, explicitly NOT feasible and without invented metrics
+                best = {"m": default["m_g"], "kappa": default["kappa_g"], "cost": None, "availability": None,
+                        "is_feasible": False}
+                n_items, n_rev = 0, 0
+            else:
+                res, n_items, reviews = scored
+                k_best = policy_backtest.select_candidate(
+                    res, target_availability, pc.GUARD, mask=np.isclose(res.m, 0.0))
+                m_best = policy_backtest.select_candidate(res, target_availability, pc.GUARD)
+                best = k_best if persist_kappa_only else m_best
+                n_rev = len(reviews)
 
-            # Tìm các SKU thuộc phân nhóm này
-            skus = (
-                db.query(SKUClassification.item_id)
-                .filter(SKUClassification.segment == class_id)
-                .all()
-            )
-            item_ids = [s[0] for s in skus]
-
-            best_m = default_spec["m_g"]
-            best_kappa = default_spec["kappa_g"]
-            best_cost = default_spec["val_cost"]
-            best_service = default_spec["val_service"]
-            is_class_feasible = True
-
-            # Nếu có SKU trong nhóm, thực hiện tối ưu thực tế qua quét lưới (research.md §7.4)
-            if item_ids:
-                cls_stats = (
-                    db.query(
-                        func.avg(SKUClassification.cv),
-                        func.avg(SKUClassification.mean_demand),
-                    )
-                    .filter(SKUClassification.segment == class_id)
-                    .first()
-                )
-                avg_cv = float(cls_stats[0]) if cls_stats and cls_stats[0] else 0.5
-                avg_demand = float(cls_stats[1]) if cls_stats and cls_stats[1] else 5.0
-
-                avg_unit_price = float(
-                    (
-                        db.query(func.avg(Product.price))
-                        .filter(Product.item_id.in_(item_ids))
-                        .scalar()
-                    )
-                    or 3.5
-                )
-
-                # Giả định chi phí chuẩn A3 (§7.2)
-                h_daily = self.HOLDING_RATE_DAILY * avg_unit_price
-                h_annual = max(0.5, h_daily * 365.0)
-                b_penalty = self.STOCKOUT_PENALTY_RATE * avg_unit_price
-                c_order = self.ORDER_COST_C
-                annual_d = max(1.0, avg_demand * 365.0)
-                H_days = self.DEFAULT_LEAD_TIME + self.DEFAULT_REVIEW_PERIOD
-
-                # Quét lưới tối ưu hóa tìm min Cost(m, kappa) thỏa mãn Availability >= target + guard
-                target_with_guard = target_availability + 0.01  # Guard 1pp per §7.4
-                candidates = []
-
-                for m_cand in M_GRID:
-                    for k_cand in KAPPA_GRID:
-                        # 1. EOQ và kích thước lô đặt hàng
-                        eoq_val = max(1.0, math.sqrt((2.0 * annual_d * c_order) / h_annual))
-                        batch_size = max(1.0, k_cand * eoq_val)
-
-                        # 2. Safety stock
-                        sigma_h = max(0.1, avg_cv * avg_demand * math.sqrt(H_days))
-                        z_tau = float(stats.norm.ppf(min(0.999, max(0.5, target_availability))))
-                        ss_val = max(0.0, z_tau * sigma_h * math.exp(m_cand))
-                        cycle_stock = batch_size / 2.0
-
-                        # 3. Ước tính mức phục vụ thực tế (theo phân phối chuẩn)
-                        z_eff = z_tau + (m_cand / max(0.1, avg_cv))
-                        est_avail = float(stats.norm.cdf(z_eff))
-
-                        # 4. Chi phí thường niên theo A3 (Holding + Ordering + Stockout)
-                        n_orders = annual_d / batch_size
-                        c_ordering = n_orders * c_order
-                        c_holding = (ss_val + cycle_stock) * h_annual
-                        shortage_prob = max(0.0, 1.0 - est_avail)
-                        c_shortage = annual_d * shortage_prob * b_penalty
-
-                        tot_cost = round((c_holding + c_ordering + c_shortage) * len(item_ids), 2)
-                        is_feas = bool(est_avail >= target_with_guard)
-
-                        candidates.append({
-                            "m": m_cand,
-                            "kappa": k_cand,
-                            "cost": tot_cost,
-                            "service": round(est_avail, 4),
-                            "is_feasible": is_feas,
-                        })
-
-                # Lựa chọn ứng viên tối ưu (research.md §7.4):
-                feasible_candidates = [c for c in candidates if c["is_feasible"]]
-                if feasible_candidates:
-                    best_cand = min(feasible_candidates, key=lambda x: x["cost"])
-                    is_class_feasible = True
-                else:
-                    best_cand = max(candidates, key=lambda x: (x["service"], -x["cost"]))
-                    is_class_feasible = False
-
-                best_m = best_cand["m"]
-                best_kappa = best_cand["kappa"]
-                best_cost = best_cand["cost"]
-                best_service = best_cand["service"]
-
-            # Ghi/Cập nhật vào bảng policy_selection
-            existing = (
-                db.query(PolicySelection)
-                .filter(
-                    PolicySelection.selection_id == selection_id,
-                    PolicySelection.class_id == class_id,
-                )
-                .first()
-            )
+            existing = db.query(PolicySelection).filter(
+                PolicySelection.selection_id == selection_id, PolicySelection.class_id == class_id).first()
             if existing:
-                existing.m_g = best_m
-                existing.kappa_g = best_kappa
-                existing.val_cost = best_cost
-                existing.val_service = best_service
-                existing.is_feasible = is_class_feasible
-                existing.setpoint = target_availability
+                existing.m_g, existing.kappa_g = best["m"], best["kappa"]
+                existing.val_cost, existing.val_service = best["cost"], best["availability"]
+                existing.is_feasible = best["is_feasible"]
+                existing.guard = pc.GUARD
+                existing.setpoint = setpoint
+                existing.tau = tau_q
+                existing.source = "j5_backtest"
                 existing.created_at = now
             else:
-                new_policy = PolicySelection(
-                    selection_id=selection_id,
-                    class_id=class_id,
-                    policy_type="REFIT_RSS_EOQ_G",
-                    m_g=best_m,
-                    kappa_g=best_kappa,
-                    tau=0.95,
-                    setpoint=target_availability,
-                    guard=0.01,
-                    gain_eta=1.0,
-                    val_cost=best_cost,
-                    val_service=best_service,
-                    is_feasible=is_class_feasible,
-                    econ_service=0.95,
-                    created_at=now,
-                )
-                db.add(new_policy)
-
+                db.add(PolicySelection(
+                    selection_id=selection_id, class_id=class_id, policy_type="REFIT_RSS_EOQ_G",
+                    m_g=best["m"], kappa_g=best["kappa"], tau=tau_q, setpoint=setpoint,
+                    guard=pc.GUARD, gain_eta=pc.CONTROLLER_ETA, val_cost=best["cost"],
+                    val_service=best["availability"], is_feasible=best["is_feasible"],
+                    econ_service=pc.TARGET_AVAILABILITY, source="j5_backtest", created_at=now,
+                ))
             results.append({
-                "selection_id": selection_id,
-                "class_id": class_id,
-                "policy_type": "REFIT_RSS_EOQ_G",
-                "m_g": best_m,
-                "kappa_g": best_kappa,
-                "val_cost": best_cost,
-                "val_service": best_service,
-                "is_feasible": is_class_feasible,
-                "setpoint": target_availability,
+                "selection_id": selection_id, "class_id": class_id, "policy_type": "REFIT_RSS_EOQ_G",
+                "m_g": best["m"], "kappa_g": best["kappa"], "val_cost": best["cost"],
+                "val_service": best["availability"], "is_feasible": best["is_feasible"],
+                "setpoint": setpoint, "n_items": n_items, "n_validation_reviews": n_rev,
+                "c3out_active": bool(c3out_active),
+                "search_mode": "kappa_only" if persist_kappa_only else "m_grid",
+                "source": "j5_backtest",
+                **_fields("kappa_only", k_best), **_fields("m_grid", m_best),
             })
-
         db.commit()
         return results
 

@@ -1,9 +1,8 @@
 from datetime import datetime
 from typing import Optional, List, Tuple
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.audit_log import AuditLog
+from app.models.audit_log import AUDIT_RESULT_FAILURE, AUDIT_RESULT_SUCCESS, AuditLog
 
 
 class AuditService:
@@ -17,12 +16,18 @@ class AuditService:
         actor_email: Optional[str] = None,
         ip_address: Optional[str] = None,
         details: Optional[str] = None,
+        result: str = AUDIT_RESULT_SUCCESS,
     ) -> AuditLog:
+        """Write one audit row. ``result`` is the outcome RECORDED by the caller: SUCCESS (default, the row is
+        written on the success path of the operation) or FAILURE (failed / rejected attempt)."""
+        if result not in (AUDIT_RESULT_SUCCESS, AUDIT_RESULT_FAILURE):
+            raise ValueError(f"audit result must be {AUDIT_RESULT_SUCCESS} or {AUDIT_RESULT_FAILURE}, got {result!r}")
         audit_entry = AuditLog(
             action=action,
             actor_email=actor_email,
             ip_address=ip_address,
             details=details,
+            result=result,
         )
         db.add(audit_entry)
         db.flush()
@@ -37,11 +42,15 @@ class AuditService:
         actor_email: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
+        result: Optional[str] = None,
     ) -> Tuple[List[AuditLog], int]:
         """
-        UC45: Lọc và phân trang nhật ký hoạt động hệ thống.
+        UC45: Lọc và phân trang nhật ký hoạt động hệ thống. ``result``: SUCCESS | FAILURE | unknown.
         """
         query = db.query(AuditLog)
+        if result and result.strip():
+            r = result.strip()
+            query = query.filter(AuditLog.result == ("unknown" if r.lower() == "unknown" else r.upper()))
 
         if action and action.strip():
             query = query.filter(AuditLog.action.ilike(f"%{action.strip()}%"))

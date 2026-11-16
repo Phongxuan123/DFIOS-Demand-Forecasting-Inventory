@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user, require_admin, require_manager_or_admin, get_client_ip
@@ -53,27 +53,38 @@ def update_classification_thresholds(
 
 @router.post("/recompute", response_model=ClassificationRecomputeResponse, summary="UC25 - Kích hoạt tính lại phân loại toàn bộ SKU (Manager & Admin only)")
 def trigger_recompute_classification(
-    store_id: Optional[str] = Query("CA_1", description="Mã cửa hàng phân loại"),
+    store_id: Optional[str] = Query("CA_1", description="Mã cửa hàng phân loại (chỉ kho này được tính lại)"),
+    source: str = Query(
+        "auto",
+        pattern="^(auto|thresholds)$",
+        description="auto: ưu tiên lớp ground truth C3-OUT nếu có; thresholds: chỉ dùng ngưỡng UC25",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ):
     """
     **UC25 - Recompute Classification**:
-    Chủ động chạy lại thuật toán phân loại Pareto ABC & CV XYZ cho toàn bộ SKU theo dữ liệu mới nhất.
+    Chạy lại thuật toán phân loại Pareto ABC & CV XYZ cho MỘT kho theo dữ liệu mới nhất.
+    Phân lớp của các kho khác không bị ảnh hưởng (P-10).
     """
-    count = classification_service.recompute_classification(db, store_id=store_id)
+    resolved_store = (store_id or "CA_1").strip() or "CA_1"
+    count = classification_service.recompute_classification(db, store_id=resolved_store, source=source)
     thresholds = classification_service.get_thresholds(db)
     return ClassificationRecomputeResponse(
         success=True,
-        message=f"Đã phân loại lại thành công cho {count} SKU sản phẩm ({store_id}).",
+        message=f"Đã phân loại lại thành công cho {count} SKU sản phẩm ({resolved_store}).",
         total_skus_classified=count,
         thresholds=thresholds,
         recomputed_at=datetime.now(timezone.utc),
+        store_id=resolved_store,
+        source=source,
+        class_sources=classification_service.get_source_summary(db, resolved_store),
     )
 
 
 @router.get("/matrix", response_model=ClassificationMatrixResponse, summary="UC26 - Xem ma trận phân loại 3x3 ABC-XYZ")
 def get_classification_matrix(
+    store_id: Optional[str] = Query(None, description="Mã cửa hàng (mặc định CA_1)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -81,7 +92,7 @@ def get_classification_matrix(
     **UC26 - View ABC-XYZ Matrix**:
     Người dùng xem ma trận 3x3 thể hiện số lượng và tỷ trọng SKU, doanh thu tương ứng theo 9 phân khúc (AX...CZ).
     """
-    return classification_service.get_matrix(db)
+    return classification_service.get_matrix(db, store_id=store_id)
 
 
 @router.get("/skus", response_model=SKUClassificationListResponse, summary="UC27 - Lọc danh sách SKU theo phân khúc ABC/XYZ")
@@ -95,6 +106,7 @@ def get_classification_skus(
     limit: int = Query(50, ge=1, le=500, description="Số lượng bản ghi tối đa lấy về"),
     sort_by: str = Query("revenue", description="Trường sắp xếp (revenue, revenue_share, cv, mean_demand, item_id)"),
     order: str = Query("desc", description="Thứ tự sắp xếp (desc hoặc asc)"),
+    store_id: Optional[str] = Query(None, description="Mã cửa hàng (mặc định CA_1)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -113,6 +125,7 @@ def get_classification_skus(
         limit=limit,
         sort_by=sort_by,
         order=order,
+        store_id=store_id,
     )
 
 

@@ -6,8 +6,8 @@ sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import text
 from app.core.database import engine
+from app.core.db_bulk import psql_insert_copy
 from app.models.base import Base
 from app.models.calendar import Calendar
 
@@ -33,9 +33,12 @@ if existing_count > 0:
     sys.exit(0)
 
 if not CALENDAR_PATH or not os.path.exists(CALENDAR_PATH):
-    raise SystemExit("calendar.csv not found. Please set M5_CALENDAR_CSV_PATH in BE/.env or place calendar.csv into BE/scripts/sample_data/")
+    raise SystemExit(
+        "calendar.csv (Kaggle M5, not shipped in the repository: P-45) not found. Set M5_CALENDAR_CSV_PATH in "
+        "BE/.env to your own copy (or drop it into BE/scripts/sample_data/, git-ignored)."
+    )
 else:
     df = pd.read_csv(CALENDAR_PATH)
     df["date"] = pd.to_datetime(df["date"]).dt.date
-    df.to_sql("calendar", engine, if_exists="append", index=False, chunksize=1000, method="multi")
+    df.to_sql("calendar", engine, if_exists="append", index=False, method=psql_insert_copy)
     print(f"Seeded {len(df)} calendar days into database!")

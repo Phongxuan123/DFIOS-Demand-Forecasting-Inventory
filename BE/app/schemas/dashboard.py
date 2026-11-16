@@ -10,11 +10,14 @@ class DashboardKPIs(BaseModel):
     total_skus: int = Field(..., description="Tổng số SKU đang quản lý")
     total_inventory_value: float = Field(..., description="Tổng giá trị tồn kho hiện tại (USD)")
     stockout_rate: float = Field(..., description="Tỷ lệ hết hàng (% SKU có on_hand <= 0)")
-    estimated_service_level: float = Field(..., description="Mức độ phục vụ ước tính (%)")
+    estimated_service_level: Optional[float] = Field(None, description="Mức độ phục vụ ước tính (%) = 100 - tỷ lệ SKU on_hand<=0 tại thời điểm hiện tại; null khi chưa có tồn kho")
     reorder_alerts_count: int = Field(..., description="Số SKU có tồn kho <= ROP (cần đặt hàng)")
     pending_replenishments_count: int = Field(..., description="Số đề xuất đặt hàng đang chờ duyệt (PENDING)")
     avg_forecast_accuracy: str = Field(default="N/A", description="Chỉ số sai số / độ chính xác dự báo mô hình sản xuất (ví dụ: WRMSSE 0.4935)")
     total_suppliers: int = Field(..., description="Tổng số nhà cung cấp đang hợp tác")
+    production_wrmsse: Optional[float] = Field(None, description="WRMSSE numeric of the Production model (null when not in the registry)")
+    production_model_id: Optional[str] = Field(None, description="Registry id of the Production model")
+    orders_placed_count: int = Field(0, description="Orders placed = APPROVED + COMPLETED recommendations with review_date in the simulated clock window")
 
 
 class DemandTrendPoint(BaseModel):
@@ -34,6 +37,9 @@ class DemandTrendResponse(BaseModel):
     store_id: Optional[str] = None
     category: Optional[str] = None
     data: List[DemandTrendPoint] = []
+    # additive (U-04): the series is bounded by the simulated clock
+    as_of: Optional[str] = None
+    forecast_note: Optional[str] = None
 
 
 class InventoryAlertItem(BaseModel):
@@ -50,6 +56,10 @@ class InventoryAlertItem(BaseModel):
     reorder_point: float
     severity: str = Field(..., description="Mức độ cảnh báo: CRITICAL (đỏ), WARNING (vàng), HEALTHY (xanh)")
     suggested_action: str
+    suggested_action_code: Optional[str] = Field(
+        None, description="Stable code of suggested_action: out_of_stock | below_ss_and_rop | ip_below_rop | healthy")
+    suggested_action_params: Dict[str, Any] = Field(
+        default_factory=dict, description="Numbers used in the text (on_hand, safety_stock, inventory_position, reorder_point)")
     updated_at: Optional[str] = None
 
 

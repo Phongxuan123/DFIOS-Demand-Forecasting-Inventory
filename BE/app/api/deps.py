@@ -1,8 +1,10 @@
+import ipaddress
 from typing import Generator, List, Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.user import User
 from app.repositories.user_repository import user_repository
@@ -100,16 +102,45 @@ require_admin = require_roles(["Admin"])
 require_manager_or_admin = require_roles(["Admin", "Warehouse Manager"])
 
 
+def _is_trusted_proxy(host: Optional[str]) -> bool:
+    if not host:
+        return False
+    trusted = settings.TRUSTED_PROXIES
+    if not trusted:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return host in trusted
+    for entry in trusted:
+        try:
+            if addr in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            if host == entry:
+                return True
+    return False
+
+
 def get_client_ip(request: Request) -> Optional[str]:
     """
-    Trích xuất IP client tập trung (R-44).
-    Ưu tiên header 'X-Forwarded-For' khi chạy sau reverse proxy (Nginx, Docker),
-    nếu không có thì fallback về 'request.client.host'.
+    Trích xuất IP client tập trung (R-44, P-09).
+
+    `X-Forwarded-For` do client tự đặt nên KHÔNG được tin mặc định. Header chỉ được dùng khi
+    kết nối trực tiếp đến từ một proxy nằm trong `TRUSTED_PROXIES` (biến môi trường, danh sách
+    IP/CIDR phân tách bằng dấu phẩy). Khi đó lấy địa chỉ ngoài cùng bên phải không thuộc proxy tin cậy.
     """
     if not request:
         return None
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
     client = getattr(request, "client", None)
-    return client.host if client else None
+    peer = client.host if client else None
+    if _is_trusted_proxy(peer):
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+            for hop in reversed(hops):
+                if not _is_trusted_proxy(hop):
+                    return hop
+            if hops:
+                return hops[0]
+    return peer

@@ -1,10 +1,52 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.v1.api_router import api_router
 
+logger = logging.getLogger("dfios.startup")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # P-10: đưa schema DB đã tồn tại lên bản mới (idempotent, chỉ chạy trên PostgreSQL, không chặn khởi động nếu lỗi)
+    try:
+        from app.core.database import engine
+        from app.core.schema_upgrades import apply_schema_upgrades
+        applied = apply_schema_upgrades(engine)
+        if applied:
+            logger.warning("Schema upgrades applied: %s", ", ".join(applied))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Schema upgrade check failed (run scripts/init_tables.py): %s", exc)
+    # R-17: the default ML schedule is created HERE (and by scripts/init_tables.py), never by a GET
+    try:
+        import sys
+        if "pytest" not in sys.modules:  # tests use their own databases (never write to the configured one)
+            from app.core.database import SessionLocal
+            from app.services.pipeline_service import pipeline_service
+            with SessionLocal() as db:
+                if pipeline_service.ensure_default_schedule(db):
+                    logger.warning("Default ML pipeline schedule created")
+    except Exception as exc:  # noqa: BLE001 - startup must not fail on an optional seed
+        logger.error("Default schedule check failed: %s", exc)
+    task = None
+    try:
+        from app.services.scheduler_service import scheduler_enabled, scheduler_loop
+        if scheduler_enabled():
+            import asyncio
+            task = asyncio.create_task(scheduler_loop())
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Scheduler start failed: %s", exc)
+    yield
+    if task is not None:
+        task.cancel()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.PROJECT_NAME,
     version="1.0.0",
     description="Backend API cho hệ thống dự báo nhu cầu & tối ưu tồn kho DFIOS"
@@ -17,6 +59,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count", "Content-Disposition"],
 )
 
 # Đăng ký API router v1: /api/v1/... và alias /api/...

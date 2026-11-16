@@ -19,6 +19,7 @@ from app.schemas.forecast import (
     BulkOverrideRequest,
     BulkOverrideResponse,
 )
+from app.services import policy_config as pc
 from app.schemas.window_quantile import WindowQuantileResponse
 from app.services.forecast_service import forecast_service
 from app.services.window_quantile_service import window_quantile_service
@@ -34,7 +35,8 @@ def get_forecasts(
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng / kho"),
     start_date: Optional[date] = Query(None, description="Ngày bắt đầu (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Ngày kết thúc (YYYY-MM-DD)"),
-    model_version: Optional[str] = Query(None, description="Phiên bản mô hình ML"),
+    model_version: Optional[str] = Query(None, description="Phiên bản mô hình ML (khớp chính xác)"),
+    model_name: Optional[str] = Query(None, description="Lọc theo tên mô hình (chuỗi con của model_version, vd: ensemble)"),
     skip: int = Query(0, ge=0, description="Số lượng bản ghi bỏ qua (phân trang)"),
     limit: int = Query(50, ge=1, le=500, description="Số lượng bản ghi tối đa lấy về"),
     sort_by: str = Query("forecast_date", description="Trường sắp xếp (forecast_date, y_pred, item_id, h)"),
@@ -56,6 +58,7 @@ def get_forecasts(
         start_date=start_date,
         end_date=end_date,
         model_version=model_version,
+        model_name=model_name,
         skip=skip,
         limit=limit,
         sort_by=sort_by,
@@ -250,6 +253,7 @@ def get_sku_window_quantiles(
     Truy xuất phân phối xác suất thực nghiệm trên cửa sổ bảo vệ H = L + R (mặc định 10 ngày) cho SKU.
     Cung cấp dải 19 mức quantile thực nghiệm Q_hat(tau) và mức Q_hat(0.95) chuẩn bị cho Tier 2.
     """
+    forecast_service._reject_global(store_id, "GET /forecasts/{sku}/window-quantiles")
     prod = db.query(Product).filter(Product.item_id == sku).first()
     if not prod:
         raise HTTPException(
@@ -259,7 +263,7 @@ def get_sku_window_quantiles(
 
     if not origin_date:
         clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
-        target_date = clock.current_date if clock else date(2015, 5, 24)
+        target_date = clock.current_date if clock else pc.DEMO_START_DATE
     else:
         target_date = origin_date
 
@@ -273,7 +277,7 @@ def get_sku_window_quantiles(
     )
 
     q_dict = record.q_levels or {}
-    tau_95 = float(q_dict.get("0.95", round(record.point_window * 1.6, 2)))
+    tau_95 = float(q_dict["0.95"]) if "0.95" in q_dict else None  # Q-14: never an invented point*1.6
 
     return WindowQuantileResponse(
         id=record.id,
@@ -301,12 +305,17 @@ def get_sku_future_forecast(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.services.forecast_service import forecast_service as _fs
+    _fs._reject_global(store_id, "GET /forecasts/{sku}/future")
     from app.services.predictor_service import dfios_predictor
+    from app.models.sim_clock import SimClock
+    clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
     return dfios_predictor.predict_sku_future(
         item_id=sku,
         store_id=store_id,
         horizon=horizon,
         db=db,
+        as_of=clock.current_date if clock and clock.current_date else None,
     )
 
 

@@ -25,6 +25,8 @@ class ForecastItemResponse(BaseModel):
     category: Optional[str] = None
     model_version: str
     generated_at: Optional[datetime] = None
+    backtest: bool = Field(False, description="True: forecast_date <= simulated clock date of the store (retrospective forecast, actuals may exist)")
+    source: str = Field("forecast_table", description="production_artifact | backtest | forecast_table")
 
 
 class ForecastListResponse(BaseModel):
@@ -32,6 +34,11 @@ class ForecastListResponse(BaseModel):
     total: int
     horizon: int
     model_version: Optional[str] = None
+    model_name: Optional[str] = Field(None, description="Filter applied (substring of model_version) when given")
+    store_id: Optional[str] = None
+    source: Optional[str] = None
+    backtest: bool = False
+    available_versions: List[str] = Field(default_factory=list, description="All model versions available for the filter (exactly ONE is returned)")
     skip: int
     limit: int
 
@@ -53,6 +60,9 @@ class HistoricalDemandResponse(BaseModel):
     max_quantity: float
     count: int
     history: List[HistoryPoint]
+    # additive (U-04): the series never goes beyond the simulated clock date
+    as_of: Optional[str] = None
+    bounded_by_clock: bool = False
 
 
 # --- UC21: Compare Actual vs Predicted ---
@@ -70,18 +80,23 @@ class ComparePoint(BaseModel):
 
 
 class CompareMetrics(BaseModel):
-    mae: float
-    rmse: float
+    mae: Optional[float] = Field(None, description="null when data_points = 0 (no day with both actual and forecast)")
+    rmse: Optional[float] = Field(None, description="null when data_points = 0")
     mape: Optional[float] = None
+    mase: Optional[float] = Field(None, description="MAE / naive one-step MAE of the training history before the first compared day; null when < 2 training days")
+    mase_scale_n: int = Field(0, description="Days of training history used for the MASE scale")
     total_actual: float
     total_predicted: float
     data_points: int
+    metrics_reason: Optional[str] = Field(None, description="Why the error metrics are null (Vietnamese text)")
+    metrics_reason_code: Optional[str] = Field(None, description="no_forecast | no_actuals | no_overlap; null when metrics exist")
 
 
 class ForecastCompareResponse(BaseModel):
     item_id: str
     store_id: Optional[str] = None
     model_version: Optional[str] = None
+    model_version_source: Optional[str] = Field(None, description="requested | resolved_ensemble | resolved_other | none")
     metrics: CompareMetrics
     comparison: List[ComparePoint]
 
@@ -116,7 +131,11 @@ class ForecastUncertaintyResponse(BaseModel):
     horizon: int
     sigma_h: Optional[float] = None
     points: List[UncertaintyPoint]
+    # B-06: REAL forecast errors r = actual - prediction (None when no actual overlaps the horizon)
     error_distribution: Optional[ErrorDistribution] = None
+    error_distribution_n: int = 0
+    # width of the p10-p90 band (uncertainty), kept separate from the error distribution
+    band_width_distribution: Optional[ErrorDistribution] = None
 
 
 # --- UC23: Forecast Explanation (SHAP) ---
@@ -133,8 +152,14 @@ class ForecastExplanationResponse(BaseModel):
     store_id: Optional[str] = None
     model_name: str
     model_version: str
-    base_value: float
+    base_value: Optional[float] = None
     features: List[SHAPFeatureContribution]
+    # additive (U-03): False => no attribution exists for this SKU, features is empty, never fabricated
+    available: bool = True
+    source: Optional[str] = None  # stored_explanations | none
+    reason: Optional[str] = None
+    # stable machine code for the FE to translate (e.g. "no_stored_shap"); reason stays as raw English text
+    reason_code: Optional[str] = None
 
 
 # --- UC24: Manual Forecast Override ---

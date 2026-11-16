@@ -1,7 +1,25 @@
-import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { apiClient } from '../services/apiClient.ts';
+/**
+ * Auth state.
+ *
+ * R-22: re-hydration only drops the session when the server says the token is invalid (401,
+ * handled by apiClient which fires `dfios:unauthorized`). A network error, timeout or 5xx on
+ * /auth/me keeps the stored token and the cached user, so a slow backend never logs people out.
+ * R-25: every per-account cache is cleared on login AND logout (services/session.ts).
+ */
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { apiClient, toApiError } from '../services/apiClient.ts';
+import {
+  AUTH_UNAUTHORIZED_EVENT,
+  clearClientCaches,
+  clearSession,
+  getStoredUser,
+  getToken,
+  storeSession,
+  storeUser,
+} from '../services/session.ts';
+import { normalizeRole, type Role } from '../auth/permissions.ts';
 
-export type Role = 'ADMIN' | 'WAREHOUSE MANAGER' | 'VIEWER';
+export type { Role } from '../auth/permissions.ts';
 
 export interface User {
   id?: string;
@@ -13,164 +31,152 @@ export interface User {
   is_verified?: boolean;
 }
 
+export const SESSION_EXPIRED_FLAG = 'dfios_session_expired';
+
 interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
+  /** Rejects with the original axios error; present it with apiErrorMessage / toApiError. */
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   updateCurrentUser: (userData: Partial<User>) => void;
   refreshUser: () => Promise<void>;
+  /** True while the stored token is being validated on first load. */
   isLoading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const normalizeRole = (role: string | undefined): Role => {
-  const normalized = (role || 'VIEWER').toUpperCase();
-  if (normalized === 'ADMIN') return 'ADMIN';
-  if (normalized === 'WAREHOUSE MANAGER') return 'WAREHOUSE MANAGER';
-  return 'VIEWER';
+const normalizeUser = (raw: Record<string, unknown> | null | undefined): User => {
+  const r = (raw ?? {}) as Record<string, string | undefined>;
+  return {
+    ...(r as object),
+    name: r.display_name || r.name || r.email || 'User',
+    email: r.email || '',
+    role: normalizeRole(r.role),
+  } as User;
 };
 
-const normalizeUser = (raw: any): User => ({
-  ...raw,
-  name: raw?.display_name || raw?.name || raw?.email || 'User',
-  email: raw?.email || '',
-  role: normalizeRole(raw?.role),
-});
-
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => !!localStorage.getItem('access_token'));
-  const [user, setUser] = useState<User | null>(() => {
-    try {
-      const saved = localStorage.getItem('user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [isLoading, setIsLoading] = useState<boolean>(() => !!localStorage.getItem('access_token'));
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => !!getToken());
+  const [user, setUser] = useState<User | null>(() => getStoredUser<User>());
+  const [isLoading, setIsLoading] = useState<boolean>(() => !!getToken());
 
-  // Re-hydrate session on mount by validating token with BE
+  // Validate the stored token once on mount.
   useEffect(() => {
-    const checkSession = async () => {
-      const token = localStorage.getItem('access_token');
-      if (token) {
-        try {
-          const me = await apiClient.get('/auth/me');
-          const normalized = normalizeUser(me.data);
-          localStorage.setItem('user', JSON.stringify(normalized));
-          setUser(normalized);
-          setIsAuthenticated(true);
-        } catch (error) {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('user');
+    let cancelled = false;
+    // Aborted on unmount (also avoids the duplicate /auth/me of the dev StrictMode double mount, U-01).
+    const controller = new AbortController();
+    const check = async () => {
+      if (!getToken()) {
+        setIsLoading(false);
+        return;
+      }
+      try {
+        const me = await apiClient.get('/auth/me', { signal: controller.signal });
+        if (cancelled) return;
+        const normalized = normalizeUser(me.data);
+        storeUser(normalized);
+        setUser(normalized);
+        setIsAuthenticated(true);
+      } catch (err) {
+        if (cancelled) return;
+        // 401 -> apiClient already cleared the session and fired the unauthorized event.
+        // Anything else (network, timeout, 5xx): keep the session.
+        if (toApiError(err).kind === 'unauthorized') {
           setUser(null);
           setIsAuthenticated(false);
         }
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
-      setIsLoading(false);
     };
-    checkSession();
+    void check();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, []);
 
-  const login = async (email: string, password: string) => {
-    setIsLoading(true);
-    try {
-      const response = await apiClient.post('/auth/login', { email: email.trim().toLowerCase(), password });
-      const { access_token, user: userData } = response.data;
-      const normalizedUser = normalizeUser(userData);
-      
-      localStorage.setItem('access_token', access_token);
-      localStorage.setItem('user', JSON.stringify(normalizedUser));
-      
-      setIsAuthenticated(true);
-      setUser(normalizedUser);
-    } catch (error: any) {
-      let errorMessage = 'Login failed. Please check your credentials.';
-      if (error.response?.data?.detail) {
-        if (typeof error.response.data.detail === 'string') {
-          errorMessage = error.response.data.detail;
-        } else if (Array.isArray(error.response.data.detail)) {
-          errorMessage = error.response.data.detail.map((d: any) => d.msg || d.message || JSON.stringify(d)).join(', ');
-        }
-      } else if (error.code === 'ECONNABORTED') {
-        errorMessage = 'Connection timed out. Please check your network connection or try again later.';
-      } else if (error.code === 'ERR_NETWORK' || !error.response) {
-        errorMessage = 'Cannot connect to Backend API server (Port 8000). Please ensure Backend is running.';
-      } else if (error.response?.status === 502 || error.response?.status === 504) {
-        errorMessage = 'Backend service is restarting or unresponsive (502/504). Please try again shortly.';
-      } else if (error.response?.status === 401) {
-        errorMessage = 'Incorrect email address or password.';
-      } else if (error.message) {
-        errorMessage = error.message;
+  // Forced sign-out (401 on a request that carried the current token).
+  useEffect(() => {
+    const onUnauthorized = () => {
+      try {
+        sessionStorage.setItem(SESSION_EXPIRED_FLAG, '1');
+      } catch {
+        /* ignore */
       }
-      throw new Error(errorMessage);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      setUser(null);
+      setIsAuthenticated(false);
+    };
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
 
-  const logout = () => {
-    const token = localStorage.getItem('access_token');
-    
-    // 1. Instantly purge credentials and state on client (0ms optimistic logout)
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('user');
+  const login = useCallback(async (email: string, password: string) => {
+    clearClientCaches(); // never inherit the previous account's caches
+    const response = await apiClient.post('/auth/login', { email: email.trim().toLowerCase(), password });
+    const { access_token, user: userData } = response.data;
+    const normalized = normalizeUser(userData);
+    clearClientCaches();
+    storeSession(access_token, normalized);
+    try {
+      sessionStorage.removeItem(SESSION_EXPIRED_FLAG);
+    } catch {
+      /* ignore */
+    }
+    setUser(normalized);
+    setIsAuthenticated(true);
+  }, []);
+
+  const logout = useCallback(() => {
+    const token = getToken();
+    clearSession();
+    clearClientCaches();
     setIsAuthenticated(false);
     setUser(null);
-
-    // 2. Notify backend in background with short 2.5s timeout (non-blocking fire-and-forget)
+    // Tell the backend, fire-and-forget. The router then redirects to /login (ProtectedRoute).
     if (token) {
-      apiClient.post('/auth/logout', null, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 2500,
-      }).catch((err) => {
-        console.debug('Background logout notification completed or ignored:', err.message);
-      });
+      apiClient
+        .post('/auth/logout', null, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 2500,
+          notifyForbidden: false,
+        })
+        .catch(() => undefined);
     }
+  }, []);
 
-    // 3. Guarantee immediate redirect to /login
-    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-      window.location.href = '/login';
-    }
-  };
-
-  const updateCurrentUser = (userData: Partial<User>) => {
+  const updateCurrentUser = useCallback((userData: Partial<User>) => {
     setUser((prev) => {
       if (!prev) return null;
-      const next: User = {
-        ...prev,
-        ...userData,
-        name: userData.display_name || userData.name || prev.name,
-      };
-      localStorage.setItem('user', JSON.stringify(next));
+      const next: User = { ...prev, ...userData, name: userData.display_name || userData.name || prev.name };
+      storeUser(next);
       return next;
     });
-  };
+  }, []);
 
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     try {
       const me = await apiClient.get('/auth/me');
       const normalized = normalizeUser(me.data);
-      localStorage.setItem('user', JSON.stringify(normalized));
+      storeUser(normalized);
       setUser(normalized);
-    } catch (err) {
-      console.error('Failed to refresh user', err);
+    } catch {
+      /* keep the current user; a failed refresh must not change the session */
     }
-  };
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ isAuthenticated, user, login, logout, updateCurrentUser, refreshUser, isLoading }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ isAuthenticated, user, login, logout, updateCurrentUser, refreshUser, isLoading }),
+    [isAuthenticated, user, login, logout, updateCurrentUser, refreshUser, isLoading],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };

@@ -17,6 +17,7 @@ from app.schemas.model_registry import (
 )
 from app.repositories.model_registry_repository import model_registry_repository
 from app.services.audit_service import audit_service
+from app.services.coverage_service import coverage_fields
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class ModelRegistryService:
             # Hạ cấp toàn bộ mô hình production cũ cùng scope (B-03)
             old_prods = (
                 db.query(ModelRegistry)
-                .filter(ModelRegistry.scope == clean_scope, ModelRegistry.is_production == True)
+                .filter(ModelRegistry.scope == clean_scope, ModelRegistry.is_production.is_(True))
                 .all()
             )
             for old in old_prods:
@@ -109,7 +110,15 @@ class ModelRegistryService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Không tìm thấy phiên bản mô hình với ID: {model_id}",
             )
-        return ModelRegistryResponse.model_validate(model)
+        return self._with_coverage(db, ModelRegistryResponse.model_validate(model))
+
+    @staticmethod
+    def _with_coverage(db: Session, resp: ModelRegistryResponse) -> ModelRegistryResponse:
+        """Production models carry the MEASURED Q0.95 coverage in ``metrics`` (not persisted; labelled by source)."""
+        if resp.is_production:
+            cov = {k: v for k, v in coverage_fields(db).items() if v is not None}
+            resp.metrics = {**(resp.metrics or {}), **cov}
+        return resp
 
     def validate_model(self, db: Session, model_id: str) -> Dict[str, Any]:
         """
@@ -144,7 +153,22 @@ class ModelRegistryService:
         custom_artifact = params.get("artifact_file") or params.get("model_file")
         target_filename = custom_artifact or artifact_filename_map.get(algo)
 
-        target_filepath = os.path.join(model_dir, target_filename) if target_filename else None
+        # P-25: chặn path traversal – artifact_file chỉ được là tên file nằm trong MODEL/
+        target_filepath = None
+        if target_filename:
+            target_filename = str(target_filename)
+            model_dir_real = os.path.realpath(model_dir)
+            candidate = os.path.realpath(os.path.join(model_dir_real, target_filename))
+            if (
+                os.path.isabs(target_filename)
+                or os.path.basename(target_filename) != target_filename
+                or os.path.commonpath([model_dir_real, candidate]) != model_dir_real
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="artifact_file không hợp lệ: chỉ chấp nhận tên file nằm trong thư mục MODEL/.",
+                )
+            target_filepath = candidate
         file_exists = bool(target_filepath and os.path.exists(target_filepath))
         file_size = os.path.getsize(target_filepath) if file_exists else 0
 
@@ -154,7 +178,7 @@ class ModelRegistryService:
             try:
                 with open(target_filepath, "rb") as f:
                     file_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.warning(f"Lỗi tính checksum cho {target_filepath}: {e}")
 
         # 3. Đếm số SKU thực tế có trong hệ thống có thể kiểm thử (tối đa 200 SKU mẫu)
@@ -193,7 +217,7 @@ class ModelRegistryService:
                     if comp_name.lower() == algo and "val_wrmsse" in comp_info:
                         metrics = {"val_wrmsse": comp_info["val_wrmsse"]}
                         break
-            except Exception:
+            except (OSError, ValueError, KeyError, AttributeError):
                 pass
 
         status_msg = (
@@ -238,7 +262,7 @@ class ModelRegistryService:
             scope=scope,
         )
         return ModelRegistryListResponse(
-            items=[ModelRegistryResponse.model_validate(m) for m in items],
+            items=[self._with_coverage(db, ModelRegistryResponse.model_validate(m)) for m in items],
             total=total,
         )
 

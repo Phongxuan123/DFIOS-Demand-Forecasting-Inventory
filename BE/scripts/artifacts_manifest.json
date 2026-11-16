@@ -1,0 +1,95 @@
+{
+  "files": [
+    {
+      "name": "forecasts_Ensemble.parquet",
+      "location": "scripts",
+      "purpose": "Ensemble forecasts with y_true (load_sales_history)",
+      "size": 4871651,
+      "sha256": "68399399b0c8cbaa9454a10cbe5f74009c81bd2066f565409ac908113e92f2af"
+    },
+    {
+      "name": "quantiles_tft.parquet",
+      "location": "scripts",
+      "purpose": "TFT P10/P50/P90 quantiles (load_sales_history)",
+      "size": 12709728,
+      "sha256": "0b7c6720f72a88d19357941a3c16db70c05dd90413bad22eb4e84a800fbe8b03"
+    },
+    {
+      "name": "production_forecast.parquet",
+      "location": "scripts",
+      "purpose": "Production forecast incl. quantiles (load_forecast, load_inventory_params)",
+      "size": 16350255,
+      "sha256": "89316de8c15c8ba341faec96c9dda00b4dc17ba1a0608951da25505eeed1a389"
+    },
+    {
+      "name": "production_sigma.parquet",
+      "location": "scripts",
+      "purpose": "Forecast error sigma per SKU (load_forecast, load_inventory_params)",
+      "size": 736385,
+      "sha256": "0e0de7ad74d0ddbd5947baaea14711ae49781093689881a68b205934d316003e"
+    },
+    {
+      "name": "tier2_input.parquet",
+      "location": "scripts",
+      "purpose": "Tier-2 optimization input (load_c3out_data)",
+      "size": 4216676,
+      "sha256": "d034d84ed0fcfa250a75c1257b7ce8e04eed8eeaeb5ce99b442c8a667f578cca"
+    },
+    {
+      "name": "c3ok_sku_class.csv",
+      "location": "scripts",
+      "purpose": "C3-OK ABC/XYZ ground-truth classes (load_c3out_data)",
+      "size": 850041,
+      "sha256": "968377355703b122761b90b7f893fb029d73ad48f170fc1d393fcdb5de925ddf"
+    },
+    {
+      "name": "c3ok_forecasts.npz",
+      "location": "MODEL",
+      "purpose": "C3-OK backtest forecasts (load_backtest_forecasts)",
+      "size": 16211386,
+      "sha256": "cdbe311dcea5f535e52e910bf6ea3d0bc8afe45fa40a31bfdd98845b21af2810"
+    },
+    {
+      "name": "best_params.json",
+      "location": "MODEL",
+      "purpose": "Best hyper-parameters (model registry)",
+      "size": 16407,
+      "sha256": "391f6a221e7a0023c5b174b3449b722fb0a1ea0d1b79652f394f70d26eaed5d0"
+    },
+    {
+      "name": "ensemble_manifest.json",
+      "location": "MODEL",
+      "purpose": "Ensemble bundle manifest (model registry)",
+      "size": 12599,
+      "sha256": "ed4f559ea2ce543cecd55138783b976c3f7d9fa187f80e8680974070b2b0be6b"
+    },
+    {
+      "name": "c3ok_results.csv",
+      "location": "MODEL",
+      "purpose": "Policy results B0/B2/P-CR/P6 (simulation_service, reports)",
+      "size": 3476,
+      "sha256": "14bc538e7ea8ee3b8902525f4197538993172703be2be77ccdf58f6a7b5e08ac"
+    },
+    {
+      "name": "c3ok_csl_by_class.csv",
+      "location": "MODEL",
+      "purpose": "CSL by ABC/XYZ class (sync_scientific_baseline)",
+      "size": 5857,
+      "sha256": "146e32b4f47f45ff97a247c1d2b9c43261bfef302bfa41add0f217fc41b42e2a"
+    },
+    {
+      "name": "c3ok_config.json",
+      "location": "MODEL",
+      "purpose": "C3-OK experiment config (series count, review window)",
+      "size": 1807,
+      "sha256": "1147d9ba715579f4e884bb52dfc4c2e0d8da3b711e6c99be72bbfcb60731edb6"
+    },
+    {
+      "name": "c3ok_forecast_calibration.csv",
+      "location": "scripts",
+      "purpose": "Measured empirical coverage of the Ensemble quantiles (test cover_0.95 = 0.8314) -> coverage_q95",
+      "size": 465,
+      "sha256": "42db7f091af3c94ef0c527d89424de543da07517dd2c10b1efb7c4d4b094acce"
+    }
+  ]
+}

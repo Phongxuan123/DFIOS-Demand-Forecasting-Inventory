@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
 import re
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -60,6 +59,9 @@ class BatchScheduleResponse(BaseModel):
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None
     created_at: str
+    last_run_status: Optional[str] = None
+    mode: str = Field("manual", description="scheduled = executed by the in-process scheduler; manual = stored only, nothing runs it")
+    note: Optional[str] = None
 
 
 class BatchScheduleListResponse(BaseModel):
@@ -91,3 +93,5 @@ class PipelineRunResponse(BaseModel):
     started_at: str
     completed_at: str
     duration_seconds: float
+    forecast_source: Optional[str] = None  # existing | sba-croston-fallback | none
+    forecast_note: Optional[str] = None

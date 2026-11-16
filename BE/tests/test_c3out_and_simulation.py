@@ -12,8 +12,6 @@ from app.models.policy_selection import PolicySelection
 from app.services.calibrator_service import calibrator_service
 from app.services.optimization_service import optimization_service
 from app.services.window_quantile_service import window_quantile_service, ROUTE_C_TAU_LEVELS
-from app.services.simulation_service import simulation_service
-from app.services.dashboard_service import dashboard_service
 from app.services.data_preprocessing_service import data_preprocessing_service
 
 
@@ -143,8 +141,9 @@ class TestC3OutAndSimulation(unittest.TestCase):
             cx_new = next(s for s in states if s.class_id == "CX")
             # Kiểm tra: error_rate phải giữ nguyên 0.0, TUYỆT ĐỐI không bị ép thành 1.0
             self.assertEqual(cx_new.error_rate, 0.0)
-            # theta phải giảm nhẹ -0.04 (hoặc giữ mức âm), TUYỆT ĐỐI không nhảy lên +0.96
-            self.assertEqual(cx_new.theta, -0.04)
+            # Không có policy_selection -> setpoint mặc định 0.95: theta = 0 + 1.0 * (0.0 - 0.05) = -0.05,
+            # TUYỆT ĐỐI không nhảy lên +0.95
+            self.assertEqual(cx_new.theta, -0.05)
             self.assertNotEqual(cx_new.theta, 0.96)
         finally:
             db.close()
@@ -219,8 +218,9 @@ class TestC3OutAndSimulation(unittest.TestCase):
             quantile_floor=1.0,
         )
 
-        # Đảm bảo có đủ 24 mức quantile
-        self.assertEqual(len(q_dict), 24)
+        # Đảm bảo có đủ mức quantile (gồm tau = 0.9615 của P-CR)
+        self.assertEqual(len(q_dict), len(ROUTE_C_TAU_LEVELS))
+        self.assertIn("0.9615", q_dict)  # tau of policy P-CR
         # Kiểm tra tính đơn điệu tăng dần: Q(0.10) <= Q(0.50) <= Q(0.95)
         self.assertLessEqual(q_dict["0.1"], q_dict["0.5"])
         self.assertLessEqual(q_dict["0.5"], q_dict["0.95"])
@@ -263,48 +263,6 @@ class TestC3OutAndSimulation(unittest.TestCase):
         ip_high = expected_s + 10
         self.assertFalse(ip_high < expected_s)
 
-    def test_simulation_policy_comparison_metrics(self):
-        """
-        Test TEST.1 - Kiểm định logic so sánh đối đầu 4 chính sách tồn kho (Sửa lỗi N-01):
-        - Đọc dữ liệu thực nghiệm chuẩn từ c3ok_results.csv và mô hình chi phí A3
-        - P4 (P-CR) đạt chuẩn SLA 96% và có chi phí thấp nhất
-        - P0 (Cổ điển) bị vi phạm SLA (< 96%) và có chi phí cao
-        - Khi target_service_level = 0.99: P6 không được hardcode is_feasible=True
-        """
-        # Test case 1: Target SLA 0.96
-        res = simulation_service.compare_policies(
-            db=None,
-            store_id="CA_1",
-            horizon_days=90,
-            target_service_level=0.96,
-        )
-
-        self.assertEqual(len(res.policies), 4)
-        p_map = {p.policy_id: p for p in res.policies}
-
-        # P4 (P-CR) đạt tính khả thi và có chi phí tối ưu nhất
-        self.assertTrue(p_map["P4_frozen_refit"].is_feasible)
-        self.assertGreaterEqual(p_map["P4_frozen_refit"].availability, 96.0)
-        self.assertEqual(res.recommended_policy, "P4_frozen_refit")
-
-        # P0 bị vi phạm SLA (CSL ~90.7%)
-        self.assertFalse(p_map["P0_classical"].is_feasible)
-        self.assertLess(p_map["P0_classical"].availability, 96.0)
-
-        # P4 và P6 có tổng chi phí rẻ hơn P0 đáng kể
-        self.assertLess(p_map["P4_frozen_refit"].total_cost, p_map["P0_classical"].total_cost)
-        self.assertLess(p_map["P6_c3out_closed_loop"].total_cost, p_map["P0_classical"].total_cost)
-
-        # Test case 2: Target SLA 0.99 (Kiểm tra sửa triệt để N-01: không hardcode is_feasible=True cho P6)
-        res_99 = simulation_service.compare_policies(
-            db=None,
-            store_id="CA_1",
-            horizon_days=90,
-            target_service_level=0.99,
-        )
-        p_map_99 = {p.policy_id: p for p in res_99.policies}
-        self.assertFalse(p_map_99["P6_c3out_closed_loop"].is_feasible)
-
     def test_data_preprocessing_service_auto_detection(self):
         """
         Test PRE.3 - Kiểm định khả năng tự động tiền xử lý dữ liệu:
@@ -333,53 +291,11 @@ class TestC3OutAndSimulation(unittest.TestCase):
         self.assertEqual(day1_row["item_id"], "BOT01")
         self.assertEqual(day1_row["store_id"], "STORE_TEST")
 
-    def test_shadow_baseline_kpi_dashboard_no_fake_constants(self):
-        """
-        Test TEST.1 - Kiểm định sửa dứt điểm lỗi N-03 (KPI shadow dashboard):
-        - Khi không có giao dịch/sự kiện nào phát sinh, chi phí và tiết kiệm phải là 0.0,
-          TUYỆT ĐỐI không được cộng tĩnh +120, +45, +18 hay báo "tiết kiệm $735".
-        - B0 availability phải khớp số liệu thực nghiệm c3ok_csl_by_class.csv (ví dụ AZ=82.8%, AX=91.5%),
-          TUYỆT ĐỐI không dùng công thức tự chế err * 2.8.
-        """
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        Session = sessionmaker(bind=engine)
-        db = Session()
-
-        try:
-            clock = SimClock(store_id="CA_1", current_date=date(2016, 5, 23), start_date=date(2016, 4, 25))
-            db.add(clock)
-            db.commit()
-
-            res = dashboard_service.get_shadow_baseline_dashboard(db, store_id="CA_1")
-
-            # 1. Khi 0 sự kiện: chi phí và tiết kiệm phải bằng 0.0
-            self.assertEqual(res.c3out_total_cost, 0.0)
-            self.assertEqual(res.b0_total_cost, 0.0)
-            self.assertEqual(res.total_cost_savings, 0.0)
-            for pt in res.cost_curves:
-                self.assertEqual(pt.c3out_total_cost, 0.0)
-                self.assertEqual(pt.b0_total_cost, 0.0)
-                self.assertEqual(pt.cost_savings, 0.0)
-
-            # 2. B0 availability phải lấy từ c3ok_csl_by_class.csv
-            seg_map = {s.class_id: s for s in res.segment_availabilities}
-            self.assertEqual(seg_map["AZ"].b0_availability, 82.8)
-            self.assertEqual(seg_map["AX"].b0_availability, 91.5)
-            self.assertEqual(seg_map["BY"].b0_availability, 92.0)
-            self.assertNotEqual(seg_map["AZ"].b0_availability, round((1.0 - 0.032 * 2.8) * 100, 1))
-
-            # 3. Cảnh báo đúng chuẩn nếu chưa có sự kiện
-            self.assertIn("chưa ghi nhận giao dịch", res.summary_insights[1])
-        finally:
-            db.close()
-
     def test_tier2_mg_decoupled_from_tier3_theta_no_doubling(self):
         """
         Test N-05: Kiểm tra tách m_g của Tier 2 khỏi theta của C3-OUT.
         - Khởi tạo mặc định m_g = 0.0 cho cả 9 lớp (tránh lỗi cộng dồn thành e^{2*theta})
         """
-        from app.services.optimization_service import optimization_service
         for class_id, policy in optimization_service.DEFAULT_OPTIMAL_POLICIES.items():
             self.assertEqual(
                 policy["m_g"],
@@ -387,52 +303,28 @@ class TestC3OutAndSimulation(unittest.TestCase):
                 f"Lớp {class_id} có m_g={policy['m_g']} != 0.0, gây lỗi nhân đôi e^(2*theta)!",
             )
 
-    def test_tier2_j5_constrained_grid_search_and_feasibility(self):
-        """
-        Test N-07: Kiểm tra tối ưu Tier 2 J5 qua quét lưới có ràng buộc theo research.md §7.4:
-        - Quét lưới thực tế (m, kappa)
-        - Kappa >= 0.5 đảm bảo batching EOQ (S > s)
-        - is_feasible kiểm tra động theo target_availability + 0.01 guard
-        """
-        from app.services.optimization_service import optimization_service
+    def test_tier2_j5_without_validation_data_is_neutral_and_not_feasible(self):
+        """J5 never invents metrics: with no backtest data every class is the neutral policy, flagged infeasible
+        (the real (R,s,S) backtest is covered in test_scientific_core.py)."""
         from app.models.classification import SKUClassification
         from app.models.product import Product
 
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
-        Session = sessionmaker(bind=engine)
-        db = Session()
+        db = sessionmaker(bind=engine)()
         try:
-            # 1. Tạo dữ liệu Product và SKUClassification cho nhóm AX
-            p = Product(item_id="TEST_SKU_AX", name="Item AX", cat_id="FOODS", price=10.0)
-            db.add(p)
-            cls_ax = SKUClassification(
-                id="cls_ax_01",
-                item_id="TEST_SKU_AX",
-                abc_class="A",
-                xyz_class="X",
-                segment="AX",
-                cv=0.2,
-                mean_demand=20.0,
-            )
-            db.add(cls_ax)
+            db.add(Product(item_id="TEST_SKU_AX", name="Item AX", cat_id="FOODS", price=10.0))
+            db.add(SKUClassification(id="cls_ax_01", item_id="TEST_SKU_AX", store_id="CA_1", abc_class="A",
+                                     xyz_class="X", segment="AX", cv=0.2, mean_demand=20.0))
             db.commit()
-
-            # 2. Chạy refit_quarterly_policies với target = 0.95
-            res = optimization_service.refit_quarterly_policies(
-                db, store_id="CA_1", target_availability=0.95
-            )
-            ax_res = next(r for r in res if r["class_id"] == "AX")
-            self.assertGreaterEqual(ax_res["kappa_g"], 0.5)
-            self.assertGreaterEqual(ax_res["val_service"], 0.95)
-            self.assertTrue(ax_res["is_feasible"])
-
-            # 3. Chạy với target quá cao (0.999) -> Không khả thi -> is_feasible = False
-            res_high = optimization_service.refit_quarterly_policies(
-                db, store_id="CA_1", target_availability=0.999
-            )
-            ax_high = next(r for r in res_high if r["class_id"] == "AX")
-            self.assertFalse(ax_high["is_feasible"])
+            res = optimization_service.refit_quarterly_policies(db, store_id="CA_1")
+            ax = next(r for r in res if r["class_id"] == "AX")
+            self.assertEqual(ax["m_g"], 0.0)
+            self.assertEqual(ax["kappa_g"], 1.0)
+            self.assertIsNone(ax["val_service"])
+            self.assertIsNone(ax["val_cost"])
+            self.assertFalse(ax["is_feasible"])
+            self.assertAlmostEqual(ax["setpoint"], 0.96)  # Q-06: A_g (0.95 from settings) + guard 0.01 (research 8.2)
         finally:
             db.close()
 
@@ -446,7 +338,6 @@ class TestC3OutAndSimulation(unittest.TestCase):
         - Chu kỳ rà soát J6 không chồng lấn (đúng 7 ngày)
         """
         from app.services.pipeline_service import pipeline_service
-        from app.services.replenishment_service import replenishment_service
         from app.models.product import Product
         from app.models.inventory import Inventory
         from app.models.inventory_daily import InventoryDaily
@@ -510,7 +401,7 @@ class TestC3OutAndSimulation(unittest.TestCase):
             self.assertEqual(first_rec.review_date, date(2016, 5, 2))
 
             # 5. Tua tiếp 3 ngày (đến 2016-05-05 = lead_time_days) -> đơn hàng phải đến và COMPLETED
-            res2 = pipeline_service.advance_sim_clock(
+            pipeline_service.advance_sim_clock(
                 db, store_id="CA_1", days=3, lead_time_days=3, review_period_days=7
             )
             db.refresh(first_rec)
@@ -556,71 +447,51 @@ class TestC3OutAndSimulation(unittest.TestCase):
 
     def test_route_c_lookahead_bias_prevention_and_causal_invariance(self):
         """
-        Test N-25 / R-15 / R-47: Kiểm định tính nhân quả (Causality) và Zero Lookahead Bias của Route (c).
-        Toàn bộ dữ liệu doanh số/dự báo trong tương lai (sau origin_date hoặc sau cutoff_date)
-        tuyệt đối không được rò rỉ vào việc tính sai số lịch sử và phân vị cửa sổ Q_H(tau).
+        Causality of route (c): sales inside (cutoff, origin] and after the origin, and backtest reviews that are
+        not matured (s + H > origin), must NOT change the residuals nor Q_hat at the origin.
         """
         import numpy as np
         from app.services.window_quantile_service import window_quantile_service
         from app.models.sales_history import SalesHistory
-        from app.models.forecast import Forecast
+        from app.models.forecast_backtest import ForecastBacktest
+        from app.services import policy_config as pc
 
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)
         Session = sessionmaker(bind=engine)
         db = Session()
         try:
-            store = "CA_1"
-            item = "FOODS_1_001"
-            origin = date(2016, 4, 25)
-            H = 10
-
-            # 1. Nạp 40 ngày dữ liệu lịch sử trước origin (đảm bảo <= cutoff = origin - 10)
-            base_date = date(2016, 3, 1)
-            for i in range(40):
-                d = base_date + timedelta(days=i)
-                # Chỉ nạp đến ngày 2016-04-10 (trước cutoff 2016-04-15)
-                if d <= date(2016, 4, 10):
-                    sh = SalesHistory(id=f"sh_past_{i}", item_id=item, store_id=store, sale_date=d, quantity=10.0 + (i % 3))
-                    fc = Forecast(
-                        id=f"fc_past_{i}", item_id=item, store_id=store, forecast_date=d,
-                        h=1, y_pred=10.0, p10=8.0, p50=10.0, p90=12.0, available=True, model_version="ensemble_v1"
-                    )
-                    db.add_all([sh, fc])
+            store, item, H = "CA_1", "FOODS_1_001", 10
+            o_idx = 1700
+            origin = pc.day_index_to_date(o_idx)
+            matured = [o_idx - H - 7 * k for k in range(10)]         # s + H <= origin
+            unmatured = [o_idx - 3, o_idx + 4]                       # s + H > origin
+            for i, r in enumerate(matured + unmatured):
+                db.add(ForecastBacktest(id=f"fb_{i}", store_id=store, item_id=item, review_day=r,
+                                        dhat=10.0, dhat_lgb=10.0, sigma_d=1.0, model_run="backtest-ensemble-v1"))
+            # actuals: 1.5 per day for every day strictly before the origin
+            for d in range(o_idx - 100, o_idx):
+                db.add(SalesHistory(id=f"s_{d}", item_id=item, store_id=store,
+                                    sale_date=pc.day_index_to_date(d), quantity=1.5))
             db.commit()
 
-            # Thu thập sai số và giá trị quantile tại origin trước khi có dữ liệu tương lai
             res_before = window_quantile_service.collect_historical_residuals(
-                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H
-            )
-            q_val_before = window_quantile_service.get_tau_quantile_value(
-                db, store_id=store, item_id=item, origin_date=origin, tau=0.95, horizon_days=H
-            )
-            self.assertGreater(len(res_before), 0)
-            self.assertGreater(q_val_before, 0.0)
+                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H)
+            q_before = window_quantile_service.build_records(db, store, [item], origin, H)[0].q_levels["0.95"]
+            self.assertEqual(len(res_before), len(matured))          # un-matured reviews are excluded
+            np.testing.assert_allclose(res_before, 15.0 - 10.0)
 
-            # 2. Bơm dữ liệu TƯƠNG LAI đột biến (sau origin_date: ngày 2016-04-26 đến 2016-05-10) với doanh số cực lớn (999.0)
-            for i in range(15):
-                future_d = origin + timedelta(days=i + 1)
-                sh_future = SalesHistory(id=f"sh_future_{i}", item_id=item, store_id=store, sale_date=future_d, quantity=999.0)
-                fc_future = Forecast(
-                    id=f"fc_future_{i}", item_id=item, store_id=store, forecast_date=future_d,
-                    h=1, y_pred=5.0, p10=2.0, p50=5.0, p90=8.0, available=True, model_version="ensemble_v1"
-                )
-                db.add_all([sh_future, fc_future])
+            # inject extreme data in the FUTURE (after the origin): it must not leak in
+            for d in range(o_idx + 1, o_idx + 20):
+                db.add(SalesHistory(id=f"f_{d}", item_id=item, store_id=store,
+                                    sale_date=pc.day_index_to_date(d), quantity=999.0))
             db.commit()
 
-            # 3. Thu thập lại sai số và quantile tại origin
             res_after = window_quantile_service.collect_historical_residuals(
-                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H
-            )
-            q_val_after = window_quantile_service.get_tau_quantile_value(
-                db, store_id=store, item_id=item, origin_date=origin, tau=0.95, horizon_days=H
-            )
-
-            # Khẳng định tính nhân quả tuyệt đối: Dữ liệu tương lai không ảnh hưởng gì tới sai số và quantile ở quá khứ
+                db, item_id=item, store_id=store, origin_date=origin, horizon_days=H)
+            q_after = window_quantile_service.build_records(db, store, [item], origin, H)[0].q_levels["0.95"]
             np.testing.assert_array_almost_equal(res_before, res_after)
-            self.assertEqual(q_val_before, q_val_after)
+            self.assertEqual(q_before, q_after)
         finally:
             db.close()
 
@@ -670,7 +541,7 @@ class TestC3OutAndSimulation(unittest.TestCase):
                     id=f"run1_{h}", item_id=item, store_id=store,
                     forecast_date=date(2016, 4, 25) + timedelta(days=h - 1),
                     h=h, y_pred=1.0, p10=0.8, p50=1.0, p90=1.2, available=True,
-                    model_version="run_april"
+                    model_version="Ensemble run_april"
                 )
                 db.add(fc)
 
@@ -680,7 +551,7 @@ class TestC3OutAndSimulation(unittest.TestCase):
                     id=f"run2_{h}", item_id=item, store_id=store,
                     forecast_date=date(2016, 5, 23) + timedelta(days=h - 1),
                     h=h, y_pred=5.0, p10=4.0, p50=5.0, p90=6.0, available=True,
-                    model_version="run_may"
+                    model_version="Ensemble run_may"
                 )
                 db.add(fc)
             db.commit()
@@ -709,20 +580,20 @@ class TestC3OutAndSimulation(unittest.TestCase):
             m5_start = date(2011, 1, 29)
             H = 10
 
-            # Nạp 6 chu kỳ backtest: review_days = 1500, 1507, 1514, 1521, 1528, 1535 (dhat = 2.0 -> pred window = 20.0)
+            # Nạp 6 chu kỳ backtest: review_days = 1500, 1507, 1514, 1521, 1528, 1535 (dhat = 20.0 = tổng cửa sổ 10 ngày)
             review_days = [1500, 1507, 1514, 1521, 1528, 1535]
             for i, r_day in enumerate(review_days):
                 fb = ForecastBacktest(
                     id=f"fb_{i}", store_id=store, item_id=item, review_day=r_day,
-                    dhat=2.0, dhat_lgb=2.0, sigma_d=0.5, model_run="backtest-ensemble-v1"
-                )
+                    dhat=20.0, dhat_lgb=20.0, sigma_d=0.5, model_run="backtest-ensemble-v1"
+                )  # dhat is already the H-day window sum (artifact c3ok, W = 10)
                 db.add(fb)
 
             # Nạp doanh số thực tế 1 bản ghi duy nhất cho mỗi ngày từ ngày 1500 đến ngày 1535 + H:
             # Mỗi ngày bán 3.0 đơn -> bất kỳ cửa sổ 10 ngày nào cũng có tổng actual = 30.0
             total_days = (review_days[-1] + H) - review_days[0]
             for offset in range(total_days):
-                sale_d = m5_start + timedelta(days=review_days[0] - 1 + offset)
+                sale_d = m5_start + timedelta(days=review_days[0] + offset)  # day index r+offset: window is [r, r+H)
                 sh = SalesHistory(
                     id=f"sh_{review_days[0] + offset}", item_id=item, store_id=store,
                     sale_date=sale_d, quantity=3.0

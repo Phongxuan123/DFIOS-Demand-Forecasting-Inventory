@@ -1,102 +1,33 @@
-import sys
-import os
+"""
+Inventory parameters (s, S, SS, EOQ) for the demo store.
 
-if sys.stdout.encoding != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8')
-if sys.stderr.encoding != 'utf-8':
-    sys.stderr.reconfigure(encoding='utf-8')
+B-20 / R-28: there is ONE formula (REFIT-RSS-EOQ-G in ``OptimizationService``) with L = 3, R = 7, H = 10
+from ``policy_config``. This loader no longer re-implements it (the old version used L = 7 and a
+different safety-stock formula than load_c3out_data). It simply calls the service.
+``sync_scientific_baseline`` recomputes once more at the end of the build, after the backtest forecasts,
+quantiles, policies and theta are loaded.
+"""
+import os
+import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
-import pandas as pd
-import numpy as np
-from datetime import datetime, timezone
-from sqlalchemy import text
-from app.core.database import engine
+from app.core.database import SessionLocal, engine
+from app.models.inventory_param import InventoryParam
+from app.services import policy_config as pc
+from app.services.optimization_service import optimization_service
 
-STORE_ID = "CA_1"
-LEAD_TIME = 7
-TAU = 0.95
-Z_TAU = 1.645
-ORDER_COST = 2.0
 
-with engine.begin() as conn:
-    conn.execute(text("""
-        ALTER TABLE inventory_params
-            ADD COLUMN IF NOT EXISTS "s" DOUBLE PRECISION,
-            ADD COLUMN IF NOT EXISTS "S" DOUBLE PRECISION,
-            ADD COLUMN IF NOT EXISTS model_run_id VARCHAR(100) DEFAULT 'c3out-calibrated';
-    """))
+def main() -> None:
+    InventoryParam.__table__.create(bind=engine, checkfirst=True)
+    db = SessionLocal()
+    try:
+        n = optimization_service.recompute_parameters(db, store_id=pc.DEMO_STORE_ID)
+        print(f"Computed inventory_params for {n} SKUs (L={pc.LEAD_TIME_DAYS}, R={pc.REVIEW_PERIOD_DAYS}).")
+    finally:
+        db.close()
 
-C3_EXP_THETA = {
-    "AX": 1.095,
-    "AY": 1.201,
-    "AZ": 1.481,
-    "BX": 1.094,
-    "BY": 1.172,
-    "BZ": 1.468,
-    "CX": 1.149,
-    "CY": 1.133,
-    "CZ": 1.397,
-}
-DEFAULT_EXP_THETA = 1.15
 
-forecast_path = os.path.join(SCRIPT_DIR, "production_forecast.parquet")
-sigma_path = os.path.join(SCRIPT_DIR, "production_sigma.parquet")
-
-fc_df = pd.read_parquet(forecast_path)
-fc_df = fc_df[(fc_df["store_id"] == STORE_ID) & (fc_df["h"] <= LEAD_TIME)]
-
-sg_df = pd.read_parquet(sigma_path)
-sg_df["item_id"] = sg_df["id"].apply(lambda x: "_".join(x.split("_")[:3]))
-sg_store = sg_df[sg_df["id"].str.contains(f"_{STORE_ID}_")].copy()
-
-dl_df = fc_df.groupby("item_id")["y_pred"].sum().reset_index()
-dl_df.rename(columns={"y_pred": "d_l"}, inplace=True)
-
-merged = pd.merge(dl_df, sg_store[["item_id", "sigma_d_h7"]], on="item_id", how="left")
-merged["sigma_d_h7"] = merged["sigma_d_h7"].fillna(1.5)
-
-with engine.connect() as conn:
-    class_df = pd.read_sql("SELECT item_id, segment as class FROM sku_classifications", conn)
-    price_df = pd.read_sql("SELECT item_id, coalesce(price, 10.0) as unit_price FROM products", conn)
-
-merged = pd.merge(merged, class_df, on="item_id", how="left")
-merged = pd.merge(merged, price_df, on="item_id", how="left")
-merged["class"] = merged["class"].fillna("BY")
-merged["exp_theta"] = merged["class"].map(C3_EXP_THETA).fillna(DEFAULT_EXP_THETA)
-merged["unit_price"] = merged["unit_price"].fillna(10.0)
-
-merged["order_cost"] = ORDER_COST
-merged["holding_cost"] = (0.002 * merged["unit_price"] * 365).round(4)
-# B-20: Thống nhất công thức tính SS chuẩn lý thuyết: SS = z_tau * sigma_d * sqrt(L) * exp(theta)
-merged["safety_stock"] = (Z_TAU * merged["sigma_d_h7"] * np.sqrt(LEAD_TIME) * merged["exp_theta"]).round(2).clip(lower=0.0)
-merged["reorder_point"] = (merged["d_l"] + merged["safety_stock"]).round(2).clip(lower=0.0)
-merged["annual_demand"] = ((merged["d_l"] / LEAD_TIME) * 365).round(2).clip(lower=1.0)
-merged["eoq"] = np.sqrt((2 * merged["annual_demand"] * merged["order_cost"]) / merged["holding_cost"]).round(2).clip(lower=1.0)
-
-merged["s"] = merged["reorder_point"]
-merged["S"] = (merged["s"] + merged["eoq"]).round(2)
-merged["model_run_id"] = "c3out-calibrated"
-
-now = datetime.now(timezone.utc)
-merged["id"] = STORE_ID + "_" + merged["item_id"]
-merged["store_id"] = STORE_ID
-merged["service_level"] = TAU
-merged["lead_time_days"] = LEAD_TIME
-merged["source"] = "c3out"
-merged["updated_at"] = now
-
-final_params = merged[[
-    "id", "item_id", "store_id", "service_level", "lead_time_days",
-    "safety_stock", "reorder_point", "eoq", "annual_demand",
-    "holding_cost", "order_cost", "unit_price", "source", "updated_at",
-    "s", "S", "model_run_id"
-]]
-
-with engine.begin() as conn:
-    conn.execute(text("DELETE FROM inventory_params WHERE store_id = :s"), {"s": STORE_ID})
-
-final_params.to_sql("inventory_params", engine, if_exists="append", index=False, chunksize=1000, method="multi")
-print(f"Seeded {len(final_params)} inventory_params records!")
+if __name__ == "__main__":
+    main()

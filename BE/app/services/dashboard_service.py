@@ -1,8 +1,6 @@
-import asyncio
 import logging
-import math
 from datetime import date, timedelta, datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -20,18 +18,40 @@ from app.schemas.dashboard import (
     RealtimeStockAlertTriggerResponse,
 )
 from app.schemas.event import create_stock_alert_event
-from app.schemas.kpi_dashboard import CostCurvePoint, SegmentAvailability, KPIDashboardResponse
+from app.schemas.kpi_dashboard import CostCurvePoint, InsightDetail, SegmentAvailability, KPIDashboardResponse
 from app.models.sim_clock import SimClock
-from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
-from app.models.policy_selection import PolicySelection
 from app.models.classification import SKUClassification
 from app.models.product import Product
 from app.models.inventory_daily import InventoryDaily
 from app.models.replenishment import ReplenishmentRecommendation
 from app.services.calibrator_service import calibrator_service
+from app.services.optimization_service import optimization_service
+from app.services import policy_config as pc
+from app.models.inventory import Inventory
+from app.models.sim_state import SimShadowDaily
 
 logger = logging.getLogger(__name__)
+
+# Round 5 (U-06): every Vietnamese reason of the KPI dashboard / reports has a STABLE code (`*_reason_code`).
+KPI_REASONS: Dict[str, str] = {
+    "no_clock": "Không có sim_clock cho phạm vi yêu cầu.",
+    "no_closed_cycle": "Chưa có chu kỳ review nào được đóng (service_outcomes); tua đồng hồ ít nhất 1 kỳ review (7 ngày).",
+    "no_shadow": (
+        "B0 shadow chưa được mô phỏng song song cho giai đoạn này (đồng hồ tua trước khi có shadow); "
+        "reset đồng hồ và tua lại để có B0."
+    ),
+    "no_shadow_cost": "B0 shadow chưa có dữ liệu chi phí: reset đồng hồ và tua lại.",
+    "no_simulated_days": "Chưa có inventory_daily trong cửa sổ mô phỏng (đồng hồ chưa tua): chưa tính được chi phí A3.",
+}
+_KPI_REASON_CODES = {v: k for k, v in KPI_REASONS.items()}
+
+
+def kpi_reason_code(reason: Optional[str]) -> Optional[str]:
+    """Stable code of a KPI reason text (None for no reason, 'other' for a text without a code)."""
+    if not reason:
+        return None
+    return _KPI_REASON_CODES.get(reason, "other")
 
 
 class DashboardService:
@@ -57,12 +77,14 @@ class DashboardService:
         """
         UC08: Lấy chuỗi xu hướng nhu cầu bán hàng và dự báo.
         """
+        meta: Dict[str, Any] = {}
         trend_rows = dashboard_repository.get_demand_trend(
             db,
             store_id=store_id,
             category=category,
             days=days,
             granularity=granularity,
+            meta=meta,
         )
         points = [DemandTrendPoint(**r) for r in trend_rows]
         return DemandTrendResponse(
@@ -70,6 +92,8 @@ class DashboardService:
             store_id=store_id,
             category=category,
             data=points,
+            as_of=meta.get("as_of"),
+            forecast_note=meta.get("forecast_note"),
         )
 
     def get_alerts(
@@ -135,7 +159,7 @@ class DashboardService:
             .filter(
                 Alert.store_id.in_(target_stores),
                 Alert.item_id.in_(target_items),
-                Alert.is_read == False,
+                Alert.is_read.is_(False),
             )
             .all()
         )
@@ -200,7 +224,7 @@ class DashboardService:
             try:
                 event_bus.publish_nowait(event)
                 broadcast_count += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one bad SSE subscriber must not stop the others (logged)
                 logger.warning(f"Error publishing stock alert event: {e}")
 
         return RealtimeStockAlertTriggerResponse(
@@ -235,7 +259,7 @@ class DashboardService:
             {
                 "date": p.date,
                 "actual": p.actual,
-                "lightgbm": p.predicted if p.predicted is not None else p.actual,
+                "lightgbm": p.predicted,  # null when no forecast exists (never substituted by the actual)
             }
             for p in trend_obj.data
         ]
@@ -310,211 +334,305 @@ class DashboardService:
 
     # --- Task API.4: Dashboard KPI & Shadow Baseline B0 ---
 
+    @staticmethod
+    def _daily_costs(db: Session, model, stores: List[str], start: date, end: date) -> Dict[date, Tuple[float, float]]:
+        """{date: (holding, shortage)} in A3 money: h*price*on_hand_end, b*price*lost, summed over SKUs."""
+        rows = (
+            db.query(
+                model.date,
+                func.sum(model.on_hand_end * Product.price).label("hv"),
+                func.sum(model.lost_sales * Product.price).label("lv"),
+            )
+            .join(Product, Product.item_id == model.item_id)
+            .filter(model.store_id.in_(stores), model.date > start, model.date <= end)
+            .group_by(model.date)
+            .all()
+        )
+        return {
+            r.date: (
+                float(r.hv or 0.0) * pc.HOLDING_RATE_DAILY,
+                float(r.lv or 0.0) * pc.STOCKOUT_PENALTY_RATE,
+            )
+            for r in rows
+        }
+
+    def _availability_by_class(
+        self, db: Session, stores: List[str], start: date, end: date, R: int
+    ) -> Tuple[Dict[str, Dict[str, Any]], Optional[str], Optional[str]]:
+        """
+        Observed availability per ABC-XYZ class over the CLOSED cycles of service_outcomes (C3-OUT) and the same
+        cycles of the shadow B0. Returns ({class: {...}}, c3_reason, b0_reason).
+        """
+        so = (
+            db.query(
+                ServiceOutcome.store_id, ServiceOutcome.class_id, ServiceOutcome.cycle_index,
+                ServiceOutcome.n_sku, ServiceOutcome.n_stockout,
+            )
+            .filter(
+                ServiceOutcome.store_id.in_(stores),
+                ServiceOutcome.cycle_start >= start,
+                ServiceOutcome.cycle_end <= end,
+            )
+            .all()
+        )
+        out: Dict[str, Dict[str, Any]] = {
+            c: {"n_sku": 0, "n_periods": 0, "c3_stockout": 0, "b0_stockout": None} for c in pc.ALL_CLASSES
+        }
+        if not so:
+            reason = KPI_REASONS["no_closed_cycle"]
+            return out, reason, reason
+        closed = {(r.store_id, r.cycle_index) for r in so}
+        for r in so:
+            if r.class_id in out:
+                out[r.class_id]["n_periods"] += int(r.n_sku or 0)
+                out[r.class_id]["c3_stockout"] += int(r.n_stockout or 0)
+                out[r.class_id]["n_sku"] = max(out[r.class_id]["n_sku"], int(r.n_sku or 0))
+
+        has_shadow = (
+            db.query(func.count(SimShadowDaily.item_id))
+            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date > start)
+            .scalar()
+        )
+        if not has_shadow:
+            return out, None, KPI_REASONS["no_shadow"]
+        # B0: stocked-out SKU-cycles (on_hand_end <= 0 on at least one day of the cycle) of the same closed cycles
+        sh_rows = (
+            db.query(SimShadowDaily.store_id, SimShadowDaily.item_id, SimShadowDaily.date)
+            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date >= start, SimShadowDaily.date <= end,
+                    SimShadowDaily.on_hand_end <= 0)
+            .all()
+        )
+        seg_of: Dict[Tuple[str, str], str] = {}
+        seg_any: Dict[str, str] = {}
+        for item_id, seg, st in db.query(
+            SKUClassification.item_id, SKUClassification.segment, SKUClassification.store_id
+        ).all():
+            seg_any.setdefault(item_id, seg)
+            if st:
+                seg_of[(st, item_id)] = seg
+        seen = set()
+        b0 = {c: 0 for c in pc.ALL_CLASSES}
+        for st, item_id, d in sh_rows:
+            k = (d - start).days // R
+            if (st, k) not in closed or (st, item_id, k) in seen:
+                continue
+            seen.add((st, item_id, k))
+            seg = seg_of.get((st, item_id)) or seg_any.get(item_id)
+            if seg in b0:
+                b0[seg] += 1
+        for c in pc.ALL_CLASSES:
+            out[c]["b0_stockout"] = b0[c]
+        return out, None, None
+
     def get_shadow_baseline_dashboard(
         self, db: Session, store_id: str = "CA_1"
     ) -> KPIDashboardResponse:
         """
-        Task API.4 - Trả về chi phí lũy kế theo mô hình A3, availability 9 nhóm hàng,
-        và đường chi phí của chính sách tĩnh B0 chạy song song (shadow baseline).
-        R-20: Hỗ trợ truy vấn toàn hệ thống (GLOBAL) chính xác không ép thành CA_1.
+        Task API.4 - Cumulative A3 cost, availability of the 9 classes and the SHADOW baseline B0.
+        N-03: B0 is simulated in parallel by ``/clock/advance`` (sim_shadow_daily), NOT derived from C3 x fixed
+        ratios or tables. Every unavailable metric is null + reason. P-22: GLOBAL aggregates theta over stores,
+        ordering cost counts only placed orders (APPROVED / COMPLETED), target comes from system settings.
         """
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
         target_store = "GLOBAL" if is_global else store_id.strip()
+        R = pc.REVIEW_PERIOD_DAYS
 
-        if is_global:
-            clock = db.query(SimClock).order_by(SimClock.current_date.desc()).first()
-        else:
-            clock = db.query(SimClock).filter(SimClock.store_id == target_store).first()
-
-        curr_date = clock.current_date if clock and clock.current_date else date(2016, 5, 23)
-        start_date = clock.start_date if clock and clock.start_date else date(2016, 4, 25)
+        clocks = db.query(SimClock).all() if is_global else db.query(SimClock).filter(SimClock.store_id == target_store).all()
+        if not clocks:
+            no_clock = KPI_REASONS["no_clock"]
+            return KPIDashboardResponse(
+                store_id=store_id, current_date=pc.DEMO_START_DATE, days_elapsed=0, reviews_elapsed=0,
+                segment_availabilities=[
+                    SegmentAvailability(
+                        class_id=c, target=round(float(optimization_service.get_service_level_config(db).default_service_level) * 100.0, 1),
+                        theta=0.0, multiplier=1.0, status="NOT_MEASURED",
+                    )
+                    for c in pc.ALL_CLASSES
+                ],
+                cost_curves=[],
+                summary_insights=[f"Chưa có đồng hồ mô phỏng cho '{target_store}': không có số liệu KPI."],
+                insight_details=[InsightDetail(code="no_clock", params={"store_id": target_store})],
+                source="none", cost_reason=no_clock, availability_reason=no_clock, b0_reason=no_clock,
+                cost_reason_code="no_clock", availability_reason_code="no_clock", b0_reason_code="no_clock",
+            )
+        stores = [c.store_id for c in clocks]
+        curr_date = max(c.current_date for c in clocks)
+        start_date = min(c.start_date for c in clocks)
         days_elapsed = max(0, (curr_date - start_date).days)
-        reviews_elapsed = max(0, days_elapsed // 7)
+        reviews_elapsed = days_elapsed // R
 
-        # 1. Lấy thông tin hệ số C³-OUT của 9 nhóm
-        thetas = calibrator_service.get_current_thetas(db, store_id=None if is_global else target_store)
-        multipliers = calibrator_service.get_current_multipliers(db, store_id=None if is_global else target_store)
+        cfg = optimization_service.get_service_level_config(db)
+        target_pct = round(float(cfg.default_service_level) * 100.0, 1)
+        n_skus = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id.in_(stores)).scalar() or None
 
-        # 2. Lấy kết quả phục vụ thực tế theo từng nhóm từ service_outcomes
-        ALL_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]
-        segment_availabilities: List[SegmentAvailability] = []
-        c3out_avail_list = []
-        b0_avail_list = []
+        # theta / multiplier: per store; GLOBAL = mean over stores of each store's latest state (P-22)
+        th_acc: Dict[str, List[float]] = {c: [] for c in pc.ALL_CLASSES}
+        mu_acc: Dict[str, List[float]] = {c: [] for c in pc.ALL_CLASSES}
+        for c in clocks:
+            thetas = calibrator_service.get_current_thetas(db, store_id=c.store_id, as_of=c.current_date)
+            mults = calibrator_service.get_current_multipliers(db, store_id=c.store_id)
+            for cid in pc.ALL_CLASSES:
+                th_acc[cid].append(thetas.get(cid, 0.0))
+                mu_acc[cid].append(mults.get(cid, 1.0))
 
-        # Ground-truth empirical availability từ c3ok_csl_by_class.csv (chuẩn thực nghiệm M5)
-        # B0 DFIOS tau=0.95 vs P C3-OUT tau=0.95
-        c3_baseline_csl = {
-            "AX": 94.9, "AY": 94.9, "AZ": 94.9,
-            "BX": 95.0, "BY": 94.9, "BZ": 94.9,
-            "CX": 94.8, "CY": 94.9, "CZ": 94.8,
-        }
-        b0_baseline_csl = {
-            "AX": 91.5, "AY": 89.9, "AZ": 82.8,
-            "BX": 92.8, "BY": 92.0, "BZ": 87.7,
-            "CX": 92.8, "CY": 93.3, "CZ": 90.5,
-        }
+        def mean(xs: List[float]) -> float:
+            return sum(xs) / len(xs) if xs else 0.0
 
-        for class_id in ALL_CLASSES:
-            so_q = db.query(func.avg(ServiceOutcome.error_rate)).filter(ServiceOutcome.class_id == class_id)
-            if not is_global:
-                so_q = so_q.filter(ServiceOutcome.store_id == target_store)
-            avg_err = so_q.scalar()
+        avail, c3_reason, b0_reason = self._availability_by_class(db, stores, start_date, curr_date, R)
 
-            if avg_err is not None:
-                c3_avail = round((1.0 - float(avg_err)) * 100.0, 1)
+        segs: List[SegmentAvailability] = []
+        c3_so = c3_n = b0_so = b0_n = 0
+        for cid in pc.ALL_CLASSES:
+            a = avail[cid]
+            n_per = a["n_periods"]
+            c3_av = round((1.0 - a["c3_stockout"] / n_per) * 100.0, 1) if n_per and c3_reason is None else None
+            b0_av = (
+                round((1.0 - a["b0_stockout"] / n_per) * 100.0, 1)
+                if n_per and a["b0_stockout"] is not None and b0_reason is None else None
+            )
+            if c3_av is not None:
+                c3_so += a["c3_stockout"]
+                c3_n += n_per
+            if b0_av is not None:
+                b0_so += a["b0_stockout"]
+                b0_n += n_per
+            th = mean(th_acc[cid])
+            # R5F-03: no measured availability -> NOT_MEASURED (a pass is never shown without a measurement)
+            if abs(th) >= pc.THETA_MAX or (c3_av is not None and c3_av < target_pct - 1.0):
+                flag = "WARNING"
+            elif c3_av is None:
+                flag = "NOT_MEASURED"
             else:
-                c3_avail = c3_baseline_csl.get(class_id, 94.9)
+                flag = "COMPLIANT"
+            segs.append(SegmentAvailability(
+                class_id=cid, target=target_pct, c3out_availability=c3_av, b0_availability=b0_av,
+                n_sku=a["n_sku"] or None, n_periods=n_per or None,
+                theta=round(th, 3), multiplier=round(mean(mu_acc[cid]), 3), status=flag,
+            ))
+        overall_c3 = round((1.0 - c3_so / c3_n) * 100.0, 1) if c3_n else None
+        overall_b0 = round((1.0 - b0_so / b0_n) * 100.0, 1) if b0_n else None
 
-            # B0 availability lấy từ bảng chuẩn thực nghiệm c3ok_csl_by_class.csv, không nhân hệ số giả
-            b0_avail = b0_baseline_csl.get(class_id, 89.0)
-            c3out_avail_list.append(c3_avail)
-            b0_avail_list.append(b0_avail)
+        # ---- costs (A3): daily aggregates, cumulative per review cycle
+        cost_reason = None
+        c3_daily = self._daily_costs(db, InventoryDaily, stores, start_date, curr_date)
+        sh_daily = self._daily_costs(db, SimShadowDaily, stores, start_date, curr_date)
+        have_c3 = bool(c3_daily)
+        have_b0 = bool(sh_daily)
 
-            th = thetas.get(class_id, 0.0)
-            mult = multipliers.get(class_id, 1.0)
-            # Cảnh báo khi theta chạm ngưỡng biên ±2.0 theo research.md §8.1
-            status_flag = "WARNING" if th >= 2.0 or th <= -2.0 or c3_avail < 94.0 else "COMPLIANT"
-
-            segment_availabilities.append(
-                SegmentAvailability(
-                    class_id=class_id,
-                    target=96.0,
-                    c3out_availability=c3_avail,
-                    b0_availability=b0_avail,
-                    theta=round(th, 3),
-                    multiplier=round(mult, 3),
-                    status=status_flag,
-                )
-            )
-
-        overall_c3_avail = round(sum(c3out_avail_list) / max(1, len(c3out_avail_list)), 1)
-        overall_b0_avail = round(sum(b0_avail_list) / max(1, len(b0_avail_list)), 1)
-
-        # 3. Tính toán chi phí thực tế từ InventoryDaily và ReplenishmentRecommendation theo chuẩn A3
-        inv_daily_q = (
-            db.query(
-                InventoryDaily.date,
-                func.sum(InventoryDaily.on_hand_end * Product.price).label("holding_val"),
-                func.sum(InventoryDaily.lost_sales * Product.price).label("lost_val"),
-            )
-            .join(Product, Product.item_id == InventoryDaily.item_id)
+        placed = (
+            db.query(ReplenishmentRecommendation.review_date, func.count(ReplenishmentRecommendation.id))
             .filter(
-                InventoryDaily.date >= start_date,
-                InventoryDaily.date <= curr_date,
-            )
-        )
-        if not is_global:
-            inv_daily_q = inv_daily_q.filter(InventoryDaily.store_id == target_store)
-        daily_holding_lost = inv_daily_q.group_by(InventoryDaily.date).all()
-
-        daily_cost_map = {
-            r.date: (float(r.holding_val or 0.0) * 0.002, float(r.lost_val or 0.0) * 0.35)
-            for r in daily_holding_lost
-        }
-
-        rep_rec_q = (
-            db.query(
-                ReplenishmentRecommendation.review_date,
-                func.count(ReplenishmentRecommendation.id).label("order_count"),
-            )
-            .filter(
-                ReplenishmentRecommendation.review_date >= start_date,
+                ReplenishmentRecommendation.store_id.in_(stores),
+                ReplenishmentRecommendation.review_date > start_date,
                 ReplenishmentRecommendation.review_date <= curr_date,
+                ReplenishmentRecommendation.status.in_(("APPROVED", "COMPLETED")),
             )
+            .group_by(ReplenishmentRecommendation.review_date)
+            .all()
         )
-        if not is_global:
-            rep_rec_q = rep_rec_q.filter(ReplenishmentRecommendation.store_id == target_store)
-        daily_orders = rep_rec_q.group_by(ReplenishmentRecommendation.review_date).all()
-        daily_order_map = {
-            r.review_date: float(r.order_count or 0.0) * 2.0
-            for r in daily_orders if r.review_date is not None
-        }
-        daily_order_map = {
-            r.review_date: float(r.order_count or 0.0) * 2.0
-            for r in daily_orders if r.review_date is not None
-        }
+        c3_orders = {d: float(n) * pc.ORDER_COST_C for d, n in placed if d is not None}
+        sh_orders_rows = (
+            db.query(SimShadowDaily.date, func.count(SimShadowDaily.item_id))
+            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date > start_date,
+                    SimShadowDaily.date <= curr_date, SimShadowDaily.order_qty > 0)
+            .group_by(SimShadowDaily.date)
+            .all()
+        )
+        b0_orders = {d: float(n) * pc.ORDER_COST_C for d, n in sh_orders_rows}
 
-        # 4. Tạo chuỗi đường chi phí lũy kế theo tuần (Cost Curves)
-        cost_curves: List[CostCurvePoint] = []
-        cycles_count = max(0, reviews_elapsed)
-        c3_cum_h = 0.0
-        c3_cum_o = 0.0
-        c3_cum_s = 0.0
+        curves: List[CostCurvePoint] = []
+        if not have_c3:
+            cost_reason = KPI_REASONS["no_simulated_days"]
+        else:
+            ch = co = cs = bh = bo = bs = 0.0
+            for cyc in range(reviews_elapsed + 1):
+                lo = start_date + timedelta(days=(cyc - 1) * R) if cyc else start_date
+                hi = min(start_date + timedelta(days=cyc * R), curr_date)
+                d = lo + timedelta(days=1)
+                while d <= hi:
+                    h_, s_ = c3_daily.get(d, (0.0, 0.0))
+                    ch += h_
+                    cs += s_
+                    co += c3_orders.get(d, 0.0)
+                    if have_b0:
+                        bh_, bs_ = sh_daily.get(d, (0.0, 0.0))
+                        bh += bh_
+                        bs += bs_
+                        bo += b0_orders.get(d, 0.0)
+                    d += timedelta(days=1)
+                c3_t = round(ch + co + cs, 2)
+                b0_t = round(bh + bo + bs, 2) if have_b0 else None
+                curves.append(CostCurvePoint(
+                    date=start_date + timedelta(days=cyc * R), cycle_index=cyc,
+                    c3out_holding_cost=round(ch, 2), c3out_ordering_cost=round(co, 2),
+                    c3out_stockout_cost=round(cs, 2), c3out_total_cost=c3_t,
+                    b0_holding_cost=round(bh, 2) if have_b0 else None,
+                    b0_ordering_cost=round(bo, 2) if have_b0 else None,
+                    b0_stockout_cost=round(bs, 2) if have_b0 else None,
+                    b0_total_cost=b0_t,
+                    cost_savings=round(b0_t - c3_t, 2) if b0_t is not None else None,
+                ))
+        last = curves[-1] if curves else None
+        c3_total = last.c3out_total_cost if last else None
+        b0_total = last.b0_total_cost if last else None
+        savings = last.cost_savings if last else None
+        if have_c3 and not have_b0:
+            b0_reason = b0_reason or KPI_REASONS["no_shadow_cost"]
 
-        # Tỷ lệ chi phí chuẩn thực nghiệm từ c3ok_results.csv (BIKIP model) giữa B0 và C3-OUT:
-        # B0 hold = 0.7935 * C3 hold, B0 order = 1.0078 * C3 order, B0 lost = 1.9757 * C3 lost
-        B0_HOLD_RATIO = 0.7935
-        B0_ORDER_RATIO = 1.0078
-        B0_LOST_RATIO = 1.9757
-
-        for cyc in range(cycles_count + 1):
-            pt_date = start_date + timedelta(days=cyc * 7)
-            if cyc == 0:
-                day_h, day_s = daily_cost_map.get(pt_date, (0.0, 0.0))
-                day_o = daily_order_map.get(pt_date, 0.0)
-                c3_cum_h += day_h
-                c3_cum_s += day_s
-                c3_cum_o += day_o
-            else:
-                prev_pt_date = start_date + timedelta(days=(cyc - 1) * 7)
-                for d_offset in range(1, 8):
-                    cur_d = prev_pt_date + timedelta(days=d_offset)
-                    if cur_d <= curr_date:
-                        day_h, day_s = daily_cost_map.get(cur_d, (0.0, 0.0))
-                        day_o = daily_order_map.get(cur_d, 0.0)
-                        c3_cum_h += day_h
-                        c3_cum_s += day_s
-                        c3_cum_o += day_o
-
-            c3_tot = round(c3_cum_h + c3_cum_o + c3_cum_s, 2)
-
-            b0_cum_h = round(c3_cum_h * B0_HOLD_RATIO, 2)
-            b0_cum_o = round(c3_cum_o * B0_ORDER_RATIO, 2)
-            b0_cum_s = round(c3_cum_s * B0_LOST_RATIO, 2)
-            b0_tot = round(b0_cum_h + b0_cum_o + b0_cum_s, 2)
-
-            savings = round(max(0.0, b0_tot - c3_tot), 2)
-
-            cost_curves.append(
-                CostCurvePoint(
-                    date=pt_date,
-                    cycle_index=cyc,
-                    c3out_holding_cost=round(c3_cum_h, 2),
-                    c3out_ordering_cost=round(c3_cum_o, 2),
-                    c3out_stockout_cost=round(c3_cum_s, 2),
-                    c3out_total_cost=c3_tot,
-                    b0_holding_cost=b0_cum_h,
-                    b0_ordering_cost=b0_cum_o,
-                    b0_stockout_cost=b0_cum_s,
-                    b0_total_cost=b0_tot,
-                    cost_savings=savings,
-                )
+        insights: List[str] = []
+        details: List[InsightDetail] = []  # same order as ``insights`` (stable codes for client-side i18n)
+        if overall_c3 is not None:
+            line = f"Availability quan sát (các chu kỳ đã đóng): C³-OUT {overall_c3}% (mục tiêu {target_pct}%)"
+            line += f", B0 raw quantile τ=0.95 {overall_b0}%." if overall_b0 is not None else f"; B0: {b0_reason}"
+            insights.append(line)
+            details.append(InsightDetail(code="availability_observed", params={
+                "c3out_pct": overall_c3, "target_pct": target_pct, "b0_pct": overall_b0,
+                "b0_reason_code": kpi_reason_code(b0_reason),
+            }))
+        else:
+            insights.append(c3_reason or "Chưa có availability quan sát.")
+            details.append(InsightDetail(code=kpi_reason_code(c3_reason) or "no_availability"))
+        if savings is not None:
+            word = "tiết kiệm" if savings >= 0 else "chi thêm"
+            insights.append(
+                f"So với B0 shadow, C³-OUT {word} {abs(savings):,.2f} $ lũy kế theo mô hình A3 "
+                f"(B0 {b0_total:,.2f} $, C³-OUT {c3_total:,.2f} $). C³-OUT là bộ điều khiển mức phục vụ, "
+                f"chênh lệch chi phí có thể âm."
             )
-
-        last_pt = cost_curves[-1]
-        c3_total_cost = last_pt.c3out_total_cost
-        b0_total_cost = last_pt.b0_total_cost
-        total_savings = last_pt.cost_savings
-
-        insights = [
-            f"Availability trung bình: C³-OUT đạt {overall_c3_avail}% so với Baseline tĩnh B0 đạt {overall_b0_avail}% (chuẩn thực nghiệm M5).",
-            f"Tổng chi phí tiết kiệm lũy kế đạt {total_savings:,.2f} $ theo mô hình chi phí A3 (h=0.002*giá/ngày, c=2.0 $/đơn, b=0.35*giá)." if total_savings > 0 else "Giai đoạn quan sát chưa ghi nhận giao dịch phát sinh chi phí hoặc đứt hàng.",
-            "Bộ điều khiển tích phân chuẩn hai phía C³-OUT tự động điều chỉnh theta trong khoảng [-2.0, 2.0] theo research.md §8.1.",
-        ]
+            details.append(InsightDetail(code="cost_vs_b0", params={
+                "direction": "saves" if savings >= 0 else "costs_more", "difference": round(abs(savings), 2),
+                "savings": savings, "b0_total": b0_total, "c3out_total": c3_total,
+            }))
+        elif cost_reason or b0_reason:
+            insights.append(cost_reason or b0_reason)
+            details.append(InsightDetail(code=kpi_reason_code(cost_reason or b0_reason) or "no_cost"))
+        insights.append("B0 được mô phỏng song song trên cùng nhu cầu và tồn kho ban đầu (không dùng tỷ lệ cố định).")
+        details.append(InsightDetail(code="b0_shadow_definition"))
 
         return KPIDashboardResponse(
             store_id=store_id,
             current_date=curr_date,
             days_elapsed=days_elapsed,
             reviews_elapsed=reviews_elapsed,
-            c3out_total_cost=c3_total_cost,
-            b0_total_cost=b0_total_cost,
-            total_cost_savings=total_savings,
-            c3out_overall_availability=overall_c3_avail,
-            b0_overall_availability=overall_b0_avail,
-            segment_availabilities=segment_availabilities,
-            cost_curves=cost_curves,
+            c3out_total_cost=c3_total,
+            b0_total_cost=b0_total,
+            total_cost_savings=savings,
+            c3out_overall_availability=overall_c3,
+            b0_overall_availability=overall_b0,
+            segment_availabilities=segs,
+            cost_curves=curves,
             summary_insights=insights,
+            source="simulator",
+            as_of=curr_date,
+            n_skus=n_skus,
+            target_availability=target_pct,
+            cost_reason=cost_reason,
+            availability_reason=c3_reason,
+            b0_reason=b0_reason,
+            cost_reason_code=kpi_reason_code(cost_reason),
+            availability_reason_code=kpi_reason_code(c3_reason),
+            b0_reason_code=kpi_reason_code(b0_reason),
+            insight_details=details,
         )
 
 

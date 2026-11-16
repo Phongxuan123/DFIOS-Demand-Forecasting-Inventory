@@ -390,7 +390,8 @@ class TestClassificationEndpoints(unittest.TestCase):
 
         with self.TestingSessionLocal() as session:
             cls_ca1 = session.query(SKUClassification).filter(
-                SKUClassification.item_id == "SKU_MULTI_STORE"
+                SKUClassification.item_id == "SKU_MULTI_STORE",
+                SKUClassification.store_id == "CA_1",
             ).first()
             self.assertIsNotNone(cls_ca1)
             # Doanh thu CA_1: 10 * 50 * 5.0 = 2500.0
@@ -407,7 +408,8 @@ class TestClassificationEndpoints(unittest.TestCase):
 
         with self.TestingSessionLocal() as session:
             cls_tx1 = session.query(SKUClassification).filter(
-                SKUClassification.item_id == "SKU_MULTI_STORE"
+                SKUClassification.item_id == "SKU_MULTI_STORE",
+                SKUClassification.store_id == "TX_1",
             ).first()
             self.assertIsNotNone(cls_tx1)
             # Doanh thu TX_1: 0.0 -> CV gán 2.0 -> lớp Z (không thể là X)

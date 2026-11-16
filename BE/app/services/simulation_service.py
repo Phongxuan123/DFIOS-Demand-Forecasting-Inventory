@@ -1,244 +1,208 @@
-import csv
-import os
-from typing import Dict, List, Optional, Any
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from typing import List, Optional, Tuple
 
+from fastapi import HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.models.inventory import Inventory
 from app.models.product import Product
-from app.models.inventory_param import InventoryParam
-from app.models.system_setting import SystemSetting
-from app.schemas.simulation import PolicySimulationMetric, PolicyComparisonResponse
+from app.schemas.simulation import InsightDetail, PolicySimulationMetric, PolicyComparisonResponse
+from app.services import policy_config as pc
+from app.services.policy_artifact import (
+    ArtifactMissingError,
+    ArtifactResults,
+    load_results,
+)
+
+# policy_id (API) -> artifact key. The labels follow what the artifact rows REALLY are (P-15):
+#   B0 = raw quantile tau=0.95 | B2 = raw quantile tau*=0.99 | P-CR = C3-OUT at the critical ratio |
+#   P6 = C3-OUT tau=0.95 (service-level controller, not a cost reducer).
+POLICY_IDS = [
+    ("B0_raw_quantile", "B0"),
+    ("B2_frozen_critical_ratio", "B2"),
+    ("PCR_c3out_cost_optimal", "PCR"),
+    ("P6_c3out_closed_loop", "P6"),
+]
 
 
 class SimulationService:
     """
-    Module What-If Simulation Đối đầu Chính sách Tồn kho (Task API.5):
-    Đối chiếu 4 chính sách tồn kho dựa trên kiểm nghiệm thực nghiệm M5 Walmart (72 chu kỳ review):
-    - P0: Cổ điển (Gaussian SS + ROP + EOQ / B0 Baseline)
-    - P1: Raw Route (c) Quantile (B2 Tĩnh đóng băng, không guard band)
-    - P4: Tối ưu Chi phí Phân lớp (P-CR Cost-optimal Setpoint, REFIT-RSS-EOQ-G)
-    - P6: C³-OUT Vòng kín (Adaptive Closed-Loop Control)
+    What-If policy comparison (Task API.5 / FR10).
 
-    Tuân thủ mô hình chi phí chuẩn A3 (research.md §7.2):
-    - Phí lưu kho h = 0.002 * sell_price / ngày
-    - Phí đặt hàng c = 2.0 $ / đơn
-    - Phí phạt hết hàng b = 0.35 * sell_price / đơn vị thiếu
+    HONESTY RULE (N-01, P-15): this service does NOT simulate the four policies. It returns the
+    result rows of the offline M5 run (``c3ok_results.csv``: 25,950 SKUs x 357 test days, L=3, R=7),
+    re-scaled to the requested store size / horizon, and says so (``source = "artifact_extract"``,
+    ``simulated = False``). If the artifact is missing the endpoint answers 503 - there are no embedded
+    constants.
     """
 
-    HOLDING_COST_RATE_PER_DAY = 0.002
-    ORDERING_COST_PER_ORDER = 2.0
-    STOCKOUT_PENALTY_RATE = 0.35
+    HOLDING_COST_RATE_PER_DAY = pc.HOLDING_RATE_DAILY
+    ORDERING_COST_PER_ORDER = pc.ORDER_COST_C
+    STOCKOUT_PENALTY_RATE = pc.STOCKOUT_PENALTY_RATE
 
     @staticmethod
-    def _load_c3ok_results() -> Dict[str, Dict[str, float]]:
-        """
-        Đọc dữ liệu kiểm định thực nghiệm chuẩn từ c3ok_results.csv.
-        Dữ liệu gốc trên 3.049 SKU qua 72 chu kỳ review (504 ngày).
-        """
-        base_dir = os.path.dirname(__file__)
-        candidates = [
-            os.path.abspath(os.path.join(base_dir, "..", "..", "MODEL", "c3ok_results.csv")),
-            os.path.abspath(os.path.join(base_dir, "..", "..", "..", "c3ok_artifacts", "c3ok_artifacts", "c3ok_results.csv")),
-            os.path.abspath(os.path.join(base_dir, "..", "..", "..", "BE", "MODEL", "c3ok_results.csv")),
-        ]
-
-        csv_path = None
-        for p in candidates:
-            if os.path.isfile(p):
-                csv_path = p
-                break
-
-        results: Dict[str, Dict[str, float]] = {}
-        if csv_path:
-            with open(csv_path, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    name = row.get("policy", "")
-                    try:
-                        results[name] = {
-                            "tau": float(row.get("tau", 0.0)),
-                            "csl": float(row.get("CSL", 0.0)),
-                            "fill_rate": float(row.get("fill_rate", 0.0)),
-                            "hold_bikip": float(row.get("hold_BIKIP", 0.0)),
-                            "lost_bikip": float(row.get("lost_BIKIP", 0.0)),
-                            "order_bikip": float(row.get("order_BIKIP", 0.0)),
-                            "cost_bikip": float(row.get("cost_BIKIP", 0.0)),
-                            "cost_paper": float(row.get("cost_PAPER", 0.0)),
-                        }
-                    except (ValueError, TypeError):
-                        continue
-
-        # Fallback dữ liệu chuẩn từ c3ok_results.csv nếu không đọc được file
-        if not results:
-            results = {
-                "B0 DFIOS τ=0.95": {
-                    "tau": 0.95, "csl": 0.90709, "fill_rate": 0.94050,
-                    "hold_bikip": 714598.98, "lost_bikip": 773751.84, "order_bikip": 1923694.0,
-                    "cost_bikip": 3412044.82, "cost_paper": 767052.47
-                },
-                "B2 DFIOS τ*=0.99 [BIKIP]": {
-                    "tau": 0.99, "csl": 0.93362, "fill_rate": 0.95560,
-                    "hold_bikip": 852948.76, "lost_bikip": 575342.87, "order_bikip": 1928790.0,
-                    "cost_bikip": 3357081.62, "cost_paper": 699361.32
-                },
-                "P-CR C³-OUT τ=0.9615 [BIKIP]": {
-                    "tau": 0.9615, "csl": 0.96054, "fill_rate": 0.97498,
-                    "hold_bikip": 984863.21, "lost_bikip": 307251.18, "order_bikip": 1902784.0,
-                    "cost_bikip": 3194898.39, "cost_paper": 598919.84
-                },
-                "P C³-OUT τ=0.95": {
-                    "tau": 0.95, "csl": 0.94895, "fill_rate": 0.96833,
-                    "hold_bikip": 900606.68, "lost_bikip": 391639.43, "order_bikip": 1908706.0,
-                    "cost_bikip": 3200952.10, "cost_paper": 629384.80
-                },
-            }
-        return results
+    def _store_basis(db: Session, store_id: str) -> Tuple[int, Optional[float], str]:
+        """(#SKUs of the store, mean unit price, price source). Price = products.price (A3 price)."""
+        sku_count = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id == store_id).scalar() or 0
+        if sku_count:
+            avg_price = (
+                db.query(func.avg(Product.price))
+                .join(Inventory, Inventory.item_id == Product.item_id)
+                .filter(Inventory.store_id == store_id)
+                .scalar()
+            )
+        else:
+            sku_count = db.query(func.count(Product.item_id)).scalar() or 0
+            avg_price = db.query(func.avg(Product.price)).scalar()
+        return int(sku_count), (float(avg_price) if avg_price else None), "products.price"
 
     def compare_policies(
         self,
-        db: Optional[Session] = None,
+        db: Session,
         store_id: str = "CA_1",
         horizon_days: int = 90,
         target_service_level: float = 0.96,
     ) -> PolicyComparisonResponse:
-        """
-        Chạy mô phỏng đối đầu 4 chính sách tồn kho dựa trên số liệu thực nghiệm M5 (c3ok_results.csv)
-        theo mô hình chi phí chuẩn A3.
-        """
-        benchmark_results = self._load_c3ok_results()
+        try:
+            art: ArtifactResults = load_results()
+        except ArtifactMissingError as e:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
-        # Xác định số lượng SKU và đơn giá trung bình từ DB (nếu có)
-        if db is not None:
-            products = db.query(Product).all()
-            sku_count = len(products) if products else 3049
-            avg_price_scalar = db.query(func.avg(Product.sell_price)).scalar()
-            avg_price = float(avg_price_scalar) if avg_price_scalar and avg_price_scalar > 0 else 3.50
-        else:
-            sku_count = 3049
-            avg_price = 3.50
-
-        # Hệ số quy đổi theo quy mô SKU và số ngày mô phỏng (chuẩn M5: 3.049 SKU, 504 ngày)
-        ref_skus = 3049.0
-        ref_days = 504.0
-        scale = (sku_count / ref_skus) * (horizon_days / ref_days)
-
-        # Định nghĩa 4 chính sách tương ứng từ bảng thực nghiệm c3ok
-        policy_configs = [
-            (
-                "P0_classical",
-                "P0 - Cổ điển (Gaussian SS + ROP)",
-                "B0 DFIOS τ=0.95",
-                "Baseline tĩnh công thức truyền thống Z*sigma_L ở mức quantile τ=0.95. Bị thiếu phủ nghiêm trọng trên chuỗi nhu cầu gián đoạn.",
-            ),
-            (
-                "P1_raw_quantile",
-                "P1 - Raw Route (c) Quantile",
-                "B2 DFIOS τ*=0.99 [BIKIP]",
-                "Dùng phân phối thực nghiệm không có guard band và không bù sai số động theo chu kỳ.",
-            ),
-            (
-                "P4_frozen_refit",
-                "P4/P-CR - Tối ưu Chi phí Phân lớp",
-                "P-CR C³-OUT τ=0.9615 [BIKIP]",
-                "Tối ưu hóa setpoint quantile theo từng phân lớp ABC/XYZ (lưới mịn), đạt chi phí tối thiểu theo mô hình A3.",
-            ),
-            (
-                "P6_c3out_closed_loop",
-                "P6 - C³-OUT Vòng kín",
-                "P C³-OUT τ=0.95",
-                "Bộ điều khiển tích phân một phía C³-OUT tự động hiệu chỉnh hệ số an toàn θ_g theo từng chu kỳ để ổn định mức phục vụ.",
-            ),
-        ]
+        sku_count, avg_price, price_source = self._store_basis(db, store_id)
+        ref_skus = float(art.n_skus) if art.n_skus else None
+        if not ref_skus:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Không xác định được số SKU của artifact (thiếu c3ok_sku_class.csv) nên không thể quy đổi quy mô.",
+            )
+        if sku_count <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cửa hàng '{store_id}' chưa có SKU/tồn kho nào để quy đổi quy mô mô phỏng.",
+            )
+        scale = (sku_count / ref_skus) * (horizon_days / float(art.n_days))
 
         policies: List[PolicySimulationMetric] = []
-        for policy_id, policy_name, benchmark_key, desc in policy_configs:
-            row = benchmark_results.get(benchmark_key)
-            if not row:
-                continue
-
-            hold_cost = round(row["hold_bikip"] * scale, 2)
-            lost_cost = round(row["lost_bikip"] * scale, 2)
-            ord_cost = round(row["order_bikip"] * scale, 2)
+        for policy_id, key in POLICY_IDS:
+            row = art.policies[key]
+            hold_cost = round(row.holding_bikip * scale, 2)
+            lost_cost = round(row.shortage_bikip * scale, 2)
+            ord_cost = round(row.ordering_bikip * scale, 2)
             tot_cost = round(hold_cost + lost_cost + ord_cost, 2)
-
-            csl = row["csl"]
-            avail_pct = round(csl * 100.0, 1)
-
-            # Tính số đơn hàng và số đơn vị thiếu theo mô hình A3
-            total_orders = max(1, int(round((row["order_bikip"] / self.ORDERING_COST_PER_ORDER) * scale)))
-            stockout_unit_cost = max(0.5, self.STOCKOUT_PENALTY_RATE * avg_price)
-            total_stockouts = max(0, int(round((row["lost_bikip"] / stockout_unit_cost) * scale)))
-
-            # Kiểm tra tính khả thi: CSL thực nghiệm phải >= target_service_level
-            is_feasible = bool(csl >= target_service_level)
-
+            total_orders = int(round((row.ordering_bikip / self.ORDERING_COST_PER_ORDER) * scale))
             policies.append(
                 PolicySimulationMetric(
                     policy_id=policy_id,
-                    policy_name=policy_name,
-                    description=desc,
+                    policy_key=key,
+                    policy_name=row.label,
+                    description=row.description,
                     total_cost=tot_cost,
                     holding_cost=hold_cost,
                     ordering_cost=ord_cost,
                     stockout_cost=lost_cost,
-                    availability=avail_pct,
+                    availability=round(row.csl * 100.0, 1),
                     total_orders=total_orders,
-                    total_stockouts=total_stockouts,
-                    is_feasible=is_feasible,
-                    cost_increase_vs_best=0.0,
+                    total_stockouts=None,
+                    stockouts_reason="Số đơn vị thiếu không có trong artifact (chỉ có chi phí b·đơn vị thiếu theo giá từng SKU).",
+                    stockouts_reason_code="artifact_no_units",
+                    is_feasible=bool(row.csl >= target_service_level),
+                    tau=row.tau,
+                    csl=round(row.csl, 5),
+                    fill_rate=round(row.fill_rate, 5),
+                    artifact_row=row.artifact_row,
+                    artifact_total_cost=round(row.cost_bikip, 2),
                 )
             )
 
-        # Quyết định chính sách đề xuất:
-        # 1. Trong các chính sách khả thi (đạt SLA), chọn chính sách có tổng chi phí thấp nhất.
-        # 2. Nếu không có chính sách nào đạt SLA, chọn chính sách có availability cao nhất (theo research.md §7.4).
-        feasible_policies = [p for p in policies if p.is_feasible]
-        if feasible_policies:
-            best_feasible = min(feasible_policies, key=lambda p: p.total_cost)
-            recommended_policy = best_feasible.policy_id
-            best_cost = best_feasible.total_cost
+        feasible = [p for p in policies if p.is_feasible]
+        if feasible:
+            best = min(feasible, key=lambda p: p.total_cost)
+            recommended = best.policy_id
+            best_cost = best.total_cost
         else:
-            best_service = max(policies, key=lambda p: p.availability)
-            recommended_policy = best_service.policy_id
+            best = max(policies, key=lambda p: p.availability)
+            recommended = best.policy_id
             best_cost = min(p.total_cost for p in policies)
-
         for p in policies:
             p.cost_increase_vs_best = round(max(0.0, p.total_cost - best_cost), 2)
 
-        # Tổng hợp insight trung thực khoa học
-        insights: List[List[str]] = []
-        rec_policy = next((p for p in policies if p.policy_id == recommended_policy), policies[0])
-
-        if feasible_policies:
-            insight_rec = (
-                f"Chính sách đề xuất {rec_policy.policy_name} đáp ứng yêu cầu SLA >= {target_service_level*100:.1f}% "
-                f"(đạt CSL {rec_policy.availability:.1f}%) với tổng chi phí tối ưu ({rec_policy.total_cost:,.2f} $)."
+        by_id = {p.policy_id: p for p in policies}
+        insights: List[str] = []
+        details: List[InsightDetail] = []  # same order as ``insights``; stable codes for client-side i18n
+        target_pct = round(target_service_level * 100, 1)
+        if feasible:
+            insights.append(
+                f"Đề xuất {best.policy_name}: availability quan sát {best.availability:.1f}% >= mục tiêu "
+                f"{target_service_level * 100:.1f}%, tổng chi phí thấp nhất trong các phương án đạt mục tiêu "
+                f"({best.total_cost:,.2f} $ đã quy đổi)."
             )
+            details.append(InsightDetail(code="recommend_feasible", params={
+                "policy_id": best.policy_id, "policy_key": best.policy_key, "availability_pct": best.availability,
+                "target_pct": target_pct, "total_cost": best.total_cost,
+            }))
         else:
-            insight_rec = (
-                f"Cảnh báo: Không có chính sách nào đạt SLA cam kết {target_service_level*100:.1f}%. "
-                f"Chính sách tiệm cận tốt nhất là {rec_policy.policy_name} (đạt CSL {rec_policy.availability:.1f}%)."
+            insights.append(
+                f"Không phương án nào trong artifact đạt availability {target_service_level * 100:.1f}%. "
+                f"Gần nhất: {best.policy_name} ({best.availability:.1f}%)."
             )
-
-        insights_list = [
-            insight_rec,
-            (
-                "Chi phí tính theo chuẩn A3 (research.md §7.2): h = 0.002 * giá/ngày, c = 2.0 $/đơn, b = 0.35 * giá. "
-                "Thực nghiệm cho thấy P4 (P-CR) đạt chi phí thấp hơn P6 khi cùng thỏa mãn SLA nhờ tối ưu hóa setpoint phân lớp tĩnh."
-            ),
-            (
-                "Chính sách P6 (C³-OUT) đóng vai trò bộ điều khiển thích nghi bù trừ sai lệch theo chu kỳ "
-                "nhằm đảm bảo mức phục vụ trước biến động nhu cầu, không phải là bộ giảm chi phí vô điều kiện."
-            ),
-        ]
+            details.append(InsightDetail(code="recommend_infeasible", params={
+                "policy_id": best.policy_id, "policy_key": best.policy_key, "availability_pct": best.availability,
+                "target_pct": target_pct,
+            }))
+        pcr, p6, b0 = by_id["PCR_c3out_cost_optimal"], by_id["P6_c3out_closed_loop"], by_id["B0_raw_quantile"]
+        cmp_word = "thấp hơn" if pcr.total_cost < p6.total_cost else "cao hơn"
+        diff_pct = abs(pcr.total_cost - p6.total_cost) / max(1e-9, p6.total_cost) * 100.0
+        insights.append(
+            f"P-CR (τ={pcr.tau}) có tổng chi phí {cmp_word} P6 (τ={p6.tau}) {diff_pct:.2f}% "
+            f"({pcr.total_cost:,.2f} so với {p6.total_cost:,.2f}); availability {pcr.availability:.1f}% so với {p6.availability:.1f}%."
+        )
+        details.append(InsightDetail(code="pcr_vs_p6", params={
+            "direction": "lower" if pcr.total_cost < p6.total_cost else "higher",
+            "tau_pcr": pcr.tau, "tau_p6": p6.tau, "diff_pct": round(diff_pct, 2),
+            "cost_pcr": pcr.total_cost, "cost_p6": p6.total_cost,
+            "availability_pcr_pct": pcr.availability, "availability_p6_pct": p6.availability,
+        }))
+        insights.append(
+            f"B0 (raw quantile τ=0.95) chỉ đạt availability {b0.availability:.1f}% dù đặt mục tiêu 95%; "
+            f"P6 điều khiển về {p6.availability:.1f}%. P6 là bộ điều khiển mức phục vụ, không phải bộ giảm chi phí."
+        )
+        details.append(InsightDetail(code="b0_vs_p6", params={
+            "availability_b0_pct": b0.availability, "availability_p6_pct": p6.availability,
+        }))
+        insights.append(
+            f"Nguồn: trích kết quả offline {art.n_skus:,} SKU x {art.n_days} ngày (c3ok_results.csv), quy đổi tuyến tính "
+            f"theo {sku_count:,} SKU x {horizon_days} ngày; KHÔNG phải mô phỏng chạy lại. Chi phí theo A3 "
+            f"(h=0.002·giá/ngày, b=0.35·giá, c=2/đơn)."
+        )
+        details.append(InsightDetail(code="artifact_source", params={
+            "artifact_n_skus": art.n_skus, "artifact_n_days": art.n_days,
+            "sku_count": sku_count, "horizon_days": horizon_days,
+        }))
 
         return PolicyComparisonResponse(
             store_id=store_id,
             simulation_horizon_days=horizon_days,
             sku_count=sku_count,
-            recommended_policy=recommended_policy,
+            recommended_policy=recommended,
+            recommended_policy_key=best.policy_key,
             policies=policies,
-            insights=insights_list,
+            insights=insights,
+            insight_details=details,
+            source="artifact_extract",
+            simulated=False,
+            as_of=art.as_of,
+            n_skus=sku_count,
+            artifact_n_skus=art.n_skus,
+            artifact_n_days=art.n_days,
+            scale_factor=round(scale, 12),
+            scale_basis=f"(sku_count / {art.n_skus}) x (horizon_days / {art.n_days})",
+            price_source=price_source,
+            avg_price=round(avg_price, 4) if avg_price is not None else None,
+            what_if=None,
+            what_if_reason=(
+                "Bảng này là trích kết quả artifact (không mô phỏng). Mô phỏng what-if THẬT trên lịch sử của cửa hàng: "
+                "gửi kèm `what_if` trong request hoặc gọi POST /api/v1/simulation/what-if."
+            ),
         )
 
 

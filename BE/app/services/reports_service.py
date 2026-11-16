@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.repositories.reports_repository import reports_repository
+from app.services.coverage_service import coverage_fields
 from app.schemas.reports import (
     BacktestRequest,
     BacktestResponse,
@@ -47,6 +48,11 @@ class ReportsService:
             store_id=store_id,
             abc_class=abc_class,
         )
+        cov = coverage_fields(db, store_id)
+        res["overall_metrics"] = {
+            **res["overall_metrics"],
+            **{k: v for k, v in cov.items() if k != "coverage_q95_db_causal_source"},
+        }
         return ForecastAccuracyReportResponse(**res)
 
     def get_inventory_performance(
@@ -159,28 +165,38 @@ class ReportsService:
         elif rtype in ("cost", "cost-comparison"):
             rep = self.get_cost_comparison(db, store_id=store_id)
             filename = f"Cost_Comparison_Report_{timestamp}.csv"
-            write_sanitized_row(["Cost Component", "Static Baseline ($)", "ML-driven Policy ($)", "Savings ($)"])
-            write_sanitized_row(["Holding Cost", rep.baseline_policy.holding_cost, rep.ml_policy.holding_cost, round(rep.baseline_policy.holding_cost - rep.ml_policy.holding_cost, 2)])
-            write_sanitized_row(["Ordering Cost", rep.baseline_policy.order_cost, rep.ml_policy.order_cost, round(rep.baseline_policy.order_cost - rep.ml_policy.order_cost, 2)])
-            write_sanitized_row(["Stockout Penalty", rep.baseline_policy.stockout_penalty_cost, rep.ml_policy.stockout_penalty_cost, round(rep.baseline_policy.stockout_penalty_cost - rep.ml_policy.stockout_penalty_cost, 2)])
-            write_sanitized_row(["Total Annual Cost", rep.baseline_policy.total_cost, rep.ml_policy.total_cost, rep.cost_savings_amount])
-            write_sanitized_row([])
-            write_sanitized_row(["Total Estimated Savings", f"{rep.savings_percentage}%", f"${rep.cost_savings_amount}"])
+            write_sanitized_row(["Cost Component", "B0 shadow baseline ($)", "C3-OUT policy ($)", "Savings ($)"])
+            if rep.baseline_policy is not None and rep.ml_policy is not None:
+                bp, mp = rep.baseline_policy, rep.ml_policy
+                write_sanitized_row(["Holding Cost", bp.holding_cost, mp.holding_cost, round(bp.holding_cost - mp.holding_cost, 2)])
+                write_sanitized_row(["Ordering Cost", bp.order_cost, mp.order_cost, round(bp.order_cost - mp.order_cost, 2)])
+                write_sanitized_row(["Stockout Penalty", bp.stockout_penalty_cost, mp.stockout_penalty_cost, round(bp.stockout_penalty_cost - mp.stockout_penalty_cost, 2)])
+                write_sanitized_row(["Total Cost (simulated window)", bp.total_cost, mp.total_cost, rep.cost_savings_amount])
+                write_sanitized_row([])
+                write_sanitized_row(["Total Estimated Savings", f"{rep.savings_percentage}%", f"${rep.cost_savings_amount}"])
+            else:
+                write_sanitized_row(["Unavailable", "", "", ""])
+                write_sanitized_row(["Reason", rep.reason or "n/a"])
+            write_sanitized_row(["Period", f"{rep.period_start} .. {rep.period_end}", "Source", rep.source])
 
         elif rtype in ("backtest", "backtesting"):
             rep = self.run_backtesting(db, BacktestRequest(store_id=store_id or "CA_1"))
             filename = f"Historical_Backtest_Report_{timestamp}.csv"
-            write_sanitized_row(["Metric", "Value", "Benchmark"])
-            write_sanitized_row(["Model Name", rep.model_name, "Machine Learning Engine"])
+            def na(v, suffix=""):
+                return "n/a" if v is None else f"{v}{suffix}"
+            write_sanitized_row(["Metric", "Value", "Note"])
+            write_sanitized_row(["Model Name", rep.model_name, "Policy under test: C3-OUT simulator"])
             write_sanitized_row(["Store", rep.store_id, "Fulfillment Center"])
             write_sanitized_row(["Simulated Days", rep.simulated_days, "Days"])
-            write_sanitized_row(["Baseline Stockouts", rep.baseline_stockouts, "Incidents"])
-            write_sanitized_row(["ML Stockouts", rep.ml_stockouts, "Incidents"])
-            write_sanitized_row(["Stockout Reduction", f"{rep.stockout_reduction_pct}%", "Improvement"])
-            write_sanitized_row(["Baseline Avg Inventory", rep.baseline_avg_inventory, "Units"])
-            write_sanitized_row(["ML Avg Inventory", rep.ml_avg_inventory, "Units"])
-            write_sanitized_row(["Holding Cost Savings", f"${rep.holding_cost_savings}", "USD"])
-            write_sanitized_row(["Achieved Service Level", f"{rep.service_level_achieved}%", "Target 95%"])
+            write_sanitized_row(["B0 Stockouts (SKU-cycles)", na(rep.baseline_stockouts), "Observed on shadow B0"])
+            write_sanitized_row(["C3-OUT Stockouts (SKU-cycles)", na(rep.ml_stockouts), "Observed"])
+            write_sanitized_row(["Stockout Reduction", na(rep.stockout_reduction_pct, "%"), "vs B0"])
+            write_sanitized_row(["B0 Avg Inventory", na(rep.baseline_avg_inventory), "Units"])
+            write_sanitized_row(["C3-OUT Avg Inventory", na(rep.ml_avg_inventory), "Units"])
+            write_sanitized_row(["Holding Cost Savings", na(rep.holding_cost_savings), "USD (A3)"])
+            write_sanitized_row(["Achieved Availability", na(rep.service_level_achieved, "%"), f"Target {rep.target_service_level}"])
+            if rep.reason:
+                write_sanitized_row(["Reason", rep.reason])
 
         else:
             raise HTTPException(

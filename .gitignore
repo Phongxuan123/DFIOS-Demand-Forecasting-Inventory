@@ -7,6 +7,7 @@ FE/node_modules/
 BE/.env
 BE/.env.*
 !BE/.env.example
+!BE/.env.local.example
 
 # Build and distribution outputs
 dist/
@@ -281,3 +282,11 @@ c3ok_artifacts/
 *.ubj
 *.npz
 
+
+# extra virtualenvs
+BE/.venv*/
+BE/scripts/c3ok_sku_class.csv
+
+# Internal hand-off files (database dumps) - never commit
+*.dump
+docs/handoff/

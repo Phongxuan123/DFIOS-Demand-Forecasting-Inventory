@@ -17,7 +17,7 @@ from app.repositories.inventory_repository import inventory_repository
 from app.repositories.product_repository import product_repository
 from app.services.audit_service import audit_service
 from app.core.events import event_bus
-from app.schemas.event import create_inventory_updated_event
+from app.schemas.event import INVENTORY_EVENT_ROLES, create_inventory_updated_event
 
 
 class InventoryService:
@@ -154,6 +154,8 @@ class InventoryService:
         sse_event = create_inventory_updated_event(
             sku_id=item_id,
             actor_id=user_email or "system",
+            # B-25: payload chứa email người sửa nên chỉ gửi cho Admin/Manager (Viewer không nhận)
+            target_roles=list(INVENTORY_EVENT_ROLES),
         )
 
         async def _publish():

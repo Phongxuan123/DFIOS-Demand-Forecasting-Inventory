@@ -11,7 +11,7 @@ from app.models.user import User
 from app.models.email_token import EmailToken
 from app.models.audit_log import AuditLog
 from app.core.security import get_password_hash, create_access_token
-from app.services.email_service import email_sender, MockEmailSender
+from app.services.email_service import MockEmailSender
 from app.services.email_token_service import rate_limiter, email_token_service
 from app.api.deps import get_db
 
@@ -40,7 +40,6 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
 
         # Sử dụng Mock Email Sender để test không gửi email thật và có thể kiểm tra danh sách đã gửi
         import app.services.email_service as email_mod
-        from app.services.email_service import MockEmailSender
         self.mock_email = MockEmailSender()
         self._orig_email_sender = email_mod.email_sender
         email_mod.email_sender = self.mock_email
@@ -123,13 +122,13 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
         # Trích xuất raw token từ link trong mail
         raw_token = sent["html_body"].split("/activate?token=")[1].split('"')[0]
 
-        # Đăng nhập khi chưa kích hoạt -> Bị chặn 403
+        # Đăng nhập khi chưa kích hoạt với mật khẩu bất kỳ -> 401 chung, KHÔNG lộ trạng thái tài khoản (P-09 / R-24)
         login_fail = self.client.post(
             "/api/v1/auth/login",
             json={"email": "new.employee@dfios.com", "password": "anypassword"},
         )
-        self.assertEqual(login_fail.status_code, 403)
-        self.assertIn("chưa kích hoạt", login_fail.json()["detail"])
+        self.assertEqual(login_fail.status_code, 401)
+        self.assertNotIn("kích hoạt", login_fail.json()["detail"])
 
         # Kích hoạt tài khoản với token và thiết lập mật khẩu lần đầu
         act_res = self.client.post(
@@ -497,7 +496,6 @@ class TestEmailVerificationAndAuthFlows(unittest.TestCase):
 
     def test_b28_mock_email_sender_bounded_memory_safety(self):
         """B-28: MockEmailSender có giới hạn hàng đợi tối đa FIFO ngăn tràn bộ nhớ RAM."""
-        from app.services.email_service import MockEmailSender
 
         bounded_sender = MockEmailSender(max_records=5)
         for i in range(10):

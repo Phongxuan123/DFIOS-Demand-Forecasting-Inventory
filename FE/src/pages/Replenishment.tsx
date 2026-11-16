@@ -1,2067 +1,658 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
-import { useSearchParams } from 'react-router-dom';
-import {
-  Pencil,
-  RefreshCw,
-  X,
-  CheckCircle2,
-  Download,
-  Check,
-  Ban,
-  AlertTriangle,
-  PackageCheck,
-  Layers,
-  History as HistoryIcon,
-  Search,
-  Calculator,
-  ShieldCheck,
-  CheckSquare,
-  Square,
-} from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Check, Download, Pencil, RefreshCw, Sparkles, Ban, X, Info } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useLanguage } from '../context/LanguageContext.tsx';
-import { api } from '../services/api.ts';
-import { Pagination } from '../components/ui/Pagination.tsx';
+import { useStore } from '../context/StoreContext.tsx';
+import { useClock } from '../context/ClockContext.tsx';
+import { useApi } from '../hooks/useApi.ts';
+import { useFormat, useT } from '../i18n/index.tsx';
+import { useBe, useBeCode } from '../i18n/useBe.ts';
+import { prefixCode } from '../i18n/beText.ts';
+import { can } from '../auth/permissions.ts';
+import { apiErrorMessage } from '../services/apiClient.ts';
+import {
+  adjustReplenishment,
+  approveReplenishment,
+  cancelReplenishment,
+  exportReplenishmentsCsv,
+  generateReplenishments,
+  getCalibrationStatus,
+  getPolicyParam,
+  listReplenishmentHistory,
+  listReplenishments,
+  rejectReplenishment,
+  type ReplenishmentItem,
+} from '../services/replenishmentApi.ts';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
-import { resolveEffectiveRssMetrics } from '../utils/dfiosAnalytics.ts';
+import { inventoryPosition } from '../utils/policyMath.ts';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  DataSourceNote,
+  Drawer,
+  EmptyState,
+  HoldHeight,
+  Input,
+  IconButton,
+  KpiTile,
+  Modal,
+  PageHeader,
+  SearchInput,
+  Select,
+  Table,
+  type SortState,
+  Tabs,
+  Unavailable,
+  useConfirm,
+  usePagination,
+  useRowSelection,
+  useToast,
+  type Column,
+  type Tone,
+} from '../components/ui/index.ts';
 import './Replenishment.css';
 
-const formatQty = (val: number | string | null | undefined, locale: string = 'en-US'): string => {
-  if (val == null || isNaN(Number(val))) return '—';
-  return Math.round(Number(val)).toLocaleString(locale);
-};
+/** Sanity ceiling for a manual order quantity (the API only requires > 0). */
+const MAX_ORDER_QTY = 1_000_000;
 
-const formatDecimal = (val: number | string | null | undefined, digits: number = 1, locale: string = 'en-US'): string => {
-  if (val == null || isNaN(Number(val))) return '—';
-  return Number(val).toLocaleString(locale, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: digits,
-  });
-};
+const STATUS_TONE: Record<string, Tone> = { PENDING: 'warning', APPROVED: 'success', REJECTED: 'danger', CANCELLED: 'neutral' };
+const PRIORITY_TONE: Record<string, Tone> = { CRITICAL: 'danger', HIGH: 'warning', MEDIUM: 'info', LOW: 'neutral' };
+const STATUS_KEYS = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
+const PRIORITY_KEYS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 
-const PRIORITY_LABELS_EN: Record<string, string> = {
-  CRITICAL: 'Critical',
-  HIGH: 'High',
-  MEDIUM: 'Medium',
-  LOW: 'Low',
-};
+/** Table column key -> backend sort_by (only these are sortable server-side). */
+const SORT_MAP: Record<string, string> = { sku: 'item_id', priority: 'priority', status: 'status', recommended: 'recommended_qty', final: 'final_qty', created: 'created_at' };
 
-const PRIORITY_LABELS_VI: Record<string, string> = {
-  CRITICAL: 'Khẩn cấp',
-  HIGH: 'Cao',
-  MEDIUM: 'Vừa',
-  LOW: 'Thấp',
-};
-
-const STATUS_LABELS_EN: Record<string, string> = {
-  PENDING: 'Pending',
-  PROPOSED: 'Proposed',
-  APPROVED: 'Approved',
-  REJECTED: 'Rejected',
-  CANCELLED: 'Cancelled',
-};
-
-const STATUS_LABELS_VI: Record<string, string> = {
-  PENDING: 'Chờ duyệt',
-  PROPOSED: 'Đề xuất',
-  APPROVED: 'Đã duyệt',
-  REJECTED: 'Từ chối',
-  CANCELLED: 'Đã hủy',
-};
-
-const computeRssMetrics = (row: any) => {
-  const onHand = Math.round(Number(row.on_hand ?? 0));
-  const onOrder = Math.round(Number(row.on_order ?? 0));
-  const resolved = resolveEffectiveRssMetrics(row);
-  const ip = Math.round(resolved.inventoryPosition);
-  const s = resolved.reorderPointS;
-  const bigS = resolved.orderUpToS;
-  const eoq = resolved.eoq;
-  const ss = resolved.safetyStock;
-  const isTriggered = s != null ? ip <= s : false;
-  const computedOrderQty = isTriggered && bigS != null ? Math.max(0, bigS - ip) : 0;
-  const recommendedQty = resolved.recommendedQty > 0 ? resolved.recommendedQty : computedOrderQty;
-  const finalQty = Math.round(Number(row.final_qty ?? recommendedQty));
-
-  return {
-    onHand,
-    onOrder,
-    ip,
-    s,
-    bigS,
-    eoq,
-    ss,
-    isTriggered,
-    recommendedQty,
-    finalQty,
-    policyApplied: resolved.policyApplied,
-    reviewDate: resolved.reviewDate,
-    modelRunId: resolved.modelRunId,
-    source: resolved.source,
-  };
-};
+type DialogState = { kind: 'reject' | 'cancel' | 'adjust'; rec: ReplenishmentItem } | null;
 
 export const Replenishment: React.FC = () => {
+  const t = useT();
+  const fmt = useFormat();
+  const toast = useToast();
   const { user } = useAuth();
-  const { language } = useLanguage();
-  const canEdit = user?.role?.toUpperCase() !== 'VIEWER';
+  const { storeId } = useStore();
+  const { version } = useClock();
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const canWrite = can(user?.role, 'replenishment:write');
 
-  const isVi = language === 'vi';
-  const localeStr = isVi ? 'vi-VN' : 'en-US';
-  const priorityLabels = isVi ? PRIORITY_LABELS_VI : PRIORITY_LABELS_EN;
-  const statusLabels = isVi ? STATUS_LABELS_VI : STATUS_LABELS_EN;
+  const [tab, setTab] = useState<'proposals' | 'history'>('proposals');
+  const [status, setStatus] = useState('');
+  const [priority, setPriority] = useState('');
+  const [search, setSearch] = useState('');
+  const [nonce, setNonce] = useState(0);
+  const [sort, setSort] = useState<SortState | null>(null);
+  const pg = usePagination(25);
+  const sel = useRowSelection();
+  const [overrides, setOverrides] = useState<Record<string, Partial<ReplenishmentItem>>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [detail, setDetail] = useState<ReplenishmentItem | null>(null);
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const focusSkuParam = searchParams.get('sku');
-  const focusStoreParam = searchParams.get('store');
-  const focusTokenParam = searchParams.get('focus');
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  const resetPage = () => pg.setPage(1);
 
-  const [selectedStore, setSelectedStore] = useState<string>(() =>
-    focusStoreParam && focusStoreParam !== 'All' ? focusStoreParam : 'CA_1'
+  const list = useApi(
+    (signal) =>
+      listReplenishments(
+        { skip: pg.offset, limit: pg.pageSize, store_id: storeId as string, status: status || undefined, priority: priority || undefined, search: search.trim() || undefined, sort_by: sort ? SORT_MAP[sort.key] : undefined, sort_dir: sort?.dir },
+        signal,
+      ),
+    [storeId, pg.offset, pg.pageSize, status, priority, search, sort, version, nonce],
+    { enabled: !!storeId && tab === 'proposals' },
   );
-  const [viewTab, setViewTab] = useState<'RECOMMENDATIONS' | 'INVENTORY' | 'HISTORY'>('RECOMMENDATIONS');
+  const history = useApi(
+    (signal) =>
+      listReplenishmentHistory(
+        { skip: pg.offset, limit: pg.pageSize, store_id: storeId as string, status: status || undefined },
+        signal,
+      ),
+    [storeId, pg.offset, pg.pageSize, status, version, nonce],
+    { enabled: !!storeId && tab === 'history' },
+  );
+  const active = tab === 'proposals' ? list : history;
 
-  const [pendingScrollTarget, setPendingScrollTarget] = useState<{
-    sku: string;
-    recId?: string;
-    tab: 'RECOMMENDATIONS' | 'INVENTORY';
-    token: string;
-  } | null>(null);
-  const [flashingRowKey, setFlashingRowKey] = useState<string | null>(null);
+  const rows = useMemo(
+    () => (active.data?.items ?? []).map((r) => (overrides[r.id] ? { ...r, ...overrides[r.id] } : r)),
+    [active.data, overrides],
+  );
 
-  const recRequestIdRef = useRef(0);
-  const invRequestIdRef = useRef(0);
-  const locateTokenRef = useRef<string | null>(null);
-  const skipNextAutoLoadRef = useRef(false);
-  const lastLoadedStoreRef = useRef<string>(selectedStore);
-  const flashTimeoutRef = useRef<number | null>(null);
-
-  // Recommendations State
-  const [recommendations, setRecommendations] = useState<any[]>([]);
-  const [recTotal, setRecTotal] = useState(0);
-  const [pendingCount, setPendingCount] = useState(0);
-  const [approvedCount, setApprovedCount] = useState(0);
-  const [recPage, setRecPage] = useState(1);
-  const [recPageSize, setRecPageSize] = useState(10);
-  const [recStatusFilter, setRecStatusFilter] = useState<string>('ALL');
-  const [recPriorityFilter, setRecPriorityFilter] = useState<string>('ALL');
-  const [recSearch, setRecSearch] = useState<string>('');
-
-  // Inventory Levels State
-  const [inventory, setInventory] = useState<any[]>([]);
-  const [totalMonitoredSkus, setTotalMonitoredSkus] = useState<number>(0);
-  const [invPage, setInvPage] = useState(1);
-  const [invPageSize, setInvPageSize] = useState(10);
-
-  // History State
-  const [historyList, setHistoryList] = useState<any[]>([]);
-  const [historyTotal, setHistoryTotal] = useState(0);
-  const [historyPage, setHistoryPage] = useState(1);
-  const [historyPageSize, setHistoryPageSize] = useState(10);
-  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('ALL');
-
-  // Bulk Selection State
-  const [selectedRecIds, setSelectedRecIds] = useState<string[]>([]);
-  const [isBulkApproving, setIsBulkApproving] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
-
-  // UI state
-  const [selectedItem, setSelectedItem] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-
-  // Modals
-  const [showAdjustModal, setShowAdjustModal] = useState(false);
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-  const [targetRec, setTargetRec] = useState<any>(null);
-  const [adjustQtyInput, setAdjustQtyInput] = useState<number>(0);
-  const [actionReasonInput, setActionReasonInput] = useState<string>('');
-  const [isSubmittingAction, setIsSubmittingAction] = useState(false);
-
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
-  const [isRecomputing, setIsRecomputing] = useState(false);
-
-  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
-    setToastMsg({ text, type });
-    setTimeout(() => setToastMsg(null), 4000);
+  const afterMutation = () => {
+    emitAlertsSyncEvent();
+    refresh();
   };
 
-  const monitoredSkusCount = useMemo(() => {
-    return Math.max(totalMonitoredSkus, recTotal, recommendations.length, inventory.length);
-  }, [totalMonitoredSkus, recTotal, recommendations.length, inventory.length]);
-
-  const pendingItemsOnPage = useMemo(() => {
-    return recommendations.filter((r) => r.status === 'PENDING' && r.id);
-  }, [recommendations]);
-
-  const allPendingSelectedOnPage = useMemo(() => {
-    if (pendingItemsOnPage.length === 0) return false;
-    return pendingItemsOnPage.every((r) => selectedRecIds.includes(r.id));
-  }, [pendingItemsOnPage, selectedRecIds]);
-
-  const fetchInventoryWithParams = useCallback(async (store: string) => {
-    const [firstInv, firstParams] = await Promise.all([
-      api.inventory.getInventory({ limit: 500, store_id: store }).catch(() => ({ list: [], total: 0 })),
-      api.optimization
-        .getParameters({ limit: 200, skip: 0, store_id: store })
-        .catch(() => ({ items: [], total: 0 })),
-    ]);
-
-    const invList: any[] = [...(firstInv.list || [])];
-    const invTotal = Number(firstInv.total || invList.length);
-    const paramItems: any[] = [...(firstParams.items || [])];
-    const paramTotal = Number(firstParams.total || paramItems.length);
-
-    // Fetch all remaining inventory and parameter pages in parallel without re-fetching offset 0
-    const invOffsets: number[] = [];
-    for (let skip = invList.length; skip < invTotal; skip += 500) {
-      invOffsets.push(skip);
-    }
-
-    const paramOffsets: number[] = [];
-    for (let skip = 200; skip < paramTotal; skip += 200) {
-      paramOffsets.push(skip);
-    }
-
-    if (invOffsets.length > 0 || paramOffsets.length > 0) {
-      const [extraInvPages, extraParamPages] = await Promise.all([
-        Promise.all(
-          invOffsets.map((skip) =>
-            api.inventory
-              .getInventory({ skip, limit: 500, store_id: store })
-              .catch(() => ({ list: [] }))
-          )
-        ),
-        Promise.all(
-          paramOffsets.map((skip) =>
-            api.optimization
-              .getParameters({ limit: 200, skip, store_id: store })
-              .catch(() => ({ items: [] }))
-          )
-        ),
-      ]);
-
-      extraInvPages.forEach((p) => {
-        if (Array.isArray(p?.list)) invList.push(...p.list);
-      });
-      extraParamPages.forEach((p) => {
-        if (Array.isArray(p?.items)) paramItems.push(...p.items);
-      });
-    }
-
-    const paramMap = new Map();
-    paramItems.forEach((p: any) => {
-      paramMap.set(p.item_id, p);
-    });
-
-    const mapped = invList.map((item: any) => {
-      const opt = paramMap.get(item.item_id) || {};
-      const resolvedS = opt.s ?? opt.reorder_point ?? item.reorder_point;
-      return {
-        ...item,
-        s: opt.s != null ? Math.round(opt.s) : undefined,
-        S: opt.S != null ? Math.round(opt.S) : undefined,
-        order_up_to_S: opt.S != null ? Math.round(opt.S) : item.order_up_to_S,
-        reorder_point_s: resolvedS != null ? Math.round(resolvedS) : item.reorder_point_s,
-        model_run_id: opt.model_run_id || item.model_run_id || null,
-        source: opt.source || item.source || null,
-        policy_applied: opt.source === 'ml' ? 'ML Dynamic (R, s, S)' : undefined,
-        safety_stock:
-          opt.safety_stock != null
-            ? Math.round(opt.safety_stock)
-            : item.safety_stock != null
-            ? Math.round(item.safety_stock)
-            : null,
-        reorder_point:
-          resolvedS != null
-            ? Math.round(resolvedS)
-            : null,
-        eoq: opt.eoq != null ? Math.round(opt.eoq) : item.eoq != null ? Math.round(item.eoq) : null,
-      };
-    });
-
-    return { mapped, invTotal };
-  }, []);
-
-  const loadRecommendations = async (store: string = selectedStore) => {
-    const reqId = ++recRequestIdRef.current;
+  /** Optimistic update with rollback (R-35 / F-19). */
+  const mutate = async (rec: ReplenishmentItem, patch: Partial<ReplenishmentItem>, call: () => Promise<unknown>, okMsg: string) => {
+    setBusy(rec.id);
+    setOverrides((o) => ({ ...o, [rec.id]: patch }));
     try {
-      const hasCustomFilters =
-        recStatusFilter !== 'ALL' || recPriorityFilter !== 'ALL' || recSearch.trim().length > 0;
-      const globalOffset = (recPage - 1) * recPageSize;
-      // When unfiltered, fetch aligned 200-item blocks to share cache with notification deep-link jumps
-      const blockSkip = hasCustomFilters ? globalOffset : Math.floor(globalOffset / 200) * 200;
-      const blockLimit = hasCustomFilters ? recPageSize : 200;
-
-      const [res, invMeta] = await Promise.all([
-        api.replenishment.listRecommendations({
-          store_id: store,
-          status: recStatusFilter !== 'ALL' ? recStatusFilter : undefined,
-          priority: recPriorityFilter !== 'ALL' ? recPriorityFilter : undefined,
-          search: recSearch.trim() || undefined,
-          skip: blockSkip,
-          limit: blockLimit,
-          auto_generate: false,
-        }),
-        api.inventory.getInventory({ limit: 1, store_id: store }).catch(() => ({ list: [], total: 0 })),
-      ]);
-
-      if (reqId !== recRequestIdRef.current) return;
-
-      const rawItems = res.items || [];
-      const recItems = hasCustomFilters
-        ? rawItems
-        : rawItems.slice(globalOffset - blockSkip, globalOffset - blockSkip + recPageSize);
-
-      setRecommendations(recItems);
-      setRecTotal(res.total || 0);
-      setPendingCount(res.pending_count || 0);
-      setApprovedCount(res.approved_count || 0);
-
-      const invTotal = invMeta.total || res.total || recItems.length;
-      setTotalMonitoredSkus(invTotal);
-
-      setSelectedRecIds((prev) =>
-        prev.filter((id) => recItems.some((item: any) => item.id === id && item.status === 'PENDING'))
-      );
+      await call();
+      toast.success(okMsg);
+      sel.set(new Set([...sel.selected].filter((k) => k !== rec.id)));
+      afterMutation();
+      return true;
     } catch (err) {
-      console.error('Failed to load replenishment recommendations', err);
-    }
-  };
-
-  const loadInventory = async (store: string = selectedStore) => {
-    const reqId = ++invRequestIdRef.current;
-    try {
-      const { mapped, invTotal } = await fetchInventoryWithParams(store);
-      if (reqId !== invRequestIdRef.current) return;
-      setInventory(mapped);
-      setTotalMonitoredSkus((prevTotal) => Math.max(invTotal, mapped.length, recTotal, prevTotal));
-    } catch (err) {
-      console.error('Failed to load inventory levels', err);
-    }
-  };
-
-  const loadHistory = async (store: string = selectedStore) => {
-    try {
-      const res = await api.replenishment.listHistory({
-        store_id: store,
-        status: historyStatusFilter !== 'ALL' ? historyStatusFilter : undefined,
-        skip: (historyPage - 1) * historyPageSize,
-        limit: historyPageSize,
-      });
-      setHistoryList(res.items || []);
-      setHistoryTotal(res.total || 0);
-    } catch (err) {
-      console.error('Failed to load replenishment history', err);
-    }
-  };
-
-  const loadAll = async (store: string = selectedStore) => {
-    setIsLoading(true);
-    try {
-      if (viewTab === 'RECOMMENDATIONS') {
-        await loadRecommendations(store);
-      } else if (viewTab === 'INVENTORY') {
-        await loadInventory(store);
-      } else {
-        await loadHistory(store);
-      }
+      toast.error(t('replenishment.toast.failed', { message: apiErrorMessage(err, t) }));
+      return false;
     } finally {
-      setIsLoading(false);
+      setOverrides((o) => {
+        const next = { ...o };
+        delete next[rec.id];
+        return next;
+      });
+      setBusy(null);
     }
   };
 
-  useEffect(() => {
-    if (!focusSkuParam) return;
-    const token = focusTokenParam || `${focusSkuParam}:${focusStoreParam || ''}:${Date.now()}`;
-    locateTokenRef.current = token;
-    const targetStore = focusStoreParam && focusStoreParam !== 'All' ? focusStoreParam : selectedStore;
+  const onApprove = async (rec: ReplenishmentItem) => {
+    const ok = await confirm({
+      title: t('replenishment.confirm.approve_title', { sku: rec.item_id }),
+      description: t('replenishment.confirm.approve_desc', { qty: fmt.integer(rec.final_qty), store: rec.store_id }),
+      confirmLabel: t('replenishment.action.approve'),
+    });
+    if (!ok) return;
+    await mutate(rec, { status: 'APPROVED' }, () => approveReplenishment(rec.id), t('replenishment.toast.approved', { sku: rec.item_id }));
+  };
 
-    // Delay showing skeleton by 60ms so warm-cache deep-link jumps never flash a loading frame
-    let skeletonTimer: number | null = window.setTimeout(() => {
-      if (locateTokenRef.current === token) {
-        setIsLoading(true);
-      }
-    }, 60);
-
-    const clearSkeleton = () => {
-      if (skeletonTimer !== null) {
-        window.clearTimeout(skeletonTimer);
-        skeletonTimer = null;
-      }
-    };
-
-    const pickMatchingIndex = (batch: any[]) => {
-      const pendingIdx = batch.findIndex(
-        (r: any) => r.item_id === focusSkuParam && (r.status === 'PENDING' || r.status === 'PROPOSED')
-      );
-      if (pendingIdx !== -1) return pendingIdx;
-      return batch.findIndex((r: any) => r.item_id === focusSkuParam);
-    };
-
-    const locateTargetSku = async () => {
+  const onBulkApprove = async () => {
+    const ids = [...sel.selected].map(String);
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: t('replenishment.confirm.bulk_title', { count: ids.length }),
+      description: t('replenishment.confirm.bulk_desc'),
+      confirmLabel: t('replenishment.action.approve'),
+    });
+    if (!ok) return;
+    setOverrides((o) => ({ ...o, ...Object.fromEntries(ids.map((id) => [id, { status: 'APPROVED' } as Partial<ReplenishmentItem>])) }));
+    let done = 0;
+    const failedIds: string[] = [];
+    for (const id of ids) {
       try {
-        if (targetStore !== selectedStore) {
-          skipNextAutoLoadRef.current = true;
-          lastLoadedStoreRef.current = targetStore;
-          setSelectedStore(targetStore);
-        }
-
-        // Fire light total-SKU count non-blocking in the background
-        void api.inventory
-          .getInventory({ limit: 1, store_id: targetStore })
-          .then((meta) => {
-            if (locateTokenRef.current === token && meta?.total) {
-              setTotalMonitoredSkus((prev) => Math.max(prev, Number(meta.total)));
-            }
-          })
-          .catch(() => {});
-
-        // 1. Search PO Recommendations table (batch 0 hits warm cache if hovered/opened in Topbar)
-        if (canEdit) {
-          try {
-            const firstRes = await api.replenishment.listRecommendations({
-              store_id: targetStore,
-              skip: 0,
-              limit: 200,
-              auto_generate: false,
-            });
-            if (locateTokenRef.current !== token) return;
-
-            const firstBatch = firstRes?.items || [];
-            const totalRecs = Number(firstRes?.total || firstBatch.length);
-            const summaryMeta = {
-              total: totalRecs,
-              pending_count: Number(firstRes?.pending_count || 0),
-              approved_count: Number(firstRes?.approved_count || 0),
-            };
-
-            let matchedRec: any = null;
-            let matchedIndex = -1;
-            let matchedPageItems: any[] | null = null;
-
-            const firstIdx = pickMatchingIndex(firstBatch);
-            if (firstIdx !== -1) {
-              matchedRec = firstBatch[firstIdx];
-              matchedIndex = firstIdx;
-              const pageInBatchStart = Math.floor((matchedIndex % 200) / recPageSize) * recPageSize;
-              matchedPageItems = firstBatch.slice(pageInBatchStart, pageInBatchStart + recPageSize);
-            } else if (totalRecs > 200 && firstBatch.length === 200) {
-              // Scan remaining pages in parallel chunks of 4 (much faster than sequential awaits)
-              const maxScan = Math.min(totalRecs, 1400);
-              const offsets: number[] = [];
-              for (let skip = 200; skip < maxScan; skip += 200) {
-                offsets.push(skip);
-              }
-
-              for (let i = 0; i < offsets.length; i += 4) {
-                const chunk = offsets.slice(i, i + 4);
-                const chunkResults = await Promise.all(
-                  chunk.map((skip) =>
-                    api.replenishment
-                      .listRecommendations({
-                        store_id: targetStore,
-                        skip,
-                        limit: 200,
-                        auto_generate: false,
-                      })
-                      .then((res) => ({ skip, batch: res?.items || [] }))
-                      .catch(() => ({ skip, batch: [] }))
-                  )
-                );
-                if (locateTokenRef.current !== token) return;
-
-                for (const { skip, batch } of chunkResults) {
-                  const localIdx = pickMatchingIndex(batch);
-                  if (localIdx !== -1) {
-                    matchedRec = batch[localIdx];
-                    matchedIndex = skip + localIdx;
-                    const pageInBatchStart = Math.floor((matchedIndex % 200) / recPageSize) * recPageSize;
-                    matchedPageItems = batch.slice(pageInBatchStart, pageInBatchStart + recPageSize);
-                    break;
-                  }
-                }
-                if (matchedRec) break;
-              }
-            }
-
-            if (matchedRec && matchedIndex !== -1) {
-              const targetPage = Math.floor(matchedIndex / recPageSize) + 1;
-              recRequestIdRef.current += 1;
-              skipNextAutoLoadRef.current = true;
-              clearSkeleton();
-
-              setRecStatusFilter('ALL');
-              setRecPriorityFilter('ALL');
-              setRecSearch('');
-              setViewTab('RECOMMENDATIONS');
-              setRecPage(targetPage);
-              if (matchedPageItems) {
-                setRecommendations(matchedPageItems);
-              }
-              setRecTotal(summaryMeta.total);
-              setPendingCount(summaryMeta.pending_count);
-              setApprovedCount(summaryMeta.approved_count);
-              setIsLoading(false);
-              setPendingScrollTarget({
-                sku: focusSkuParam,
-                recId: matchedRec.id,
-                tab: 'RECOMMENDATIONS',
-                token,
-              });
-              setSearchParams({}, { replace: true });
-              return;
-            }
-
-            // If store has > 1,400 recs, verify exact item_id query before falling back to Inventory
-            if (totalRecs > 1400) {
-              const directRes = await api.replenishment.listRecommendations({
-                store_id: targetStore,
-                item_id: focusSkuParam,
-                auto_generate: false,
-              });
-              if (locateTokenRef.current !== token) return;
-              const directItems = directRes?.items || [];
-              if (directItems.length > 0) {
-                const preferred =
-                  directItems.find((r: any) => r.status === 'PENDING' || r.status === 'PROPOSED') ||
-                  directItems[0];
-                recRequestIdRef.current += 1;
-                skipNextAutoLoadRef.current = true;
-                clearSkeleton();
-                setRecStatusFilter('ALL');
-                setRecPriorityFilter('ALL');
-                setRecSearch(focusSkuParam);
-                setViewTab('RECOMMENDATIONS');
-                setRecPage(1);
-                setRecommendations(directItems.slice(0, recPageSize));
-                setRecTotal(Number(directRes?.total || directItems.length));
-                setIsLoading(false);
-                setPendingScrollTarget({
-                  sku: focusSkuParam,
-                  recId: preferred.id,
-                  tab: 'RECOMMENDATIONS',
-                  token,
-                });
-                setSearchParams({}, { replace: true });
-                return;
-              }
-            }
-          } catch {
-            // Fall through to Inventory levels table
-          }
-        }
-
-        // 2. Fallback to Stock & Thresholds (INVENTORY) tab (always works for VIEWER or ungenerated PO SKUs)
-        const { mapped, invTotal } = await fetchInventoryWithParams(targetStore);
-        if (locateTokenRef.current !== token) return;
-
-        const invIdx = mapped.findIndex((item: any) => item.item_id === focusSkuParam);
-        if (invIdx !== -1) {
-          const targetInvPage = Math.floor(invIdx / invPageSize) + 1;
-          invRequestIdRef.current += 1;
-          skipNextAutoLoadRef.current = true;
-          clearSkeleton();
-          setInventory(mapped);
-          setTotalMonitoredSkus((prevTotal) => Math.max(invTotal, mapped.length, prevTotal));
-          setViewTab('INVENTORY');
-          setInvPage(targetInvPage);
-          setIsLoading(false);
-          setPendingScrollTarget({
-            sku: focusSkuParam,
-            tab: 'INVENTORY',
-            token,
-          });
-          setSearchParams({}, { replace: true });
-          return;
-        }
-
-        skipNextAutoLoadRef.current = false;
-        setSearchParams({}, { replace: true });
-        showToast(
-          isVi
-            ? `Không tìm thấy SKU ${focusSkuParam} tại kho ${targetStore}.`
-            : `SKU ${focusSkuParam} not found in store ${targetStore}.`,
-          'error'
-        );
-      } finally {
-        clearSkeleton();
-        if (locateTokenRef.current === token) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void locateTargetSku();
-    return () => {
-      clearSkeleton();
-    };
-  }, [focusSkuParam, focusStoreParam, focusTokenParam]);
-
-  // Execute smooth scroll & brief highlight flash once the target row renders in DOM
-  useEffect(() => {
-    if (!pendingScrollTarget || isLoading) return;
-    if (pendingScrollTarget.tab !== viewTab) return;
-
-    let rowEl: HTMLElement | null = null;
-    let flashKey: string | null = null;
-
-    if (viewTab === 'RECOMMENDATIONS') {
-      if (pendingScrollTarget.recId) {
-        rowEl = document.querySelector(
-          `tr[data-rep-rec-id="${CSS.escape(pendingScrollTarget.recId)}"]`
-        );
-        if (rowEl) {
-          flashKey = `rec:${pendingScrollTarget.recId}`;
-        }
-      }
-      if (!rowEl) {
-        rowEl = document.querySelector(
-          `tr[data-rep-sku="${CSS.escape(pendingScrollTarget.sku)}"]`
-        );
-        const recId = rowEl?.getAttribute('data-rep-rec-id');
-        if (rowEl && recId) {
-          flashKey = `rec:${recId}`;
-        }
-      }
-    } else if (viewTab === 'INVENTORY') {
-      rowEl = document.querySelector(
-        `tr[data-rep-inv-sku="${CSS.escape(pendingScrollTarget.sku)}"]`
-      );
-      if (rowEl) {
-        flashKey = `inv:${pendingScrollTarget.sku}`;
+        await approveReplenishment(id);
+        done += 1;
+      } catch {
+        failedIds.push(id);
       }
     }
+    setOverrides({});
+    sel.set(new Set(failedIds));
+    if (failedIds.length === 0) toast.success(t('replenishment.toast.bulk_done', { ok: done }));
+    else toast.warning(t('replenishment.toast.bulk_partial', { ok: done, total: ids.length, failed: failedIds.length }));
+    afterMutation();
+  };
 
-    if (!rowEl || !flashKey) return;
-
-    setPendingScrollTarget(null);
-    const targetElement = rowEl;
-    const keyToFlash = flashKey;
-
-    // Reset then re-apply on next frame so clicking the same item twice replays the brief flash
-    setFlashingRowKey(null);
-    if (flashTimeoutRef.current) {
-      window.clearTimeout(flashTimeoutRef.current);
-    }
-
-    requestAnimationFrame(() => {
-      targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      requestAnimationFrame(() => {
-        setFlashingRowKey(keyToFlash);
-        flashTimeoutRef.current = window.setTimeout(() => {
-          setFlashingRowKey((curr) => (curr === keyToFlash ? null : curr));
-        }, 1850);
-      });
+  const onGenerate = async () => {
+    if (!storeId) return;
+    const ok = await confirm({
+      title: t('replenishment.confirm.generate_title', { store: storeId }),
+      description: t('replenishment.confirm.generate_desc'),
+      confirmLabel: t('replenishment.action.generate'),
     });
-  }, [pendingScrollTarget, viewTab, recommendations, inventory, isLoading, recPage, invPage]);
-
-  useEffect(() => {
-    return () => {
-      if (flashTimeoutRef.current) {
-        window.clearTimeout(flashTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  // Single unified tab/store/filter loader (prevents duplicate mount requests)
-  useEffect(() => {
-    if (focusSkuParam) return;
-    if (lastLoadedStoreRef.current !== selectedStore) {
-      lastLoadedStoreRef.current = selectedStore;
-      setSelectedRecIds([]);
-    }
-    if (skipNextAutoLoadRef.current) {
-      skipNextAutoLoadRef.current = false;
-      return;
-    }
-    void loadAll(selectedStore);
-  }, [
-    selectedStore,
-    viewTab,
-    recPage,
-    recPageSize,
-    recStatusFilter,
-    recPriorityFilter,
-    recSearch,
-    historyPage,
-    historyPageSize,
-    historyStatusFilter,
-    focusSkuParam,
-  ]);
-
-  const handleToggleSelectRow = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setSelectedRecIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
-  };
-
-  const handleToggleSelectAllOnPage = () => {
-    if (allPendingSelectedOnPage) {
-      const pagePendingIds = new Set(pendingItemsOnPage.map((r) => r.id));
-      setSelectedRecIds((prev) => prev.filter((id) => !pagePendingIds.has(id)));
-    } else {
-      const merged = new Set([...selectedRecIds, ...pendingItemsOnPage.map((r) => r.id)]);
-      setSelectedRecIds(Array.from(merged));
-    }
-  };
-
-  const handleBulkApprove = async () => {
-    const targetIds =
-      selectedRecIds.length > 0
-        ? [...selectedRecIds]
-        : pendingItemsOnPage.map((r) => r.id).filter(Boolean);
-    if (targetIds.length === 0) {
-      showToast(isVi ? 'Chưa chọn đơn chờ duyệt nào.' : 'No pending orders selected.', 'error');
-      return;
-    }
-
-    setIsBulkApproving(true);
-    setBulkProgress({ done: 0, total: targetIds.length });
-    let approvedOk = 0;
-    let failedCount = 0;
-    const approvedItems: Array<{ itemId: string; storeId?: string }> = [];
-
+    if (!ok) return;
     try {
-      for (let i = 0; i < targetIds.length; i++) {
-        const recId = targetIds[i];
-        try {
-          await api.replenishment.approve(recId);
-          approvedOk++;
-          const recObj = recommendations.find((r) => r.id === recId);
-          if (recObj?.item_id) {
-            approvedItems.push({ itemId: recObj.item_id, storeId: recObj.store_id || selectedStore });
-          }
-        } catch {
-          failedCount++;
-        }
-        setBulkProgress({ done: i + 1, total: targetIds.length });
-      }
-
-      setSelectedRecIds((prev) => prev.filter((id) => !targetIds.includes(id)));
-      await loadRecommendations(selectedStore);
-      if (approvedItems.length > 0) {
-        emitAlertsSyncEvent({
-          action: 'po_bulk_approved',
-          storeId: selectedStore,
-          items: approvedItems,
-        });
-      }
-
-      if (failedCount === 0) {
-        showToast(
-          isVi
-            ? `Đã duyệt hàng loạt ${approvedOk}/${targetIds.length} đơn PO!`
-            : `Bulk-approved ${approvedOk}/${targetIds.length} POs!`,
-          'success'
-        );
-      } else {
-        showToast(
-          isVi
-            ? `Đã duyệt ${approvedOk}/${targetIds.length} đơn (${failedCount} lỗi).`
-            : `Approved ${approvedOk}/${targetIds.length} orders (${failedCount} failed).`,
-          approvedOk > 0 ? 'success' : 'error'
-        );
-      }
-    } finally {
-      setIsBulkApproving(false);
-      setBulkProgress(null);
+      const res = await generateReplenishments(storeId);
+      toast.success(t('replenishment.toast.generated', { count: res.generated_count }));
+      afterMutation();
+    } catch (err) {
+      toast.error(t('replenishment.toast.failed', { message: apiErrorMessage(err, t) }));
     }
   };
 
-  const handleAutoGenerate = async () => {
-    setIsGenerating(true);
+  const onExport = async () => {
+    if (!storeId) return;
     try {
-      const res = await api.replenishment.generateRecommendations(selectedStore);
-      showToast(res.message || (isVi ? 'Đã tạo đề xuất PO mới.' : 'Generated PO recommendations.'));
-      await loadRecommendations(selectedStore);
-      emitAlertsSyncEvent({ action: 'po_generated', storeId: selectedStore });
-    } catch (err: any) {
-      showToast(
-        err.response?.data?.detail || (isVi ? 'Không thể tạo đề xuất' : 'Failed to generate recommendations'),
-        'error'
-      );
-    } finally {
-      setIsGenerating(false);
+      await exportReplenishmentsCsv(storeId, status || undefined);
+      toast.success(t('replenishment.toast.exported'));
+    } catch (err) {
+      toast.error(t('replenishment.toast.failed', { message: apiErrorMessage(err, t) }));
     }
   };
 
-  const handleExportCsv = async () => {
-    setIsExporting(true);
-    try {
-      await api.replenishment.downloadCsv(selectedStore, recStatusFilter !== 'ALL' ? recStatusFilter : undefined);
-      showToast(isVi ? 'Đã xuất CSV thành công.' : 'Exported CSV successfully.');
-    } catch {
-      showToast(isVi ? 'Lỗi xuất CSV' : 'Failed to export CSV', 'error');
-    } finally {
-      setIsExporting(false);
-    }
-  };
+  const statusLabel = (s: string) => ((STATUS_KEYS as readonly string[]).includes(s) ? t(`replenishment.status.${s as (typeof STATUS_KEYS)[number]}`) : s);
+  const priorityLabel = (p: string) => ((PRIORITY_KEYS as readonly string[]).includes(p) ? t(`replenishment.priority.${p as (typeof PRIORITY_KEYS)[number]}`) : p);
 
-  const handleApprove = async (rec: any) => {
-    try {
-      await api.replenishment.approve(rec.id);
-      showToast(isVi ? `Đã duyệt PO ${rec.item_id}!` : `Approved PO for ${rec.item_id}!`);
-      setSelectedRecIds((prev) => prev.filter((id) => id !== rec.id));
-      await loadRecommendations(selectedStore);
-      if (selectedItem?.id === rec.id) {
-        setSelectedItem({ ...selectedItem, status: 'APPROVED' });
-      }
-      emitAlertsSyncEvent({
-        action: 'po_approved',
-        itemId: rec.item_id,
-        storeId: rec.store_id || selectedStore,
-      });
-    } catch (err: any) {
-      showToast(err.response?.data?.detail || (isVi ? 'Phê duyệt thất bại' : 'Approval failed'), 'error');
-    }
-  };
-
-  const handleOpenAdjust = (rec: any) => {
-    const metrics = computeRssMetrics(rec);
-    setTargetRec(rec);
-    setAdjustQtyInput(metrics.finalQty);
-    setActionReasonInput(
-      rec.reason || (isVi ? 'Làm tròn theo lô MOQ nhà cung cấp' : 'Rounded to supplier MOQ case pack')
-    );
-    setShowAdjustModal(true);
-  };
-
-  const handleSubmitAdjust = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!targetRec) return;
-    setIsSubmittingAction(true);
-    try {
-      await api.replenishment.adjustQuantity(targetRec.id, {
-        final_qty: Number(adjustQtyInput),
-        reason: actionReasonInput.trim(),
-      });
-      showToast(isVi ? `Đã cập nhật SL cho ${targetRec.item_id}.` : `Updated quantity for ${targetRec.item_id}.`);
-      setShowAdjustModal(false);
-      await loadRecommendations(selectedStore);
-      if (selectedItem?.id === targetRec.id) {
-        setSelectedItem({ ...selectedItem, final_qty: Number(adjustQtyInput), reason: actionReasonInput.trim() });
-      }
-    } catch (err: any) {
-      showToast(err.response?.data?.detail || (isVi ? 'Lỗi điều chỉnh' : 'Adjustment failed'), 'error');
-    } finally {
-      setIsSubmittingAction(false);
-    }
-  };
-
-  const handleOpenReject = (rec: any) => {
-    setTargetRec(rec);
-    setActionReasonInput('');
-    setShowRejectModal(true);
-  };
-
-  const handleSubmitReject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!targetRec) return;
-    setIsSubmittingAction(true);
-    try {
-      await api.replenishment.reject(targetRec.id, {
-        reason: actionReasonInput.trim() || (isVi ? 'Từ chối bởi Quản lý kho' : 'Rejected by Manager'),
-      });
-      showToast(isVi ? `Đã từ chối ${targetRec.item_id}.` : `Rejected ${targetRec.item_id}.`);
-      setShowRejectModal(false);
-      setSelectedRecIds((prev) => prev.filter((id) => id !== targetRec.id));
-      await loadRecommendations(selectedStore);
-      if (selectedItem?.id === targetRec.id) {
-        setSelectedItem({ ...selectedItem, status: 'REJECTED' });
-      }
-      emitAlertsSyncEvent({
-        action: 'po_rejected',
-        itemId: targetRec.item_id,
-        storeId: targetRec.store_id || selectedStore,
-      });
-    } catch (err: any) {
-      showToast(err.response?.data?.detail || (isVi ? 'Lỗi từ chối' : 'Rejection failed'), 'error');
-    } finally {
-      setIsSubmittingAction(false);
-    }
-  };
-
-  const handleOpenCancel = (rec: any) => {
-    setTargetRec(rec);
-    setActionReasonInput('');
-    setShowCancelModal(true);
-  };
-
-  const handleSubmitCancel = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!targetRec) return;
-    setIsSubmittingAction(true);
-    try {
-      await api.replenishment.cancel(targetRec.id, {
-        reason: actionReasonInput.trim() || (isVi ? 'Hủy theo điều phối kho' : 'Cancelled per dispatch update'),
-      });
-      showToast(isVi ? `Đã hủy PO ${targetRec.item_id}.` : `Cancelled PO ${targetRec.item_id}.`);
-      setShowCancelModal(false);
-      await loadRecommendations(selectedStore);
-      if (selectedItem?.id === targetRec.id) {
-        setSelectedItem({ ...selectedItem, status: 'CANCELLED' });
-      }
-      emitAlertsSyncEvent({
-        action: 'po_cancelled',
-        itemId: targetRec.item_id,
-        storeId: targetRec.store_id || selectedStore,
-      });
-    } catch (err: any) {
-      showToast(err.response?.data?.detail || (isVi ? 'Lỗi hủy đơn' : 'Cancellation failed'), 'error');
-    } finally {
-      setIsSubmittingAction(false);
-    }
-  };
-
-  const handleRecompute = async () => {
-    setIsRecomputing(true);
-    try {
-      const res = await api.optimization.recompute({ store_id: selectedStore });
-      showToast(res.message || (isVi ? 'Đã tính lại tham số (R, s, S)!' : 'Recomputed (R, s, S) parameters!'));
-      await loadAll(selectedStore);
-      emitAlertsSyncEvent({ action: 'params_recomputed', storeId: selectedStore });
-    } catch (err: any) {
-      showToast(err.response?.data?.detail || (isVi ? 'Lỗi tính lại tham số' : 'Recompute failed'), 'error');
-    } finally {
-      setIsRecomputing(false);
-    }
-  };
-
-  const selectedDrawerMetrics = selectedItem ? computeRssMetrics(selectedItem) : null;
-
-  return (
-    <div className="rep-container">
-      {toastMsg && (
-        <div
-          style={{
-            position: 'fixed',
-            top: '20px',
-            right: '20px',
-            backgroundColor: toastMsg.type === 'error' ? '#dc2626' : '#0f766e',
-            color: '#ffffff',
-            padding: '0.65rem 1.1rem',
-            borderRadius: '6px',
-            boxShadow: '0 8px 20px rgba(15, 23, 42, 0.18)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '0.8125rem',
-            fontWeight: 600,
-          }}
-        >
-          {toastMsg.type === 'error' ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
-          <span>{toastMsg.text}</span>
+  const columns: Column<ReplenishmentItem>[] = [
+    {
+      key: 'sku',
+      header: t('replenishment.col.sku'),
+      sortable: tab === 'proposals',
+      cell: (r) => (
+        <div>
+          <div className="rep-sku">{r.item_id}</div>
+          <div className="rep-sub">{r.product_name && r.product_name !== r.item_id ? r.product_name : r.supplier_name ?? ''}</div>
         </div>
-      )}
-
-      {/* Header & Controls */}
-      <div className="rep-header-section">
-        <div className="rep-header-left">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <h1 className="rep-page-title">
-              {isVi ? 'Bổ Sung Tồn Kho & Đơn Đặt Hàng' : 'Replenishment & PO Control'}
-            </h1>
-            <span className="rep-engine-tag">REFIT-RSS-EOQ-G + C³-OUT</span>
+      ),
+    },
+    { key: 'priority', header: t('replenishment.col.priority'), sortable: tab === 'proposals', cell: (r) => <Badge tone={PRIORITY_TONE[r.priority] ?? 'neutral'}>{priorityLabel(r.priority)}</Badge> },
+    { key: 'status', header: t('replenishment.col.status'), sortable: tab === 'proposals', cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge> },
+    { key: 'on_hand', header: <span title={t('replenishment.col_hint.on_hand')}>{t('replenishment.col.on_hand')}</span>, align: 'right', cell: (r) => fmt.integer(r.on_hand) },
+    { key: 'on_order', header: <span title={t('replenishment.col_hint.on_order')}>{t('replenishment.col.on_order')}</span>, align: 'right', cell: (r) => fmt.integer(r.on_order) },
+    {
+      key: 'ip',
+      header: <span title={t('replenishment.col_hint.ip')}>{t('replenishment.col.ip')}</span>,
+      align: 'right',
+      cell: (r) => {
+        // IP is the review-date snapshot; it is never recomputed from the CURRENT on hand / on order.
+        const ip = r.inventory_position ?? inventoryPosition(r.on_hand_at_review, r.on_order_at_review);
+        if (ip == null) return <Unavailable />;
+        const date = r.review_date ? fmt.date(r.review_date, 'short') : '—';
+        const split =
+          r.on_hand_at_review != null && r.on_order_at_review != null
+            ? t('replenishment.ip_split', { on_hand: fmt.integer(r.on_hand_at_review), on_order: fmt.integer(r.on_order_at_review), date })
+            : t('replenishment.ip_split_unknown', { date });
+        return (
+          <div>
+            <div>{fmt.integer(ip)}</div>
+            <div className="rep-sub">{split}</div>
           </div>
-          <p className="rep-page-desc">
-            {isVi
-              ? 'Kiểm soát tồn kho định kỳ (R, s, S) và phê duyệt đơn hàng tự động.'
-              : 'Periodic review (R, s, S) inventory control and automated PO approvals.'}
-          </p>
-        </div>
-
-        <div className="rep-header-right">
-          {canEdit && (
+        );
+      },
+    },
+    { key: 's', header: t('replenishment.col.s'), align: 'right', cell: (r) => fmt.integer(r.reorder_point_s) },
+    { key: 'S', header: t('replenishment.col.S'), align: 'right', cell: (r) => fmt.integer(r.order_up_to_S) },
+    { key: 'eoq', header: t('replenishment.col.eoq'), align: 'right', cell: (r) => fmt.integer(r.eoq_quantity) },
+    {
+      key: 'kappa',
+      header: <span title={t('replenishment.col_hint.kappa')}>{t('replenishment.col.kappa')}</span>,
+      align: 'right',
+      cell: (r) => (r.kappa_g != null ? fmt.number(r.kappa_g, { digits: 2 }) : <Unavailable />),
+    },
+    { key: 'abc', header: t('replenishment.col.abc_xyz'), cell: (r) => (r.abc_xyz_class ? <Badge tone="neutral">{r.abc_xyz_class}</Badge> : <Unavailable />) },
+    { key: 'theta', header: <span title={t('replenishment.col_hint.theta')}>{t('replenishment.col.theta')}</span>, align: 'right', cell: (r) => (r.theta != null ? fmt.number(r.theta, { digits: 3 }) : <Unavailable />) },
+    { key: 'm_g', header: <span title={t('replenishment.col_hint.m_g')}>{t('replenishment.col.m_g')}</span>, align: 'right', cell: (r) => (r.m_g != null ? fmt.number(r.m_g, { digits: 3 }) : <Unavailable />) },
+    { key: 'q_hat', header: <span title={t('replenishment.col_hint.q_hat')}>{t('replenishment.col.q_hat')}</span>, align: 'right', cell: (r) => (r.q_hat != null ? fmt.number(r.q_hat, { digits: 1 }) : <Unavailable />) },
+    { key: 'lt', header: t('replenishment.col.lead_time'), align: 'right', cell: (r) => (r.lead_time_days != null ? t('replenishment.days', { n: fmt.integer(r.lead_time_days) }) : <Unavailable />) },
+    { key: 'recommended', header: t('replenishment.col.recommended'), sortable: tab === 'proposals', align: 'right', cell: (r) => fmt.integer(r.recommended_qty) },
+    {
+      key: 'final',
+      header: t('replenishment.col.final'),
+      sortable: tab === 'proposals',
+      align: 'right',
+      cell: (r) => <strong>{fmt.integer(r.final_qty)}</strong>,
+    },
+    { key: 'created', header: t('replenishment.col.created'), sortable: tab === 'proposals', cell: (r) => fmt.date(r.created_at, 'short') },
+  ];
+  if (tab === 'history') {
+    columns.push(
+      { key: 'decided', header: t('replenishment.col.decided'), cell: (r) => fmt.date(r.decided_at, 'short') },
+      { key: 'decided_by', header: t('replenishment.col.decided_by'), cell: (r) => r.decided_by ?? <Unavailable /> },
+    );
+  }
+  columns.push({
+    key: 'actions',
+    header: <span className="ui-sr-only">{t('replenishment.col.actions')}</span>,
+    align: 'right',
+    cell: (r) => {
+      const disabled = !canWrite || busy === r.id;
+      const noPerm = !canWrite ? t('replenishment.action.no_permission') : undefined;
+      return (
+        <div className="rep-actions" onClick={(e) => e.stopPropagation()}>
+          {tab === 'proposals' && r.status === 'PENDING' && (
             <>
-              {viewTab === 'RECOMMENDATIONS' && (selectedRecIds.length > 0 || pendingItemsOnPage.length > 0) && (
-                <button
-                  className="rep-btn rep-btn-teal"
-                  onClick={handleBulkApprove}
-                  disabled={isBulkApproving}
-                  title={isVi ? 'Duyệt hàng loạt đề xuất chờ duyệt' : 'Bulk approve pending recommendations'}
-                >
-                  <CheckSquare size={13} className={isBulkApproving ? 'animate-spin' : ''} />
-                  <span>
-                    {isBulkApproving && bulkProgress
-                      ? `${bulkProgress.done}/${bulkProgress.total}...`
-                      : isVi
-                      ? `Duyệt hàng loạt (${selectedRecIds.length > 0 ? selectedRecIds.length : pendingItemsOnPage.length})`
-                      : `Bulk Approve (${selectedRecIds.length > 0 ? selectedRecIds.length : pendingItemsOnPage.length})`}
-                  </span>
-                </button>
-              )}
-
-              <button className="rep-btn rep-btn-primary" onClick={handleAutoGenerate} disabled={isGenerating}>
-                <RefreshCw size={13} className={isGenerating ? 'animate-spin' : ''} />
-                <span>{isGenerating ? '...' : isVi ? 'Tạo đề xuất PO' : 'Generate POs'}</span>
-              </button>
-
-              <button className="rep-btn rep-btn-outline" onClick={handleRecompute} disabled={isRecomputing}>
-                <Calculator size={13} className={isRecomputing ? 'animate-spin' : ''} />
-                <span>{isRecomputing ? '...' : isVi ? 'Tính lại (R,s,S)' : 'Recompute (R,s,S)'}</span>
-              </button>
-
-              <button className="rep-btn rep-btn-outline" onClick={handleExportCsv} disabled={isExporting}>
-                <Download size={13} />
-                <span>{isVi ? 'Xuất CSV' : 'Export CSV'}</span>
-              </button>
+              <IconButton size="sm" label={noPerm ?? t('replenishment.action.approve')} icon={<Check size={15} />} disabled={disabled} onClick={() => void onApprove(r)} />
+              <IconButton size="sm" label={noPerm ?? t('replenishment.action.adjust')} icon={<Pencil size={15} />} disabled={disabled} onClick={() => setDialog({ kind: 'adjust', rec: r })} />
+              <IconButton size="sm" label={noPerm ?? t('replenishment.action.reject')} icon={<X size={15} />} disabled={disabled} onClick={() => setDialog({ kind: 'reject', rec: r })} />
             </>
           )}
-
-          <button className="rep-btn rep-btn-outline" onClick={() => loadAll(selectedStore)}>
-            <RefreshCw size={13} />
-            <span>{isVi ? 'Làm mới' : 'Refresh'}</span>
-          </button>
+          {tab === 'proposals' && r.status === 'APPROVED' && (
+            <IconButton size="sm" label={noPerm ?? t('replenishment.action.cancel')} icon={<Ban size={15} />} disabled={disabled} onClick={() => setDialog({ kind: 'cancel', rec: r })} />
+          )}
+          <IconButton size="sm" label={t('replenishment.action.details')} icon={<Info size={15} />} onClick={() => setDetail(r)} />
         </div>
-      </div>
+      );
+    },
+  });
 
-      {/* 4 Crisp KPI Cards */}
-      <div className="rep-kpi-row">
-        <div className="rep-kpi-card">
-          <div className="rep-kpi-header">
-            <span className="rep-kpi-title">{isVi ? 'CHỜ PHÊ DUYỆT' : 'PENDING POs'}</span>
-            <span className="rep-kpi-badge badge-warning">IP ≤ s</span>
-          </div>
-          <div className="rep-kpi-content">
-            <span className="rep-kpi-num">{pendingCount.toLocaleString(localeStr)}</span>
-            <span className="rep-kpi-sub">{isVi ? 'Cần phê duyệt' : 'Awaiting approval'}</span>
-          </div>
+  const filtered = !!(status || priority || search.trim());
+  const total = active.data?.total;
+
+  return (
+    <div className="ui-stack">
+      <PageHeader
+        title={t('replenishment.title')}
+        description={t('replenishment.description')}
+        meta={storeId ? <DataSourceNote source={t('replenishment.source', { store: storeId })} /> : undefined}
+        actions={
+          <>
+            <Button variant="secondary" leftIcon={<RefreshCw size={16} />} onClick={refresh} loading={active.loading && !!active.data}>
+              {t('common.actions.refresh')}
+            </Button>
+            <Button variant="secondary" leftIcon={<Download size={16} />} onClick={() => void onExport()} disabled={!storeId}>
+              {t('replenishment.action.export')}
+            </Button>
+            <Button leftIcon={<Sparkles size={16} />} onClick={() => void onGenerate()} disabled={!canWrite || !storeId} title={!canWrite ? t('replenishment.action.no_permission') : undefined}>
+              {t('replenishment.action.generate')}
+            </Button>
+          </>
+        }
+      />
+
+      {!storeId && <Alert tone="warning">{t('replenishment.no_store')}</Alert>}
+      {!canWrite && <Alert tone="info">{t('replenishment.action.no_permission')}</Alert>}
+
+      {tab === 'proposals' && (
+        <div className="ui-grid ui-grid--kpi">
+          <KpiTile
+            label={t('replenishment.kpi.pending')}
+            value={list.data ? fmt.integer(list.data.pending_count) : null}
+            loading={list.loading && !list.data}
+            unavailableReason={list.error ? t('common.state.error_title') : undefined}
+            hint={t('replenishment.kpi.pending_hint', { store: storeId ?? '' })}
+          />
+          <KpiTile
+            label={t('replenishment.kpi.approved')}
+            value={list.data ? fmt.integer(list.data.approved_count) : null}
+            loading={list.loading && !list.data}
+            unavailableReason={list.error ? t('common.state.error_title') : undefined}
+          />
+          <KpiTile
+            label={t('replenishment.kpi.total')}
+            value={list.data ? fmt.integer(list.data.total) : null}
+            loading={list.loading && !list.data}
+            unavailableReason={list.error ? t('common.state.error_title') : undefined}
+          />
         </div>
+      )}
 
-        <div className="rep-kpi-card">
-          <div className="rep-kpi-header">
-            <span className="rep-kpi-title">{isVi ? 'ĐƠN ĐÃ DUYỆT' : 'APPROVED POs'}</span>
-            <span className="rep-kpi-badge badge-success">L = 3d</span>
-          </div>
-          <div className="rep-kpi-content">
-            <span className="rep-kpi-num">{approvedCount.toLocaleString(localeStr)}</span>
-            <span className="rep-kpi-sub">{isVi ? 'Đang vận chuyển' : 'In transit (On-Order)'}</span>
-          </div>
+      <Card flush>
+        <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
+          <Tabs
+            aria-label={t('replenishment.title')}
+            value={tab}
+            onChange={(id) => {
+              setTab(id);
+              setStatus('');
+              resetPage();
+            }}
+            items={[
+              { id: 'proposals', label: t('replenishment.tabs.proposals'), count: list.data?.total },
+              { id: 'history', label: t('replenishment.tabs.history') },
+            ]}
+          />
         </div>
-
-        <div className="rep-kpi-card">
-          <div className="rep-kpi-header">
-            <span className="rep-kpi-title">{isVi ? 'TỔNG ĐỀ XUẤT' : 'TOTAL ORDERS'}</span>
-            <span className="rep-kpi-badge badge-neutral">R = 7d</span>
-          </div>
-          <div className="rep-kpi-content">
-            <span className="rep-kpi-num">{recTotal.toLocaleString(localeStr)}</span>
-            <span className="rep-kpi-sub">{isVi ? `Chu kỳ kho ${selectedStore}` : `Cycle at ${selectedStore}`}</span>
-          </div>
+        <div className="rep-filters">
+          {tab === 'proposals' && (
+            <SearchInput
+              value={search}
+              onChange={(v) => {
+                setSearch(v);
+                resetPage();
+              }}
+              placeholder={t('replenishment.filter.search')}
+            />
+          )}
+          <Select
+            aria-label={t('replenishment.filter.status')}
+            value={status}
+            onChange={(v) => {
+              setStatus(v);
+              resetPage();
+            }}
+            options={[
+              { value: '', label: t('replenishment.filter.all_status') },
+              ...(tab === 'history' ? STATUS_KEYS.filter((k) => k !== 'PENDING') : STATUS_KEYS).map((k) => ({ value: k as string, label: t(`replenishment.status.${k}`) })),
+            ]}
+          />
+          {tab === 'proposals' && (
+            <Select
+              aria-label={t('replenishment.filter.priority')}
+              value={priority}
+              onChange={(v) => {
+                setPriority(v);
+                resetPage();
+              }}
+              options={[{ value: '', label: t('replenishment.filter.all_priority') }, ...PRIORITY_KEYS.map((k) => ({ value: k as string, label: t(`replenishment.priority.${k}`) }))]}
+            />
+          )}
         </div>
+        <HoldHeight activeKey={tab}>
+        <Table
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          loading={active.loading && !active.data}
+          error={active.error}
+          onRetry={active.refetch}
+          filtered={filtered}
+          emptyTitle={t('replenishment.empty.title')}
+          emptyDescription={t('replenishment.empty.description')}
+          dense
+          sort={tab === 'proposals' ? sort : undefined}
+          onSortChange={tab === 'proposals' ? (s) => { setSort(s); resetPage(); } : undefined}
+          pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total }}
+          selection={
+            tab === 'proposals' && canWrite
+              ? {
+                  selected: sel.selected,
+                  onChange: sel.set,
+                  isDisabled: (key) => rows.find((r) => r.id === key)?.status !== 'PENDING',
+                  actions: (
+                    <Button size="sm" leftIcon={<Check size={14} />} onClick={() => void onBulkApprove()}>
+                      {t('replenishment.action.approve_selected', { count: sel.size })}
+                    </Button>
+                  ),
+                }
+              : undefined
+          }
+        />
+        </HoldHeight>
+        {tab === 'proposals' && canWrite && !active.error && rows.length > 0 && (
+          <p className="rep-note" style={{ padding: 'var(--space-3) var(--space-4)' }}>
+            {t('replenishment.action.select_hint')}
+          </p>
+        )}
+      </Card>
+      {!active.loading && !active.error && rows.length === 0 && !filtered && tab === 'history' && (
+        <EmptyState compact title={t('replenishment.empty.title')} />
+      )}
 
-        <div className="rep-kpi-card">
-          <div className="rep-kpi-header">
-            <span className="rep-kpi-title">{isVi ? 'MẶT HÀNG THEO DÕI' : 'MONITORED SKUS'}</span>
-            <span className="rep-kpi-badge badge-teal">H = L + R = 10d</span>
-          </div>
-          <div className="rep-kpi-content">
-            <span className="rep-kpi-num">{monitoredSkusCount.toLocaleString(localeStr)}</span>
-            <span className="rep-kpi-sub">REFIT-RSS-EOQ-G + C³-OUT</span>
-          </div>
-        </div>
-      </div>
+      <ActionDialog
+        state={dialog}
+        onClose={() => setDialog(null)}
+        onSubmit={async (state, reason, qty) => {
+          const { rec, kind } = state;
+          if (kind === 'reject') {
+            return mutate(rec, { status: 'REJECTED' }, () => rejectReplenishment(rec.id, reason), t('replenishment.toast.rejected', { sku: rec.item_id }));
+          }
+          if (kind === 'cancel') {
+            return mutate(rec, { status: 'CANCELLED' }, () => cancelReplenishment(rec.id, reason), t('replenishment.toast.cancelled', { sku: rec.item_id }));
+          }
+          return mutate(rec, { final_qty: qty as number }, () => adjustReplenishment(rec.id, qty as number, reason), t('replenishment.toast.adjusted', { sku: rec.item_id }));
+        }}
+      />
+      <PolicyDrawer rec={detail} onClose={() => setDetail(null)} />
+      {confirmDialog}
+    </div>
+  );
+};
 
-      {/* Sub-Navigation Bar + Compact Single-Line Formula Strip */}
-      <div className="rep-subnav-row">
-        <div className="rep-tabs-bar" role="tablist">
-          <button
-            role="tab"
-            aria-selected={viewTab === 'RECOMMENDATIONS'}
-            className={`rep-tab-btn ${viewTab === 'RECOMMENDATIONS' ? 'active' : ''}`}
-            onClick={() => setViewTab('RECOMMENDATIONS')}
-          >
-            <PackageCheck size={15} />
-            <span>{isVi ? 'Đề xuất Đặt hàng (PO)' : 'PO Recommendations'}</span>
-          </button>
+/* ------------------------------ reject / cancel / adjust ------------------------------ */
+const ActionDialog: React.FC<{
+  state: DialogState;
+  onClose: () => void;
+  onSubmit: (state: NonNullable<DialogState>, reason: string, qty: number | null) => Promise<boolean>;
+}> = ({ state, onClose, onSubmit }) => {
+  const t = useT();
+  const fmt = useFormat();
+  const [reason, setReason] = useState('');
+  const [qtyText, setQtyText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const key = state ? `${state.kind}:${state.rec.id}` : '';
+  const [lastKey, setLastKey] = useState('');
+  if (key !== lastKey) {
+    setLastKey(key);
+    setReason('');
+    setQtyText(state ? String(Math.round(state.rec.final_qty)) : '');
+    setTouched(false);
+  }
+  if (!state) return <Modal open={false} onClose={onClose} title="" />;
 
-          <button
-            role="tab"
-            aria-selected={viewTab === 'INVENTORY'}
-            className={`rep-tab-btn ${viewTab === 'INVENTORY' ? 'active' : ''}`}
-            onClick={() => setViewTab('INVENTORY')}
-          >
-            <Layers size={15} />
-            <span>{isVi ? 'Tồn kho & Ngưỡng (IP vs s, S)' : 'Stock & Thresholds (IP vs s, S)'}</span>
-          </button>
+  const reasonOk = reason.trim().length >= 3;
+  const qtyNum = Number(qtyText);
+  const qtyOk = /^\d+$/.test(qtyText.trim()) && qtyNum >= 1 && qtyNum <= MAX_ORDER_QTY;
+  const valid = reasonOk && (state.kind !== 'adjust' || qtyOk);
+  const titleKey = state.kind === 'reject' ? 'replenishment.dialog.reject_title' : state.kind === 'cancel' ? 'replenishment.dialog.cancel_title' : 'replenishment.dialog.adjust_title';
+  const confirmKey = state.kind === 'reject' ? 'replenishment.dialog.confirm_reject' : state.kind === 'cancel' ? 'replenishment.dialog.confirm_cancel' : 'replenishment.dialog.confirm_adjust';
 
-          <button
-            role="tab"
-            aria-selected={viewTab === 'HISTORY'}
-            className={`rep-tab-btn ${viewTab === 'HISTORY' ? 'active' : ''}`}
-            onClick={() => setViewTab('HISTORY')}
-          >
-            <HistoryIcon size={15} />
-            <span>{isVi ? 'Lịch sử Phê duyệt' : 'Approval History'}</span>
-          </button>
-        </div>
+  const submit = async () => {
+    setTouched(true);
+    if (!valid) return;
+    setSubmitting(true);
+    const ok = await onSubmit(state, reason.trim(), state.kind === 'adjust' ? qtyNum : null);
+    setSubmitting(false);
+    if (ok) onClose();
+  };
 
-        <div className="rep-inline-formula-strip">
-          <ShieldCheck size={13} className="rep-policy-icon" />
-          <span className="rep-formula-pill">IP = OH + OO</span>
-          <span className="rep-formula-sep">·</span>
-          <span className="rep-formula-pill">s = Q̂(τ) + θσ̂</span>
-          <span className="rep-formula-sep">·</span>
-          <span className="rep-formula-pill">S = s + ⌈κ·EOQ⌉</span>
-          <span className="rep-formula-sep">·</span>
-          <span className="rep-formula-pill pill-accent">IP ≤ s ⇒ q = S − IP</span>
-        </div>
-      </div>
-
-      {/* TAB 1: PO RECOMMENDATIONS (Focused on Order Execution) */}
-      {viewTab === 'RECOMMENDATIONS' && (
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!submitting}
+      size="sm"
+      title={t(titleKey, { sku: state.rec.item_id })}
+      footer={
         <>
-          <div className="rep-filter-toolbar">
-            <div className="rep-filter-left">
-              <span className="rep-filter-lbl">{isVi ? 'TRẠNG THÁI:' : 'STATUS:'}</span>
-              <div className="rep-filter-pills">
-                {[
-                  { val: 'ALL', label: isVi ? 'Tất cả' : 'All' },
-                  { val: 'PENDING', label: isVi ? 'Chờ duyệt' : 'Pending' },
-                  { val: 'PROPOSED', label: isVi ? 'Đề xuất' : 'Proposed' },
-                  { val: 'APPROVED', label: isVi ? 'Đã duyệt' : 'Approved' },
-                  { val: 'REJECTED', label: isVi ? 'Từ chối' : 'Rejected' },
-                  { val: 'CANCELLED', label: isVi ? 'Đã hủy' : 'Cancelled' },
-                ].map(({ val, label }) => (
-                  <button
-                    key={val}
-                    className={`rep-pill-btn ${recStatusFilter === val ? 'active' : ''}`}
-                    onClick={() => {
-                      setRecStatusFilter(val);
-                      setRecPage(1);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
+            {t('common.actions.cancel')}
+          </Button>
+          <Button variant={state.kind === 'adjust' ? 'primary' : 'danger'} onClick={() => void submit()} loading={submitting}>
+            {t(confirmKey)}
+          </Button>
+        </>
+      }
+    >
+      <div className="ui-stack" style={{ gap: 'var(--space-3)' }}>
+        {state.kind === 'adjust' && (
+          <Input
+            label={t('replenishment.dialog.qty')}
+            inputMode="numeric"
+            value={qtyText}
+            onChange={(e) => setQtyText(e.target.value)}
+            error={touched && !qtyOk ? t('replenishment.dialog.qty_invalid', { max: fmt.integer(MAX_ORDER_QTY) }) : undefined}
+            hint={t('replenishment.dialog.qty_hint', { max: fmt.integer(MAX_ORDER_QTY), recommended: fmt.integer(state.rec.recommended_qty) })}
+          />
+        )}
+        <Input
+          label={t('replenishment.dialog.reason')}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          error={touched && !reasonOk ? t('replenishment.dialog.reason_required') : undefined}
+          hint={t('replenishment.dialog.reason_hint')}
+        />
+      </div>
+    </Modal>
+  );
+};
+
+/* ------------------------------ policy details drawer ------------------------------ */
+const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => void }> = ({ rec, onClose }) => {
+  const t = useT();
+  const be = useBe();
+  const beCode = useBeCode();
+  const fmt = useFormat();
+  const param = useApi((signal) => getPolicyParam(rec!.item_id, rec!.store_id, signal), [rec?.item_id, rec?.store_id], { enabled: !!rec });
+  const calib = useApi((signal) => getCalibrationStatus(rec!.store_id, signal), [rec?.store_id], { enabled: !!rec });
+  const p = param.data?.items?.[0];
+  const mismatch =
+    !!rec && !!p && ((p.s != null && rec.reorder_point_s != null && Math.round(p.s) !== Math.round(rec.reorder_point_s)) || (p.S != null && rec.order_up_to_S != null && Math.round(p.S) !== Math.round(rec.order_up_to_S)));
+  const thetas = calib.data?.thetas ?? {};
+
+  return (
+    <Drawer open={!!rec} onClose={onClose} title={rec ? t('replenishment.drawer.title', { sku: rec.item_id }) : ''} description={rec?.product_name ?? undefined}>
+      {rec && (
+        <div className="ui-stack" style={{ gap: 'var(--space-4)' }}>
+          <dl className="rep-dl">
+            <dt>{t('replenishment.drawer.policy')}</dt>
+            <dd>{rec.policy_applied ?? <Unavailable />}</dd>
+            <dt>{t('replenishment.drawer.review_date')}</dt>
+            <dd>{fmt.date(rec.review_date, 'medium')}</dd>
+            <dt>{t('replenishment.drawer.s')}</dt>
+            <dd className="ui-num">{fmt.integer(rec.reorder_point_s)}</dd>
+            <dt>{t('replenishment.drawer.S')}</dt>
+            <dd className="ui-num">{fmt.integer(rec.order_up_to_S)}</dd>
+            <dt>{t('replenishment.drawer.eoq')}</dt>
+            <dd className="ui-num">{fmt.integer(rec.eoq_quantity)}</dd>
+            <dt>{t('replenishment.drawer.kappa')}</dt>
+            <dd className="ui-num">{rec.kappa_g != null ? fmt.number(rec.kappa_g, { digits: 3 }) : <Unavailable />}</dd>
+            <dt>{t('replenishment.drawer.q_hat')}</dt>
+            <dd className="ui-num">{rec.q_hat != null ? fmt.number(rec.q_hat, { digits: 1 }) : <Unavailable reason={t('replenishment.drawer.q_hat_unavailable')} />}</dd>
+            <dt>{t('replenishment.col.abc_xyz')}</dt>
+            <dd>{rec.abc_xyz_class ?? <Unavailable />}</dd>
+            <dt>{t('replenishment.col.theta')} / {t('replenishment.col.m_g')}</dt>
+            <dd className="ui-num">
+              {rec.theta != null ? fmt.number(rec.theta, { digits: 3 }) : '—'} / {rec.m_g != null ? fmt.number(rec.m_g, { digits: 3 }) : '—'}
+            </dd>
+            <dt>{t('replenishment.col.lead_time')}</dt>
+            <dd className="ui-num">{rec.lead_time_days != null ? t('replenishment.days', { n: fmt.integer(rec.lead_time_days) }) : <Unavailable />}</dd>
+            <dt>{t('replenishment.drawer.supplier')}</dt>
+            <dd>{rec.supplier_name ?? <Unavailable />}</dd>
+          </dl>
+
+          <Card title={t('replenishment.drawer.lead_time')} className="rep-card">
+            {param.loading ? (
+              <p className="rep-note">{t('common.state.loading')}</p>
+            ) : param.error ? (
+              <p className="rep-note">{apiErrorMessage(param.error, t)}</p>
+            ) : p ? (
+              <div className="ui-stack" style={{ gap: 'var(--space-3)' }}>
+                <dl className="rep-dl">
+                  <dt>{t('replenishment.drawer.lead_time')}</dt>
+                  <dd className="ui-num">{t('replenishment.drawer.lead_time_value', { days: fmt.integer(p.lead_time_days) })}</dd>
+                  <dt>{t('replenishment.drawer.service_level')}</dt>
+                  <dd className="ui-num">{fmt.percent(p.service_level)}</dd>
+                  <dt>{t('replenishment.drawer.safety_stock')}</dt>
+                  <dd className="ui-num">{fmt.integer(p.safety_stock)}</dd>
+                  <dt>{t('replenishment.drawer.rop')}</dt>
+                  <dd className="ui-num">{fmt.integer(p.reorder_point)}</dd>
+                  <dt>{t('replenishment.drawer.param_source')}</dt>
+                  <dd>{p.source}</dd>
+                  <dt>{t('replenishment.drawer.model_run')}</dt>
+                  <dd className="rep-sku">{p.model_run_id ?? <Unavailable />}</dd>
+                </dl>
+                <p className="rep-note">{mismatch ? t('replenishment.drawer.mismatch') : t('replenishment.drawer.consistent')}</p>
               </div>
+            ) : (
+              <Unavailable reason={t('replenishment.drawer.unavailable_params')} />
+            )}
+          </Card>
 
-              <div className="rep-filter-divider" />
-
-              <span className="rep-filter-lbl">{isVi ? 'ƯU TIÊN:' : 'PRIORITY:'}</span>
-              <div className="rep-filter-pills">
-                {[
-                  { val: 'ALL', label: isVi ? 'Tất cả' : 'All' },
-                  { val: 'CRITICAL', label: isVi ? 'Khẩn cấp' : 'Critical' },
-                  { val: 'HIGH', label: isVi ? 'Cao' : 'High' },
-                  { val: 'MEDIUM', label: isVi ? 'Vừa' : 'Medium' },
-                  { val: 'LOW', label: isVi ? 'Thấp' : 'Low' },
-                ].map(({ val, label }) => (
-                  <button
-                    key={val}
-                    className={`rep-pill-btn ${recPriorityFilter === val ? 'active' : ''}`}
-                    onClick={() => {
-                      setRecPriorityFilter(val);
-                      setRecPage(1);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-              {canEdit && selectedRecIds.length > 0 && (
-                <div className="rep-bulk-selection-pill">
-                  <span>
-                    {isVi ? `Đã chọn ${selectedRecIds.length}` : `${selectedRecIds.length} selected`}
-                  </span>
-                  <button
-                    type="button"
-                    className="rep-bulk-inline-btn"
-                    onClick={handleBulkApprove}
-                    disabled={isBulkApproving}
-                  >
-                    <Check size={12} />
-                    <span>{isVi ? 'Duyệt ngay' : 'Approve'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="rep-bulk-clear-btn"
-                    onClick={() => setSelectedRecIds([])}
-                    title={isVi ? 'Bỏ chọn' : 'Clear'}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-
-              <div className="rep-search-group">
-                <Search size={14} className="rep-search-icon" />
-                <input
-                  type="text"
-                  className="rep-search-input"
-                  placeholder={isVi ? 'Tìm SKU, sản phẩm...' : 'Search SKU, item...'}
-                  value={recSearch}
-                  onChange={(e) => {
-                    setRecSearch(e.target.value);
-                    setRecPage(1);
-                  }}
-                />
-                {recSearch && (
-                  <button
-                    onClick={() => {
-                      setRecSearch('');
-                      setRecPage(1);
-                    }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="rep-table-panel">
-            <div className="rep-table-container">
-              <table className="rep-table">
-                <thead>
-                  <tr>
-                    {canEdit && (
-                      <th style={{ width: '38px', textAlign: 'center', padding: '0.65rem 0.5rem' }}>
-                        <button
-                          type="button"
-                          className="rep-checkbox-btn"
-                          onClick={handleToggleSelectAllOnPage}
-                          disabled={pendingItemsOnPage.length === 0}
-                          title={isVi ? 'Chọn tất cả đơn chờ duyệt' : 'Select all pending on page'}
-                        >
-                          {allPendingSelectedOnPage ? (
-                            <CheckSquare size={15} className="text-teal-700" />
-                          ) : (
-                            <Square size={15} className="text-slate-400" />
-                          )}
-                        </button>
-                      </th>
-                    )}
-                    <th>{isVi ? 'Mã SKU / Sản phẩm' : 'SKU / Product'}</th>
-                    <th style={{ width: '68px' }}>{isVi ? 'Kho' : 'Store'}</th>
-                    <th className="text-right" style={{ width: '124px' }}>
-                      IP (OH+OO)
-                    </th>
-                    <th className="text-right" style={{ width: '88px' }}>
-                      s (ROP)
-                    </th>
-                    <th className="text-right" style={{ width: '90px' }}>
-                      S (Up-To)
-                    </th>
-                    <th className="text-right" style={{ width: '84px' }}>
-                      EOQ
-                    </th>
-                    <th className="text-right" style={{ width: '96px' }}>
-                      {isVi ? 'Gợi ý (q)' : 'Rec Qty (q)'}
-                    </th>
-                    <th className="text-right" style={{ width: '96px' }}>
-                      {isVi ? 'SL Chốt' : 'Final Qty'}
-                    </th>
-                    <th style={{ width: '88px' }}>{isVi ? 'Ưu tiên' : 'Priority'}</th>
-                    <th style={{ width: '96px' }}>{isVi ? 'Trạng thái' : 'Status'}</th>
-                    <th className="text-center" style={{ width: '96px' }}>
-                      {isVi ? 'Thao tác' : 'Actions'}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {isLoading ? (
-                    Array.from({ length: 6 }).map((_, idx) => (
-                      <tr key={`skeleton-rec-${idx}`} className="rep-skeleton-row" aria-hidden="true">
-                        {canEdit && (
-                          <td style={{ textAlign: 'center' }}>
-                            <span className="rep-skeleton-box" style={{ width: '14px', height: '14px', margin: '0 auto' }} />
-                          </td>
-                        )}
-                        <td>
-                          <span className="rep-skeleton-box" style={{ width: '112px', height: '12px', marginBottom: '6px' }} />
-                          <span className="rep-skeleton-box" style={{ width: '76px', height: '10px', opacity: 0.65 }} />
-                        </td>
-                        <td><span className="rep-skeleton-box" style={{ width: '40px', height: '18px' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '74px', height: '14px', marginLeft: 'auto' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '42px', height: '14px', marginLeft: 'auto' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '42px', height: '14px', marginLeft: 'auto' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '38px', height: '14px', marginLeft: 'auto' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '62px', height: '20px' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '68px', height: '20px' }} /></td>
-                        <td><span className="rep-skeleton-box" style={{ width: '64px', height: '20px', margin: '0 auto' }} /></td>
-                      </tr>
-                    ))
-                  ) : recommendations.length === 0 ? (
-                    <tr>
-                      <td colSpan={canEdit ? 12 : 11} style={{ textAlign: 'center', padding: '2.5rem', color: '#94a3b8' }}>
-                        <p style={{ margin: 0, fontWeight: 600, fontSize: '0.8125rem', color: '#475569' }}>
-                          {isVi ? 'Không có đề xuất đặt hàng nào khớp bộ lọc.' : 'No matching replenishment orders.'}
-                        </p>
-                      </td>
-                    </tr>
-                  ) : (
-                    recommendations.map((rec) => {
-                      const isPending = rec.status === 'PENDING';
-                      const isApproved = rec.status === 'APPROVED';
-                      const isSelected = selectedItem?.id === rec.id;
-                      const isChecked = selectedRecIds.includes(rec.id);
-                      const isFlashing = flashingRowKey === `rec:${rec.id}`;
-                      const priClass = (rec.priority || 'LOW').toLowerCase();
-                      const statusClass = (rec.status || 'PENDING').toLowerCase();
-                      const m = computeRssMetrics(rec);
-
-                      return (
-                        <tr
-                          key={rec.id}
-                          data-rep-rec-id={rec.id}
-                          data-rep-sku={rec.item_id}
-                          className={`${isSelected ? 'selected' : ''} ${isChecked ? 'row-checked' : ''} ${
-                            isFlashing ? 'rep-row-flash' : ''
-                          }`}
-                          onClick={() => setSelectedItem(rec)}
-                          style={{ cursor: 'pointer' }}
-                        >
-                          {canEdit && (
-                            <td
-                              style={{ textAlign: 'center', padding: '0.65rem 0.5rem' }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {isPending ? (
-                                <button
-                                  type="button"
-                                  className="rep-checkbox-btn"
-                                  onClick={(e) => handleToggleSelectRow(rec.id, e)}
-                                >
-                                  {isChecked ? (
-                                    <CheckSquare size={15} className="text-teal-700" />
-                                  ) : (
-                                    <Square size={15} className="text-slate-400" />
-                                  )}
-                                </button>
-                              ) : (
-                                <span style={{ color: '#cbd5e1', fontSize: '0.75rem' }}>—</span>
-                              )}
-                            </td>
-                          )}
-                          <td>
-                            <div className="rep-sku-code">{rec.item_id}</div>
-                            <div className="rep-sku-name">
-                              {rec.product_name || rec.category || (isVi ? 'Hàng tiêu dùng' : 'Merchandise')}
-                            </div>
-                          </td>
-                          <td>
-                            <span className="rep-store-tag">{rec.store_id}</span>
-                          </td>
-                          <td
-                            className="text-right"
-                            title={`On-Hand: ${m.onHand} + On-Order: ${m.onOrder} = IP: ${m.ip}`}
-                          >
-                            <div className="rep-ip-cell">
-                              <span className={`rep-mono-num ${m.isTriggered ? 'num-danger' : 'num-default'}`}>
-                                {formatQty(m.ip, localeStr)}
-                              </span>
-                              <span className={`rep-trigger-badge ${m.isTriggered ? 'trig-yes' : 'trig-no'}`}>
-                                {m.isTriggered
-                                  ? isVi
-                                    ? 'IP ≤ s · ĐẶT'
-                                    : 'IP ≤ s · TRIGGER'
-                                  : isVi
-                                  ? 'IP > s · GIỮ'
-                                  : 'IP > s · HOLD'}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="text-right rep-mono-num num-default">{formatDecimal(m.s, 1, localeStr)}</td>
-                          <td className="text-right rep-mono-num num-teal">{formatQty(m.bigS, localeStr)}</td>
-                          <td className="text-right rep-mono-num num-muted" title={`SS: ${m.ss}`}>
-                            {formatQty(m.eoq, localeStr)}
-                          </td>
-                          <td className="text-right rep-mono-num num-muted">
-                            {formatQty(m.recommendedQty, localeStr)}
-                          </td>
-                          <td className="text-right rep-mono-num num-highlight">
-                            {formatQty(m.finalQty, localeStr)}
-                          </td>
-                          <td>
-                            <span className={`rep-priority-badge pri-${priClass}`}>
-                              <span className="rep-priority-dot" />
-                              {priorityLabels[rec.priority] || rec.priority}
-                            </span>
-                          </td>
-                          <td>
-                            <span className={`rep-status-pill status-${statusClass}`}>
-                              <span className="rep-status-dot" />
-                              {statusLabels[rec.status] || rec.status}
-                            </span>
-                          </td>
-                          <td className="text-center" onClick={(e) => e.stopPropagation()}>
-                            <div className="rep-action-group">
-                              {canEdit && isPending && (
-                                <>
-                                  <button
-                                    className="rep-action-btn-icon btn-approve"
-                                    onClick={() => handleApprove(rec)}
-                                    title={isVi ? 'Duyệt' : 'Approve'}
-                                  >
-                                    <Check size={14} />
-                                  </button>
-                                  <button
-                                    className="rep-action-btn-icon btn-adjust"
-                                    onClick={() => handleOpenAdjust(rec)}
-                                    title={isVi ? 'Sửa SL' : 'Adjust'}
-                                  >
-                                    <Pencil size={13} />
-                                  </button>
-                                  <button
-                                    className="rep-action-btn-icon btn-reject"
-                                    onClick={() => handleOpenReject(rec)}
-                                    title={isVi ? 'Từ chối' : 'Reject'}
-                                  >
-                                    <Ban size={13} />
-                                  </button>
-                                </>
-                              )}
-
-                              {canEdit && isApproved && (
-                                <button
-                                  className="rep-action-btn-ghost btn-cancel"
-                                  onClick={() => handleOpenCancel(rec)}
-                                >
-                                  {isVi ? 'Hủy' : 'Cancel'}
-                                </button>
-                              )}
-
-                              {!isPending && !isApproved && (
-                                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>—</span>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {recTotal > 0 && (
-              <div style={{ padding: '0.65rem 1rem', borderTop: '1px solid #e2e8f0' }}>
-                <Pagination
-                  currentPage={recPage}
-                  totalItems={recTotal}
-                  pageSize={recPageSize}
-                  onPageChange={setRecPage}
-                  onPageSizeChange={(sz) => {
-                    setRecPageSize(sz);
-                    setRecPage(1);
-                  }}
-                  pageSizeOptions={[10, 20, 50]}
-                />
+          <Card title={t('replenishment.drawer.theta')}>
+            {calib.loading ? (
+              <p className="rep-note">{t('common.state.loading')}</p>
+            ) : calib.error ? (
+              <p className="rep-note">{apiErrorMessage(calib.error, t)}</p>
+            ) : Object.keys(thetas).length === 0 ? (
+              <Unavailable />
+            ) : (
+              <div className="ui-stack" style={{ gap: 'var(--space-3)' }}>
+                <dl className="rep-dl">
+                  {Object.entries(thetas)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([cls, th]) => (
+                      <React.Fragment key={cls}>
+                        <dt>{cls}</dt>
+                        <dd className="ui-num">{fmt.number(th, { digits: 3 })}</dd>
+                      </React.Fragment>
+                    ))}
+                </dl>
+                <p className="rep-note">
+                  {t('replenishment.drawer.theta_hint', { index: calib.data?.latest_review_index ?? 0, date: fmt.date(calib.data?.latest_review_date, 'medium') })}
+                </p>
+                <p className="rep-note">{t('replenishment.drawer.theta_unavailable')}</p>
               </div>
             )}
-          </div>
-        </>
-      )}
+          </Card>
 
-      {/* TAB 2: WAREHOUSE STOCK & THRESHOLDS (On-Hand, On-Order, IP, s, S, Fill Bar) */}
-      {viewTab === 'INVENTORY' && (
-        <div className="rep-table-panel">
-          <div className="rep-table-container">
-            <table className="rep-table">
-              <thead>
-                <tr>
-                  <th>{isVi ? 'Mã SKU / Sản phẩm' : 'SKU / Product'}</th>
-                  <th style={{ width: '75px' }}>{isVi ? 'Kho' : 'Store'}</th>
-                  <th className="text-right" style={{ width: '95px' }}>
-                    On-Hand
-                  </th>
-                  <th className="text-right" style={{ width: '95px' }}>
-                    On-Order
-                  </th>
-                  <th className="text-right" style={{ width: '95px' }}>
-                    IP (OH+OO)
-                  </th>
-                  <th className="text-right" style={{ width: '95px' }}>
-                    SS
-                  </th>
-                  <th className="text-right" style={{ width: '95px' }}>
-                    s (ROP)
-                  </th>
-                  <th className="text-right" style={{ width: '95px' }}>
-                    S (Up-To)
-                  </th>
-                  <th style={{ width: '150px' }}>{isVi ? 'Mức lấp đầy (IP / S)' : 'Fill Level (IP / S)'}</th>
-                  <th style={{ width: '115px' }}>{isVi ? 'Trạng thái' : 'Status'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading ? (
-                  Array.from({ length: 6 }).map((_, idx) => (
-                    <tr key={`skeleton-inv-${idx}`} className="rep-skeleton-row" aria-hidden="true">
-                      <td>
-                        <span className="rep-skeleton-box" style={{ width: '112px', height: '12px', marginBottom: '6px' }} />
-                        <span className="rep-skeleton-box" style={{ width: '76px', height: '10px', opacity: 0.65 }} />
-                      </td>
-                      <td><span className="rep-skeleton-box" style={{ width: '40px', height: '18px' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '40px', height: '14px', marginLeft: 'auto' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '40px', height: '14px', marginLeft: 'auto' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '44px', height: '14px', marginLeft: 'auto' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '108px', height: '10px' }} /></td>
-                      <td><span className="rep-skeleton-box" style={{ width: '72px', height: '20px' }} /></td>
-                    </tr>
-                  ))
-                ) : (
-                  inventory.slice((invPage - 1) * invPageSize, invPage * invPageSize).map((item) => {
-                  const m = computeRssMetrics(item);
-                  const ss = item.safety_stock != null ? Number(item.safety_stock) : null;
-                  const rop = item.reorder_point != null ? Number(item.reorder_point) : null;
-                  const isCrit = ss != null ? m.ip <= ss : false;
-                  const isBelowRop = rop != null ? m.ip > (ss ?? 0) && m.ip <= rop : false;
-                  const statusKey = isCrit ? 'critical' : isBelowRop ? 'warning' : ss == null ? 'neutral' : 'healthy';
-                  const statusText = isCrit
-                    ? isVi
-                      ? 'Nguy cấp'
-                      : 'Critical'
-                    : isBelowRop
-                    ? isVi
-                      ? 'Cần đặt (IP ≤ s)'
-                      : 'Trigger (IP ≤ s)'
-                    : ss == null
-                    ? isVi
-                      ? 'Chưa gán'
-                      : 'Unset'
-                    : isVi
-                    ? 'An toàn'
-                    : 'Healthy';
-                  const fillPct = m.bigS != null && m.bigS > 0 ? Math.min(100, Math.max(0, Math.round((m.ip / m.bigS) * 100))) : 0;
-                  const isFlashing = flashingRowKey === `inv:${item.item_id}`;
-
-                  return (
-                    <tr
-                      key={item.item_id}
-                      data-rep-inv-sku={item.item_id}
-                      className={isFlashing ? 'rep-row-flash' : ''}
-                    >
-                      <td>
-                        <div className="rep-sku-code">{item.item_id}</div>
-                        <div className="rep-sku-name">{item.name || item.item_id}</div>
-                      </td>
-                      <td>
-                        <span className="rep-store-tag">{item.store_id || selectedStore}</span>
-                      </td>
-                      <td className={`text-right rep-mono-num ${m.onHand <= 0 ? 'num-danger' : 'num-default'}`}>
-                        {formatQty(m.onHand, localeStr)}
-                      </td>
-                      <td className="text-right rep-mono-num num-muted">{formatQty(m.onOrder, localeStr)}</td>
-                      <td className={`text-right rep-mono-num ${m.isTriggered ? 'num-danger' : 'num-default'}`}>
-                        {formatQty(m.ip, localeStr)}
-                      </td>
-                      <td className="text-right rep-mono-num num-muted">
-                        {ss != null ? formatDecimal(ss, 1, localeStr) : '—'}
-                      </td>
-                      <td className="text-right rep-mono-num num-default">
-                        {rop != null ? formatDecimal(rop, 1, localeStr) : '—'}
-                      </td>
-                      <td className="text-right rep-mono-num num-teal">
-                        {rop != null ? formatQty(m.bigS, localeStr) : '—'}
-                      </td>
-                      <td>
-                        <div className="rep-fill-bar-wrap">
-                          <div className="rep-fill-bar-track">
-                            <div
-                              className={`rep-fill-bar-fill ${
-                                isCrit ? 'fill-crit' : isBelowRop ? 'fill-warn' : 'fill-ok'
-                              }`}
-                              style={{ width: `${fillPct}%` }}
-                            />
-                          </div>
-                          <span className="rep-fill-pct">{fillPct}%</span>
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`rep-status-pill status-${statusKey}`}>
-                          <span className="rep-status-dot" />
-                          {statusText}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{ padding: '0.65rem 1rem', borderTop: '1px solid #e2e8f0' }}>
-            <Pagination
-              currentPage={invPage}
-              totalItems={inventory.length}
-              pageSize={invPageSize}
-              onPageChange={setInvPage}
-              onPageSizeChange={(sz) => {
-                setInvPageSize(sz);
-                setInvPage(1);
-              }}
-              pageSizeOptions={[10, 20, 50]}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: DECISION HISTORY */}
-      {viewTab === 'HISTORY' && (
-        <div className="rep-table-panel">
-          <div
-            className="rep-filter-toolbar"
-            style={{ border: 'none', borderBottom: '1px solid #e2e8f0', borderRadius: 0, marginBottom: 0 }}
-          >
-            <div className="rep-filter-left">
-              <span className="rep-filter-lbl">{isVi ? 'TRẠNG THÁI:' : 'STATUS:'}</span>
-              <div className="rep-filter-pills">
-                {[
-                  { val: 'ALL', label: isVi ? 'Tất cả' : 'All' },
-                  { val: 'APPROVED', label: isVi ? 'Đã duyệt' : 'Approved' },
-                  { val: 'REJECTED', label: isVi ? 'Từ chối' : 'Rejected' },
-                  { val: 'CANCELLED', label: isVi ? 'Đã hủy' : 'Cancelled' },
-                ].map(({ val, label }) => (
-                  <button
-                    key={val}
-                    className={`rep-pill-btn ${historyStatusFilter === val ? 'active' : ''}`}
-                    onClick={() => {
-                      setHistoryStatusFilter(val);
-                      setHistoryPage(1);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-              {isVi ? 'Nhật ký kho ' : 'Audit log: '}
-              <strong>{selectedStore}</strong>
-            </span>
-          </div>
-
-          <div className="rep-table-container">
-            <table className="rep-table">
-              <thead>
-                <tr>
-                  <th>{isVi ? 'Mã SKU' : 'SKU Code'}</th>
-                  <th style={{ width: '75px' }}>{isVi ? 'Kho' : 'Store'}</th>
-                  <th className="text-right" style={{ width: '115px' }}>
-                    {isVi ? 'Đề xuất (q)' : 'Initial Qty'}
-                  </th>
-                  <th className="text-right" style={{ width: '115px' }}>
-                    {isVi ? 'SL Chốt' : 'Final Qty'}
-                  </th>
-                  <th style={{ width: '110px' }}>{isVi ? 'Trạng thái' : 'Status'}</th>
-                  <th>{isVi ? 'Lý do / Ghi chú' : 'Justification'}</th>
-                  <th style={{ width: '130px' }}>{isVi ? 'Người duyệt' : 'Decided By'}</th>
-                  <th style={{ width: '155px' }}>{isVi ? 'Thời gian' : 'Timestamp'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historyList.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} style={{ textAlign: 'center', padding: '2.5rem', color: '#94a3b8' }}>
-                      {isVi ? 'Chưa có lịch sử phê duyệt.' : 'No approval history recorded.'}
-                    </td>
-                  </tr>
-                ) : (
-                  historyList.map((h) => {
-                    const statusClass = (h.status || '').toLowerCase();
-                    return (
-                      <tr key={h.id}>
-                        <td>
-                          <span className="rep-sku-code">{h.item_id}</span>
-                        </td>
-                        <td>
-                          <span className="rep-store-tag">{h.store_id}</span>
-                        </td>
-                        <td className="text-right rep-mono-num num-muted">{formatQty(h.recommended_qty, localeStr)}</td>
-                        <td className="text-right rep-mono-num num-highlight">{formatQty(h.final_qty, localeStr)}</td>
-                        <td>
-                          <span className={`rep-status-pill status-${statusClass}`}>
-                            <span className="rep-status-dot" />
-                            {statusLabels[h.status] || h.status}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '0.8125rem', color: '#475569', maxWidth: '280px' }}>
-                          {h.reason || '—'}
-                        </td>
-                        <td style={{ fontSize: '0.8125rem', color: '#334155', fontWeight: 500 }}>
-                          {h.decided_by || (isVi ? 'Hệ thống' : 'System')}
-                        </td>
-                        <td className="rep-mono-num num-muted" style={{ fontSize: '0.75rem' }}>
-                          {h.decided_at
-                            ? new Date(h.decided_at).toLocaleString(localeStr)
-                            : new Date(h.created_at).toLocaleString(localeStr)}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {historyTotal > 0 && (
-            <div style={{ padding: '0.65rem 1rem', borderTop: '1px solid #e2e8f0' }}>
-              <Pagination
-                currentPage={historyPage}
-                totalItems={historyTotal}
-                pageSize={historyPageSize}
-                onPageChange={setHistoryPage}
-                onPageSizeChange={(sz) => {
-                  setHistoryPageSize(sz);
-                  setHistoryPage(1);
-                }}
-                pageSizeOptions={[10, 20, 50]}
-              />
+          {rec.reason && (
+            <div>
+              <div className="rep-note">{t('replenishment.drawer.reason')}</div>
+              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>{rec.reason_code === 'ip_below_s' ? beCode(prefixCode('rep', rec.reason_code), rec.reason_params, rec.reason) : be(rec.reason)}</p>
             </div>
           )}
         </div>
       )}
-
-      {/* Slide-Over Detail Drawer */}
-      {selectedItem &&
-        selectedDrawerMetrics &&
-        createPortal(
-          <div className="rep-drawer-overlay" onClick={() => setSelectedItem(null)}>
-            <div className="rep-drawer" onClick={(e) => e.stopPropagation()}>
-              <div className="drawer-header">
-                <div>
-                  <span className="drawer-badge">
-                    {isVi ? 'Chi tiết Chính sách (R, s, S)' : '(R, s, S) Order Inspector'}
-                  </span>
-                  <h3 className="drawer-title">{selectedItem.item_id}</h3>
-                  <p className="drawer-sku-info">
-                    {selectedItem.product_name || selectedItem.category || 'SKU'} &bull; {selectedItem.store_id}
-                  </p>
-                </div>
-                <button className="drawer-close-btn" onClick={() => setSelectedItem(null)}>
-                  <X size={16} />
-                </button>
-              </div>
-
-              <div className="drawer-body">
-                <div className="drawer-kpi-grid">
-                  <div className="drawer-kpi-card">
-                    <span className="drawer-kpi-lbl">On-Hand (OH)</span>
-                    <span className={`drawer-kpi-val ${selectedDrawerMetrics.onHand <= 0 ? 'text-red' : 'text-slate'}`}>
-                      {formatQty(selectedDrawerMetrics.onHand, localeStr)}
-                    </span>
-                  </div>
-                  <div className="drawer-kpi-card">
-                    <span className="drawer-kpi-lbl">On-Order (OO)</span>
-                    <span className="drawer-kpi-val text-slate">
-                      {formatQty(selectedDrawerMetrics.onOrder, localeStr)}
-                    </span>
-                  </div>
-                  <div className="drawer-kpi-card">
-                    <span className="drawer-kpi-lbl">IP = OH + OO</span>
-                    <span
-                      className={`drawer-kpi-val ${
-                        selectedDrawerMetrics.isTriggered ? 'text-red' : 'text-slate'
-                      }`}
-                    >
-                      {formatQty(selectedDrawerMetrics.ip, localeStr)}
-                    </span>
-                  </div>
-                  <div className="drawer-kpi-card">
-                    <span className="drawer-kpi-lbl">s (ROP)</span>
-                    <span className="drawer-kpi-val text-slate">
-                      {formatDecimal(selectedDrawerMetrics.s, 1, localeStr)}
-                    </span>
-                  </div>
-                  <div className="drawer-kpi-card">
-                    <span className="drawer-kpi-lbl">S (Order-Up-To)</span>
-                    <span className="drawer-kpi-val" style={{ color: '#0f766e' }}>
-                      {formatQty(selectedDrawerMetrics.bigS, localeStr)}
-                    </span>
-                  </div>
-                  <div className="drawer-kpi-card">
-                    <span className="drawer-kpi-lbl">EOQ / SS</span>
-                    <span className="drawer-kpi-val text-slate">
-                      {formatQty(selectedDrawerMetrics.eoq, localeStr)} /{' '}
-                      {formatDecimal(selectedDrawerMetrics.ss, 1, localeStr)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="drawer-rec-box">
-                  <div className="drawer-rec-row-primary">
-                    <span className="drawer-rec-label">{isVi ? 'SL Đặt Chốt' : 'Final Order Qty'}</span>
-                    <span className="drawer-rec-value-highlight">
-                      {formatQty(selectedDrawerMetrics.finalQty, localeStr)}
-                    </span>
-                  </div>
-                  <div className="drawer-rec-row-sub">
-                    <span>{isVi ? 'Gợi ý q = S − IP:' : 'Recommended q = S − IP:'}</span>
-                    <span className="rep-mono-num">{formatQty(selectedDrawerMetrics.recommendedQty, localeStr)}</span>
-                  </div>
-                  <div className="drawer-rec-row-sub">
-                    <span>{isVi ? 'Chính sách áp dụng:' : 'Policy Applied:'}</span>
-                    <span className="rep-mono-num">{selectedDrawerMetrics.policyApplied}</span>
-                  </div>
-                  <div className="drawer-rec-row-sub">
-                    <span>{isVi ? 'Cửa sổ bảo vệ:' : 'Protection Window:'}</span>
-                    <span className="rep-mono-num">
-                      H = L + R = 10d
-                      {selectedDrawerMetrics.reviewDate ? ` • ${selectedDrawerMetrics.reviewDate}` : ''}
-                    </span>
-                  </div>
-                  {selectedDrawerMetrics.modelRunId && (
-                    <div className="drawer-rec-row-sub">
-                      <span>{isVi ? 'Mã lượt chạy ML:' : 'Model Run ID:'}</span>
-                      <span className="rep-mono-num">{selectedDrawerMetrics.modelRunId}</span>
-                    </div>
-                  )}
-                </div>
-
-                {selectedItem.reason && (
-                  <div className="drawer-section">
-                    <span className="drawer-section-title">{isVi ? 'Ghi chú' : 'Notes'}</span>
-                    <p className="drawer-reason-text">{selectedItem.reason}</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="drawer-footer">
-                {canEdit && selectedItem.status === 'PENDING' && (
-                  <>
-                    <button className="drawer-btn-approve" onClick={() => handleApprove(selectedItem)}>
-                      <Check size={15} /> {isVi ? 'Duyệt đơn' : 'Approve'}
-                    </button>
-                    <button className="drawer-btn-adjust" onClick={() => handleOpenAdjust(selectedItem)}>
-                      <Pencil size={14} /> {isVi ? 'Sửa SL' : 'Adjust'}
-                    </button>
-                  </>
-                )}
-
-                {canEdit && selectedItem.status === 'APPROVED' && (
-                  <button
-                    className="rep-btn rep-btn-outline w-full justify-center"
-                    style={{ color: '#dc2626', borderColor: '#fecaca', padding: '0.625rem', width: '100%' }}
-                    onClick={() => handleOpenCancel(selectedItem)}
-                  >
-                    <Ban size={15} /> {isVi ? 'Hủy đơn đã duyệt' : 'Cancel Order'}
-                  </button>
-                )}
-
-                {(!canEdit || (selectedItem.status !== 'PENDING' && selectedItem.status !== 'APPROVED')) && (
-                  <button className="drawer-btn-close" onClick={() => setSelectedItem(null)}>
-                    {isVi ? 'Đóng' : 'Close'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
-
-      {/* MODAL 1: Adjust Quantity */}
-      {showAdjustModal &&
-        targetRec &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setShowAdjustModal(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-              <button className="modal-close" onClick={() => setShowAdjustModal(false)}>
-                <X size={16} />
-              </button>
-              <h2 className="modal-title">{isVi ? 'Điều chỉnh số lượng' : 'Adjust Order Quantity'}</h2>
-              <p className="modal-subtitle">
-                {targetRec.item_id} &bull; {targetRec.store_id}
-              </p>
-
-              <form onSubmit={handleSubmitAdjust}>
-                <div className="modal-form-group">
-                  <label>{isVi ? 'Thông số (R, s, S)' : '(R, s, S) Parameters'}</label>
-                  <input
-                    type="text"
-                    disabled
-                    value={(() => {
-                      const m = computeRssMetrics(targetRec);
-                      return `q = ${formatQty(m.recommendedQty, localeStr)} (IP: ${m.ip}, s: ${m.s}, S: ${m.bigS})`;
-                    })()}
-                    className="modal-input"
-                    style={{ background: '#f1f5f9', color: '#475569', fontFamily: "'IBM Plex Mono', monospace" }}
-                  />
-                </div>
-
-                <div className="modal-form-group">
-                  <label>{isVi ? 'Số lượng chốt (Final Qty) *' : 'Final Quantity *'}</label>
-                  <input
-                    type="number"
-                    min="1"
-                    required
-                    value={adjustQtyInput}
-                    onChange={(e) => setAdjustQtyInput(Number(e.target.value))}
-                    className="modal-input"
-                    autoFocus
-                  />
-                </div>
-
-                <div className="modal-form-group">
-                  <label>{isVi ? 'Lý do điều chỉnh *' : 'Reason *'}</label>
-                  <textarea
-                    required
-                    rows={2}
-                    value={actionReasonInput}
-                    onChange={(e) => setActionReasonInput(e.target.value)}
-                    className="modal-input"
-                  />
-                </div>
-
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="modal-btn-cancel"
-                    onClick={() => setShowAdjustModal(false)}
-                    disabled={isSubmittingAction}
-                  >
-                    {isVi ? 'Hủy' : 'Cancel'}
-                  </button>
-                  <button
-                    type="submit"
-                    className="modal-btn-apply"
-                    disabled={isSubmittingAction || adjustQtyInput <= 0 || !actionReasonInput.trim()}
-                  >
-                    {isSubmittingAction ? '...' : isVi ? 'Lưu' : 'Save'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>,
-          document.body
-        )}
-
-      {/* MODAL 2: Reject */}
-      {showRejectModal &&
-        targetRec &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setShowRejectModal(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-              <button className="modal-close" onClick={() => setShowRejectModal(false)}>
-                <X size={16} />
-              </button>
-              <h2 className="modal-title" style={{ color: '#dc2626' }}>
-                {isVi ? 'Từ chối đề xuất' : 'Reject Recommendation'}
-              </h2>
-              <p className="modal-subtitle">
-                {targetRec.item_id} &bull; {targetRec.store_id}
-              </p>
-
-              <form onSubmit={handleSubmitReject}>
-                <div className="modal-form-group">
-                  <label>{isVi ? 'Lý do từ chối *' : 'Reason *'}</label>
-                  <textarea
-                    required
-                    rows={2}
-                    value={actionReasonInput}
-                    onChange={(e) => setActionReasonInput(e.target.value)}
-                    className="modal-input"
-                    autoFocus
-                  />
-                </div>
-
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="modal-btn-cancel"
-                    onClick={() => setShowRejectModal(false)}
-                    disabled={isSubmittingAction}
-                  >
-                    {isVi ? 'Hủy' : 'Cancel'}
-                  </button>
-                  <button
-                    type="submit"
-                    style={{
-                      backgroundColor: '#dc2626',
-                      color: '#fff',
-                      border: 'none',
-                      padding: '0.5rem 1.15rem',
-                      borderRadius: '4px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      fontSize: '0.8125rem',
-                    }}
-                    disabled={isSubmittingAction || !actionReasonInput.trim()}
-                  >
-                    {isSubmittingAction ? '...' : isVi ? 'Từ chối' : 'Reject'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>,
-          document.body
-        )}
-
-      {/* MODAL 3: Cancel */}
-      {showCancelModal &&
-        targetRec &&
-        createPortal(
-          <div className="modal-overlay" onClick={() => setShowCancelModal(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-              <button className="modal-close" onClick={() => setShowCancelModal(false)}>
-                <X size={16} />
-              </button>
-              <h2 className="modal-title" style={{ color: '#dc2626' }}>
-                {isVi ? 'Hủy đơn đã duyệt' : 'Cancel Approved PO'}
-              </h2>
-              <p className="modal-subtitle">
-                {targetRec.item_id} ({formatQty(targetRec.final_qty, localeStr)} {isVi ? 'đv' : 'units'})
-              </p>
-
-              <form onSubmit={handleSubmitCancel}>
-                <div className="modal-form-group">
-                  <label>{isVi ? 'Lý do hủy *' : 'Reason *'}</label>
-                  <textarea
-                    required
-                    rows={2}
-                    value={actionReasonInput}
-                    onChange={(e) => setActionReasonInput(e.target.value)}
-                    className="modal-input"
-                    autoFocus
-                  />
-                </div>
-
-                <div className="modal-actions">
-                  <button
-                    type="button"
-                    className="modal-btn-cancel"
-                    onClick={() => setShowCancelModal(false)}
-                    disabled={isSubmittingAction}
-                  >
-                    {isVi ? 'Đóng' : 'Close'}
-                  </button>
-                  <button
-                    type="submit"
-                    style={{
-                      backgroundColor: '#dc2626',
-                      color: '#fff',
-                      border: 'none',
-                      padding: '0.5rem 1.15rem',
-                      borderRadius: '4px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      fontSize: '0.8125rem',
-                    }}
-                    disabled={isSubmittingAction || !actionReasonInput.trim()}
-                  >
-                    {isSubmittingAction ? '...' : isVi ? 'Xác nhận hủy' : 'Confirm Cancel'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>,
-          document.body
-        )}
-    </div>
+    </Drawer>
   );
 };

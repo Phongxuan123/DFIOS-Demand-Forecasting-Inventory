@@ -166,7 +166,8 @@ class TestPipelineEndpoints(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["status"], "COMPLETED")
         self.assertIn("run_id", data)
-        self.assertGreaterEqual(data["forecasts_generated"], 28)
+        # fixture has no sales history for CA_1: nothing generated (was a fabricated sku_count * horizon)
+        self.assertEqual(data["forecasts_generated"], 0)
         self.assertGreaterEqual(data["inventory_params_updated"], 1)
 
     def test_trigger_pipeline_run_viewer_forbidden(self):

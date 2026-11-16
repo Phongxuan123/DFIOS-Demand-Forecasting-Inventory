@@ -18,21 +18,28 @@ with engine.begin() as conn:
             m_g DOUBLE PRECISION DEFAULT 0.0,
             kappa_g DOUBLE PRECISION DEFAULT 1.0,
             tau DOUBLE PRECISION DEFAULT 0.95,
-            setpoint DOUBLE PRECISION DEFAULT 0.96,
+            setpoint DOUBLE PRECISION DEFAULT 0.95,
             guard DOUBLE PRECISION DEFAULT 0.01,
             gain_eta DOUBLE PRECISION DEFAULT 1.0,
             val_cost DOUBLE PRECISION,
             val_service DOUBLE PRECISION,
-            is_feasible BOOLEAN DEFAULT TRUE,
+            is_feasible BOOLEAN,
+            source VARCHAR(30),
             econ_service DOUBLE PRECISION DEFAULT 0.95,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             PRIMARY KEY (selection_id, class_id)
         );
     """))
 
-SELECTION_ID = "quarter_2015_Q2"
+from app.services import policy_config as pc
+SELECTION_ID = pc.DEMO_SELECTION_ID
 now = datetime.now(timezone.utc)
 
+# Q-07: the artifact numbers (c3ok_csl_by_class.csv / c3ok_results.csv) are TEST-window results of a different
+# run; they are NOT validation measurements of this database, so they are no longer written into
+# val_cost / val_service (NULL) and the row is not claimed feasible (is_feasible NULL). The row is labelled
+# source = "artifact"; the artifact figures live in system_settings.policy_benchmark_results.
+# m_g = 0: the closed-loop theta carries the level (N-05). setpoint = A_g + guard (research.md 8.2, Q-06).
 OPTIMAL_POLICIES = [
     {"class_id": "AX", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 319489.84, "val_service": 0.9495},
     {"class_id": "AY", "m_g": 0.0, "kappa_g": 1.0, "val_cost": 395968.80, "val_service": 0.9494},
@@ -54,12 +61,13 @@ for p in OPTIMAL_POLICIES:
         "m_g": p["m_g"],
         "kappa_g": p["kappa_g"],
         "tau": 0.95,
-        "setpoint": 0.96,
+        "setpoint": pc.TARGET_AVAILABILITY + pc.GUARD,
         "guard": 0.01,
         "gain_eta": 1.0,
-        "val_cost": p["val_cost"],
-        "val_service": p["val_service"],
-        "is_feasible": True,
+        "val_cost": None,
+        "val_service": None,
+        "is_feasible": None,
+        "source": "artifact",
         "econ_service": 0.95,
         "created_at": now
     })

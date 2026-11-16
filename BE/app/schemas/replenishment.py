@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -15,13 +15,17 @@ class ReplenishmentItemResponse(BaseModel):
     category: Optional[str] = None
     supplier_id: Optional[str] = None
     supplier_name: Optional[str] = None
-    on_hand: float = 0.0
-    on_order: float = 0.0
+    on_hand: float = Field(0.0, description="CURRENT on hand (live inventory row, clock date), not the review-date value")
+    on_order: float = Field(0.0, description="CURRENT on order (live inventory row, clock date), not the review-date value")
     rop: float = 0.0
     safety_stock: float = 0.0
     order_up_to_S: Optional[float] = None
     reorder_point_s: Optional[float] = None
-    inventory_position: Optional[float] = None
+    inventory_position: Optional[float] = Field(
+        None, description="IP at review_date (= on_hand_at_review + on_order_at_review), basis of q = S - IP"
+    )
+    on_hand_at_review: Optional[float] = Field(None, description="On hand at review_date (null for legacy rows)")
+    on_order_at_review: Optional[float] = Field(None, description="On order at review_date (null for legacy rows)")
     eoq_quantity: Optional[float] = None
     policy_applied: Optional[str] = None
     review_date: Optional[date] = None
@@ -30,9 +34,22 @@ class ReplenishmentItemResponse(BaseModel):
     priority: str = Field(..., description="Mức độ ưu tiên: CRITICAL, HIGH, MEDIUM, LOW")
     status: str = Field(..., description="Trạng thái: PENDING, APPROVED, REJECTED, CANCELLED")
     reason: Optional[str] = None
+    reason_code: Optional[str] = Field(
+        None,
+        description="Stable code of `reason`: ip_below_s (system proposal, params ip/s/S/q/policy) | user_adjusted | "
+                    "user_rejected | cancelled (the text is the user's own note)",
+    )
+    reason_params: Dict[str, Any] = Field(default_factory=dict)
     decided_by: Optional[str] = None
     created_at: datetime
     decided_at: Optional[datetime] = None
+    # --- policy context (additive; null when the SKU has no classification / forecast / parameter row) ---
+    abc_xyz_class: Optional[str] = None
+    theta: Optional[float] = Field(None, description="theta_g of the class of the SKU (latest calibration state)")
+    m_g: Optional[float] = None
+    kappa_g: Optional[float] = None
+    q_hat: Optional[float] = Field(None, description="Q_hat(tau) of the latest stored window quantile at the service level of the SKU")
+    lead_time_days: Optional[int] = None
 
 
 class ReplenishmentListResponse(BaseModel):

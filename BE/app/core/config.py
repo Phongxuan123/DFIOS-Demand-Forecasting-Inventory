@@ -1,9 +1,33 @@
 import os
 from dotenv import load_dotenv
 
-# Load BE/.env
+# Thứ tự ưu tiên: biến môi trường của shell > BE/.env.local (cấu hình riêng từng máy, không commit) > BE/.env
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(BASE_DIR, ".env.local"))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+_LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal", "db", "postgres"}
+
+
+def _assert_local_only() -> None:
+    """DFIOS_LOCAL_ONLY=1: môi trường test tách biệt, cấm kết nối tới database ngoài máy (vd Supabase của nhóm)."""
+    if os.getenv("DFIOS_LOCAL_ONLY", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    from urllib.parse import urlparse
+    url = os.getenv("DATABASE_URL", "").strip()
+    # R5B-09: an unset URL means the localhost default; SQLite is a local file (the test suite uses it)
+    if not url or url.lower().startswith("sqlite"):
+        return
+    host = (urlparse(url.replace("+psycopg2", "")).hostname or "").lower()
+    if host not in _LOCAL_DB_HOSTS:
+        raise RuntimeError(
+            f"DFIOS_LOCAL_ONLY=1 but DATABASE_URL points to '{host}'. "
+            "This machine is configured as an isolated test environment; refusing to connect to a remote database. "
+            "Fix DATABASE_URL in BE/.env.local or unset DFIOS_LOCAL_ONLY."
+        )
+
+
+_assert_local_only()
 
 class Settings:
     PROJECT_NAME: str = "DFIOS - Demand Forecasting & Inventory Optimization System"
@@ -39,6 +63,15 @@ class Settings:
         "ENABLE_TEST_ENDPOINTS",
         "true" if os.getenv("ENVIRONMENT", "development") != "production" else "false",
     ).lower() in ("true", "1", "yes")
+
+    # P-09: chỉ tin `X-Forwarded-For` khi kết nối đến từ các proxy này (IP hoặc CIDR, phân tách dấu phẩy).
+    # Để trống (mặc định) nghĩa là không tin header, dùng IP kết nối trực tiếp.
+    TRUSTED_PROXIES: list[str] = [
+        p.strip() for p in os.getenv("TRUSTED_PROXIES", "").split(",") if p.strip()
+    ]
+
+    # P-05: thư mục chứa artifact khoa học (parquet, npz, csv, MODEL/*).
+    ARTIFACTS_DIR: str = os.getenv("DFIOS_ARTIFACTS_DIR", "")
 
     # Allow Frontend Vite dev server
     CORS_ORIGINS: list[str] = [

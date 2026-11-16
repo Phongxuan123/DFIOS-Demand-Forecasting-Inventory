@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 UserRole = Literal["Admin", "Warehouse Manager", "Viewer"]
 
@@ -13,8 +13,7 @@ class UserResponse(BaseModel):
     is_verified: bool = False
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserCreateRequest(BaseModel):
     email: str = Field(..., description="Email người dùng")

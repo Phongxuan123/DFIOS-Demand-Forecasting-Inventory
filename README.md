@@ -17,53 +17,109 @@ Hệ thống được thiết kế và cài đặt bám sát 100% đặc tả ng
 ## 2. Hướng dẫn Khởi chạy Hệ thống
 
 ### 2.1. Yêu cầu Môi trường
-- **Python**: 3.13+
-- **Database**: PostgreSQL 16
-- **Docker & Docker Compose**: Để chạy container cơ sở dữ liệu
+- **Python**: 3.12 (khuyến nghị, xem `.python-version`); 3.14 cũng cài được (wheel đã kiểm tra)
+- **Database**: PostgreSQL 16 (qua Docker Compose)
+- **Docker & Docker Compose**
 - **Node.js**: 20+ (cho Frontend)
 
 ### 2.2. Khởi chạy Database PostgreSQL
-Khởi chạy container PostgreSQL 16 qua Docker Compose:
 ```bash
 docker compose up -d
 ```
-Container `dfios-postgres` sẽ chạy trên cổng mặc định `5432` với cơ sở dữ liệu `dfios`.
+Container `dfios-postgres` chạy trên cổng `5432`, user `dfios`, database `dfios`. Mật khẩu mặc định `dfios123`
+(chỉ cho máy cục bộ); đổi bằng biến `POSTGRES_PASSWORD` trong file `.env` cạnh `docker-compose.yml`
+và cập nhật `DATABASE_URL` tương ứng. Compose có healthcheck (`pg_isready`).
+Backend và Frontend tùy chọn chạy trong container: `docker compose --profile app up -d --build`
+(cần `BE/.env`).
 
-### 2.3. Khởi tạo & Chạy Backend (FastAPI)
-1. Cài đặt các thư viện phụ thuộc:
-   ```bash
-   pip install -r BE/requirements.txt
-   ```
-2. Cấu hình biến môi trường tại `BE/.env` (tham khảo file `BE/.env.example` hoặc mục 3 bên dưới).
-3. Khởi tạo bảng dữ liệu và nạp baseline thực nghiệm M5:
-   ```bash
-   python BE/scripts/sync_scientific_baseline.py
-   ```
-4. Khởi chạy máy chủ API:
-   ```bash
-   cd BE
-   uvicorn app.main:app --reload --port 8000
-   ```
-   API Swagger UI sẽ có sẵn tại: [http://localhost:8000/docs](http://localhost:8000/docs)
+### 2.3. Cài đặt Backend
 
-### 2.4. Khởi chạy Frontend (React + Vite)
+**PowerShell (Windows)**
+```powershell
+cd BE
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt          # thêm requirements-dev.txt nếu cần ruff
+Copy-Item .env.example .env              # rồi điền giá trị (xem mục 4)
+```
+
+**bash (Linux/macOS/Git Bash)**
+```bash
+cd BE
+python3.12 -m venv .venv
+source .venv/bin/activate                # Git Bash trên Windows: source .venv/Scripts/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+### 2.4. Artifact khoa học và dữ liệu M5 (bắt buộc)
+Các file artifact (parquet, npz, csv, `MODEL/*`) **không nằm trong git**; chủ dự án gửi trực tiếp cho thành viên.
+Danh sách file bắt buộc, vị trí và sha256 nằm ở `BE/scripts/artifacts_manifest.json`:
+- `BE/scripts/`: `forecasts_Ensemble.parquet`, `quantiles_tft.parquet`, `production_forecast.parquet`,
+  `production_sigma.parquet`, `tier2_input.parquet`, `c3ok_sku_class.csv`
+- `BE/MODEL/`: `c3ok_forecasts.npz`, `best_params.json`, `ensemble_manifest.json`
+
+Kiểm tra (báo lỗi rõ ràng, thoát mã 1 nếu thiếu hoặc sai nội dung):
+```bash
+cd BE
+python scripts/check_artifacts.py
+```
+Có thể đặt thư mục artifact khác bằng `DFIOS_ARTIFACTS_DIR` (áp dụng cho nhóm `BE/scripts/`).
+
+Dữ liệu M5 gốc (`sales_train_evaluation.csv`, `calendar.csv`, tùy chọn `sell_prices.csv`) tải từ cuộc thi
+Kaggle "M5 Forecasting - Accuracy" và đặt đường dẫn vào `M5_SALES_CSV_PATH`, `M5_CALENDAR_CSV_PATH` trong `BE/.env`.
+
+> **Điều khoản dữ liệu**: M5 là dữ liệu của Walmart công bố qua Kaggle, chỉ dùng cho mục đích học thuật/nghiên cứu
+> theo điều khoản cuộc thi (https://www.kaggle.com/competitions/m5-forecasting-accuracy/rules). Không đưa dữ liệu gốc
+> và các artifact dẫn xuất lên kho mã công khai.
+
+### 2.5. Dựng cơ sở dữ liệu bằng MỘT lệnh
+Từ thư mục `BE/` (đã có `BE/.env` hoặc biến môi trường `DATABASE_URL`, `M5_*`, `ADMIN_PASSWORD`,
+`MANAGER_PASSWORD`, `VIEWER_PASSWORD`):
+```bash
+python scripts/bootstrap.py --reset
+```
+Thứ tự: kiểm tra artifact -> `init_tables` -> các loader (users, suppliers, calendar, events, products,
+sales_history, forecast, inventory_params, c3out, inventory, ...) -> `seed_demo` -> `sync_scientific_baseline`.
+In tiến độ và thời gian từng bước (khoảng 1 phút trên máy phát triển). Lỗi ở bước nào thì dừng và gợi ý
+`--from <bước>` để chạy tiếp.
+- `--reset`: DROP và tạo lại schema `public`. Từ chối nếu host của `DATABASE_URL` không phải `localhost`/`127.0.0.1`,
+  trừ khi thêm `--i-know`.
+- Không có `--reset`: chạy lại trên DB đã có dữ liệu (các loader idempotent).
+- `--skip-checksum`: chỉ kiểm tra tồn tại và kích thước artifact.
+
+### 2.6. Khởi chạy API
+```bash
+cd BE
+uvicorn app.main:app --reload --port 8000
+```
+Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs). Phía sau reverse proxy, đặt
+`TRUSTED_PROXIES` (IP/CIDR, phân tách dấu phẩy) thì header `X-Forwarded-For` mới được tin; mặc định không tin.
+
+### 2.7. Khởi chạy Frontend (React + Vite)
 ```bash
 cd FE
 npm install
 npm run dev
 ```
-Giao diện người dùng sẽ chạy tại: [http://localhost:5173](http://localhost:5173)
+Giao diện chạy tại [http://localhost:5173](http://localhost:5173). Danh sách kho cho bộ chọn kho: `GET /api/v1/inventory/stores`.
 
 ---
 
-## 3. Kiểm thử Tự động (Automated Unit Tests)
+## 3. Kiểm thử Tự động (Automated Tests)
 
-Toàn bộ 208 unit tests bảo toàn logic nghiệp vụ, giải thuật toán học và tính toàn vẹn của hệ thống:
-```bash
-# Đặt PYTHONPATH về BE và chạy toàn bộ test suite
-$env:PYTHONPATH='BE'
-python -m unittest discover -s BE/tests -p "test_*.py"
+Bộ test dùng `pytest` (SQLite in-memory, không cần PostgreSQL). Từ thư mục `BE/`:
+
+**PowerShell**
+```powershell
+python -m pytest -q
 ```
+**bash**
+```bash
+python -m pytest -q
+```
+Số lượng test hiện tại: xem dòng tổng kết của `pytest` (khoảng 240 test, mất vài phút).
+Test cần artifact `MODEL/tft_model.pth` tự bỏ qua (skip) khi file không có trên máy.
 
 ---
 
@@ -98,9 +154,9 @@ FRONTEND_BASE_URL=http://localhost:5173
 # Cấu hình SMTP
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=nguyensuminhnhat@gmail.com
+SMTP_USER=your_account@gmail.com
 SMTP_PASSWORD=your_16_character_app_password
-EMAILS_FROM_EMAIL=nguyensuminhnhat@gmail.com
+EMAILS_FROM_EMAIL=your_account@gmail.com
 EMAILS_FROM_NAME=DFIOS Notification
 EMAILS_USE_TLS=True
 

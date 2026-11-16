@@ -1,7 +1,5 @@
 import asyncio
-import json
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
@@ -15,9 +13,7 @@ from app.models.user import User
 from app.core.security import get_password_hash, create_access_token
 from app.core.events import InMemoryEventBus, event_bus
 from app.schemas.event import (
-    EventType,
     create_inventory_updated_event,
-    SystemEvent,
 )
 from app.api.deps import get_db
 
@@ -146,7 +142,7 @@ class TestRealtimeSSE(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bus.get_user_connection_count(user_email), 5)
 
         # Mở kết nối thứ 6: kết nối cũ nhất thứ 1 sẽ bị ngắt
-        sixth_queue = await bus.subscribe(user_email)
+        await bus.subscribe(user_email)
         self.assertEqual(bus.get_user_connection_count(user_email), 5)
 
         # Kết nối thứ 1 sẽ nhận tín hiệu None báo hiệu kết nối đã bị đóng do quá giới hạn

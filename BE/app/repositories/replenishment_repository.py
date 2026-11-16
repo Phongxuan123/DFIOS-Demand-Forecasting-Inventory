@@ -1,9 +1,32 @@
 from datetime import datetime
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, desc, asc, case
 
 from app.models.replenishment import ReplenishmentRecommendation
+
+
+_SORT_COLUMNS = {
+    "created_at", "decided_at", "item_id", "store_id", "status", "priority",
+    "recommended_qty", "final_qty", "review_date",
+}
+
+
+def _order_by(sort_by, sort_dir, default):
+    """Whitelisted ORDER BY (+ id tiebreak for stable pagination); priority sorts by severity."""
+    if not sort_by or sort_by not in _SORT_COLUMNS:
+        return default if isinstance(default, list) else [default]
+    fn = asc if (sort_dir or "desc").lower() == "asc" else desc
+    if sort_by == "priority":
+        col = case(
+            (ReplenishmentRecommendation.priority == "CRITICAL", 0),
+            (ReplenishmentRecommendation.priority == "HIGH", 1),
+            (ReplenishmentRecommendation.priority == "MEDIUM", 2),
+            else_=3,
+        )
+    else:
+        col = getattr(ReplenishmentRecommendation, sort_by)
+    return [fn(col), ReplenishmentRecommendation.id]
 
 
 class ReplenishmentRepository:
@@ -39,6 +62,8 @@ class ReplenishmentRepository:
         priority: Optional[str] = None,
         search: Optional[str] = None,
         item_id: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: Optional[str] = None,
     ) -> Tuple[List[ReplenishmentRecommendation], int]:
         query = db.query(ReplenishmentRecommendation)
 
@@ -64,9 +89,7 @@ class ReplenishmentRepository:
         total = query.count()
         # Sắp xếp ưu tiên: HIGH -> MEDIUM -> LOW, sau đó đến ngày tạo mới nhất
         items = (
-            query.order_by(
-                desc(ReplenishmentRecommendation.created_at)
-            )
+            query.order_by(*_order_by(sort_by, sort_dir, desc(ReplenishmentRecommendation.created_at)))
             .offset(skip)
             .limit(limit)
             .all()
@@ -83,6 +106,8 @@ class ReplenishmentRepository:
         status: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: Optional[str] = None,
     ) -> Tuple[List[ReplenishmentRecommendation], int]:
         query = db.query(ReplenishmentRecommendation)
 
@@ -103,7 +128,10 @@ class ReplenishmentRepository:
 
         total = query.count()
         items = (
-            query.order_by(desc(ReplenishmentRecommendation.decided_at), desc(ReplenishmentRecommendation.created_at))
+            query.order_by(*_order_by(
+                sort_by, sort_dir,
+                [desc(ReplenishmentRecommendation.decided_at), desc(ReplenishmentRecommendation.created_at)],
+            ))
             .offset(skip)
             .limit(limit)
             .all()

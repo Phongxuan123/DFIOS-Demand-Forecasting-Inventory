@@ -1,6 +1,6 @@
 import math
 from datetime import date
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -175,7 +175,6 @@ class DataQualityService:
 
         total_missing_days = 0
         total_expected_days = 0
-        outlier_candidates = []
 
         for s in series_agg:
             # E. Kiểm tra khoảng trống / ngày bị thiếu (Missing Days)
@@ -202,46 +201,44 @@ class DataQualityService:
                         )
                     )
 
-            # F. Phát hiện giá trị ngoại lai (Outliers theo Z-score)
-            if s.total_pts >= 5 and s.mean_qty is not None and s.sum_sq is not None:
-                mean_val = float(s.mean_qty)
-                var_val = max(0.0, (float(s.sum_sq) / s.total_pts) - (mean_val ** 2))
-                std_val = math.sqrt(var_val)
-                if std_val > 0.001:
-                    outlier_candidates.append((s.item_id, s.store_id, mean_val, std_val))
-
-        # 7. Truy vấn giá trị ngoại lai cho các chuỗi có độ lệch chuẩn đáng kể
-        for item_id, store_id, mean_val, std_val in outlier_candidates:
-            high_cut = mean_val + request.outlier_threshold_std * std_val
-            low_cut = mean_val - request.outlier_threshold_std * std_val
-            outlier_rows = (
-                db.query(
-                    SalesHistory.item_id,
-                    SalesHistory.store_id,
-                    SalesHistory.sale_date,
-                    SalesHistory.quantity,
-                )
-                .filter(
-                    *base_filters,
-                    SalesHistory.item_id == item_id,
-                    SalesHistory.store_id == store_id,
-                    (SalesHistory.quantity >= high_cut) | (SalesHistory.quantity <= low_cut),
-                )
-                .all()
+        # F. Outliers (Z-score): ONE SQL statement over all series (B-02) instead of one query per series.
+        # |q - mean| >= k * std  <=>  (q - mean)^2 >= k^2 * var   (no sqrt needed, works on SQLite and Postgres)
+        stat_sq = (
+            db.query(
+                SalesHistory.item_id.label("item_id"),
+                SalesHistory.store_id.label("store_id"),
+                func.avg(SalesHistory.quantity).label("mean_q"),
+                (func.sum(SalesHistory.quantity * SalesHistory.quantity) / func.count(SalesHistory.id)
+                 - func.avg(SalesHistory.quantity) * func.avg(SalesHistory.quantity)).label("var_q"),
+                func.count(SalesHistory.id).label("n"),
             )
-            for r in outlier_rows:
-                z_score = abs(float(r.quantity) - mean_val) / std_val
-                summary.outliers_count += 1
-                issues.append(
-                    DataQualityIssue(
-                        check_type="OUTLIER",
-                        item_id=r.item_id,
-                        store_id=r.store_id,
-                        severity="LOW" if z_score < 4.0 else "MEDIUM",
-                        message=f"Số lượng bán ngoại lai {r.quantity} (Z-score: {z_score:.2f}) vào ngày {r.sale_date}.",
-                        metric_value=float(r.quantity),
-                    )
+            .filter(*base_filters)
+            .group_by(SalesHistory.item_id, SalesHistory.store_id)
+            .having(func.count(SalesHistory.id) >= 5)
+            .subquery()
+        )
+        k2 = float(request.outlier_threshold_std) ** 2
+        dev = (SalesHistory.quantity - stat_sq.c.mean_q)
+        outlier_q = (
+            db.query(SalesHistory.item_id, SalesHistory.store_id, SalesHistory.sale_date, SalesHistory.quantity,
+                     stat_sq.c.mean_q, stat_sq.c.var_q)
+            .join(stat_sq, (SalesHistory.item_id == stat_sq.c.item_id) & (SalesHistory.store_id == stat_sq.c.store_id))
+            .filter(*base_filters, stat_sq.c.var_q > 1e-6, dev * dev >= k2 * stat_sq.c.var_q)
+        )
+        summary.outliers_count = outlier_q.count()
+        for r in outlier_q.limit(200).all():  # at most 200 issue rows are stored
+            std_val = math.sqrt(max(float(r.var_q), 1e-12))
+            z_score = abs(float(r.quantity) - float(r.mean_q)) / std_val
+            issues.append(
+                DataQualityIssue(
+                    check_type="OUTLIER",
+                    item_id=r.item_id,
+                    store_id=r.store_id,
+                    severity="LOW" if z_score < 4.0 else "MEDIUM",
+                    message=f"Số lượng bán ngoại lai {r.quantity} (Z-score: {z_score:.2f}) vào ngày {r.sale_date}.",
+                    metric_value=float(r.quantity),
                 )
+            )
 
         # 8. Tổng hợp chỉ số
         summary.missing_rate = (
