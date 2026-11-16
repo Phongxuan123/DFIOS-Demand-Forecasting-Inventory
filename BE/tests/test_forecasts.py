@@ -339,6 +339,7 @@ class TestForecastEndpoints(unittest.TestCase):
         self.assertFalse(data["available"])
         self.assertEqual(data["features"], [])
         self.assertTrue(data["reason"])
+        self.assertEqual(data["reason_code"], "no_stored_shap")
 
         # ARIMA model -> 404 Not Found kèm thông báo rõ ràng
         res_arima = self.client.get(

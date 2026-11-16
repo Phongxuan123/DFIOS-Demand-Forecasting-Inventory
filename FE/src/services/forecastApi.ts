@@ -82,6 +82,8 @@ export interface ExplanationResponse {
   source?: string | null;
   /** Why the explanation is unavailable (BE text, may be Vietnamese). */
   reason?: string | null;
+  /** Stable code (e.g. "no_stored_shap"); when present the UI shows its own localized text. */
+  reason_code?: string | null;
 }
 
 export interface WindowQuantileResponse {

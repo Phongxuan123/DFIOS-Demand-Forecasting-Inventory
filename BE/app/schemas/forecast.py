@@ -156,6 +156,8 @@ class ForecastExplanationResponse(BaseModel):
     available: bool = True
     source: Optional[str] = None  # stored_explanations | none
     reason: Optional[str] = None
+    # stable machine code for the FE to translate (e.g. "no_stored_shap"); reason stays as raw English text
+    reason_code: Optional[str] = None
 
 
 # --- UC24: Manual Forecast Override ---

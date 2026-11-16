@@ -705,7 +705,7 @@ class ForecastService:
         # in this database, so we say so instead of inventing numbers.
         return ForecastExplanationResponse(
             item_id=sku, store_id=store_id, model_name="n/a", model_version=model_version or "n/a",
-            base_value=None, features=[], available=False, source="none",
+            base_value=None, features=[], available=False, source="none", reason_code="no_stored_shap",
             reason=(
                 "No per-SKU feature attribution is available: the production forecast is an ensemble artifact "
                 "(no SHAP values are stored for this SKU and none are fabricated)."

@@ -784,7 +784,7 @@ export const ForecastExplorer: React.FC = () => {
                 <EmptyState
                   compact
                   title={t('forecast.shap.unavailable_title')}
-                  description={explanation.data?.reason ? `${t('forecast.shap.unavailable_body')} ${explanation.data.reason}` : t('forecast.shap.unavailable_body')}
+                  description={explanation.data?.reason && !explanation.data.reason_code ? `${t('forecast.shap.unavailable_body')} ${be(explanation.data.reason)}` : t('forecast.shap.unavailable_body')}
                 />
               ) : explanation.data.features.length === 0 ? (
                 <EmptyState compact title={t('forecast.shap.empty_title')} />

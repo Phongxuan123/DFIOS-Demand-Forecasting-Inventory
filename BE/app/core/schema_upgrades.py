@@ -8,6 +8,38 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 
+# Bảng có bước nâng cấp riêng (đổi khóa, backfill) bên dưới, không đụng bằng bước tổng quát.
+_CUSTOM_UPGRADE_TABLES = {"sku_classifications"}
+
+
+def _reconcile_columns(engine: Engine, base) -> list[str]:
+    """
+    Bước tổng quát, chỉ THÊM/NỚI, không xóa dữ liệu:
+    - cột có trong model nhưng thiếu trong DB -> ADD COLUMN (cho phép NULL);
+    - cột model cho phép NULL nhưng DB còn NOT NULL (khác khóa chính) -> DROP NOT NULL.
+    Cần cho DB tạo bởi phiên bản code cũ (ví dụ policy_selection.val_cost giờ được để trống khi chưa đo).
+    """
+    applied: list[str] = []
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    for table in base.metadata.sorted_tables:
+        if table.name not in existing_tables or table.name in _CUSTOM_UPGRADE_TABLES:
+            continue
+        db_cols = {c["name"]: c for c in insp.get_columns(table.name)}
+        pk = {c.name for c in table.primary_key.columns}
+        for col in table.columns:
+            if col.name not in db_cols:
+                col_type = col.type.compile(dialect=engine.dialect)
+                with engine.begin() as conn:
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}'))
+                applied.append(f"{table.name}.{col.name}")
+            elif col.nullable and col.name not in pk and not db_cols[col.name].get("nullable", True):
+                with engine.begin() as conn:
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ALTER COLUMN "{col.name}" DROP NOT NULL'))
+                applied.append(f"{table.name}.{col.name}:nullable")
+    return applied
+
+
 def apply_schema_upgrades(engine: Engine) -> list[str]:
     """Trả về danh sách bước đã áp dụng (rỗng nếu schema đã mới)."""
     applied: list[str] = []
@@ -20,6 +52,8 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
     Base.metadata.create_all(engine)
     insp = inspect(engine)
     applied.extend(f"create_table.{t}" for t in sorted(set(insp.get_table_names()) - before))
+    applied.extend(_reconcile_columns(engine, Base))
+    insp = inspect(engine)
     if "policy_selection" in insp.get_table_names():
         if "source" not in {c["name"] for c in insp.get_columns("policy_selection")}:
             with engine.begin() as conn:
