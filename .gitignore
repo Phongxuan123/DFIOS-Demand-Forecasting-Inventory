@@ -286,3 +286,7 @@ c3ok_artifacts/
 # extra virtualenvs
 BE/.venv*/
 BE/scripts/c3ok_sku_class.csv
+
+# Internal hand-off files (database dumps) - never commit
+*.dump
+docs/handoff/
