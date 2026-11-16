@@ -6,6 +6,26 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 load_dotenv(os.path.join(BASE_DIR, ".env.local"))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
+_LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal", "db", "postgres"}
+
+
+def _assert_local_only() -> None:
+    """DFIOS_LOCAL_ONLY=1: môi trường test tách biệt, cấm kết nối tới database ngoài máy (vd Supabase của nhóm)."""
+    if os.getenv("DFIOS_LOCAL_ONLY", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    from urllib.parse import urlparse
+    url = os.getenv("DATABASE_URL", "")
+    host = (urlparse(url.replace("+psycopg2", "")).hostname or "").lower()
+    if host not in _LOCAL_DB_HOSTS:
+        raise RuntimeError(
+            f"DFIOS_LOCAL_ONLY=1 but DATABASE_URL points to '{host}'. "
+            "This machine is configured as an isolated test environment; refusing to connect to a remote database. "
+            "Fix DATABASE_URL in BE/.env.local or unset DFIOS_LOCAL_ONLY."
+        )
+
+
+_assert_local_only()
+
 class Settings:
     PROJECT_NAME: str = "DFIOS - Demand Forecasting & Inventory Optimization System"
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+psycopg2://dfios:dfios123@localhost:5432/dfios")

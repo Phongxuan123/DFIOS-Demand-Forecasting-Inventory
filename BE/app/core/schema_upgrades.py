@@ -13,7 +13,13 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
     applied: list[str] = []
     if engine.dialect.name != "postgresql":
         return applied
+    # Bảng mới của phiên bản code này (vd sim_snapshot, sim_shadow_daily) chưa có trên DB cũ:
+    # create_all chỉ TẠO bảng còn thiếu, không sửa/xóa bảng đã có.
+    from app.models import Base
+    before = set(inspect(engine).get_table_names())
+    Base.metadata.create_all(engine)
     insp = inspect(engine)
+    applied.extend(f"create_table.{t}" for t in sorted(set(insp.get_table_names()) - before))
     if "policy_selection" in insp.get_table_names():
         if "source" not in {c["name"] for c in insp.get_columns("policy_selection")}:
             with engine.begin() as conn:
