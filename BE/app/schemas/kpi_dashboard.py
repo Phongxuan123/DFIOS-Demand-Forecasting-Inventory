@@ -32,7 +32,7 @@ class SegmentAvailability(BaseModel):
     n_periods: Optional[int] = None
     theta: float
     multiplier: float
-    status: str  # "COMPLIANT" | "WARNING"
+    status: str  # "COMPLIANT" | "WARNING" | "NOT_MEASURED" (no availability measured yet)
 
 
 class KPIDashboardResponse(BaseModel):

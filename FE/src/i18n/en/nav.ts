@@ -45,7 +45,7 @@ export const shell: typeof ViShell = {
     advance_body:
       'The server will run the J1–J6 batch chain for store {store}: sales replay, forecast, cycle close, C³-OUT review and new replenishment recommendations. This writes to the database; the time depends on the number of days and SKUs (the server reports no step-by-step progress).',
     advancing: 'Advancing clock…',
-    advancing_elapsed: 'Advancing the clock: {seconds} s elapsed.',
+    advancing_elapsed: '{seconds} s elapsed.',
     advancing_estimate: 'Previous advance: {days} days took {seconds} s.',
     advancing_no_estimate: 'The server reports no progress; only the elapsed time is shown.',
     advance_duration: 'Server time {seconds} s.',

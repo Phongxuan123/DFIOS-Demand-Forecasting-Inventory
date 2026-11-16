@@ -373,6 +373,11 @@ def test_ground_truth_labels_are_verified(env, monkeypatch):
         mapping = {STORE: {"I1": "AX", "I2": "AZ"}}  # I2 differs, I3 missing; TX_1 has no mapping at all
         monkeypatch.setattr(classification_service, "_load_ground_truth_classes",
                             lambda store_id="CA_1": mapping.get(store_id, {}))
+        # R5B-04: no mapping file on this machine -> nothing is relabelled
+        monkeypatch.setattr(classification_service, "_ground_truth_file", lambda: None)
+        assert classification_service.verify_ground_truth_labels(s) is None
+        assert s.query(SKUClassification).filter(SKUClassification.class_source == "ground_truth").count() == 4
+        monkeypatch.setattr(classification_service, "_ground_truth_file", lambda: "c3ok_sku_class.csv")
         assert classification_service.verify_ground_truth_labels(s) == 3
         got = {(r.item_id, r.store_id): r.class_source for r in s.query(SKUClassification)}
         assert got == {("I1", STORE): "ground_truth", ("I2", STORE): "legacy_unverified",
@@ -426,6 +431,12 @@ def test_postgres_upgrade_of_old_tables_never_claims_ground_truth(monkeypatch):
             conn.execute(sql("ALTER TABLE sku_classifications ALTER COLUMN class_source SET DEFAULT 'ground_truth'"))
             conn.execute(sql("UPDATE sku_classifications SET class_source = 'ground_truth'"))
         monkeypatch.setattr(classification_service, "_load_ground_truth_classes", lambda store_id="CA_1": {})
+        # R5B-04: without the mapping file the check is deferred and nothing changes
+        monkeypatch.setattr(classification_service, "_ground_truth_file", lambda: None)
+        assert any("deferred" in a for a in apply_schema_upgrades(eng))
+        with eng.begin() as conn:
+            assert conn.execute(sql("SELECT class_source FROM sku_classifications")).scalar() == "ground_truth"
+        monkeypatch.setattr(classification_service, "_ground_truth_file", lambda: "c3ok_sku_class.csv")
         applied = apply_schema_upgrades(eng)
         assert any("verified" in a for a in applied)
         with eng.begin() as conn:
@@ -555,3 +566,157 @@ def test_admin_can_delete_another_user(env):
     assert c.delete("/api/v1/users/v1", headers=admin).status_code == 404
     assert c.delete("/api/v1/users/a1", headers=admin).status_code == 400  # cannot delete self
     assert c.delete("/api/v1/users/m1", headers=env["manager"]).status_code == 403
+    # R5F-01: lock and delete are audited
+    assert c.patch("/api/v1/users/m1/status", json={"is_active": False}, headers=admin).status_code == 200
+    actions = {x["action"] for x in c.get("/api/v1/audit-logs?limit=50", headers=admin).json()["items"]}
+    assert {"admin.delete_user", "admin.lock_user"} <= actions
+
+
+# ================================================================== ROUND 5 review follow-up (R5B-01 .. R5B-10)
+def test_login_budget_reservation_is_atomic_under_a_parallel_burst():
+    """R5B-01: 30 parallel reservations on one key -> exactly 10 pass (check and count in one step)."""
+    import threading
+    from app.services.email_token_service import InMemoryRateLimiter
+    lim = InMemoryRateLimiter()
+    got, barrier = [], threading.Barrier(30)
+
+    def worker():
+        barrier.wait()
+        got.append(lim.reserve("login_email:x@dfios.com", 10, 300))
+
+    ts = [threading.Thread(target=worker) for _ in range(30)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert sum(1 for g in got if g is not None) == 10
+
+
+def test_db_login_budget_is_insert_then_count(env):
+    from app.services.email_token_service import db_login_failures
+    with env["Session"]() as s:
+        res = [db_login_failures.reserve(s, "login_email:k@dfios.com", 300, 10)[0] for _ in range(12)]
+        assert res == [True] * 10 + [False, False]
+        assert s.query(LoginFailure).filter(LoginFailure.key == "login_email:k@dfios.com").count() == 10
+        s.query(LoginFailure).delete()
+        s.commit()
+
+
+def test_inactive_and_throttled_logins_are_audited_and_unknown_emails_not_stored(env):
+    from app.services.email_token_service import rate_limiter
+    c = env["client"]
+    with env["Session"]() as s:
+        u = s.query(User).filter(User.id == "v1").one()
+        u.is_active = False
+        s.commit()
+    try:
+        # right password of a locked account: 403, audited, and it does NOT use the guessing budget
+        for _ in range(12):
+            assert c.post("/api/v1/auth/login", json={"email": "v1@dfios.com", "password": "Passw0rd1"}).status_code == 403
+        assert c.post("/api/v1/auth/login", json={"email": "ghost@x.com", "password": "nope"}).status_code == 401
+        logs = c.get("/api/v1/audit-logs?result=FAILURE&limit=50", headers=env["admin"]).json()["items"]
+        assert any("inactive" in (x["details"] or "") for x in logs)
+        unknown = [x for x in logs if "unknown_account" in (x["details"] or "")]
+        assert unknown and all(not x.get("actor_email") for x in unknown)
+        assert all("ghost@x.com" not in str(x) for x in logs)
+    finally:
+        for k in list(rate_limiter._requests):
+            rate_limiter.clear(k)
+        with env["Session"]() as s:
+            s.query(LoginFailure).delete()
+            s.commit()
+
+
+def test_forced_sba_never_reads_sales_after_the_clock(env):
+    c = env["client"]
+    with env["Session"]() as s:
+        _seed_store_sales(s, "NEW_3")
+        s.add(SimClock(store_id="NEW_3", current_date=date(2016, 3, 20), start_date=date(2016, 3, 1)))
+        s.add(Forecast(id="ens_x", item_id="SKU_A", store_id="NEW_3", forecast_date=date(2016, 3, 21), h=1,
+                       y_pred=1.0, available=True, model_version="Ensemble-v1"))
+        s.commit()
+    d = c.post("/api/v1/forecast/fast-inference", json={"store_id": "NEW_3", "horizon": 7, "prefer_production": False},
+               headers=env["admin"]).json()
+    assert d["source"] == "sba_fallback" and d["history_end"] == "2016-03-20" and d["clock_date"] == "2016-03-20"
+    assert "forced" in d["note"] and "has no production forecast" not in d["note"]
+
+
+def test_what_if_current_policy_keeps_its_order_up_to_level_when_costs_change(env):
+    """R5B-05: h and c re-price the stored ('current') policy; they do not redesign its S."""
+    from app.services.what_if_service import what_if_service
+    from app.schemas.simulation import WhatIfRequest
+    with env["Session"]() as s:
+        _seed_what_if(s)
+        pol = [{"policy_key": "current", "use_current": True, "use_theta": False},
+               {"policy_key": "p", "m_g": 0.0, "kappa_g": 1.0}]
+        a = what_if_service.run(s, WhatIfRequest(store_id=STORE, n_reviews=8, classes=["AX"], policies=pol))
+        b = what_if_service.run(s, WhatIfRequest(store_id=STORE, n_reviews=8, classes=["AX"], policies=pol,
+                                                 holding_rate=0.02, order_cost=0.0))
+        assert a.policies[0].overall.orders == b.policies[0].overall.orders
+        assert a.policies[0].overall.holding_cost != b.policies[0].overall.holding_cost
+        assert a.policies[1].overall.orders != b.policies[1].overall.orders  # a requested policy uses the new EOQ
+        # no stored selection -> the default is reported, never silent
+        assert a.policies[0].by_class[0].params_source == "default_no_stored_selection"
+        assert any("No stored policy selection" in n for n in a.notes)
+
+
+def test_gaussian_fallback_z_is_exact_for_any_tau():
+    from app.services.window_quantile_service import gaussian_z
+    assert gaussian_z(0.95) == 1.645
+    assert gaussian_z(0.92) == pytest.approx(1.405, abs=1e-3)
+
+
+def test_what_if_refuses_placeholder_prices(env):
+    c = env["client"]
+    with env["Session"]() as s:
+        _seed_what_if(s)
+        s.query(Product).update({Product.price: 1.0})
+        s.commit()
+    r = c.post("/api/v1/simulation/what-if", json={"store_id": STORE}, headers=env["admin"])
+    assert r.status_code == 422 and r.json()["detail"]["reason_code"] == "placeholder_prices"
+
+
+def test_compare_policies_what_if_follows_the_store_and_survives_a_missing_artifact(env, monkeypatch):
+    from fastapi import HTTPException
+    from app.services.simulation_service import simulation_service
+    c = env["client"]
+    with env["Session"]() as s:
+        _seed_what_if(s)
+
+    def missing(**kw):
+        raise HTTPException(status_code=503, detail="c3ok_results.csv missing")
+
+    monkeypatch.setattr(simulation_service, "compare_policies", missing)
+    body = {"store_id": STORE, "what_if": {"n_reviews": 8, "classes": ["AX"]}}
+    r = c.post("/api/v1/simulation/compare-policies", json=body, headers=env["admin"])
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "artifact_missing" and d["what_if"]["store_id"] == STORE
+    bad = {"store_id": STORE, "what_if": {"store_id": "TX_1"}}
+    r2 = c.post("/api/v1/simulation/compare-policies", json=bad, headers=env["admin"])
+    assert r2.status_code == 422 and r2.json()["detail"]["reason_code"] == "store_mismatch"
+    assert c.post("/api/v1/simulation/compare-policies", json={"store_id": STORE},
+                  headers=env["admin"]).status_code == 503
+
+
+def test_local_only_guard_accepts_sqlite_and_rejects_remote(monkeypatch):
+    from app.core import config
+    monkeypatch.setenv("DFIOS_LOCAL_ONLY", "1")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./x.db")
+    config._assert_local_only()
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg2://u:p@db.example.com:5432/postgres")
+    with pytest.raises(RuntimeError):
+        config._assert_local_only()
+
+
+def test_schema_reconcile_relaxes_only_explicitly_nullable_columns():
+    """R5B-10: an ORM column without nullable= keeps the NOT NULL of an existing database."""
+    from app.models import Base as AllBase
+    t = AllBase.metadata.tables
+    assert t["policy_selection"].c.val_cost._user_defined_nullable is True
+    assert t["sim_clock"].c.mode._user_defined_nullable is not True
+
+
+def test_replenishment_reason_says_ip_at_or_below_s():
+    src = open(os.path.join(BE_DIR, "app", "services", "replenishment_service.py"), encoding="utf-8").read()
+    assert "IP ({ip:.1f}) ≤ s" in src

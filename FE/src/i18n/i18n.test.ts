@@ -133,8 +133,8 @@ describe('backend text localisation (U-06)', () => {
   });
 
   it('prefers a stable backend code over the text, and falls back to the text', () => {
-    expect(localizeCoded('en', 'insufficient_data', null, 'anything')).toContain('No class of the store has replayable data');
-    expect(localizeCoded('en', 'unsupported_review_period', { supported_review_period_days: 7 }, 'x')).toContain('7 days apart');
+    expect(localizeCoded('en', 'whatif_insufficient_data', null, 'anything')).toContain('No class of the store has replayable data');
+    expect(localizeCoded('en', 'whatif_unsupported_review_period', { supported_review_period_days: 7 }, 'x')).toContain('7 days apart');
     expect(localizeCoded('en', 'unknown_code_xyz', null, 'Tồn kho trong ngưỡng an toàn.')).toBe('Stock is within the safe range.');
     expect(localizeCoded('en', null, null, null)).toBe('');
   });

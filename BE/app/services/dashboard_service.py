@@ -445,7 +445,7 @@ class DashboardService:
                 segment_availabilities=[
                     SegmentAvailability(
                         class_id=c, target=round(float(optimization_service.get_service_level_config(db).default_service_level) * 100.0, 1),
-                        theta=0.0, multiplier=1.0, status="COMPLIANT",
+                        theta=0.0, multiplier=1.0, status="NOT_MEASURED",
                     )
                     for c in pc.ALL_CLASSES
                 ],
@@ -497,7 +497,13 @@ class DashboardService:
                 b0_so += a["b0_stockout"]
                 b0_n += n_per
             th = mean(th_acc[cid])
-            flag = "WARNING" if (abs(th) >= pc.THETA_MAX or (c3_av is not None and c3_av < target_pct - 1.0)) else "COMPLIANT"
+            # R5F-03: no measured availability -> NOT_MEASURED (a pass is never shown without a measurement)
+            if abs(th) >= pc.THETA_MAX or (c3_av is not None and c3_av < target_pct - 1.0):
+                flag = "WARNING"
+            elif c3_av is None:
+                flag = "NOT_MEASURED"
+            else:
+                flag = "COMPLIANT"
             segs.append(SegmentAvailability(
                 class_id=cid, target=target_pct, c3out_availability=c3_av, b0_availability=b0_av,
                 n_sku=a["n_sku"] or None, n_periods=n_per or None,

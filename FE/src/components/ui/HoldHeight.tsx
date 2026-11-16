@@ -27,8 +27,11 @@ export const HoldHeight: React.FC<
     };
     // Snapshot right at the user's click/key (capture phase on document runs before React's handlers),
     // so the hold uses the layout the user was looking at, never a stale or still-loading height.
-    const snapshot = () => {
+    // R5F-10: only a tab control triggers it (no forced layout on every keystroke typed in a form).
+    const snapshot = (e: Event) => {
       if (holding.current || !ref.current) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target?.closest('[role="tab"]')) return;
       height.current = ref.current.offsetHeight;
       scrollY.current = window.scrollY;
     };

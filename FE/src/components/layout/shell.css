@@ -218,6 +218,8 @@
   color: var(--color-text);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+  white-space: nowrap; /* R5F-12: the date never wraps to two lines at 375 px */
+  flex-shrink: 0;
 }
 .shell-chip:hover {
   background: var(--color-surface-hover);
@@ -456,7 +458,7 @@
     gap: var(--space-1);
   }
   .shell-chip__text {
-    max-width: 84px;
+    max-width: 96px;
     overflow: hidden;
     text-overflow: ellipsis;
   }

@@ -269,10 +269,17 @@ class SimulatorService:
             db.rollback()
             raise
         db.refresh(clock)
+        # R5 FE review: (s, S, SS, ROP) of the LAST simulated review stayed in inventory_params, so the restored
+        # day-0 stock was judged against them (stale CRITICAL alerts after a reset). Recompute them at the clock
+        # origin (= start_date): same quantiles, baseline theta (review 0) and seeded policy selection as day 0.
+        from app.services.optimization_service import optimization_service
+        n_params = optimization_service.recompute_parameters(db, store_id=store_id)
+        db.commit()
         return clock, {
             "snapshot_restored": restored,
             "inventory_source": "snapshot" if restored else "initial_levels_S_from_inventory_params",
             "n_skus": len(item_ids),
+            "parameters_recomputed": n_params,
         }
 
     # ------------------------------------------------------------------ advance

@@ -108,6 +108,8 @@ class WhatIfClassResult(WhatIfMetrics):
     m_g: float
     kappa_g: float
     theta_g: float = 0.0
+    params_source: Optional[str] = Field(
+        None, description="stored (policy_selection) | default_no_stored_selection (m=0, kappa=1) | request")
 
 
 class WhatIfPolicyResult(BaseModel):

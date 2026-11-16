@@ -44,7 +44,7 @@ export const shell = {
     advance_body:
       'Máy chủ sẽ chạy chuỗi batch J1–J6 cho kho {store}: phát lại doanh số, dự báo, đóng chu kỳ, review C³-OUT và sinh đề xuất bổ sung. Thao tác ghi vào cơ sở dữ liệu; thời gian phụ thuộc số ngày và số SKU (máy chủ không báo tiến độ từng bước).',
     advancing: 'Đang tua đồng hồ…',
-    advancing_elapsed: 'Đang tua đồng hồ: đã chạy {seconds} giây.',
+    advancing_elapsed: 'Đã chạy {seconds} giây.',
     advancing_estimate: 'Lần tua trước: {days} ngày mất {seconds} giây.',
     advancing_no_estimate: 'Máy chủ không báo tiến độ; chỉ hiển thị thời gian đã chạy.',
     advance_duration: 'Máy chủ xử lý trong {seconds} giây.',

@@ -339,17 +339,30 @@ def run_fast_inference(
                 ),
             )
 
-    sales = (
-        db.query(SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity)
-        .filter(SalesHistory.store_id == store_id)
-        .order_by(SalesHistory.sale_date.asc())
-        .all()
+    # R5B-02 / U-04: the SBA fit never sees sales after the store's simulated clock (those days are the future)
+    from app.services.forecast_service import forecast_service
+    cap = forecast_service.clock_cap(db, store_id)
+    sales_q = db.query(SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity).filter(
+        SalesHistory.store_id == store_id
     )
+    if cap is not None:
+        sales_q = sales_q.filter(SalesHistory.sale_date <= cap)
+    sales = sales_q.order_by(SalesHistory.sale_date.asc()).all()
     if not sales:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Không tìm thấy dữ liệu bán hàng cho kho '{store_id}'. Hãy tải file CSV lên trước.",
+            detail=(
+                f"Không tìm thấy dữ liệu bán hàng cho kho '{store_id}'"
+                + (f" tới ngày mô phỏng {cap}" if cap is not None else "")
+                + ". Hãy tải file CSV lên trước."
+            ),
         )
+    has_production = (
+        db.query(Forecast.id)
+        .filter(Forecast.store_id == store_id, Forecast.model_version.ilike(pc.POINT_FORECAST_MODEL_PATTERN))
+        .first()
+        is not None
+    )
 
     df_sales = pd.DataFrame(sales, columns=["item_id", "sale_date", "sales"])
     df_sales["store_id"] = store_id
@@ -401,7 +414,12 @@ def run_fast_inference(
         history_start=str(df_sales["sale_date"].min().date()),
         history_end=str(df_sales["sale_date"].max().date()),
         note=(
-            "SBA-Croston fallback (alpha 0.1) with a day-of-week profile, fitted per SKU on the store's sales history; "
-            "NOT the production ensemble (the store has no production forecast)."
+            "SBA-Croston fallback (alpha 0.1) with a day-of-week profile, fitted per SKU on the store's sales history "
+            + (f"up to the simulated clock ({cap}); " if cap is not None else "(no simulated clock: all history); ")
+            + (
+                "NOT the production ensemble (forced with prefer_production=false; the production forecast is kept)."
+                if has_production else "NOT the production ensemble (the store has no production forecast)."
+            )
         ),
+        clock_date=str(cap) if cap is not None else None,
     )

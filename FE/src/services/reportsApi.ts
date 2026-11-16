@@ -226,6 +226,8 @@ export interface WhatIfClassResult extends WhatIfMetrics {
   m_g: number;
   kappa_g: number;
   theta_g?: number;
+  /** stored | default_no_stored_selection | request */
+  params_source?: string | null;
 }
 export interface WhatIfPolicyResult {
   policy_key: string;

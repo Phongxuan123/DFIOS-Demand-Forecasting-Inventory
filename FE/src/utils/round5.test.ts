@@ -4,7 +4,8 @@ import { DEFAULT_NOTIFS, NOTIF_KEY, NOTIF_PREFS_EVENT, readNotifPrefs, writeNoti
 import { WHAT_IF_DEFAULTS, availabilityRatio, toWhatIfRequest, validateWhatIf, whatIfHighlights } from './whatIf.ts';
 import { isWhatIfResponse, type WhatIfPolicyResult } from '../services/reportsApi.ts';
 import { auditOutcome } from '../services/settingsApi.ts';
-import { extractCodeAndData } from '../services/apiClient.ts';
+import { apiErrorMessage, extractCodeAndData } from '../services/apiClient.ts';
+import { clearSession, storeSession } from '../services/session.ts';
 
 describe('thetaDomain (U-14)', () => {
   it('is tight around a small drift and keeps zero in view', () => {
@@ -60,6 +61,29 @@ describe('notification preferences (read by the bell)', () => {
     window.removeEventListener(NOTIF_PREFS_EVENT, seen);
     expect(seen).toHaveBeenCalledTimes(1);
     expect(readNotifPrefs()).toEqual({ stock: false, replenishment: true });
+  });
+
+  it('keeps one entry per account and survives a login (R5F-08)', () => {
+    storeSession('tok-a', { id: 'user-a', email: 'a@x.test' });
+    writeNotifPrefs({ stock: false, replenishment: false });
+    clearSession(); // logout / login purge
+    storeSession('tok-b', { id: 'user-b', email: 'b@x.test' });
+    expect(readNotifPrefs()).toEqual(DEFAULT_NOTIFS); // another account: its own defaults
+    storeSession('tok-a', { id: 'user-a', email: 'a@x.test' });
+    expect(readNotifPrefs()).toEqual({ stock: false, replenishment: false });
+    clearSession();
+  });
+});
+
+describe('endpoint-scoped error codes (R5F-09)', () => {
+  it('looks up a what-if code under its prefix only', () => {
+    const err = { kind: 'validation', status: 422, message: 'x', detail: 'Raw reason', code: 'insufficient_data' };
+    const t = ((k: string) => k) as never;
+    // without the prefix the generic code is unknown -> the server's own text; with it -> the what-if sentence
+    expect(apiErrorMessage(err, t)).toBe('Raw reason');
+    const scoped = apiErrorMessage(err, t, 'whatif');
+    expect(scoped).not.toBe('Raw reason');
+    expect(scoped.length).toBeGreaterThan(40);
   });
 });
 

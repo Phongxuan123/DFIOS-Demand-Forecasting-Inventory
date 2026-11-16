@@ -56,6 +56,17 @@ GAUSSIAN_Z = {
     0.985: 2.170, 0.99: 2.326, 0.995: 2.576, 0.999: 3.090,
 }
 
+
+
+def gaussian_z(tau: float) -> float:
+    """R5B-05: z of the Gaussian fallback for ANY tau (the table above is kept for the listed levels)."""
+    from statistics import NormalDist
+    t = round(float(tau), 4)
+    if t in GAUSSIAN_Z:
+        return GAUSSIAN_Z[t]
+    return float(NormalDist().inv_cdf(min(0.9999, max(0.0001, float(tau)))))
+
+
 DEFAULT_MODEL_RUN_ID = "backtest-ensemble-v1"
 _IN_CHUNK = 900
 
@@ -403,7 +414,7 @@ class WindowQuantileService:
         sig = np.full(n, np.nan)
         for iid, sg in bt.groupby("item_id")["sigma_d"].last().items():
             sig[pos_item[iid]] = float(sg)
-        z = GAUSSIAN_Z.get(tau, 1.645)
+        z = gaussian_z(tau)
         for k, s_k in enumerate(review_days):
             if s_k not in pos_rev:
                 continue
@@ -536,7 +547,7 @@ class WindowQuantileService:
         else:
             sigma_h = (sigma_hint or 0.0) * math.sqrt(horizon_days)
             sigma_h = max(sigma_h, math.sqrt(max(point_window, 1.0)))  # Poisson-like lower bound
-            q = np.array([max(0.0, point_window + GAUSSIAN_Z.get(t, 1.645) * sigma_h) for t in levels])
+            q = np.array([max(0.0, point_window + gaussian_z(t) * sigma_h) for t in levels])
             if quantile_floor:
                 q = np.where((np.array(levels) >= 0.90) & (point_window > 0), np.maximum(q, quantile_floor), q)
         return {str(t): round(float(v), 2) for t, v in zip(levels, q)}

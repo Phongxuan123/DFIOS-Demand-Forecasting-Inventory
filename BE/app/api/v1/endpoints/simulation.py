@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_manager_or_admin
@@ -29,12 +29,32 @@ def compare_policies(
     Khi body có `what_if`, trường `what_if` của phản hồi chứa kết quả MÔ PHỎNG THẬT (giống `POST /simulation/what-if`).
     Role: Warehouse Manager, Admin.
     """
-    res = simulation_service.compare_policies(
-        db=db,
-        store_id=body.store_id or "CA_1",
-        horizon_days=body.horizon_days or 90,
-        target_service_level=body.target_service_level or 0.96,
-    )
+    store_id = body.store_id or "CA_1"
+    if body.what_if is not None:
+        wi_store = (body.what_if.store_id or "").strip()
+        if "store_id" not in body.what_if.model_fields_set:
+            body.what_if.store_id = store_id  # R5B-06: the what-if follows the comparison's store by default
+        elif wi_store != store_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"reason_code": "store_mismatch",
+                        "reason": f"what_if.store_id '{wi_store}' differs from store_id '{store_id}'."},
+            )
+    try:
+        res = simulation_service.compare_policies(
+            db=db,
+            store_id=store_id,
+            horizon_days=body.horizon_days or 90,
+            target_service_level=body.target_service_level or 0.96,
+        )
+    except HTTPException as e:
+        # R5B-06: the artifact extract is unavailable (503) but the what-if does not need it
+        if e.status_code != status.HTTP_503_SERVICE_UNAVAILABLE or body.what_if is None:
+            raise
+        res = PolicyComparisonResponse(
+            store_id=store_id, simulation_horizon_days=body.horizon_days or 90, sku_count=0, policies=[],
+            insights=[], status="artifact_missing", reason=str(e.detail),
+        )
     if body.what_if is not None:
         res.what_if = what_if_service.run(db, body.what_if).model_dump(mode="json")
         res.what_if_reason = None

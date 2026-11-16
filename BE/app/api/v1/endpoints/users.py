@@ -129,6 +129,7 @@ def update_user(
 def toggle_status(
     user_id: str,
     req_body: UserStatusUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -136,12 +137,14 @@ def toggle_status(
     **UC06 - Toggle User Active Status (Admin only)**:
     Admin kích hoạt (True) hoặc vô hiệu hóa (False) tài khoản người dùng.
     """
-    return user_service.toggle_user_status(db, user_id=user_id, request=req_body, current_admin=admin)
+    return user_service.toggle_user_status(db, user_id=user_id, request=req_body, current_admin=admin,
+                                           ip_address=get_client_ip(request))
 
 
 @router.delete("/{user_id}", response_model=MessageResponse, summary="UC06 - Xóa tài khoản")
 def delete_user(
     user_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
@@ -149,4 +152,4 @@ def delete_user(
     **UC06 - Delete User (Admin only)**:
     Admin xóa vĩnh viễn một tài khoản khỏi hệ thống.
     """
-    return user_service.delete_user(db, current_admin=admin, user_id=user_id)
+    return user_service.delete_user(db, current_admin=admin, user_id=user_id, ip_address=get_client_ip(request))

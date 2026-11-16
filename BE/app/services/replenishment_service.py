@@ -181,7 +181,7 @@ class ReplenishmentService:
                     # auto_order (simulator): the order is placed immediately -> APPROVED, received by J1 after L
                     # days and then set to COMPLETED; a COMPLETED order is never received twice (P-16).
                     status="APPROVED" if auto_order else "PENDING",
-                    reason=f"Đề xuất {policy_name}: IP ({ip:.1f}) < s ({s_level:.1f}), đặt q = S - IP = {recommended_qty:.0f}",
+                    reason=f"Đề xuất {policy_name}: IP ({ip:.1f}) ≤ s ({s_level:.1f}), đặt q = S - IP = {recommended_qty:.0f}",
                     order_up_to_S=S_level,
                     reorder_point_s=s_level,
                     inventory_position=ip,

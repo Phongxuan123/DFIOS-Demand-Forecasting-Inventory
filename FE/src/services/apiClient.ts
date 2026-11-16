@@ -201,10 +201,13 @@ type ErrorTranslator = (
  * User-facing text for an error. Validation / not-found errors show the server detail
  * (it is specific and actionable); transport errors use the translated generic text.
  */
-export function apiErrorMessage(err: unknown, t: ErrorTranslator): string {
+export function apiErrorMessage(err: unknown, t: ErrorTranslator, codePrefix?: string): string {
   const e = toApiError(err);
   // A stable code (newer BE) is translated first; else the known-sentence map; else the raw detail.
-  const text = () => localizeCoded(getActiveLocale(), e.code, e.data as Record<string, string | number | null> | undefined, e.detail) || e.code || '';
+  // R5F-09: endpoint-specific codes are looked up under their prefix (e.g. `whatif_insufficient_data`), so a
+  // generic code reused by another endpoint never shows the what-if sentence.
+  const code = e.code && codePrefix ? `${codePrefix}_${e.code}` : e.code;
+  const text = () => localizeCoded(getActiveLocale(), code, e.data as Record<string, string | number | null> | undefined, e.detail) || e.code || '';
   switch (e.kind) {
     case 'network':
       return t('common.errors.network');

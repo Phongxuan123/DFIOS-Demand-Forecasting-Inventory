@@ -96,6 +96,7 @@ export const forecast: typeof Vi = {
     band: 'P10–P90 band',
     adjusted: 'Overridden value',
     last_actual: 'Actuals until {date}',
+    gap: 'No actual and no stored forecast for {days} days between {from} and {to}: the axis keeps that gap empty.',
     after_clock: 'After simulation clock',
     clock_line: 'Sim clock {date}',
     tooltip_p10: 'P10',

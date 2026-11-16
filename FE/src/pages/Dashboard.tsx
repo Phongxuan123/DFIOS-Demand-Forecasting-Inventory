@@ -23,7 +23,7 @@ import {
   type Column,
 } from '../components/ui/index.ts';
 import { useApi } from '../hooks/useApi.ts';
-import { useClock } from '../context/ClockContext.tsx';
+import { CLOCK_ADVANCE_DAYS, useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBeCode } from '../i18n/useBe.ts';
@@ -139,7 +139,7 @@ const ClockPanel: React.FC = () => {
                 label={t('dashboard.clock.days')}
                 value={days}
                 onChange={setDays}
-                options={[1, 7, 14, 28].map((d) => ({ value: d, label: String(d) }))}
+                options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
                 disabled={advancing}
               />
               <Button variant="primary" loading={advancing} onClick={onAdvance}>
@@ -351,12 +351,16 @@ export const Dashboard: React.FC = () => {
       key: 'status',
       header: t('dashboard.seg.col_status'),
       value: (r) => r.status,
-      cell: (r) => (
-        <Badge tone={r.status === 'COMPLIANT' ? 'success' : 'warning'}>
-          {r.status === 'COMPLIANT' ? <CheckCircle2 size={12} aria-hidden="true" /> : <TriangleAlert size={12} aria-hidden="true" />}{' '}
-          {r.status === 'COMPLIANT' ? t('dashboard.seg.status_compliant') : t('dashboard.seg.status_warning')}
-        </Badge>
-      ),
+      cell: (r) =>
+        // R5F-03: a pass is only shown when availability was measured
+        r.status === 'NOT_MEASURED' || (r.status === 'COMPLIANT' && r.c3out_availability == null) ? (
+          <Badge tone="neutral">{t('dashboard.seg.status_not_measured')}</Badge>
+        ) : (
+          <Badge tone={r.status === 'COMPLIANT' ? 'success' : 'warning'}>
+            {r.status === 'COMPLIANT' ? <CheckCircle2 size={12} aria-hidden="true" /> : <TriangleAlert size={12} aria-hidden="true" />}{' '}
+            {r.status === 'COMPLIANT' ? t('dashboard.seg.status_compliant') : t('dashboard.seg.status_warning')}
+          </Badge>
+        ),
     },
   ];
 
@@ -379,6 +383,9 @@ export const Dashboard: React.FC = () => {
   // U-04: the sim clock is the demo's "today"; data dated after it is marked in the trend chart.
   const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : null;
   const trendBeyondClock = !!clockDate && trendRows.some((r) => r.actual !== null && r.date > clockDate);
+  // R5F-05: say why a series is missing instead of listing it in the legend with nothing drawn
+  const trendNoForecast = trendHasData && !trendRows.some((r) => r.predicted !== null);
+  const trendNoActual = trendHasData && !trendRows.some((r) => r.actual !== null);
   // U-05: say plainly when the simulator misses the availability target.
   const availMiss =
     sh && sh.c3out_overall_availability != null && sh.target_availability != null && sh.c3out_overall_availability < sh.target_availability;
@@ -427,7 +434,7 @@ export const Dashboard: React.FC = () => {
       )}
 
       <Section>
-        <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+        <div className="ui-grid ui-grid--kpi-cols" style={{ '--kpi-cols': 3 } as React.CSSProperties}>
           <KpiTile
             icon={<Target size={14} />}
             label={t('dashboard.kpi.availability')}
@@ -572,7 +579,14 @@ export const Dashboard: React.FC = () => {
             source="/dashboard/demand-trend"
             footer={
               <>
-                <ChartLegend items={[{ label: t('dashboard.charts.actual'), color: 'var(--chart-1)' }, { label: t('dashboard.charts.predicted'), color: 'var(--chart-2)', dash: '5 3' }]} />
+                <ChartLegend
+                  items={[
+                    ...(trendNoActual ? [] : [{ label: t('dashboard.charts.actual'), color: 'var(--chart-1)' }]),
+                    ...(trendNoForecast ? [] : [{ label: t('dashboard.charts.predicted'), color: 'var(--chart-2)', dash: '5 3' }]),
+                  ]}
+                />
+                {trendNoForecast && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_no_forecast')}</p>}
+                {trendNoActual && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_no_actual')}</p>}
                 {trendBeyondClock && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_beyond_clock')}</p>}
               </>
             }

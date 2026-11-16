@@ -16,7 +16,8 @@ def _reconcile_columns(engine: Engine, base) -> list[str]:
     """
     Bước tổng quát, chỉ THÊM/NỚI, không xóa dữ liệu:
     - cột có trong model nhưng thiếu trong DB -> ADD COLUMN (cho phép NULL);
-    - cột model cho phép NULL nhưng DB còn NOT NULL (khác khóa chính) -> DROP NOT NULL.
+    - cột model KHAI BÁO RÕ nullable=True nhưng DB còn NOT NULL (khác khóa chính) -> DROP NOT NULL.
+      R5B-10: cột chỉ "mặc định" nullable trong ORM (không khai báo) giữ nguyên NOT NULL của DB.
     Cần cho DB tạo bởi phiên bản code cũ (ví dụ policy_selection.val_cost giờ được để trống khi chưa đo).
     """
     applied: list[str] = []
@@ -33,7 +34,10 @@ def _reconcile_columns(engine: Engine, base) -> list[str]:
                 with engine.begin() as conn:
                     conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}'))
                 applied.append(f"{table.name}.{col.name}")
-            elif col.nullable and col.name not in pk and not db_cols[col.name].get("nullable", True):
+            elif (
+                col.nullable and col._user_defined_nullable is True  # R5B-10: only EXPLICIT nullable=True columns
+                and col.name not in pk and not db_cols[col.name].get("nullable", True)
+            ):
                 with engine.begin() as conn:
                     conn.execute(text(f'ALTER TABLE "{table.name}" ALTER COLUMN "{col.name}" DROP NOT NULL'))
                 applied.append(f"{table.name}.{col.name}:nullable")
@@ -47,10 +51,11 @@ def _upgrade_class_source(engine: Engine) -> list[str]:
     * Column missing (table of an old version): added with DEFAULT 'legacy_unverified', so every existing row is
       labelled ``legacy_unverified`` (its source was never recorded).
     * Column present with the OLD default 'ground_truth' (created or upgraded by a previous version, which labelled
-      every legacy / unspecified row ``ground_truth`` without checking): the default becomes 'legacy_unverified'
-      and every ``ground_truth`` row is verified once against the C3-OUT mapping ``c3ok_sku_class.csv``: a row whose
-      segment differs from the mapping (or whose SKU is not in it), or any row when the mapping file is not
-      available, is relabelled ``legacy_unverified``. Rows that match the mapping keep ``ground_truth``.
+      every legacy / unspecified row ``ground_truth`` without checking): every ``ground_truth`` row is verified
+      once against the C3-OUT mapping ``c3ok_sku_class.csv``: a row whose segment differs from the mapping (or
+      whose SKU / store is not in it) is relabelled ``legacy_unverified``; matching rows keep ``ground_truth``.
+      Then the default becomes 'legacy_unverified'. When the mapping file is NOT installed on this machine
+      nothing changes (R5B-04) and the step runs again on a machine that has it.
     Nothing is deleted; the next recompute of the store writes the real source again.
     """
     applied: list[str] = []
@@ -67,13 +72,18 @@ def _upgrade_class_source(engine: Engine) -> list[str]:
     default = str(cols["class_source"].get("default") or "")
     if "ground_truth" not in default:
         return applied
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE sku_classifications ALTER COLUMN class_source SET DEFAULT 'legacy_unverified'"))
-    applied.append("sku_classifications.class_source default legacy_unverified")
     from sqlalchemy.orm import Session
     from app.services.classification_service import classification_service
     with Session(bind=engine) as db:
         n = classification_service.verify_ground_truth_labels(db)
+    if n is None:
+        # R5B-04: c3ok_sku_class.csv is not installed here. Nothing is relabelled and the old default is kept as
+        # the marker, so the verification runs on the next start of a machine that has the mapping file.
+        applied.append("sku_classifications ground_truth verification deferred (c3ok_sku_class.csv not installed)")
+        return applied
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE sku_classifications ALTER COLUMN class_source SET DEFAULT 'legacy_unverified'"))
+    applied.append("sku_classifications.class_source default legacy_unverified")
     applied.append(f"sku_classifications ground_truth verified ({n} relabelled legacy_unverified)")
     return applied
 

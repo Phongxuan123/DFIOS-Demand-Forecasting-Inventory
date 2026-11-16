@@ -288,7 +288,26 @@ export const ForecastExplorer: React.FC = () => {
       p.band = r.quality === 'ok' ? [r.p10 as number, r.p90 as number] : null;
       p.adjusted = r.is_overridden ? r.y_pred : null;
     }
+    const sorted = Array.from(m.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    // R5F-04: the category axis must not hide calendar gaps (e.g. clock Apr 25 -> first forecast May 23):
+    // every missing day in between becomes an empty point, so the distance on screen is the distance in time.
+    if (sorted.length < 2) return sorted;
+    const day = 86_400_000;
+    const t0 = Date.parse(`${sorted[0].date}T00:00:00Z`);
+    const t1 = Date.parse(`${sorted[sorted.length - 1].date}T00:00:00Z`);
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || (t1 - t0) / day > 800) return sorted;
+    for (let t = t0; t <= t1; t += day) get(new Date(t).toISOString().slice(0, 10));
     return Array.from(m.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }, [historyPoints, rows]);
+
+  /** Days without any actual or forecast between the last actual and the first forecast after it (R5F-04). */
+  const forecastGap = useMemo(() => {
+    if (!historyPoints.length || !rows.length) return null;
+    const last = historyPoints[historyPoints.length - 1].date;
+    const next = rows.map((r) => r.forecast_date).filter((d) => d > last).sort()[0];
+    if (!next) return null;
+    const days = Math.round((Date.parse(`${next}T00:00:00Z`) - Date.parse(`${last}T00:00:00Z`)) / 86_400_000) - 1;
+    return days > 0 ? { days, from: last, to: next } : null;
   }, [historyPoints, rows]);
 
   // U-04: the simulation clock is the "today" of the demo. Anything dated after it is shown, but marked.
@@ -740,14 +759,21 @@ export const ForecastExplorer: React.FC = () => {
               onRetry={history.refetch}
               empty={chartData.length === 0}
               footer={
-                <ChartLegend
-                  items={[
-                    { label: t('forecast.chart.actual'), color: chart.series[1] },
-                    { label: t('forecast.chart.forecast'), color: chart.series[0] },
-                    { label: t('forecast.chart.band'), color: chart.series[0] },
-                    ...(rows.some((r) => r.is_overridden) ? [{ label: t('forecast.chart.adjusted'), color: chart.series[2] }] : []),
-                  ]}
-                />
+                <>
+                  <ChartLegend
+                    items={[
+                      { label: t('forecast.chart.actual'), color: chart.series[1] },
+                      { label: t('forecast.chart.forecast'), color: chart.series[0] },
+                      { label: t('forecast.chart.band'), color: chart.series[0] },
+                      ...(rows.some((r) => r.is_overridden) ? [{ label: t('forecast.chart.adjusted'), color: chart.series[2] }] : []),
+                    ]}
+                  />
+                  {forecastGap && (
+                    <p className="ui-muted" style={{ margin: 'var(--space-2) 0 0', fontSize: 'var(--text-xs)' }}>
+                      {t('forecast.chart.gap', { days: fmt.integer(forecastGap.days), from: fmt.date(forecastGap.from, 'short'), to: fmt.date(forecastGap.to, 'short') })}
+                    </p>
+                  )}
+                </>
               }
             >
               <ResponsiveContainer width="100%" height="100%">
@@ -774,12 +800,12 @@ export const ForecastExplorer: React.FC = () => {
                       label={{ value: t('forecast.chart.clock_line', { date: fmt.date(clockDate, 'short') }), fill: chart.tick, fontSize: 11, position: 'insideTopRight' }}
                     />
                   )}
-                  {lastActualDate && chartData.some((p) => p.date === lastActualDate) && (
+                  {lastActualDate && lastActualDate !== clockDate && chartData.some((p) => p.date === lastActualDate) && (
                     <ReferenceLine
                       x={lastActualDate}
                       stroke={chart.reference}
                       strokeDasharray="4 4"
-                      label={{ value: t('forecast.chart.last_actual', { date: fmt.date(lastActualDate, 'short') }), fill: chart.tick, fontSize: 11, position: 'insideTopLeft' }}
+                      label={{ value: t('forecast.chart.last_actual', { date: fmt.date(lastActualDate, 'short') }), fill: chart.tick, fontSize: 11, position: 'insideBottomRight' }}
                     />
                   )}
                   <Area dataKey="band" name={t('forecast.chart.band')} stroke="none" fill={chart.series[0]} fillOpacity={chart.bandOpacity} isAnimationActive={false} connectNulls={false} />

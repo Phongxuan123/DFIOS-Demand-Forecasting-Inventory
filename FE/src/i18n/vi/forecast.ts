@@ -97,6 +97,7 @@ export const forecast = {
     band: 'Dải P10–P90',
     adjusted: 'Giá trị đã điều chỉnh',
     last_actual: 'Thực tế đến {date}',
+    gap: 'Không có số thực tế và dự báo đã lưu trong {days} ngày từ {from} đến {to}: trục thời gian giữ nguyên khoảng trống này.',
     after_clock: 'Sau đồng hồ mô phỏng',
     clock_line: 'Đồng hồ {date}',
     tooltip_p10: 'P10',

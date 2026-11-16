@@ -39,6 +39,10 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
   const [form, setForm] = useState<WhatIfForm>({ ...WHAT_IF_DEFAULTS });
   const [touched, setTouched] = useState(false);
   const [state, setState] = useState<RunState>({ kind: 'idle' });
+  // R5F-07: a failed later run does not wipe the last successful result (it is labelled as previous)
+  const [lastResult, setLastResult] = useState<WhatIfResponse | null>(null);
+  // R5F-07: R values the server said it cannot replay (from a 422 unsupported_review_period)
+  const [supportedR, setSupportedR] = useState<number[] | null>(null);
   const [showClasses, setShowClasses] = useState<string | null>(null);
   const elapsed = useElapsed(state.kind === 'running');
 
@@ -53,17 +57,25 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
     setState({ kind: 'running' });
     try {
       const res = await postWhatIf(toWhatIfRequest(storeId, form));
-      setState(isWhatIfResponse(res) ? { kind: 'done', result: res } : { kind: 'malformed' });
+      if (isWhatIfResponse(res)) {
+        setState({ kind: 'done', result: res });
+        setLastResult(res);
+      } else setState({ kind: 'malformed' });
       setShowClasses(null);
     } catch (err) {
       const e = toApiError(err);
       if (e.status === 404 || e.status === 405) setState({ kind: 'unsupported' });
-      else setState({ kind: 'error', error: e });
+      else {
+        setState({ kind: 'error', error: e });
+        const sup = (e.data as { supported_review_period_days?: unknown } | undefined)?.supported_review_period_days;
+        if (e.code === 'unsupported_review_period' && Array.isArray(sup)) setSupportedR(sup.map(Number));
+      }
     }
   };
 
   const policyName = (p: WhatIfPolicyResult) => (KNOWN_POLICY_KEYS.includes(p.policy_key) ? t(`reports.whatif.policy_${p.policy_key}` as TKey) : p.label || p.policy_key);
-  const result = state.kind === 'done' ? state.result : null;
+  const result = state.kind === 'done' ? state.result : state.kind === 'error' ? lastResult : null;
+  const showingPrevious = state.kind === 'error' && !!lastResult;
   const hl = result ? whatIfHighlights(result.policies) : { cheapest: null, bestService: null };
 
   const cols: Column<WhatIfPolicyResult>[] = [
@@ -99,7 +111,21 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
 
   const classCols: Column<WhatIfClassResult>[] = [
     { key: 'cls', header: t('reports.whatif.col_class'), value: (r) => r.class_id, sortable: true },
-    { key: 'm', header: 'm_g', align: 'right', value: (r) => r.m_g, cell: (r) => fmt.number(r.m_g, { digits: 2 }) },
+    {
+      key: 'm',
+      header: 'm_g',
+      align: 'right',
+      value: (r) => r.m_g,
+      cell: (r) =>
+        r.params_source === 'default_no_stored_selection' ? (
+          <span className="ui-row" style={{ justifyContent: 'flex-end' }} title={t('reports.whatif.params_default')}>
+            <Badge tone="warning">{t('reports.whatif.params_default_short')}</Badge>
+            {fmt.number(r.m_g, { digits: 2 })}
+          </span>
+        ) : (
+          fmt.number(r.m_g, { digits: 2 })
+        ),
+    },
     { key: 'k', header: 'κ_g', align: 'right', value: (r) => r.kappa_g, cell: (r) => fmt.number(r.kappa_g, { digits: 2 }) },
     { key: 'th', header: 'θ_g', align: 'right', value: (r) => r.theta_g ?? null, cell: (r) => fmt.number(r.theta_g, { digits: 3 }) },
     { key: 'av', header: t('reports.whatif.col_availability'), align: 'right', value: (r) => availabilityRatio(r), cell: (r) => fmt.percent(availabilityRatio(r), { digits: 1 }) },
@@ -134,7 +160,11 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
               hint={t('reports.whatif.R_hint')}
               value={form.R}
               onChange={set('R')}
-              options={REVIEW_PERIODS.map((d) => ({ value: String(d), label: t('reports.whatif.days', { n: d }) }))}
+              options={REVIEW_PERIODS.map((d) => {
+                // The stored causal review forecasts are weekly: R = 1 cannot be replayed (the server refuses it)
+                const off = supportedR ? !supportedR.includes(d) : d === 1;
+                return { value: String(d), label: off ? t('reports.whatif.days_unavailable', { n: d }) : t('reports.whatif.days', { n: d }), disabled: off };
+              })}
               disabled={state.kind === 'running'}
             />
             <Input label={t('reports.whatif.h')} hint={t('reports.whatif.h_hint')} inputMode="decimal" value={form.h} onChange={(e) => set('h')(e.target.value)} error={fieldError('h')} disabled={state.kind === 'running'} />
@@ -160,7 +190,8 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
             {state.kind === 'malformed' && <Alert tone="warning">{t('reports.whatif.malformed')}</Alert>}
             {state.kind === 'error' && (
               <Alert tone={state.error.kind === 'validation' ? 'warning' : 'danger'} title={t(state.error.kind === 'validation' ? 'reports.whatif.refused' : 'reports.whatif.failed')}>
-                {apiErrorMessage(state.error, t)}
+                {apiErrorMessage(state.error, t, 'whatif')}
+                {showingPrevious && <div className="ui-muted" style={{ marginTop: 'var(--space-1)' }}>{t('reports.whatif.showing_previous')}</div>}
               </Alert>
             )}
           </div>

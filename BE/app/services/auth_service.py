@@ -43,14 +43,10 @@ LOGIN_WINDOW_SECONDS = 300
 
 class AuthService:
     @staticmethod
-    def _record_login_failure(
-        db: Session, rate_key: str, email_key: str, email: str, client_ip: Optional[str], reason_code: str
-    ) -> None:
-        """Failed login: in-memory limiter (per process), shared DB counter (Q-17) and an audit row with
-        result = FAILURE (round 5: the outcome is recorded, never derived from text). Never raises."""
-        rate_limiter.record_attempt(rate_key, window_seconds=LOGIN_WINDOW_SECONDS)
-        rate_limiter.record_attempt(email_key, window_seconds=LOGIN_WINDOW_SECONDS)
-        db_login_failures.record(db, email_key, LOGIN_WINDOW_SECONDS)
+    def _audit_login(db: Session, email: Optional[str], client_ip: Optional[str], reason_code: str) -> None:
+        """Audit row with result = FAILURE for every refused login (wrong password, unknown account, throttled,
+        inactive). R5B-07: the typed email of an UNKNOWN account is not stored (it may be a mistyped password or
+        a third party's address). Never raises."""
         try:
             audit_service.log(
                 db, action="auth.login_failed", actor_email=email, ip_address=client_ip,
@@ -60,38 +56,54 @@ class AuthService:
         except SQLAlchemyError:
             db.rollback()
 
+    @staticmethod
+    def _too_many() -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
+        )
+
     def login(self, db: Session, login_data: LoginRequest, client_ip: Optional[str] = None) -> LoginResponse:
         """
         UC01: Xác thực tài khoản người dùng và cấp token JWT (có chống brute-force và enumeration, N-12)
+
+        R5B-01: every attempt RESERVES one unit of the budget atomically before the password is checked
+        (in-memory under a lock, in the database insert-then-count). A wrong password keeps the reservation as
+        the failure record; a correct password gives it back. A parallel burst therefore cannot exceed 10.
         """
         email_clean = login_data.email.strip().lower()
         ip_part = client_ip.strip() if client_ip else "unknown"
         rate_key = f"login:{email_clean}:{ip_part}"
-        # Q-10: per-email limiter INDEPENDENT of the client IP. A spoofed X-Forwarded-For (uvicorn proxy headers
-        # trusting the peer) can mint any number of (email, ip) keys, but not more passwords-per-account budget.
+        # Q-10: per-email limiter INDEPENDENT of the client IP (a spoofed X-Forwarded-For cannot mint budget)
         email_key = f"login_email:{email_clean}"
-        # Q-17: the same per-email budget is also counted in the DATABASE (shared by every worker process)
-        db_failures = db_login_failures.count(db, email_key, LOGIN_WINDOW_SECONDS)
-        if rate_limiter.check_limit(email_key, max_requests=LOGIN_MAX_FAILURES, window_seconds=LOGIN_WINDOW_SECONDS) or (
-            db_failures is not None and db_failures >= LOGIN_MAX_FAILURES
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
-            )
 
-        # Chống brute-force: tối đa 10 lần sai trong 5 phút trên cặp (email, ip) (N-12)
-        if rate_limiter.check_limit(rate_key, max_requests=10, window_seconds=300):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Đã vượt quá số lần thử đăng nhập cho phép (10 lần trong 5 phút). Vui lòng thử lại sau.",
-            )
+        mem_email = rate_limiter.reserve(email_key, LOGIN_MAX_FAILURES, LOGIN_WINDOW_SECONDS)
+        if mem_email is None:
+            self._audit_login(db, None, client_ip, "throttled")
+            raise self._too_many()
+        mem_pair = rate_limiter.reserve(rate_key, LOGIN_MAX_FAILURES, LOGIN_WINDOW_SECONDS)
+        if mem_pair is None:
+            rate_limiter.release(email_key, mem_email)
+            self._audit_login(db, None, client_ip, "throttled")
+            raise self._too_many()
+        # Q-17: the same per-email budget, shared by every worker process through the database
+        db_allowed, db_row = db_login_failures.reserve(db, email_key, LOGIN_WINDOW_SECONDS, LOGIN_MAX_FAILURES)
+        if db_allowed is False:
+            rate_limiter.release(email_key, mem_email)
+            rate_limiter.release(rate_key, mem_pair)
+            self._audit_login(db, None, client_ip, "throttled")
+            raise self._too_many()
+
+        def give_back() -> None:
+            rate_limiter.release(email_key, mem_email)
+            rate_limiter.release(rate_key, mem_pair)
+            db_login_failures.release(db, db_row)
 
         user = user_repository.get_by_email(db, email_clean)
         if not user:
             # Chạy một lần bcrypt giả để thời gian phản hồi không lộ email có tồn tại hay không
             verify_password(login_data.password, _DUMMY_PASSWORD_HASH)
-            self._record_login_failure(db, rate_key, email_key, email_clean, client_ip, "unknown_account")
+            self._audit_login(db, None, client_ip, "unknown_account")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
@@ -100,14 +112,16 @@ class AuthService:
         # P-09 / R-24: luôn kiểm tra mật khẩu TRƯỚC mọi kiểm tra trạng thái tài khoản (chưa kích hoạt / bị khóa),
         # để người không biết mật khẩu không dò được trạng thái tài khoản qua mã 403.
         if not user.password_hash or not verify_password(login_data.password, user.password_hash):
-            self._record_login_failure(db, rate_key, email_key, email_clean, client_ip, "wrong_password")
+            self._audit_login(db, email_clean, client_ip, "wrong_password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Email hoặc mật khẩu không chính xác",
             )
 
-        # Chỉ trả 403 (chưa kích hoạt / bị khóa) khi mật khẩu đã đúng
+        # Chỉ trả 403 (chưa kích hoạt / bị khóa) khi mật khẩu đã đúng: không phải lần đoán sai -> trả lại lượt
         if not getattr(user, "is_verified", True) or not getattr(user, "is_active", True):
+            give_back()
+            self._audit_login(db, email_clean, client_ip, "inactive")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tài khoản của bạn đã bị vô hiệu hóa hoặc chưa kích hoạt. Vui lòng liên hệ quản trị viên.",
@@ -116,7 +130,7 @@ class AuthService:
         # Đăng nhập thành công -> xóa bỏ các lần thử thất bại trước đó
         rate_limiter.clear(rate_key)
         rate_limiter.clear(email_key)
-        if db_failures:
+        if db_allowed is not None:
             db_login_failures.clear(db, email_key)
 
         # B-12: sub được chuẩn hóa thành str(user.id) theo RFC 7519, kèm email và user_id

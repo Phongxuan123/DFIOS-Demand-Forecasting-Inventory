@@ -18,6 +18,7 @@ const PRESERVED_KEYS = new Set([
   'dfios_sidebar_collapsed',
   'dfios_remember_me',
   'dfios_remembered_email',
+  'dfios_notification_prefs', // R5F-08: per-account entries inside (utils/notifyPrefs.ts)
 ]);
 
 export const AUTH_UNAUTHORIZED_EVENT = 'dfios:unauthorized';

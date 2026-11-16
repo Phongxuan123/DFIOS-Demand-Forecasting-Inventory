@@ -45,4 +45,5 @@ class FastInferenceResponse(BaseModel):
     records_available: Optional[int] = Field(None, description="production_forecast: forecast rows of that version")
     history_start: Optional[str] = None
     history_end: Optional[str] = None
+    clock_date: Optional[str] = Field(None, description="sba_fallback: the store's simulated clock; sales after it are not used")
     note: Optional[str] = None

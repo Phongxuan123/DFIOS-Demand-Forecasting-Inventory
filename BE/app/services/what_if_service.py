@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from fastapi import HTTPException, status
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.models.classification import SKUClassification
@@ -100,10 +101,20 @@ class WhatIfService:
                 class_id=class_id, reason_code="no_complete_items",
                 reason="No SKU has realised demand on every replayed day, a quantile at every review and a price.")
         point, price_ok = cm["point"][ok], price[ok]
-        eoq = np.stack([policy_backtest.eoq_units(point[:, k] / H, price_ok, holding_rate, order_cost)
-                        for k in range(len(reviews))], axis=1)
+
+        def eoq_for(h: float, c: float) -> np.ndarray:
+            return np.stack([policy_backtest.eoq_units(point[:, k] / H, price_ok, h, c)
+                             for k in range(len(reviews))], axis=1)
+
+        eoq = eoq_for(holding_rate, order_cost)
+        # R5B-05: the stored policy's order-up-to level S was chosen with the A3 costs (J5). The "current" policy
+        # keeps THAT S, so a cost what-if re-prices the current policy instead of silently redesigning it.
+        if holding_rate == pc.HOLDING_RATE_DAILY and order_cost == pc.ORDER_COST_C:
+            eoq_a3 = eoq
+        else:
+            eoq_a3 = eoq_for(pc.HOLDING_RATE_DAILY, pc.ORDER_COST_C)
         return {
-            "dem": dem[ok], "q": cm["q"][ok], "eoq": eoq, "price": price_ok, "reviews": reviews,
+            "dem": dem[ok], "q": cm["q"][ok], "eoq": eoq, "eoq_a3": eoq_a3, "price": price_ok, "reviews": reviews,
             "n_items": int(ok.sum()), "n_fallback": int(cm["fallback"][ok].any(axis=1).sum()),
         }, None
 
@@ -137,6 +148,20 @@ class WhatIfService:
                 raise _unprocessable("policy_params_missing",
                                      f"Policy '{p.policy_key}': m_g and kappa_g are required unless use_current is true.")
 
+        # R5B-10: a database still holding the legacy placeholder price (every product = 1.0, before load_products
+        # read sell_prices.csv) would give meaningless costs -> refuse instead of simulating with it.
+        from sqlalchemy import func
+        n_prod, n_placeholder = db.query(
+            func.count(Product.item_id), func.sum(case((Product.price == 1.0, 1), else_=0))
+        ).filter(Product.item_id.in_(
+            db.query(SKUClassification.item_id).filter(SKUClassification.store_id == store_id)
+        )).one()
+        if n_prod and (n_placeholder or 0) >= 0.9 * n_prod:
+            raise _unprocessable(
+                "placeholder_prices",
+                f"{int(n_placeholder)} of {int(n_prod)} products of '{store_id}' still have the legacy placeholder "
+                "price 1.0: run scripts/load_products.py (M5 sell_prices.csv) before a cost what-if.")
+
         origin = optimization_service._store_origin(db, store_id)
         o_idx = pc.date_to_day_index(origin)
         tau = float(req.tau) if req.tau is not None else float(
@@ -163,22 +188,31 @@ class WhatIfService:
             )
 
         results: List[WhatIfPolicyResult] = []
+        defaulted: set = set()
         for p in policies:
             by_class: List[WhatIfClassResult] = []
             for c, d in inputs.items():
                 if p.use_current:
                     sel = stored.get(c)
-                    m = float(sel.m_g) if sel is not None and sel.m_g is not None else 0.0
-                    kappa = float(sel.kappa_g) if sel is not None and sel.kappa_g is not None else 1.0
+                    has_m = sel is not None and sel.m_g is not None
+                    has_k = sel is not None and sel.kappa_g is not None
+                    m = float(sel.m_g) if has_m else 0.0
+                    kappa = float(sel.kappa_g) if has_k else 1.0
+                    params_source = "stored" if (has_m and has_k) else "default_no_stored_selection"
+                    eoq = d["eoq_a3"]
                 else:
                     m, kappa = float(p.m_g), float(p.kappa_g)
+                    params_source = "request"
+                    eoq = d["eoq"]
+                if params_source == "default_no_stored_selection":
+                    defaulted.add(c)
                 theta = float(thetas.get(c, 0.0)) if p.use_theta else 0.0
                 res = policy_backtest.simulate_rss_candidates(
-                    d["dem"], d["q"], d["eoq"], d["price"], [m], [kappa], theta=theta, lead_time=L, review_period=R,
+                    d["dem"], d["q"], eoq, d["price"], [m], [kappa], theta=theta, lead_time=L, review_period=R,
                     holding_rate=req.holding_rate, stockout_rate=req.stockout_penalty_rate, order_cost=req.order_cost,
                 )
                 by_class.append(WhatIfClassResult(
-                    class_id=c, m_g=m, kappa_g=kappa, theta_g=round(theta, 4),
+                    class_id=c, m_g=m, kappa_g=kappa, theta_g=round(theta, 4), params_source=params_source,
                     **self._metrics(res, d["n_items"]),
                 ))
             results.append(WhatIfPolicyResult(
@@ -193,7 +227,14 @@ class WhatIfService:
             f"{n_items} SKUs simulated; {n_fb} of them used the labelled Gaussian quantile fallback at >= 1 review "
             f"(fewer than {pc.MIN_RESIDUALS} matured residual windows).",
             "Theta (when applied) is the CURRENT C3-OUT state, frozen during the replay (no closed-loop update).",
+            "The 'current' policy keeps the order-up-to level of the stored policy (EOQ with the A3 costs h = "
+            f"{pc.HOLDING_RATE_DAILY}, c = {pc.ORDER_COST_C}); the requested h, b, c re-price it. Other policies use "
+            "the requested h and c in their EOQ.",
         ]
+        if defaulted:
+            notes.append(
+                f"No stored policy selection for class(es) {sorted(defaulted)}: the 'current' policy used the "
+                "default m = 0, kappa = 1 there (params_source = default_no_stored_selection).")
         return WhatIfResponse(
             store_id=store_id, as_of=origin.isoformat(), lead_time_days=L, review_period_days=R, horizon_days=L + R,
             tau=tau, holding_rate=req.holding_rate, stockout_penalty_rate=req.stockout_penalty_rate,

@@ -1083,6 +1083,20 @@ select.ui-control__input {
 .ui-grid--kpi {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
+/* R5F-12: a fixed column count (set --kpi-cols on the element) so 6 or 7 tiles never leave one tile alone on a row */
+.ui-grid--kpi-cols {
+  grid-template-columns: repeat(var(--kpi-cols, 3), minmax(0, 1fr));
+}
+@media (max-width: 900px) {
+  .ui-grid--kpi-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .ui-grid--kpi-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .ui-grid--2 {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
 }

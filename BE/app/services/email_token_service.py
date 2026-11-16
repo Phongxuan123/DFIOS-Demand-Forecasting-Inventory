@@ -85,6 +85,33 @@ class InMemoryRateLimiter:
             self._requests[key] = kept + [now]
             self._windows[key] = max(self._windows.get(key, 0), window_seconds)
 
+    def reserve(self, key: str, max_requests: int, window_seconds: int) -> Optional[float]:
+        """
+        R5B-01: atomically check AND count one attempt (under the lock). Returns the reserved timestamp, or None
+        when the key already used its budget. A parallel burst therefore cannot pass more than ``max_requests``.
+        """
+        with self._lock:
+            now = self._now()
+            self._maybe_sweep(now)
+            kept = self._prune_key(key, now, window_seconds)
+            if len(kept) >= max_requests:
+                return None
+            self._requests[key] = kept + [now]
+            self._windows[key] = max(self._windows.get(key, 0), window_seconds)
+            return now
+
+    def release(self, key: str, stamp: Optional[float]) -> None:
+        """Gives back one reserved attempt (the attempt turned out not to be a failure)."""
+        if stamp is None:
+            return
+        with self._lock:
+            items = self._requests.get(key)
+            if items and stamp in items:
+                items.remove(stamp)
+                if not items:
+                    self._requests.pop(key, None)
+                    self._windows.pop(key, None)
+
     def clear(self, key: str) -> None:
         """Xóa toàn bộ lịch sử của key (ví dụ khi đăng nhập thành công)."""
         with self._lock:
@@ -117,17 +144,47 @@ class DbLoginFailureCounter:
             return None
 
     @staticmethod
-    def record(db: Session, key: str, window_seconds: int) -> None:
-        """Adds one failure and prunes this key's expired rows. The caller commits."""
+    def reserve(db: Session, key: str, window_seconds: int, max_failures: int) -> Tuple[Optional[bool], Optional[str]]:
+        """
+        R5B-01: insert-then-count, so the budget holds under a parallel burst. The attempt row is COMMITTED first,
+        then the window is counted: the k-th committed attempt always sees at least k rows, so at most
+        ``max_failures`` attempts are let through. Returns (allowed, row_id):
+        * (True, id)   attempt reserved (kept as the failure record if the login fails, released otherwise);
+        * (False, None) budget used up (the extra row is removed again);
+        * (None, None) database error: the in-memory limiter alone decides (never blocks a login by itself).
+        Expired rows of EVERY key are pruned here (R5B-07: stale typed emails do not stay forever).
+        """
+        from sqlalchemy import func
         from sqlalchemy.exc import SQLAlchemyError
         from app.models.audit_log import LoginFailure
         now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=window_seconds)
         try:
-            db.query(LoginFailure).filter(
-                LoginFailure.key == key, LoginFailure.created_at <= now - timedelta(seconds=window_seconds)
-            ).delete(synchronize_session=False)
-            db.add(LoginFailure(key=key, created_at=now))
-            db.flush()
+            db.query(LoginFailure).filter(LoginFailure.created_at <= cutoff).delete(synchronize_session=False)
+            row = LoginFailure(key=key, created_at=now)
+            db.add(row)
+            db.commit()
+            n = int(db.query(func.count(LoginFailure.id))
+                    .filter(LoginFailure.key == key, LoginFailure.created_at > cutoff).scalar() or 0)
+            if n > max_failures:
+                db.query(LoginFailure).filter(LoginFailure.id == row.id).delete(synchronize_session=False)
+                db.commit()
+                return False, None
+            return True, row.id
+        except SQLAlchemyError:
+            db.rollback()
+            return None, None
+
+    @staticmethod
+    def release(db: Session, row_id: Optional[str]) -> None:
+        """Removes one reserved attempt (correct password)."""
+        if not row_id:
+            return
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.models.audit_log import LoginFailure
+        try:
+            db.query(LoginFailure).filter(LoginFailure.id == row_id).delete(synchronize_session=False)
+            db.commit()
         except SQLAlchemyError:
             db.rollback()
 

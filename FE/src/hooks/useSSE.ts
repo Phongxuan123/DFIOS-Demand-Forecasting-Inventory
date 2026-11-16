@@ -106,7 +106,9 @@ export function useSSE(url: string, options: UseSseOptions = {}) {
       }
     }
 
-    void connect();
+    // R5F-13: start on the next tick. React StrictMode (dev) mounts, unmounts and remounts effects at once; a
+    // request started synchronously was aborted mid-flight by the dev proxy and showed up as a 503 on every load.
+    timer = setTimeout(() => void connect(), 0);
     return () => {
       controller.abort();
       if (timer) clearTimeout(timer);

@@ -132,6 +132,8 @@ class TestSimulator(unittest.TestCase):
 
     def test_reset_restores_snapshot_and_is_idempotent_and_replay_is_deterministic(self):
         engine, Session, db = _make_db(initial_on_hand=15.0)
+        from app.models.inventory_param import InventoryParam
+        params0 = sorted((p.item_id, p.s, p.S) for p in db.query(InventoryParam).all())
         r1 = pipeline_service.advance_sim_clock(db, "CA_1", days=10)
         state1 = _inv(db)
         self.assertNotEqual(state1[0], 15.0)
@@ -146,6 +148,11 @@ class TestSimulator(unittest.TestCase):
             self.assertEqual(db.query(ServiceOutcome).count(), 0)
             self.assertEqual(db.query(CalibrationState).filter(CalibrationState.review_index >= 1).count(), 0)
             self.assertEqual(db.query(ReplenishmentRecommendation).count(), 0)
+            # (s, S) are back to the day-0 values (stale parameters raised alerts after a reset)
+            self.assertGreater(info["parameters_recomputed"], 0)
+            if params0:
+                db.expire_all()
+                self.assertEqual(sorted((p.item_id, p.s, p.S) for p in db.query(InventoryParam).all()), params0)
         r2 = pipeline_service.advance_sim_clock(db, "CA_1", days=10)
         self.assertEqual(_inv(db), state1)
         self.assertEqual(r1["stockouts_recorded"], r2["stockouts_recorded"])

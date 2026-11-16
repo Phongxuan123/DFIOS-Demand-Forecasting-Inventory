@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, Bell, CalendarClock, ChevronDown, Languages, LogOut, Menu, Moon, RefreshCw, Store, Sun, User as UserIcon } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useStore } from '../../context/StoreContext.tsx';
-import { useClock } from '../../context/ClockContext.tsx';
+import { CLOCK_ADVANCE_DAYS, useClock } from '../../context/ClockContext.tsx';
 import { useTheme } from '../../theme/ThemeContext.tsx';
 import { useI18n } from '../../i18n/index.tsx';
 import { roleKey } from '../../auth/permissions.ts';
@@ -49,7 +49,7 @@ const StoreSelector: React.FC = () => {
 };
 
 /* ------------------------------- Clock chip -------------------------------- */
-const ADVANCE_STEPS = [7, 14, 30] as const;
+const ADVANCE_STEPS = CLOCK_ADVANCE_DAYS;
 
 const ClockChip: React.FC = () => {
   const { t, fmt } = useI18n();

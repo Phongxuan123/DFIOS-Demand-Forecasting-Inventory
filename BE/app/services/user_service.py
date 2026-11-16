@@ -259,7 +259,8 @@ class UserService:
         return MessageResponse(message=f"Đã thu hồi mọi phiên đăng nhập của {user.email}.")
 
     def toggle_user_status(
-        self, db: Session, user_id: str, request: UserStatusUpdateRequest, current_admin: User
+        self, db: Session, user_id: str, request: UserStatusUpdateRequest, current_admin: User,
+        ip_address: Optional[str] = None,
     ) -> UserResponse:
         """
         UC06: Kích hoạt / Vô hiệu hóa tài khoản (Admin không được tự khóa chính mình)
@@ -282,9 +283,20 @@ class UserService:
             user.token_version = getattr(user, "token_version", 1) + 1
             email_token_service.revoke_all_user_tokens(db, user.id)
         updated_user = user_repository.update(db, user)
+        # R5F-01: every admin action on an account is audited
+        audit_service.log(
+            db,
+            action="admin.unlock_user" if request.is_active else "admin.lock_user",
+            actor_email=current_admin.email,
+            ip_address=ip_address,
+            details=f"Admin {'mở khóa' if request.is_active else 'khóa'} tài khoản {user.email}",
+        )
+        db.commit()
         return UserResponse.model_validate(updated_user)
 
-    def delete_user(self, db: Session, current_admin: User, user_id: str) -> MessageResponse:
+    def delete_user(
+        self, db: Session, current_admin: User, user_id: str, ip_address: Optional[str] = None
+    ) -> MessageResponse:
         """
         UC06: Xóa vĩnh viễn tài khoản
         """
@@ -301,6 +313,13 @@ class UserService:
             )
         email = user.email
         user_repository.delete(db, user.id)  # repository API nhận id, không nhận object
+        # R5F-01: the deletion is audited (the deleted account's earlier audit rows are kept: they hold emails,
+        # not a foreign key)
+        audit_service.log(
+            db, action="admin.delete_user", actor_email=current_admin.email, ip_address=ip_address,
+            details=f"Admin xóa vĩnh viễn tài khoản {email}",
+        )
+        db.commit()
         return MessageResponse(message=f"Đã xóa vĩnh viễn tài khoản {email}.")
 
 

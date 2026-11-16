@@ -14,7 +14,10 @@ def _assert_local_only() -> None:
     if os.getenv("DFIOS_LOCAL_ONLY", "").strip().lower() not in ("1", "true", "yes"):
         return
     from urllib.parse import urlparse
-    url = os.getenv("DATABASE_URL", "")
+    url = os.getenv("DATABASE_URL", "").strip()
+    # R5B-09: an unset URL means the localhost default; SQLite is a local file (the test suite uses it)
+    if not url or url.lower().startswith("sqlite"):
+        return
     host = (urlparse(url.replace("+psycopg2", "")).hostname or "").lower()
     if host not in _LOCAL_DB_HOSTS:
         raise RuntimeError(

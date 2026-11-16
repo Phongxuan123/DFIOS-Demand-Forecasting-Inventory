@@ -13,6 +13,9 @@ import { useStore } from './StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { apiClient, getJson, toApiError } from '../services/apiClient.ts';
 
+/** R5F-11: the ONE list of clock-advance choices (days), used by the Dashboard card and the top-bar chip. */
+export const CLOCK_ADVANCE_DAYS = [1, 7, 14, 28] as const;
+
 export interface SimClock {
   store_id: string;
   current_date: string;

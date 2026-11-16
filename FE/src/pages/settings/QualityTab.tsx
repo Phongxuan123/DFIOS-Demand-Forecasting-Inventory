@@ -146,7 +146,7 @@ export const QualityTab: React.FC = () => {
       {run && s && (
         <Card title={t('settings.quality.summary_title', { id: run.id.slice(0, 8) })} actions={<StatusBadge status={run.status} />}>
           <div className="ui-stack">
-            <div className="ui-grid ui-grid--kpi">
+            <div className="ui-grid ui-grid--kpi-cols" style={{ '--kpi-cols': 4 } as React.CSSProperties}>
               <KpiTile label={t('settings.quality.records')} value={fmt.integer(s.total_records)} />
               <KpiTile label={t('settings.quality.missing_rate')} value={fmt.percent(s.missing_rate, { digits: 1 })} />
               <KpiTile label={t('settings.quality.outliers')} value={fmt.integer(s.outliers_count)} />
@@ -156,6 +156,14 @@ export const QualityTab: React.FC = () => {
               <KpiTile label={t('settings.quality.leakage')} value={s.leakage_detected ? t('settings.quality.leakage_yes') : t('settings.quality.leakage_no')} />
             </div>
             <div className="set-label">{t('settings.quality.issues', { n: fmt.integer(run.issues.length) })}</div>
+            {(() => {
+              // R5F-06: the server stores at most 200 outlier rows; say so when the count is larger
+              const shown = run.issues.filter((i) => i.check_type === 'OUTLIER').length;
+              return s.outliers_count > shown ? (
+                <Alert tone="info">{t('settings.quality.issues_truncated', { limit: fmt.integer(200), shown: fmt.integer(shown), total: fmt.integer(s.outliers_count) })}</Alert>
+              ) : null;
+            })()}
+            <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('settings.quality.scope_note')}</p>
             {run.issues.length === 0 ? (
               <Alert tone="success">{t('settings.quality.no_issues')}</Alert>
             ) : (
@@ -168,7 +176,7 @@ export const QualityTab: React.FC = () => {
       <Card title={t('settings.quality.history_title')} flush>
         <Table columns={historyCols} rows={history.data?.items ?? []} rowKey={(r) => r.id} loading={history.loading && !history.data} error={history.error} onRetry={history.refetch} dense />
         <div className="set-pad">
-          <DataSourceNote source={t('settings.quality.source')} note={history.data ? String(history.data.total) : undefined} />
+          <DataSourceNote source={t('settings.quality.source')} note={history.data ? t('settings.quality.runs_total', { total: fmt.integer(history.data.total) }) : undefined} />
         </div>
       </Card>
     </div>

@@ -283,6 +283,12 @@ class TestImportEndpoints(unittest.TestCase):
             lines.append(f"SKU_B,2016-03-{d:02d},{(d * 3) % 5}")
         self.assertEqual(self._upload("\n".join(lines) + "\n").status_code, 200)
 
+        # R5B-02: SBA only sees sales up to the store's clock (a fresh import starts it at the first day)
+        with self.TestingSessionLocal() as session:
+            clock = session.query(SimClock).filter(SimClock.store_id == "NEW_1").one()
+            clock.current_date = date(2016, 3, 28)
+            session.commit()
+
         for _ in range(2):
             res = self.client.post(
                 "/api/v1/forecast/fast-inference",

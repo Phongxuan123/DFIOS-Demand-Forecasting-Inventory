@@ -98,14 +98,10 @@ class ClassificationService:
     DEFAULT_STORE_ID = "CA_1"
     VALID_SEGMENTS = {"AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"}
 
-    def _load_ground_truth_classes(self, store_id: Optional[str] = "CA_1") -> Dict[str, str]:
-        """
-        Nạp ánh xạ phân lớp C3-OUT cố định theo item x store từ c3ok_sku_class.csv (chuẩn A5 research.md).
-        Trả về {} khi không có file hoặc kho không có trong file (khi đó dùng ngưỡng UC25).
-        File hỏng định dạng thì báo lỗi rõ ràng thay vì âm thầm bỏ qua.
-        """
+    @staticmethod
+    def _ground_truth_file() -> Optional[str]:
+        """Path of c3ok_sku_class.csv on this machine, or None when the artifact is not installed."""
         import os
-        import pandas as pd
         from app.core.config import settings
 
         cur_dir = os.path.dirname(os.path.abspath(__file__))
@@ -116,7 +112,17 @@ class ClassificationService:
         ]
         if settings.ARTIFACTS_DIR:
             paths.insert(0, os.path.join(settings.ARTIFACTS_DIR, "c3ok_sku_class.csv"))
-        class_file = next((p for p in paths if os.path.exists(p)), None)
+        return next((p for p in paths if os.path.exists(p)), None)
+
+    def _load_ground_truth_classes(self, store_id: Optional[str] = "CA_1") -> Dict[str, str]:
+        """
+        Nạp ánh xạ phân lớp C3-OUT cố định theo item x store từ c3ok_sku_class.csv (chuẩn A5 research.md).
+        Trả về {} khi không có file hoặc kho không có trong file (khi đó dùng ngưỡng UC25).
+        File hỏng định dạng thì báo lỗi rõ ràng thay vì âm thầm bỏ qua.
+        """
+        import pandas as pd
+
+        class_file = self._ground_truth_file()
         if not class_file:
             return {}
 
@@ -131,13 +137,17 @@ class ClassificationService:
         classes = df_store["class"].astype(str).str.strip().str.upper()
         return {i: c for i, c in zip(item_ids, classes) if c in self.VALID_SEGMENTS}
 
-    def verify_ground_truth_labels(self, db: Session) -> int:
+    def verify_ground_truth_labels(self, db: Session) -> Optional[int]:
         """
         Q-15: every row labelled ``class_source = "ground_truth"`` must match the C3-OUT mapping
-        (c3ok_sku_class.csv) of its store. Rows that do not match - or every such row of a store whose mapping is
-        not available - are relabelled ``legacy_unverified`` (their class is kept, only the claim is withdrawn).
-        Returns the number of relabelled rows.
+        (c3ok_sku_class.csv) of its store. Rows that do not match - or every such row of a store absent from the
+        mapping - are relabelled ``legacy_unverified`` (their class is kept, only the claim is withdrawn).
+        Returns the number of relabelled rows, or None when the mapping file is not installed on this machine:
+        R5B-04 - nothing is changed then, so a teammate without the artifacts cannot withdraw every label of a
+        shared database; the check runs again on a machine that has the file.
         """
+        if not self._ground_truth_file():
+            return None
         stores = [r[0] for r in db.query(SKUClassification.store_id)
                   .filter(SKUClassification.class_source == CLASS_SOURCE_GROUND_TRUTH).distinct().all()]
         relabelled = 0

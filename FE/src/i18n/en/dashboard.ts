@@ -84,6 +84,8 @@ export const dashboard: typeof Vi = {
     seg_title: 'Availability by class',
     seg_desc: 'Observed, against each class target.',
     trend_title: 'Actual vs forecast demand',
+    trend_no_forecast: 'No stored forecast falls in this window, so only actual sales are drawn.',
+    trend_no_actual: 'No actual sales in this window yet (up to the simulation clock), so only the forecast is drawn.',
     trend_desc: 'Last 30 days from sales records and stored forecasts.',
     actual: 'Actual',
     predicted: 'Forecast',
@@ -114,6 +116,7 @@ export const dashboard: typeof Vi = {
   seg: {
     status_compliant: 'Compliant',
     status_warning: 'Warning',
+    status_not_measured: 'Not measured yet',
     col_class: 'Class',
     col_target: 'Target',
     col_c3: 'C³-OUT',

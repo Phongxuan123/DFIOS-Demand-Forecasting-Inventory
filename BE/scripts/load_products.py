@@ -41,13 +41,18 @@ if len(new_df) > 0:
     new_df.to_sql("products", engine, if_exists="append", index=False)
     print(f"Seeded {len(new_df)} products!")
 
-# Cập nhật giá cho sản phẩm đã có (DB cũ có thể đang giữ giá giả 1.0)
+# Cập nhật giá cho sản phẩm đã có, CHỈ khi giá còn trống hoặc là giá giả của phiên bản cũ (1.0 / <= 0).
+# R5B-03: giá admin đã sửa qua /products không bị ghi đè mỗi lần bootstrap. Muốn đặt lại toàn bộ theo M5:
+# DFIOS_RESET_PRICES=1.
+reset_all = os.getenv("DFIOS_RESET_PRICES", "0") == "1"
+price_filter = "" if reset_all else " AND (p.price IS NULL OR p.price <= 0 OR p.price = 1.0)"
 known = df.dropna(subset=["price"])[["item_id", "price"]]
 with engine.begin() as conn:
     conn.execute(text("CREATE TEMP TABLE _product_prices (item_id TEXT PRIMARY KEY, price DOUBLE PRECISION) ON COMMIT DROP"))
     conn.execute(text("INSERT INTO _product_prices (item_id, price) VALUES (:item_id, :price)"), known.to_dict("records"))
     updated = conn.execute(text(
         "UPDATE products p SET price = t.price FROM _product_prices t "
-        "WHERE p.item_id = t.item_id AND p.price IS DISTINCT FROM t.price"
+        "WHERE p.item_id = t.item_id AND p.price IS DISTINCT FROM t.price" + price_filter
     )).rowcount
-print(f"Products check complete! prices updated: {updated}")
+print(f"Products check complete! prices updated: {updated}"
+      + ("" if reset_all else " (only empty / placeholder prices; DFIOS_RESET_PRICES=1 resets all)"))
