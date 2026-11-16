@@ -19,6 +19,13 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE policy_selection ADD COLUMN source VARCHAR(30)"))
             applied.append("policy_selection.source")
+    if "replenishment_recommendations" in insp.get_table_names():
+        rr_cols = {c["name"] for c in insp.get_columns("replenishment_recommendations")}
+        for col in ("on_hand_at_review", "on_order_at_review"):
+            if col not in rr_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE replenishment_recommendations ADD COLUMN {col} DOUBLE PRECISION"))
+                applied.append(f"replenishment_recommendations.{col}")
     if "sku_classifications" not in insp.get_table_names():
         return applied
 

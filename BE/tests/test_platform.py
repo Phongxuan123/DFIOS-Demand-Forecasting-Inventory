@@ -53,6 +53,22 @@ class TestArtifactsManifest(unittest.TestCase):
         self.assertEqual(bootstrap._db_host("postgresql+psycopg2://u:p@db.example.com:5432/db"), "db.example.com")
         self.assertNotIn("db.example.com", bootstrap.LOCAL_HOSTS)
 
+    def test_bootstrap_refuses_shared_database_without_flag(self):
+        """Bootstrap thay dữ liệu trong bảng, nên phải từ chối DB không phải localhost khi thiếu --i-know."""
+        import check_artifacts
+        old_argv, old_url, original_check = sys.argv, os.environ.get("DATABASE_URL"), check_artifacts.check
+        sys.argv = ["bootstrap.py", "--skip-checksum"]
+        os.environ["DATABASE_URL"] = "postgresql+psycopg2://u:p@shared.example.com:5432/postgres"
+        check_artifacts.check = lambda quick=False: []
+        try:
+            self.assertEqual(bootstrap.main(), 2)
+        finally:
+            sys.argv, check_artifacts.check = old_argv, original_check
+            if old_url is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = old_url
+
 
 class TestEventRoles(unittest.TestCase):
     def test_inventory_publisher_restricts_roles(self):

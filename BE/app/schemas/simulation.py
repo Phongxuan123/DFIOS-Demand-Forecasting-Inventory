@@ -2,9 +2,16 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
+class InsightDetail(BaseModel):
+    """Machine-readable twin of one ``insights`` sentence: clients render ``code`` + ``params`` in their language."""
+    code: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
 class PolicySimulationMetric(BaseModel):
     policy_id: str
-    policy_name: str
+    policy_key: Optional[str] = Field(None, description="Stable artifact policy key: B0 | B2 | PCR | P6 (for i18n)")
+    policy_name: str  # human label (Vietnamese); clients should localise from policy_key
     description: str
     total_cost: float
     holding_cost: float
@@ -14,6 +21,7 @@ class PolicySimulationMetric(BaseModel):
     total_orders: int
     total_stockouts: Optional[int] = None  # units short are not in the artifact -> null (see stockouts_reason)
     stockouts_reason: Optional[str] = None
+    stockouts_reason_code: Optional[str] = None  # e.g. "artifact_no_units"
     is_feasible: bool
     cost_increase_vs_best: float = 0.0
     # --- provenance / real artifact values (additive) ---
@@ -29,8 +37,12 @@ class PolicyComparisonResponse(BaseModel):
     simulation_horizon_days: int
     sku_count: int
     recommended_policy: Optional[str] = None
+    recommended_policy_key: Optional[str] = None  # B0 | B2 | PCR | P6
     policies: List[PolicySimulationMetric]
-    insights: List[str]
+    insights: List[str]  # human text (Vietnamese), kept for compatibility
+    insight_details: List[InsightDetail] = Field(
+        default_factory=list, description="Same insights as stable codes + raw numeric params, in the same order"
+    )
     # --- provenance (additive) ---
     source: str = "artifact_extract"  # "artifact_extract" = values read from c3ok_results.csv, NOT simulated
     simulated: bool = False

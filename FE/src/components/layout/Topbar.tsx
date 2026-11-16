@@ -13,6 +13,7 @@ import { useConfirm } from '../ui/overlays.tsx';
 import { useToast } from '../ui/Toast.tsx';
 import { LanguageToggle, ThemeToggle } from '../common/PreferenceToggles.tsx';
 import { Popover } from './Popover.tsx';
+import { countPhrase, reviewsPhrase, reviewsSinceStart } from '../../utils/simText.ts';
 import { useAlertFeed } from './useAlertFeed.ts';
 import './shell.css';
 
@@ -72,8 +73,8 @@ const ClockChip: React.FC = () => {
         t('shell.clock.advanced', {
           from: fmt.date(res.previous_date),
           to: fmt.date(res.current_date),
-          reviews: res.reviews_executed,
-          recommendations: res.recommendations_generated,
+          reviews: reviewsPhrase(t, fmt, res.reviews_executed, !!res.day0_review_executed),
+          recommendations: countPhrase(t, fmt, 'recs', res.recommendations_generated),
         }),
       );
     } catch (err) {
@@ -105,7 +106,7 @@ const ClockChip: React.FC = () => {
               <dt>{t('shell.clock.label')}</dt>
               <dd className="ui-tabular">{fmt.date(clock.current_date, 'long')}</dd>
               <dt>{t('shell.clock.day_index', { days: fmt.integer(clock.days_elapsed), start: fmt.date(clock.start_date) })}</dt>
-              <dd>{t('shell.clock.reviews', { count: fmt.integer(clock.reviews_elapsed) })}</dd>
+              <dd>{t('shell.clock.reviews', { reviews: reviewsPhrase(t, fmt, reviewsSinceStart(clock), true) })}</dd>
               <dt>{t('shell.clock.mode', { mode: clock.mode })}</dt>
               <dd className="shell-popover__source">{t('shell.clock.source', { store: clock.store_id })}</dd>
             </dl>

@@ -13,7 +13,14 @@ class SimClockResponse(BaseModel):
     speed: float = 1.0
     updated_at: datetime
     days_elapsed: int = 0
-    reviews_elapsed: int = 0
+    reviews_elapsed: int = Field(
+        0, description="Index k of the latest review (days_elapsed // R); does NOT count the day-0 review"
+    )
+    reviews_executed_total: int = Field(
+        0,
+        description="Reviews run since start_date INCLUDING the day-0 review (0 before the first advance, else k + 1); "
+                    "counted like ClockAdvanceResponse.reviews_executed",
+    )
     # --- provenance / semantics (additive) ---
     source: str = "sim_clock"
     as_of: Optional[date] = None  # == current_date
@@ -38,7 +45,8 @@ class ClockAdvanceResponse(BaseModel):
     previous_date: date
     current_date: date
     days_advanced: int
-    reviews_executed: int
+    reviews_executed: int = Field(..., description="Reviews run by this advance, including the day-0 review when it started at start_date")
+    day0_review_executed: bool = Field(False, description="True when reviews_executed includes the day-0 review")
     stockouts_recorded: int
     recommendations_generated: int
     job_events: List[str] = []

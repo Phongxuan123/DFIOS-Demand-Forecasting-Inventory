@@ -32,6 +32,7 @@ import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
 import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBe } from '../i18n/useBe.ts';
+import { insightTexts, policyDescription, policyLabel } from '../utils/policyText.ts';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
   getCostComparison,
@@ -56,7 +57,7 @@ const CostStack: React.FC<{ rows: PolicyRow[] }> = ({ rows }) => {
   const fmt = useFormat();
   const t = useT();
   const be = useBe();
-  const data = rows.map((r) => ({ name: be(r.label) || r.policy, holding: r.holding_cost, shortage: r.shortage_cost, ordering: r.ordering_cost }));
+  const data = rows.map((r) => ({ name: policyLabel(t, be, r.policy_key, r.label) || r.policy, holding: r.holding_cost, shortage: r.shortage_cost, ordering: r.ordering_cost }));
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
@@ -93,7 +94,7 @@ const PoliciesTab: React.FC = () => {
   const topCsl = withCsl.length ? withCsl.reduce((a, b) => ((a.csl as number) >= (b.csl as number) ? a : b)) : null;
   const best = objective === 'cost' ? cheapest : topCsl;
   const hasP6 = rows.some((r) => /p6/i.test(r.policy) || /p6/i.test(r.label));
-  const name = (r: PolicyRow) => be(r.label) || r.policy;
+  const name = (r: PolicyRow) => policyLabel(t, be, r.policy_key, r.label) || r.policy;
 
   const cols: Column<PolicyRow>[] = [
     {
@@ -130,17 +131,26 @@ const PoliciesTab: React.FC = () => {
     downloadCsv(
       'policy-comparison.csv',
       ['policy', 'label', 'tau', 'csl', 'fill_rate', 'holding_cost', 'shortage_cost', 'ordering_cost', 'total_cost_bikip'],
-      rows.map((r) => [r.policy, r.label, r.tau, r.csl, r.fill_rate, r.holding_cost, r.shortage_cost, r.ordering_cost, r.total_cost_bikip]),
+      rows.map((r) => [r.policy, name(r), r.tau, r.csl, r.fill_rate, r.holding_cost, r.shortage_cost, r.ordering_cost, r.total_cost_bikip]),
     );
 
   const b = bench.data;
   const missing = b?.status === 'artifact_missing';
   const simCols: Column<SimPolicyMetric>[] = [
-    { key: 'name', header: t('reports.policy.col_policy'), value: (r) => r.policy_name, cell: (r) => <span>{be(r.policy_name)} {sim.data?.recommended_policy === r.policy_id && <Badge tone="accent">{t('reports.sim.recommended_short')}</Badge>}</span> },
+    {
+      key: 'name',
+      header: t('reports.policy.col_policy'),
+      value: (r) => policyLabel(t, be, r.policy_key, r.policy_name),
+      cell: (r) => (
+        <span title={policyDescription(t, be, r.policy_key, r.description)}>
+          {policyLabel(t, be, r.policy_key, r.policy_name)} {sim.data?.recommended_policy === r.policy_id && <Badge tone="accent">{t('reports.sim.recommended_short')}</Badge>}
+        </span>
+      ),
+    },
     { key: 'av', header: t('reports.sim.col_availability'), align: 'right', value: (r) => r.availability, cell: (r) => fmt.percent(r.availability, { scale: 'percent', digits: 1 }) },
     { key: 'cost', header: t('reports.policy.col_total'), align: 'right', value: (r) => r.total_cost, cell: (r) => fmt.number(r.total_cost, { digits: 0 }) },
     { key: 'orders', header: t('reports.sim.col_orders'), align: 'right', value: (r) => r.total_orders, cell: (r) => fmt.integer(r.total_orders) },
-    { key: 'so', header: t('reports.sim.col_stockouts'), align: 'right', value: (r) => r.total_stockouts, cell: (r) => (r.total_stockouts == null ? <span title={r.stockouts_reason ?? undefined}>—</span> : fmt.integer(r.total_stockouts)) },
+    { key: 'so', header: t('reports.sim.col_stockouts'), align: 'right', value: (r) => r.total_stockouts, cell: (r) => (r.total_stockouts == null ? <span title={r.stockouts_reason_code === 'artifact_no_units' ? t('reports.sim.stockouts_artifact') : be(r.stockouts_reason) || undefined}>—</span> : fmt.integer(r.total_stockouts)) },
     { key: 'f', header: '', value: (r) => (r.is_feasible ? 1 : 0), cell: (r) => <Badge tone={r.is_feasible ? 'success' : 'warning'}>{r.is_feasible ? t('reports.sim.feasible') : t('reports.sim.infeasible')}</Badge> },
   ];
 
@@ -271,7 +281,11 @@ const PoliciesTab: React.FC = () => {
               <div style={{ display: 'grid', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
                 <p>
                   <Badge tone={sim.data.recommended_policy ? 'accent' : 'neutral'}>
-                    {sim.data.recommended_policy ? t('reports.sim.recommended', { policy: sim.data.recommended_policy }) : t('reports.sim.recommended_none')}
+                    {sim.data.recommended_policy
+                      ? t('reports.sim.recommended', {
+                          policy: policyLabel(t, be, sim.data.recommended_policy_key, sim.data.policies.find((x) => x.policy_id === sim.data?.recommended_policy)?.policy_name ?? sim.data.recommended_policy),
+                        })
+                      : t('reports.sim.recommended_none')}
                   </Badge>
                 </p>
                 <p className="ui-muted">
@@ -280,8 +294,8 @@ const PoliciesTab: React.FC = () => {
                 {sim.data.status !== 'ok' && <Alert tone="warning">{sim.data.reason ? be(sim.data.reason) : sim.data.status}</Alert>}
                 {sim.data.insights.length > 0 && (
                   <ul style={{ paddingLeft: 'var(--space-5)' }}>
-                    {sim.data.insights.map((i) => (
-                      <li key={i}>{be(i)}</li>
+                    {insightTexts(t, fmt, be, sim.data.insights, sim.data.insight_details).map((text, i) => (
+                      <li key={i}>{text}</li>
                     ))}
                   </ul>
                 )}
@@ -314,13 +328,14 @@ function pickMetric(m: Record<string, unknown> | null, algorithm: string, key: s
 const AccuracyTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
   const { storeId } = useStore();
   const { user } = useAuth();
   const isAdmin = can(user?.role, 'view:models');
   const acc = useApi((s) => getForecastAccuracy(storeId ?? '', s), [storeId], { enabled: !!storeId });
   const reg = useApi((s) => getRegistryModels(s), [], { enabled: isAdmin });
   const a = acc.data;
-  const reason = a?.metrics_reason ?? t('reports.reason.not_loaded');
+  const reason = (a?.metrics_reason ? be(a.metrics_reason) : null) ?? t('reports.reason.not_loaded');
   const metric = (label: string, v: number | null | undefined, digits = 4) => (
     <KpiTile
       label={label}
@@ -394,12 +409,13 @@ const AccuracyTab: React.FC = () => {
 const InventoryTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
   const { storeId } = useStore();
   const { version } = useClock();
   const p = usePagination(25);
   const inv = useApi((s) => getInventoryPerformance(storeId ?? '', p.pageSize, p.offset, s), [storeId, version, p.pageSize, p.offset], { enabled: !!storeId });
   const d = inv.data;
-  const rowReason = d?.reason ?? t('reports.reason.not_loaded');
+  const rowReason = (d?.reason ? be(d.reason) : null) ?? t('reports.reason.not_loaded');
   const tile = (label: string, v: string | null, unavailable?: string) => (
     <KpiTile label={label} loading={inv.loading && !d} value={v} unavailableReason={inv.error ? apiErrorMessage(inv.error, t) : v == null ? unavailable ?? rowReason : undefined} />
   );
@@ -456,6 +472,7 @@ const InventoryTab: React.FC = () => {
 const CostTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
+  const be = useBe();
   const toast = useToast();
   const { storeId } = useStore();
   const { user } = useAuth();
@@ -495,7 +512,7 @@ const CostTab: React.FC = () => {
     { key: 'b0', header: t('reports.cost.baseline'), align: 'right', value: (r) => r.b0, cell: (r) => fmt.number(r.b0, { digits: 0 }) },
     { key: 'c3', header: t('reports.cost.ml'), align: 'right', value: (r) => r.c3, cell: (r) => fmt.number(r.c3, { digits: 0 }) },
   ];
-  const btTile = (label: string, v: string | null) => <KpiTile label={label} value={v} unavailableReason={bt?.reason ?? t('reports.reason.not_loaded')} />;
+  const btTile = (label: string, v: string | null) => <KpiTile label={label} value={v} unavailableReason={(bt?.reason ? be(bt.reason) : null) ?? t('reports.reason.not_loaded')} />;
 
   return (
     <>
@@ -523,17 +540,17 @@ const CostTab: React.FC = () => {
                 label={t('reports.cost.savings')}
                 loading={cost.loading && !c}
                 value={c?.cost_savings_amount != null ? fmt.currency(c.cost_savings_amount, { compact: true }) : null}
-                unavailableReason={c?.reason ?? t('reports.reason.not_loaded')}
+                unavailableReason={(c?.reason ? be(c.reason) : null) ?? t('reports.reason.not_loaded')}
               />
               <KpiTile
                 label={t('reports.cost.savings_pct')}
                 loading={cost.loading && !c}
                 value={c?.savings_percentage != null ? fmt.percent(c.savings_percentage, { scale: 'percent', digits: 1, signed: true }) : null}
-                unavailableReason={c?.reason ?? t('reports.reason.not_loaded')}
+                unavailableReason={(c?.reason ? be(c.reason) : null) ?? t('reports.reason.not_loaded')}
               />
             </div>
             <Card flush>
-              <Table columns={costCols} rows={items} rowKey={(r) => r.key} loading={cost.loading && !c} unavailableReason={c && items.length === 0 ? c.reason ?? t('reports.reason.not_loaded') : undefined} dense />
+              <Table columns={costCols} rows={items} rowKey={(r) => r.key} loading={cost.loading && !c} unavailableReason={c && items.length === 0 ? (c.reason ? be(c.reason) : null) ?? t('reports.reason.not_loaded') : undefined} dense />
             </Card>
             {c && (
               <DataSourceNote

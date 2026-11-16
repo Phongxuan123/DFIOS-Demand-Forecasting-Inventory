@@ -27,6 +27,7 @@ import { useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBe } from '../i18n/useBe.ts';
+import { costVsB0, countPhrase, reviewsPhrase, reviewsSinceStart, signedCurrency } from '../utils/simText.ts';
 import { apiErrorMessage } from '../services/apiClient.ts';
 import {
   getAlerts,
@@ -58,7 +59,7 @@ const ClockPanel: React.FC = () => {
   const { clock, status, reason, canAdvance, advancing, advance } = useClock();
   const { confirm, dialog } = useConfirm();
   const [days, setDays] = useState<number>(7);
-  const [last, setLast] = useState<{ from: string; to: string; reviews: number; stockouts: number; recs: number } | null>(null);
+  const [last, setLast] = useState<{ from: string; to: string; reviews: number; day0: boolean; stockouts: number; recs: number } | null>(null);
 
   const onAdvance = async () => {
     const ok = await confirm({
@@ -73,6 +74,7 @@ const ClockPanel: React.FC = () => {
         from: res.previous_date,
         to: res.current_date,
         reviews: res.reviews_executed,
+        day0: !!res.day0_review_executed,
         stockouts: res.stockouts_recorded,
         recs: res.recommendations_generated,
       });
@@ -80,8 +82,8 @@ const ClockPanel: React.FC = () => {
         t('shell.clock.advanced', {
           from: fmt.date(res.previous_date),
           to: fmt.date(res.current_date),
-          reviews: res.reviews_executed,
-          recommendations: res.recommendations_generated,
+          reviews: reviewsPhrase(t, fmt, res.reviews_executed, !!res.day0_review_executed),
+          recommendations: countPhrase(t, fmt, 'recs', res.recommendations_generated),
         }),
       );
     } catch (err) {
@@ -108,7 +110,7 @@ const ClockPanel: React.FC = () => {
             {fmt.date(clock.current_date, 'long')}
           </div>
           <div className="ui-muted">
-            {t('dashboard.clock.start')}: {fmt.date(clock.start_date)}. {t('dashboard.clock.elapsed', { days: fmt.integer(clock.days_elapsed), reviews: fmt.integer(clock.reviews_elapsed) })}
+            {t('dashboard.clock.start')}: {fmt.date(clock.start_date)}. {t('dashboard.clock.elapsed', { days: countPhrase(t, fmt, 'days', clock.days_elapsed), reviews: reviewsPhrase(t, fmt, reviewsSinceStart(clock), true) })}
           </div>
         </div>
         <div>
@@ -118,9 +120,9 @@ const ClockPanel: React.FC = () => {
               ? t('dashboard.clock.last_advance_value', {
                   from: fmt.date(last.from),
                   to: fmt.date(last.to),
-                  reviews: last.reviews,
-                  stockouts: last.stockouts,
-                  recs: last.recs,
+                  reviews: reviewsPhrase(t, fmt, last.reviews, last.day0),
+                  stockouts: countPhrase(t, fmt, 'stockouts', last.stockouts),
+                  recs: countPhrase(t, fmt, 'recs', last.recs),
                 })
               : t('dashboard.clock.last_advance_none')}
           </div>
@@ -326,7 +328,8 @@ export const Dashboard: React.FC = () => {
 
   const asOf = sh?.as_of ? fmt.date(sh.as_of) : undefined;
   const availabilityReason = sh ? (sh.availability_reason ? be(sh.availability_reason) : t('dashboard.reason.availability')) : undefined;
-  const costDelta = sh?.total_cost_savings;
+  // C³-OUT − B0 (positive = C³-OUT costs MORE). The BE field total_cost_savings is B0 − C³-OUT, so it is not shown raw.
+  const costCmp = costVsB0(sh?.c3out_total_cost, sh?.b0_total_cost);
   const tabs = ['A', 'B', 'C'].map((id) => ({ id, label: id }));
   const trendRows = trend.data?.data ?? [];
   const trendHasData = trendRows.some((r) => r.actual !== null || r.predicted !== null);
@@ -424,12 +427,22 @@ export const Dashboard: React.FC = () => {
             value={sh?.c3out_total_cost != null ? fmt.currency(sh.c3out_total_cost, { compact: true }) : null}
             unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? (sh?.cost_reason ? be(sh.cost_reason) : t('dashboard.reason.cost')) : undefined}
             hint={
-              sh
-                ? t('dashboard.kpi.cost_hint', {
+              sh ? (
+                <>
+                  {t('dashboard.kpi.cost_hint', {
                     b0: sh.b0_total_cost != null ? fmt.currency(sh.b0_total_cost, { compact: true }) : (be(sh.b0_reason) || '—'),
-                    delta: costDelta != null ? fmt.currency(costDelta, { compact: true }) : '—',
-                  })
-                : undefined
+                    delta: costCmp ? signedCurrency(fmt, costCmp.diff) : '—',
+                  })}
+                  {costCmp ? (
+                    <>
+                      {' '}
+                      <Badge tone={costCmp.direction === 'more' ? 'danger' : costCmp.direction === 'less' ? 'success' : 'neutral'}>
+                        {t(`dashboard.kpi.cost_${costCmp.direction}`)}
+                      </Badge>
+                    </>
+                  ) : null}
+                </>
+              ) : undefined
             }
           />
           <KpiTile

@@ -8,10 +8,10 @@ export const O2_LOW = 0.93;
 export const O2_HIGH = 0.97;
 
 interface Props {
-  /** `coverage_q95` (artifact c3ok, out-of-sample backtest). */
+  /** `coverage_q95`: 10-day (L+R) window coverage of Q0.95, offline c3ok pipeline, M5 test split. */
   artifact?: number | null;
   artifactSource?: string | null;
-  /** `coverage_q95_db_causal` (a DIFFERENT definition: DB causal windows). Never merged with `artifact`. */
+  /** `coverage_q95_db_causal`: same 10-day window definition, but route (c) causal quantiles of this DB (other forecasts and sample). Never merged with `artifact`. */
   dbCausal?: number | null;
   dbCausalN?: number | null;
   loading?: boolean;
@@ -28,8 +28,9 @@ const Help: React.FC<{ text: string; label: string }> = ({ text, label }) => (
 );
 
 /**
- * Two separate tiles: coverage_q95 and coverage_q95_db_causal have different definitions, so each keeps
- * its own label, provenance and tooltip.
+ * Two separate tiles: coverage_q95 and coverage_q95_db_causal share the definition (share of SKU × origin
+ * 10-day windows with actual total <= Q0.95) but come from different forecasts, calibration and samples,
+ * so each keeps its own label, provenance and tooltip.
  */
 export const CoverageTiles: React.FC<Props> = ({ artifact, artifactSource, dbCausal, dbCausalN, loading, missingReason }) => {
   const t = useT();

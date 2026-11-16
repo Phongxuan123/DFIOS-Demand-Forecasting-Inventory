@@ -25,7 +25,7 @@ export const models = {
     wrmsse_hint: 'Thấp hơn là tốt hơn (chuẩn M5)',
     mase: 'MASE',
     mase_hint: 'Dưới 1,0 nghĩa là tốt hơn dự báo Naive',
-    coverage: 'Độ phủ phân vị Q̂0,95',
+    coverage: 'Độ phủ Q̂0,95 cửa sổ 10 ngày',
     coverage_hint: 'Mục tiêu O2: {low}–{high}',
     coverage_in: 'Trong ngưỡng mục tiêu',
     coverage_out: 'Ngoài ngưỡng mục tiêu',

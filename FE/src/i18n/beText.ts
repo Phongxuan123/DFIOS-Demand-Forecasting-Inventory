@@ -50,8 +50,8 @@ export function localizeBe(locale: Locale, raw: string | null | undefined): stri
     if (!m) continue;
     const vars: Record<string, string> = {};
     rule.names.forEach((n, i) => {
-      // A nested reason (e.g. "; B0: <reason>") is itself a backend sentence.
-      vars[n] = n === 'reason' ? localizeBe(locale, m[i + 1]) : m[i + 1];
+      // A nested reason (e.g. "; B0: <reason>") or policy label ("Đề xuất <policy>: ...") is itself backend text.
+      vars[n] = n === 'reason' || n === 'policy' ? localizeBe(locale, m[i + 1]) : m[i + 1];
     });
     return translate(locale, `be.${rule.key}`, vars);
   }

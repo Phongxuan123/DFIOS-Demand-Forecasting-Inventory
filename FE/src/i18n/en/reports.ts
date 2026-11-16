@@ -43,7 +43,7 @@ export const reports: typeof Vi = {
     conclusion_none: 'Not enough data to conclude.',
     p6_note:
       'P6 (C³-OUT) is an adaptive service-level controller: it holds CSL near the target and is not a cost-reduction policy. The cost-optimal policy is the one with the lowest total cost in the table above.',
-    coverage_label: 'Q0.95 coverage',
+    coverage_label: 'Q0.95 10-day window coverage',
     coverage_unavailable: 'The API does not return Q0.95 forecast coverage yet',
     cost_basis: 'Cost basis: {basis}',
   },
@@ -62,6 +62,27 @@ export const reports: typeof Vi = {
     col_orders: 'Orders',
     col_stockouts: 'Stockouts',
     insights: 'API insights',
+    insight: {
+      recommend_feasible: 'Recommended: {policy}. Observed availability {availability} ≥ target {target}, lowest total cost among the options that meet the target ({cost} scaled).',
+      recommend_infeasible: 'No option in the artifact reaches availability {target}. Closest: {policy} ({availability}).',
+      pcr_vs_p6_lower: 'P-CR (τ={tau_pcr}) has a total cost {pct} lower than P6 (τ={tau_p6}) ({cost_pcr} vs {cost_p6}); availability {av_pcr} vs {av_p6}.',
+      pcr_vs_p6_higher: 'P-CR (τ={tau_pcr}) has a total cost {pct} higher than P6 (τ={tau_p6}) ({cost_pcr} vs {cost_p6}); availability {av_pcr} vs {av_p6}.',
+      b0_vs_p6: 'B0 (raw quantile τ=0.95) only reaches availability {b0} although the target is 95%; P6 steers it to {p6}. P6 is a service-level controller, not a cost reducer.',
+      artifact_source: 'Source: extract of the offline result for {n_art} SKUs × {d_art} days (c3ok_results.csv), scaled linearly to {n} SKUs × {d} days; NOT a re-run simulation. Costs follow A3 (h=0.002·price/day, b=0.35·price, c=2/order).',
+    },
+    stockouts_artifact: "Units short are not in the artifact (only the cost b × units short at each SKU's price).",
+  },
+  policy_label: {
+    B0: 'B0 - Raw quantile τ=0.95 (original DFIOS)',
+    B2: 'B2 - Raw quantile τ*=0.99 (critical ratio)',
+    PCR: 'P-CR - C³-OUT with setpoint = critical ratio (τ=0.9615)',
+    P6: 'P6 - C³-OUT τ=0.95 (service-level controller)',
+  },
+  policy_desc: {
+    B0: 'Static baseline: s = raw Q̂ of the L+R window at τ=0.95, with no per-cycle calibration.',
+    B2: 'Cost-optimal static baseline: raw quantile at τ* chosen on validation (no controller).',
+    PCR: 'C³-OUT with setpoint τ = b/(b+h·H) = 0.9615: the A3 cost-minimising policy in the artifact.',
+    P6: 'Integral controller θ_g tracking the 0.95 target service level; NOT a cost-reduction policy.',
   },
   accuracy: {
     title: 'Forecast error',

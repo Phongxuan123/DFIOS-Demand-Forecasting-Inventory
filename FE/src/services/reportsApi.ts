@@ -3,7 +3,10 @@ import apiClient, { getJson } from './apiClient.ts';
 
 export interface PolicyRow {
   policy: string;
+  /** Stable artifact key (B0 | B2 | PCR | P6): the label is rendered from i18n, `label` is the fallback. */
+  policy_key?: string | null;
   label: string;
+  description?: string | null;
   tau: number | null;
   csl: number | null;
   fill_rate: number | null;
@@ -26,7 +29,7 @@ export interface PolicyBenchmark {
   review_period_days?: number;
   cost_basis?: string;
   reason?: string;
-  /** coverage_q95: artifact c3ok. coverage_q95_db_causal: DB causal windows (different definition, never merge). */
+  /** 10-day window Q0.95 coverage. coverage_q95: offline artifact c3ok (M5 test). coverage_q95_db_causal: route (c) on this DB. Same definition, different sample: never merge. */
   coverage_q95?: number | null;
   coverage_source?: string | null;
   coverage_q95_db_causal?: number | null;
@@ -34,8 +37,15 @@ export interface PolicyBenchmark {
   policies: Record<string, PolicyRow>;
 }
 
+export interface InsightDetail {
+  code: string;
+  params: Record<string, string | number | null>;
+}
+
 export interface SimPolicyMetric {
   policy_id: string;
+  /** Stable artifact key (B0 | B2 | PCR | P6): the label is rendered from i18n, policy_name is the fallback. */
+  policy_key?: string | null;
   policy_name: string;
   description: string;
   total_cost: number;
@@ -46,6 +56,7 @@ export interface SimPolicyMetric {
   total_orders: number;
   total_stockouts: number | null;
   stockouts_reason: string | null;
+  stockouts_reason_code?: string | null;
   is_feasible: boolean;
   tau: number | null;
   csl: number | null;
@@ -58,8 +69,11 @@ export interface PolicyComparison {
   simulation_horizon_days: number;
   sku_count: number;
   recommended_policy: string | null;
+  recommended_policy_key?: string | null;
   policies: SimPolicyMetric[];
+  /** Human text (Vietnamese) kept for compatibility; insight_details carries the same insights as codes. */
   insights: string[];
+  insight_details?: InsightDetail[];
   source: string;
   simulated: boolean;
   as_of: string | null;

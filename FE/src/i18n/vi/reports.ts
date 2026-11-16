@@ -41,7 +41,7 @@ export const reports = {
     conclusion_none: 'Chưa đủ số liệu để kết luận.',
     p6_note:
       'P6 (C³-OUT) là bộ điều khiển mức phục vụ thích ứng: giữ CSL quanh mục tiêu, không phải chính sách giảm chi phí. Chính sách tối ưu chi phí là chính sách có tổng chi phí thấp nhất ở bảng trên.',
-    coverage_label: 'Độ phủ của Q0.95',
+    coverage_label: 'Độ phủ Q0.95 cửa sổ 10 ngày',
     coverage_unavailable: 'API chưa trả độ phủ của dự báo Q0.95',
     cost_basis: 'Cơ sở chi phí: {basis}',
   },
@@ -60,6 +60,27 @@ export const reports = {
     col_orders: 'Số đơn',
     col_stockouts: 'Lần thiếu hàng',
     insights: 'Nhận xét từ API',
+    insight: {
+      recommend_feasible: 'Đề xuất {policy}: availability quan sát {availability} ≥ mục tiêu {target}, tổng chi phí thấp nhất trong các phương án đạt mục tiêu ({cost} đã quy đổi).',
+      recommend_infeasible: 'Không phương án nào trong artifact đạt availability {target}. Gần nhất: {policy} ({availability}).',
+      pcr_vs_p6_lower: 'P-CR (τ={tau_pcr}) có tổng chi phí thấp hơn P6 (τ={tau_p6}) {pct} ({cost_pcr} so với {cost_p6}); availability {av_pcr} so với {av_p6}.',
+      pcr_vs_p6_higher: 'P-CR (τ={tau_pcr}) có tổng chi phí cao hơn P6 (τ={tau_p6}) {pct} ({cost_pcr} so với {cost_p6}); availability {av_pcr} so với {av_p6}.',
+      b0_vs_p6: 'B0 (raw quantile τ=0.95) chỉ đạt availability {b0} dù đặt mục tiêu 95%; P6 điều khiển về {p6}. P6 là bộ điều khiển mức phục vụ, không phải bộ giảm chi phí.',
+      artifact_source: 'Nguồn: trích kết quả offline {n_art} SKU × {d_art} ngày (c3ok_results.csv), quy đổi tuyến tính theo {n} SKU × {d} ngày; KHÔNG phải mô phỏng chạy lại. Chi phí theo A3 (h=0.002·giá/ngày, b=0.35·giá, c=2/đơn).',
+    },
+    stockouts_artifact: 'Số đơn vị thiếu không có trong artifact (chỉ có chi phí b·đơn vị thiếu theo giá từng SKU).',
+  },
+  policy_label: {
+    B0: 'B0 - Raw quantile τ=0.95 (DFIOS gốc)',
+    B2: 'B2 - Raw quantile τ*=0.99 (critical ratio)',
+    PCR: 'P-CR - C³-OUT với setpoint = critical ratio (τ=0.9615)',
+    P6: 'P6 - C³-OUT τ=0.95 (bộ điều khiển mức phục vụ)',
+  },
+  policy_desc: {
+    B0: 'Baseline tĩnh: s = Q̂ raw của cửa sổ L+R ở τ=0.95, không hiệu chỉnh theo chu kỳ.',
+    B2: 'Baseline tĩnh tối ưu chi phí: raw quantile ở τ* chọn trên validation (không có controller).',
+    PCR: 'C³-OUT với setpoint τ = b/(b+h·H) = 0.9615: chính sách tối thiểu chi phí A3 trong artifact.',
+    P6: 'Bộ điều khiển tích phân θ_g bám mức phục vụ mục tiêu 0.95; KHÔNG phải bộ giảm chi phí.',
   },
   accuracy: {
     title: 'Sai số dự báo',

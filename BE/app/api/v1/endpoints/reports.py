@@ -145,7 +145,9 @@ def get_policy_comparison_benchmark(
     for key, row in art.policies.items():
         policies[key] = {
             "policy": row.artifact_row,
+            "policy_key": key,  # stable B0 | B2 | PCR | P6: clients localise label/description from it
             "label": row.label,
+            "description": row.description,
             "tau": row.tau,
             "csl": row.csl,
             "fill_rate": row.fill_rate,

@@ -30,7 +30,9 @@ with engine.begin() as conn:
             ADD COLUMN IF NOT EXISTS inventory_position DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS eoq_quantity DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS policy_applied VARCHAR(50) DEFAULT 'REFIT-RSS-EOQ-G',
-            ADD COLUMN IF NOT EXISTS review_date DATE;
+            ADD COLUMN IF NOT EXISTS review_date DATE,
+            ADD COLUMN IF NOT EXISTS on_hand_at_review DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS on_order_at_review DOUBLE PRECISION;
     """))
 
 inv_df = pd.read_sql(f"SELECT item_id, on_hand, on_order FROM inventory WHERE store_id = '{STORE_ID}'", engine)
@@ -63,6 +65,8 @@ for _, row in reorder_items.iterrows():
         "order_up_to_S": round(float(row["order_up_to_S"]), 2),
         "reorder_point_s": round(float(row["reorder_point_s"]), 2),
         "inventory_position": round(float(row["inventory_position"]), 2),
+        "on_hand_at_review": round(float(row["on_hand"]), 2),
+        "on_order_at_review": round(float(row["on_order"]), 2),
         "eoq_quantity": round(float(row["eoq"]), 2),
         "policy_applied": "REFIT-RSS-EOQ-G",
         "review_date": REVIEW_DATE,

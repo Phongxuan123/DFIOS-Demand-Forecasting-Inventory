@@ -21,7 +21,10 @@ export interface SimClock {
   speed: number;
   updated_at: string;
   days_elapsed: number;
+  /** Index k of the latest review (days_elapsed // R); excludes the day-0 review. */
   reviews_elapsed: number;
+  /** Reviews run since start INCLUDING the day-0 review (same counting as ClockAdvanceResult.reviews_executed). */
+  reviews_executed_total?: number | null;
 }
 
 export interface ClockAdvanceResult {
@@ -30,7 +33,9 @@ export interface ClockAdvanceResult {
   previous_date: string;
   current_date: string;
   days_advanced: number;
+  /** Includes the day-0 review when the advance started at start_date (see day0_review_executed). */
   reviews_executed: number;
+  day0_review_executed?: boolean;
   stockouts_recorded: number;
   recommendations_generated: number;
   job_events: string[];

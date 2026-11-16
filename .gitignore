@@ -7,6 +7,7 @@ FE/node_modules/
 BE/.env
 BE/.env.*
 !BE/.env.example
+!BE/.env.local.example
 
 # Build and distribution outputs
 dist/

@@ -34,7 +34,7 @@ export const shell = {
     label: 'Ngày mô phỏng',
     loading: 'Đang đọc đồng hồ…',
     day_index: 'Ngày thứ {days} kể từ {start}',
-    reviews: 'Đã qua {count} kỳ review',
+    reviews: '{reviews} từ ngày bắt đầu',
     mode: 'Chế độ: {mode}',
     source: 'BE /clock, kho {store}',
     refresh: 'Đọc lại đồng hồ',
@@ -44,7 +44,7 @@ export const shell = {
     advance_body:
       'Máy chủ sẽ chạy chuỗi batch J1–J6 cho kho {store}: phát lại doanh số, dự báo, đóng chu kỳ, review C³-OUT và sinh đề xuất bổ sung. Thao tác ghi vào cơ sở dữ liệu và có thể mất vài phút.',
     advancing: 'Đang tua đồng hồ…',
-    advanced: 'Đã tua từ {from} đến {to}: {reviews} kỳ review, {recommendations} đề xuất mới.',
+    advanced: 'Đã tua từ {from} đến {to}: {reviews}, {recommendations}.',
     advance_failed: 'Không tua được đồng hồ',
     unavailable_forbidden: 'Vai trò của bạn không được xem đồng hồ mô phỏng',
     unavailable_missing: 'Kho này chưa có đồng hồ mô phỏng',

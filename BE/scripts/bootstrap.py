@@ -59,7 +59,9 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 def _load_dotenv() -> None:
     try:
         from dotenv import load_dotenv
-        load_dotenv(os.path.join(BE_DIR, ".env"))  # không ghi đè biến môi trường đã đặt
+        # không ghi đè biến môi trường đã đặt; .env.local (riêng từng máy) được ưu tiên hơn .env
+        load_dotenv(os.path.join(BE_DIR, ".env.local"))
+        load_dotenv(os.path.join(BE_DIR, ".env"))
     except ImportError:
         pass
 
@@ -84,7 +86,7 @@ def reset_schema(url: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--reset", action="store_true", help="DROP/CREATE schema public trước khi dựng")
-    parser.add_argument("--i-know", dest="i_know", action="store_true", help="cho phép --reset trên DB không phải localhost")
+    parser.add_argument("--i-know", dest="i_know", action="store_true", help="cho phép chạy (và --reset) trên DB không phải localhost, ví dụ Supabase của nhóm")
     parser.add_argument("--skip-checksum", action="store_true", help="chỉ kiểm tra tồn tại + kích thước artifact")
     parser.add_argument("--from", dest="start_from", default=None, help="bắt đầu từ bước này")
     args = parser.parse_args()
@@ -110,15 +112,20 @@ def main() -> int:
     timings.append(("check_artifacts", time.time() - t0))
     print(f"[bootstrap] artifacts OK ({_fmt(time.time() - t0)})")
 
-    # 2. Reset
+    # 2. Bảo vệ DB dùng chung: mọi bước nạp đều thay thế dữ liệu trong bảng, nên chỉ chạy trên localhost
+    #    trừ khi người chạy xác nhận rõ bằng --i-know (ví dụ khi cố ý nạp lên Supabase của nhóm).
+    if host not in LOCAL_HOSTS and not args.i_know:
+        print(
+            f"[bootstrap] REFUSING: DATABASE_URL host '{host}' is not localhost/127.0.0.1. "
+            "Bootstrap replaces table contents (and --reset drops the whole schema). "
+            "Point DATABASE_URL to your local Postgres (BE/.env.local), or pass --i-know if you really "
+            "intend to load this shared database.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # 3. Reset
     if args.reset:
-        if host not in LOCAL_HOSTS and not args.i_know:
-            print(
-                f"[bootstrap] REFUSING --reset: DATABASE_URL host '{host}' is not localhost/127.0.0.1. "
-                "Pass --i-know to override (destroys ALL data in that database).",
-                file=sys.stderr,
-            )
-            return 2
         t0 = time.time()
         reset_schema(url)
         timings.append(("reset_schema", time.time() - t0))

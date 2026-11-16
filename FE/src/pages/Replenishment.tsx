@@ -224,13 +224,28 @@ export const Replenishment: React.FC = () => {
     },
     { key: 'priority', header: t('replenishment.col.priority'), sortable: tab === 'proposals', cell: (r) => <Badge tone={PRIORITY_TONE[r.priority] ?? 'neutral'}>{priorityLabel(r.priority)}</Badge> },
     { key: 'status', header: t('replenishment.col.status'), sortable: tab === 'proposals', cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge> },
-    { key: 'on_hand', header: t('replenishment.col.on_hand'), align: 'right', cell: (r) => fmt.integer(r.on_hand) },
-    { key: 'on_order', header: t('replenishment.col.on_order'), align: 'right', cell: (r) => fmt.integer(r.on_order) },
+    { key: 'on_hand', header: <span title={t('replenishment.col_hint.on_hand')}>{t('replenishment.col.on_hand')}</span>, align: 'right', cell: (r) => fmt.integer(r.on_hand) },
+    { key: 'on_order', header: <span title={t('replenishment.col_hint.on_order')}>{t('replenishment.col.on_order')}</span>, align: 'right', cell: (r) => fmt.integer(r.on_order) },
     {
       key: 'ip',
       header: <span title={t('replenishment.col_hint.ip')}>{t('replenishment.col.ip')}</span>,
       align: 'right',
-      cell: (r) => fmt.integer(r.inventory_position ?? inventoryPosition(r.on_hand, r.on_order)),
+      cell: (r) => {
+        // IP is the review-date snapshot; it is never recomputed from the CURRENT on hand / on order.
+        const ip = r.inventory_position ?? inventoryPosition(r.on_hand_at_review, r.on_order_at_review);
+        if (ip == null) return <Unavailable />;
+        const date = r.review_date ? fmt.date(r.review_date, 'short') : '—';
+        const split =
+          r.on_hand_at_review != null && r.on_order_at_review != null
+            ? t('replenishment.ip_split', { on_hand: fmt.integer(r.on_hand_at_review), on_order: fmt.integer(r.on_order_at_review), date })
+            : t('replenishment.ip_split_unknown', { date });
+        return (
+          <div>
+            <div>{fmt.integer(ip)}</div>
+            <div className="rep-sub">{split}</div>
+          </div>
+        );
+      },
     },
     { key: 's', header: t('replenishment.col.s'), align: 'right', cell: (r) => fmt.integer(r.reorder_point_s) },
     { key: 'S', header: t('replenishment.col.S'), align: 'right', cell: (r) => fmt.integer(r.order_up_to_S) },

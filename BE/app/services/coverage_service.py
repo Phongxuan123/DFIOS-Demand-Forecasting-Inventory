@@ -1,14 +1,18 @@
 """
-Empirical coverage of the Q0.95 protection-window quantile. TWO distinct measurements (never merged):
+Empirical coverage of the Q0.95 protection-window quantile. Both fields use the SAME definition: the share of
+(SKU, origin) 10-day (L+R) protection windows whose realised window total demand is <= the Q0.95 of that window.
+They are TWO distinct measurements (different forecasts, calibration and sample) and are never merged:
 
-* ``coverage_q95`` / ``coverage_source = "artifact:c3ok"``: the value measured OFFLINE by the C3-OUT run on the
-  M5 test split (``c3ok_forecast_calibration.csv``, row ``test``, column ``cover_0.95`` ~ 0.8314). Pure artifact
-  extract: P(y_h <= Q0.95) per (series, day) of the Ensemble daily quantile forecast.
-* ``coverage_q95_db_causal``: measured on THIS database: share of (item, origin) protection windows in
-  ``forecast_window_quantile`` whose realised window demand (``sales_history`` / M5 CSV for days missing, only
-  windows whose H days are all known) is <= the stored route-(c) Q0.95. Different object (window sum of H days,
-  empirical residual quantile of matured windows) and different sample (only origins whose window is complete).
-The two numbers are not expected to match; see docs/API_CHANGES.md ("Follow-up agent").
+* ``coverage_q95`` / ``coverage_source = "artifact:c3ok"``: measured OFFLINE by the C3-OUT pipeline on the M5
+  test split (25,950 SKUs, artifact forecasts), step "Quantile DFIOS & hieu chuan" of the run log
+  (``c3ok_forecast_calibration.csv``, row ``test``, column ``cover_0.95`` ~ 0.8314; validation 0.8478,
+  10-day bias -4.42 %). Pure artifact extract. The log does not state whether this is before or after the
+  pipeline's calibration step, so nothing is claimed either way.
+* ``coverage_q95_db_causal``: measured on THIS database from the route-(c) causal quantiles stored in
+  ``forecast_window_quantile`` (empirical residual quantile of matured windows): realised window demand from
+  ``sales_history`` / M5 CSV, only windows whose H days are all known (e.g. CA_1, 3,049 SKUs).
+The numbers are not expected to match (different forecasts / calibration / sample); both are compared with the
+same O2 band [0.93, 0.97]. See docs/API_CHANGES.md ("Follow-up agent").
 """
 from __future__ import annotations
 

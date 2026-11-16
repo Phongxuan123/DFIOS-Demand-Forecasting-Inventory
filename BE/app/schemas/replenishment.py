@@ -15,13 +15,17 @@ class ReplenishmentItemResponse(BaseModel):
     category: Optional[str] = None
     supplier_id: Optional[str] = None
     supplier_name: Optional[str] = None
-    on_hand: float = 0.0
-    on_order: float = 0.0
+    on_hand: float = Field(0.0, description="CURRENT on hand (live inventory row, clock date), not the review-date value")
+    on_order: float = Field(0.0, description="CURRENT on order (live inventory row, clock date), not the review-date value")
     rop: float = 0.0
     safety_stock: float = 0.0
     order_up_to_S: Optional[float] = None
     reorder_point_s: Optional[float] = None
-    inventory_position: Optional[float] = None
+    inventory_position: Optional[float] = Field(
+        None, description="IP at review_date (= on_hand_at_review + on_order_at_review), basis of q = S - IP"
+    )
+    on_hand_at_review: Optional[float] = Field(None, description="On hand at review_date (null for legacy rows)")
+    on_order_at_review: Optional[float] = Field(None, description="On order at review_date (null for legacy rows)")
     eoq_quantity: Optional[float] = None
     policy_applied: Optional[str] = None
     review_date: Optional[date] = None

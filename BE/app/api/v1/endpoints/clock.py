@@ -23,6 +23,10 @@ router = APIRouter()
 def _clock_response(db: Session, clock, **extra) -> SimClockResponse:
     days_elapsed = (clock.current_date - clock.start_date).days
     k = max(0, days_elapsed // pc.REVIEW_PERIOD_DAYS)
+    # Reviews actually run by the simulator since start_date: the day-0 review (start of start_date, run by the
+    # first advance) plus the reviews at day R, 2R, ... <= current_date. Same counting as
+    # POST /clock/advance ``reviews_executed`` (which includes the day-0 review when it starts from start_date).
+    reviews_total = k + 1 if days_elapsed > 0 else 0
     n_skus = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id == clock.store_id).scalar() or None
     return SimClockResponse(
         store_id=clock.store_id,
@@ -33,6 +37,7 @@ def _clock_response(db: Session, clock, **extra) -> SimClockResponse:
         updated_at=clock.updated_at,
         days_elapsed=days_elapsed,
         reviews_elapsed=k,
+        reviews_executed_total=reviews_total,
         as_of=clock.current_date,
         n_skus=n_skus,
         lead_time_days=pc.LEAD_TIME_DAYS,

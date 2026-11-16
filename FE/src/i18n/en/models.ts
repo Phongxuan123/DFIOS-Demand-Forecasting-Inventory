@@ -24,7 +24,7 @@ export const models: typeof Vi = {
     wrmsse_hint: 'Lower is better (M5 standard)',
     mase: 'MASE',
     mase_hint: 'Below 1.0 means better than the Naive forecast',
-    coverage: 'Quantile coverage Q̂0.95',
+    coverage: 'Q̂0.95 10-day window coverage',
     coverage_hint: 'O2 target: {low}–{high}',
     coverage_in: 'Within target band',
     coverage_out: 'Outside target band',

@@ -1,8 +1,9 @@
 import os
 from dotenv import load_dotenv
 
-# Load BE/.env
+# Thứ tự ưu tiên: biến môi trường của shell > BE/.env.local (cấu hình riêng từng máy, không commit) > BE/.env
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv(os.path.join(BASE_DIR, ".env.local"))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 class Settings:

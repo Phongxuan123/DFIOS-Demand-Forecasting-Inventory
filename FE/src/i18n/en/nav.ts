@@ -35,7 +35,7 @@ export const shell: typeof ViShell = {
     label: 'Simulation date',
     loading: 'Reading clock…',
     day_index: 'Day {days} since {start}',
-    reviews: '{count} review cycles elapsed',
+    reviews: '{reviews} since start',
     mode: 'Mode: {mode}',
     source: 'BE /clock, store {store}',
     refresh: 'Re-read clock',
@@ -45,7 +45,7 @@ export const shell: typeof ViShell = {
     advance_body:
       'The server will run the J1–J6 batch chain for store {store}: sales replay, forecast, cycle close, C³-OUT review and new replenishment recommendations. This writes to the database and may take a few minutes.',
     advancing: 'Advancing clock…',
-    advanced: 'Advanced from {from} to {to}: {reviews} review cycles, {recommendations} new recommendations.',
+    advanced: 'Advanced from {from} to {to}: {reviews}, {recommendations}.',
     advance_failed: 'Could not advance the clock',
     unavailable_forbidden: 'Your role cannot view the simulation clock',
     unavailable_missing: 'This store has no simulation clock yet',

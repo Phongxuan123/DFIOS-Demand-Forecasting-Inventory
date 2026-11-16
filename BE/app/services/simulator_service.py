@@ -617,6 +617,7 @@ class SimulatorService:
             "current_date": target_date,
             "days_advanced": total_days,
             "reviews_executed": reviews_executed,
+            "day0_review_executed": prev_date == t0,
             "stockouts_recorded": stockouts_recorded,
             "recommendations_generated": recommendations_generated,
             "orders_received": arrivals_total,

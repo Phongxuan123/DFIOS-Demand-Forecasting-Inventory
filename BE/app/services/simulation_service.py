@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.inventory import Inventory
 from app.models.product import Product
-from app.schemas.simulation import PolicySimulationMetric, PolicyComparisonResponse
+from app.schemas.simulation import InsightDetail, PolicySimulationMetric, PolicyComparisonResponse
 from app.services import policy_config as pc
 from app.services.policy_artifact import (
     ArtifactMissingError,
@@ -93,6 +93,7 @@ class SimulationService:
             policies.append(
                 PolicySimulationMetric(
                     policy_id=policy_id,
+                    policy_key=key,
                     policy_name=row.label,
                     description=row.description,
                     total_cost=tot_cost,
@@ -103,6 +104,7 @@ class SimulationService:
                     total_orders=total_orders,
                     total_stockouts=None,
                     stockouts_reason="Số đơn vị thiếu không có trong artifact (chỉ có chi phí b·đơn vị thiếu theo giá từng SKU).",
+                    stockouts_reason_code="artifact_no_units",
                     is_feasible=bool(row.csl >= target_service_level),
                     tau=row.tau,
                     csl=round(row.csl, 5),
@@ -126,17 +128,27 @@ class SimulationService:
 
         by_id = {p.policy_id: p for p in policies}
         insights: List[str] = []
+        details: List[InsightDetail] = []  # same order as ``insights``; stable codes for client-side i18n
+        target_pct = round(target_service_level * 100, 1)
         if feasible:
             insights.append(
                 f"Đề xuất {best.policy_name}: availability quan sát {best.availability:.1f}% >= mục tiêu "
                 f"{target_service_level * 100:.1f}%, tổng chi phí thấp nhất trong các phương án đạt mục tiêu "
                 f"({best.total_cost:,.2f} $ đã quy đổi)."
             )
+            details.append(InsightDetail(code="recommend_feasible", params={
+                "policy_id": best.policy_id, "policy_key": best.policy_key, "availability_pct": best.availability,
+                "target_pct": target_pct, "total_cost": best.total_cost,
+            }))
         else:
             insights.append(
                 f"Không phương án nào trong artifact đạt availability {target_service_level * 100:.1f}%. "
                 f"Gần nhất: {best.policy_name} ({best.availability:.1f}%)."
             )
+            details.append(InsightDetail(code="recommend_infeasible", params={
+                "policy_id": best.policy_id, "policy_key": best.policy_key, "availability_pct": best.availability,
+                "target_pct": target_pct,
+            }))
         pcr, p6, b0 = by_id["PCR_c3out_cost_optimal"], by_id["P6_c3out_closed_loop"], by_id["B0_raw_quantile"]
         cmp_word = "thấp hơn" if pcr.total_cost < p6.total_cost else "cao hơn"
         diff_pct = abs(pcr.total_cost - p6.total_cost) / max(1e-9, p6.total_cost) * 100.0
@@ -144,23 +156,38 @@ class SimulationService:
             f"P-CR (τ={pcr.tau}) có tổng chi phí {cmp_word} P6 (τ={p6.tau}) {diff_pct:.2f}% "
             f"({pcr.total_cost:,.2f} so với {p6.total_cost:,.2f}); availability {pcr.availability:.1f}% so với {p6.availability:.1f}%."
         )
+        details.append(InsightDetail(code="pcr_vs_p6", params={
+            "direction": "lower" if pcr.total_cost < p6.total_cost else "higher",
+            "tau_pcr": pcr.tau, "tau_p6": p6.tau, "diff_pct": round(diff_pct, 2),
+            "cost_pcr": pcr.total_cost, "cost_p6": p6.total_cost,
+            "availability_pcr_pct": pcr.availability, "availability_p6_pct": p6.availability,
+        }))
         insights.append(
             f"B0 (raw quantile τ=0.95) chỉ đạt availability {b0.availability:.1f}% dù đặt mục tiêu 95%; "
             f"P6 điều khiển về {p6.availability:.1f}%. P6 là bộ điều khiển mức phục vụ, không phải bộ giảm chi phí."
         )
+        details.append(InsightDetail(code="b0_vs_p6", params={
+            "availability_b0_pct": b0.availability, "availability_p6_pct": p6.availability,
+        }))
         insights.append(
             f"Nguồn: trích kết quả offline {art.n_skus:,} SKU x {art.n_days} ngày (c3ok_results.csv), quy đổi tuyến tính "
             f"theo {sku_count:,} SKU x {horizon_days} ngày; KHÔNG phải mô phỏng chạy lại. Chi phí theo A3 "
             f"(h=0.002·giá/ngày, b=0.35·giá, c=2/đơn)."
         )
+        details.append(InsightDetail(code="artifact_source", params={
+            "artifact_n_skus": art.n_skus, "artifact_n_days": art.n_days,
+            "sku_count": sku_count, "horizon_days": horizon_days,
+        }))
 
         return PolicyComparisonResponse(
             store_id=store_id,
             simulation_horizon_days=horizon_days,
             sku_count=sku_count,
             recommended_policy=recommended,
+            recommended_policy_key=best.policy_key,
             policies=policies,
             insights=insights,
+            insight_details=details,
             source="artifact_extract",
             simulated=False,
             as_of=art.as_of,

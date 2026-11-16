@@ -10,13 +10,17 @@ export interface ReplenishmentItem {
   category?: string | null;
   supplier_id?: string | null;
   supplier_name?: string | null;
+  /** CURRENT on hand / on order (live inventory row), not the review-date values. */
   on_hand: number;
   on_order: number;
   rop: number;
   safety_stock: number;
   order_up_to_S?: number | null;
   reorder_point_s?: number | null;
+  /** IP at review_date = on_hand_at_review + on_order_at_review. */
   inventory_position?: number | null;
+  on_hand_at_review?: number | null;
+  on_order_at_review?: number | null;
   eoq_quantity?: number | null;
   policy_applied?: string | null;
   review_date?: string | null;
