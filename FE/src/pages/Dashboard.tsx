@@ -1,6 +1,30 @@
 import React, { useMemo, useState } from 'react';
-import { Activity, Boxes, CheckCircle2, CircleDollarSign, ClipboardList, Info, PackageX, Target, TriangleAlert } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
+import { useNavigate } from 'react-router-dom';
+import {
+  Activity,
+  ArrowRight,
+  Boxes,
+  CheckCircle2,
+  CircleDollarSign,
+  ClipboardList,
+  PackageX,
+  Play,
+  Target,
+  TriangleAlert,
+} from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceArea,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import {
   Alert,
   Badge,
@@ -9,7 +33,6 @@ import {
   ChartFrame,
   ChartLegend,
   ChartTooltip,
-  DataSourceNote,
   EmptyState,
   KpiTile,
   PageHeader,
@@ -27,7 +50,6 @@ import { CLOCK_ADVANCE_DAYS, useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBeCode } from '../i18n/useBe.ts';
-import { BeText } from '../i18n/BeText.tsx';
 import { prefixCode } from '../i18n/beText.ts';
 import { costVsB0, countPhrase, reviewsPhrase, reviewsSinceStart, signedCurrency } from '../utils/simText.ts';
 import { thetaDomain } from '../utils/chartScale.ts';
@@ -44,18 +66,17 @@ import {
   type CostCurvePoint,
   type SegmentAvailability,
 } from '../services/dashboardApi.ts';
+import './dashboard.css';
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
-/** "WRMSSE 0.4935" -> 0.4935; anything else (e.g. "N/A") -> null. */
 function parseWrmsse(text: string | undefined): number | null {
   if (!text) return null;
   const m = /WRMSSE\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)/i.exec(text);
   return m ? Number(m[1]) : null;
 }
 
-/* ------------------------------- Clock panel ------------------------------ */
-const ClockPanel: React.FC = () => {
+const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
   const t = useT();
   const fmt = useFormat();
   const toast = useToast();
@@ -96,124 +117,119 @@ const ClockPanel: React.FC = () => {
     }
   };
 
-  let body: React.ReactNode;
   if (status === 'loading') {
-    body = <p className="ui-muted">{t('shell.clock.loading')}</p>;
-  } else if (status === 'unavailable' || !clock) {
-    const key = `shell.clock.unavailable_${reason ?? 'error'}` as const;
-    body = (
-      <Alert tone="info">
-        {t('dashboard.clock.unavailable', { reason: t(key as 'shell.clock.unavailable_error') })}
-      </Alert>
+    return (
+      <div className="dash-clock-bar">
+        <p className="ui-muted">{t('shell.clock.loading')}</p>
+      </div>
     );
-  } else {
-    body = (
-      <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-        <div>
-          <div className="ui-muted">{t('dashboard.clock.current')}</div>
-          <div style={{ fontSize: 'var(--text-xl)', fontWeight: 'var(--weight-semibold)' }} className="ui-num">
-            {fmt.date(clock.current_date, 'long')}
-          </div>
-          <div className="ui-muted">
-            {t('dashboard.clock.start')}: {fmt.date(clock.start_date)}. {t('dashboard.clock.elapsed', { days: countPhrase(t, fmt, 'days', clock.days_elapsed), reviews: reviewsPhrase(t, fmt, reviewsSinceStart(clock), true) })}
-          </div>
-        </div>
-        <div>
-          <div className="ui-muted">{t('dashboard.clock.last_advance')}</div>
-          <div>
-            {last
-              ? t('dashboard.clock.last_advance_value', {
-                  from: fmt.date(last.from),
-                  to: fmt.date(last.to),
-                  reviews: reviewsPhrase(t, fmt, last.reviews, last.day0),
-                  stockouts: countPhrase(t, fmt, 'stockouts', last.stockouts),
-                  recs: countPhrase(t, fmt, 'recs', last.recs),
-                })
-              : t('dashboard.clock.last_advance_none')}
-          </div>
-        </div>
-        <div>
-          {canAdvance ? (
-            <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-              <Select<number>
-                label={t('dashboard.clock.days')}
-                value={days}
-                onChange={setDays}
-                options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
-                disabled={advancing}
-              />
-              <Button variant="primary" loading={advancing} onClick={onAdvance}>
-                {advancing ? t('shell.clock.advancing') : t('dashboard.clock.advance')}
-              </Button>
-              <AdvanceProgress />
-            </div>
-          ) : (
-            <p className="ui-muted">{t('dashboard.clock.admin_only')}</p>
-          )}
-        </div>
+  }
+
+  if (status === 'unavailable' || !clock) {
+    const key = `shell.clock.unavailable_${reason ?? 'error'}` as const;
+    return (
+      <div className="dash-clock-bar">
+        <Alert tone="info">
+          {t('dashboard.clock.unavailable', { reason: t(key as 'shell.clock.unavailable_error') })}
+        </Alert>
       </div>
     );
   }
 
   return (
-    <Card title={t('dashboard.clock.title')}>
-      {body}
-      {dialog}
-    </Card>
-  );
-};
-
-/* ------------------------------- Demo honesty ------------------------------ */
-/** U-05: says plainly what the demo can and cannot show. Collapsed by default to keep the page calm. */
-const DemoNote: React.FC<{ store: string; start: string | null }> = ({ store, start }) => {
-  const t = useT();
-  const fmt = useFormat();
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <Button variant="ghost" size="sm" leftIcon={<Info size={14} />} aria-expanded={open} aria-controls="dash-demo-note" onClick={() => setOpen((o) => !o)}>
-        {open ? t('dashboard.demo.toggle_hide') : t('dashboard.demo.toggle_show')}
-      </Button>
-      {open && (
-        <div id="dash-demo-note" style={{ marginTop: 'var(--space-2)' }}>
-          <Alert tone="info" title={t('dashboard.demo.title')}>
-            <p style={{ margin: 0 }}>{t('dashboard.demo.p1', { store: store || '—', start: start ? fmt.date(start) : '—' })}</p>
-            <p style={{ margin: 'var(--space-2) 0 0' }}>{t('dashboard.demo.p2')}</p>
-            <p style={{ margin: 'var(--space-2) 0 0' }}>{t('dashboard.demo.p3')}</p>
-            <p style={{ margin: 'var(--space-2) 0 0' }}>{t('dashboard.demo.p4')}</p>
-          </Alert>
+    <div className="dash-clock-bar">
+      <div className="dash-clock-left">
+        <div className="dash-clock-badge">
+          <span className="dash-clock-pulse" aria-hidden="true" />
+          <span>{t('dashboard.clock.title')}</span>
         </div>
-      )}
+        <div className="dash-clock-date">
+          {fmt.date(clock.current_date, 'long')}
+        </div>
+        <div className="dash-clock-meta">
+          <span>{t('dashboard.clock.start')}: <strong>{fmt.date(clock.start_date)}</strong></span>
+          <span className="dash-clock-dot">·</span>
+          <span>{t('dashboard.clock.elapsed', { days: countPhrase(t, fmt, 'days', clock.days_elapsed), reviews: reviewsPhrase(t, fmt, reviewsSinceStart(clock), true) })}</span>
+          {last && (
+            <>
+              <span className="dash-clock-dot">·</span>
+              <span>
+                {t('dashboard.clock.last_advance')}: {t('dashboard.clock.last_advance_value', {
+                  from: fmt.date(last.from),
+                  to: fmt.date(last.to),
+                  reviews: reviewsPhrase(t, fmt, last.reviews, last.day0),
+                  stockouts: countPhrase(t, fmt, 'stockouts', last.stockouts),
+                  recs: countPhrase(t, fmt, 'recs', last.recs),
+                })}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="dash-clock-right">
+        {canAdvance ? (
+          <div className="dash-clock-form">
+            <div className="dash-clock-field">
+              <label htmlFor="dash-clock-days" className="dash-clock-label">
+                {t('dashboard.clock.days')}
+              </label>
+              <select
+                id="dash-clock-days"
+                className="dash-clock-select"
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value))}
+                disabled={advancing}
+              >
+                {CLOCK_ADVANCE_DAYS.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              variant="primary"
+              loading={advancing}
+              onClick={onAdvance}
+              className="dash-clock-btn"
+              leftIcon={<Play size={13} fill="currentColor" />}
+            >
+              {advancing ? t('shell.clock.advancing') : t('dashboard.clock.advance_action', { days: String(days) })}
+            </Button>
+            <AdvanceProgress />
+          </div>
+        ) : (
+          <span className="ui-muted">{t('dashboard.clock.admin_only')}</span>
+        )}
+      </div>
+      {dialog}
     </div>
   );
 };
 
-/* --------------------------------- Charts --------------------------------- */
 const CostChart: React.FC<{ rows: CostCurvePoint[] }> = ({ rows }) => {
   const c = useChartTheme();
   const t = useT();
   const fmt = useFormat();
   const hasB0 = rows.some((r) => r.b0_total_cost !== null);
   return (
-    <>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-          <CartesianGrid stroke={c.grid} vertical={false} />
-          <XAxis dataKey="cycle_index" {...c.axis} tickFormatter={(v: number) => String(v)} />
-          <YAxis {...c.axis} width={56} tickFormatter={(v: number) => fmt.compact(v)} />
-          <RTooltip
-            content={<ChartTooltip formatLabel={(l) => t('dashboard.charts.review', { n: String(l) })} format={(v) => fmt.currency(v, { compact: true })} />}
-            cursor={c.cursor}
-          />
-          <Line type="monotone" dataKey="c3out_total_cost" name={t('dashboard.charts.cost_c3')} stroke={c.series[0]} strokeWidth={2} dot={rows.length <= 3 ? { r: 3 } : false} />
-          {hasB0 && <Line type="monotone" dataKey="b0_total_cost" name={t('dashboard.charts.cost_b0')} stroke={c.series[1]} strokeWidth={2} strokeDasharray="5 3" dot={rows.length <= 3 ? { r: 3 } : false} connectNulls={false} />}
-        </LineChart>
-      </ResponsiveContainer>
-    </>
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+        <CartesianGrid stroke={c.grid} vertical={false} />
+        <XAxis dataKey="cycle_index" {...c.axis} tickFormatter={(v: number) => String(v)} />
+        <YAxis {...c.axis} width={56} tickFormatter={(v: number) => fmt.compact(v)} />
+        <RTooltip
+          content={<ChartTooltip formatLabel={(l) => t('dashboard.charts.review', { n: String(l) })} format={(v) => fmt.currency(v, { compact: true })} />}
+          cursor={c.cursor}
+        />
+        <Line type="monotone" dataKey="c3out_total_cost" name={t('dashboard.charts.cost_c3')} stroke={c.series[0]} strokeWidth={2} dot={rows.length <= 3 ? { r: 3 } : false} />
+        {hasB0 && <Line type="monotone" dataKey="b0_total_cost" name={t('dashboard.charts.cost_b0')} stroke={c.series[1]} strokeWidth={2} strokeDasharray="5 3" dot={rows.length <= 3 ? { r: 3 } : false} connectNulls={false} />}
+      </LineChart>
+    </ResponsiveContainer>
   );
 };
 
-/** XYZ letter -> dash pattern, so the three θ lines differ by shape too, not by colour only (U-07). */
 const THETA_DASH: Record<string, string | undefined> = { X: undefined, Y: '6 3', Z: '2 3' };
 const thetaDash = (cls: string) => THETA_DASH[cls.slice(-1)];
 
@@ -221,7 +237,6 @@ const ThetaChart: React.FC<{ rows: Array<Record<string, number | string>>; class
   const c = useChartTheme();
   const t = useT();
   const fmt = useFormat();
-  // U-14: a tight, readable y-range inside the controller limits (θ drifts by hundredths per review).
   const domain = useMemo(() => thetaDomain(rows.flatMap((r) => classes.map((cls) => (typeof r[cls] === 'number' ? (r[cls] as number) : null)))), [rows, classes]);
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -267,9 +282,28 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
   const t = useT();
   const afterStart = clockDate ? rows.find((r) => r.date > clockDate)?.date : undefined;
   const inRange = !!clockDate && rows.length > 0 && rows[0].date <= clockDate && !!afterStart;
+
+  const { chartRows, anchorDate } = useMemo(() => {
+    if (!rows || rows.length === 0) return { chartRows: rows, anchorDate: undefined };
+    let lastActualIdx = -1;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].actual !== null) {
+        lastActualIdx = i;
+        break;
+      }
+    }
+    const firstPredIdx = rows.findIndex((r) => r.predicted !== null);
+    if (lastActualIdx >= 0 && firstPredIdx > lastActualIdx && rows[lastActualIdx].predicted === null) {
+      const anchor = rows[lastActualIdx].date;
+      const patched = rows.map((r, i) => (i === lastActualIdx ? { ...r, predicted: r.actual } : r));
+      return { chartRows: patched, anchorDate: anchor };
+    }
+    return { chartRows: rows, anchorDate: undefined };
+  }, [rows]);
+
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+      <LineChart data={chartRows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <CartesianGrid stroke={c.grid} vertical={false} />
         <XAxis dataKey="date" {...c.axis} tickFormatter={(v: string) => fmt.date(v, 'axis')} minTickGap={32} />
         <YAxis {...c.axis} width={48} tickFormatter={(v: number) => fmt.compact(v)} />
@@ -279,7 +313,22 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
         {clockDate && rows.some((r) => r.date === clockDate) && (
           <ReferenceLine x={clockDate} stroke={c.series[2]} label={{ value: t('dashboard.charts.clock_line', { date: fmt.date(clockDate, 'axis') }), fill: c.tick, fontSize: 11, position: 'insideTopLeft' }} />
         )}
-        <RTooltip content={<ChartTooltip formatLabel={(l) => fmt.date(String(l))} format={(v) => fmt.number(v, { digits: 0 })} />} cursor={c.cursor} />
+        <RTooltip
+          content={(props) => {
+            const payload = props.payload && anchorDate
+              ? props.payload.filter((p) => !(String(props.label) === anchorDate && p.dataKey === 'predicted'))
+              : props.payload;
+            return (
+              <ChartTooltip
+                {...props}
+                payload={payload as any}
+                formatLabel={(l) => fmt.date(String(l))}
+                format={(v) => fmt.number(v, { digits: 0 })}
+              />
+            );
+          }}
+          cursor={c.cursor}
+        />
         <Line type="monotone" dataKey="actual" name={t('dashboard.charts.actual')} stroke={c.series[0]} strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="predicted" name={t('dashboard.charts.predicted')} stroke={c.series[1]} strokeWidth={2} strokeDasharray="5 3" dot={false} />
       </LineChart>
@@ -287,15 +336,17 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
   );
 };
 
-/* ---------------------------------- Page ---------------------------------- */
 export const Dashboard: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
   const beCode = useBeCode();
-  const { storeId, concreteStoreId, isGlobal } = useStore();
+  const navigate = useNavigate();
+  const { storeId, concreteStoreId } = useStore();
   const clock = useClock();
+  const { confirm, dialog } = useConfirm();
+  const toast = useToast();
+
   const enabled = !!storeId;
-  /** Panels that only exist per store use the real store; cost/availability and calibration accept GLOBAL. */
   const sid = concreteStoreId ?? '';
   const scope = storeId ?? '';
   const version = clock.version;
@@ -312,6 +363,28 @@ export const Dashboard: React.FC = () => {
   const sh = shadow.data;
   const wrmsse = k?.production_wrmsse ?? parseWrmsse(k?.avg_forecast_accuracy);
 
+  const onAdvanceSevenDays = async () => {
+    const ok = await confirm({
+      title: t('shell.clock.advance_title', { days: 7 }),
+      description: t('shell.clock.advance_body', { store: storeId ?? '—' }),
+      confirmLabel: t('dashboard.clock.advance'),
+    });
+    if (!ok) return;
+    try {
+      const res = await clock.advance(7);
+      toast.success(
+        t('shell.clock.advanced', {
+          from: fmt.date(res.previous_date),
+          to: fmt.date(res.current_date),
+          reviews: reviewsPhrase(t, fmt, res.reviews_executed, !!res.day0_review_executed),
+          recommendations: countPhrase(t, fmt, 'recs', res.recommendations_generated),
+        }),
+      );
+    } catch (err) {
+      toast.error(t('shell.clock.advance_failed'), apiErrorMessage(err, t));
+    }
+  };
+
   const thetaView = useMemo(() => {
     const hist: CalibrationState[] = theta.data ?? [];
     const classes = [...new Set(hist.map((h) => h.class_id))].filter((cl) => cl.startsWith(abc)).sort();
@@ -325,6 +398,21 @@ export const Dashboard: React.FC = () => {
     return { classes, rows: [...byReview.values()].sort((a, b) => Number(a.review_index) - Number(b.review_index)) };
   }, [theta.data, abc]);
 
+  const costSavingsBadge = useMemo(() => {
+    if (!sh || sh.c3out_total_cost == null || sh.b0_total_cost == null) return undefined;
+    const diff = sh.b0_total_cost - sh.c3out_total_cost;
+    if (diff <= 0) return undefined;
+    const pct = sh.b0_total_cost > 0 ? (diff / sh.b0_total_cost) * 100 : 0;
+    return (
+      <Badge tone="success">
+        {t('dashboard.charts.cost_savings', {
+          saved: fmt.currency(diff, { compact: true }),
+          pct: fmt.percent(pct / 100, { scale: 'percent', digits: 1 }),
+        })}
+      </Badge>
+    );
+  }, [sh, fmt, t]);
+
   const sevTone = (s: string): Tone => (s === 'CRITICAL' ? 'danger' : s === 'WARNING' ? 'warning' : 'success');
   const sevLabel = (s: string) =>
     s === 'CRITICAL' ? t('dashboard.alerts.sev_critical') : s === 'WARNING' ? t('dashboard.alerts.sev_warning') : t('dashboard.alerts.sev_healthy');
@@ -337,22 +425,68 @@ export const Dashboard: React.FC = () => {
     { key: 'ss', header: t('dashboard.alerts.col_ss'), align: 'right', value: (r) => r.safety_stock, cell: (r) => fmt.number(r.safety_stock, { digits: 1 }), sortable: true },
     { key: 'rop', header: t('dashboard.alerts.col_rop'), align: 'right', value: (r) => r.reorder_point, cell: (r) => fmt.number(r.reorder_point, { digits: 1 }), sortable: true },
     { key: 'sev', header: t('dashboard.alerts.col_severity'), value: (r) => r.severity, cell: (r) => <Badge tone={sevTone(r.severity)}>{sevLabel(r.severity)}</Badge>, sortable: true },
-    { key: 'action', header: t('dashboard.alerts.col_action'), value: (r) => r.suggested_action, cell: (r) => <BeText text={r.suggested_action} code={prefixCode('alert', r.suggested_action_code)} params={r.suggested_action_params} /> },
+    {
+      key: 'action',
+      header: t('dashboard.alerts.col_action'),
+      value: (r) => r.severity,
+      cell: (r) =>
+        r.severity === 'CRITICAL' ? (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => navigate(`/replenishment?search=${encodeURIComponent(r.item_id)}`)}
+          >
+            {t('dashboard.alerts.action_create_po')}
+          </Button>
+        ) : r.severity === 'WARNING' ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => navigate(`/replenishment?search=${encodeURIComponent(r.item_id)}`)}
+          >
+            {t('dashboard.alerts.action_reorder')}
+          </Button>
+        ) : (
+          <span className="ui-muted" style={{ fontSize: 'var(--text-xs)' }}>
+            {t('dashboard.alerts.action_stable')}
+          </span>
+        ),
+    },
   ];
 
   const segCols: Column<SegmentAvailability>[] = [
     { key: 'class', header: t('dashboard.seg.col_class'), value: (r) => r.class_id, sortable: true },
     { key: 'target', header: t('dashboard.seg.col_target'), align: 'right', value: (r) => r.target, cell: (r) => fmt.percent(r.target, { scale: 'percent', digits: 1 }) },
-    { key: 'c3', header: t('dashboard.seg.col_c3'), align: 'right', value: (r) => r.c3out_availability, cell: (r) => fmt.percent(r.c3out_availability, { scale: 'percent', digits: 1 }), sortable: true },
-    { key: 'b0', header: t('dashboard.seg.col_b0'), align: 'right', value: (r) => r.b0_availability, cell: (r) => fmt.percent(r.b0_availability, { scale: 'percent', digits: 1 }), sortable: true },
+    {
+      key: 'c3',
+      header: t('dashboard.seg.col_c3'),
+      align: 'right',
+      value: (r) => r.c3out_availability,
+      cell: (r) =>
+        r.c3out_availability != null ? (
+          <span style={{ fontWeight: 600, color: r.c3out_availability >= r.target ? 'var(--color-success-text)' : 'var(--color-warning-text)' }}>
+            {fmt.percent(r.c3out_availability, { scale: 'percent', digits: 1 })}
+          </span>
+        ) : (
+          <span className="ui-muted">—</span>
+        ),
+      sortable: true,
+    },
+    {
+      key: 'b0',
+      header: t('dashboard.seg.col_b0'),
+      align: 'right',
+      value: (r) => r.b0_availability,
+      cell: (r) => (r.b0_availability != null ? fmt.percent(r.b0_availability, { scale: 'percent', digits: 1 }) : <span className="ui-muted">—</span>),
+      sortable: true,
+    },
     { key: 'theta', header: t('dashboard.seg.col_theta'), align: 'right', value: (r) => r.theta, cell: (r) => fmt.number(r.theta, { digits: 3 }) },
-    { key: 'sku', header: t('dashboard.seg.col_skus'), align: 'right', value: (r) => r.n_sku, cell: (r) => fmt.integer(r.n_sku) },
+    { key: 'sku', header: t('dashboard.seg.col_skus'), align: 'right', value: (r) => r.n_sku, cell: (r) => (r.n_sku != null ? fmt.integer(r.n_sku) : <span className="ui-muted">—</span>) },
     {
       key: 'status',
       header: t('dashboard.seg.col_status'),
       value: (r) => r.status,
       cell: (r) =>
-        // R5F-03: a pass is only shown when availability was measured
         r.status === 'NOT_MEASURED' || (r.status === 'COMPLIANT' && r.c3out_availability == null) ? (
           <Badge tone="neutral">{t('dashboard.seg.status_not_measured')}</Badge>
         ) : (
@@ -374,51 +508,35 @@ export const Dashboard: React.FC = () => {
   }
 
   const asOf = sh?.as_of ? fmt.date(sh.as_of) : undefined;
-  const availabilityReason = sh ? (sh.availability_reason || sh.availability_reason_code ? beCode(prefixCode('kpi', sh.availability_reason_code), null, sh.availability_reason) : t('dashboard.reason.availability')) : undefined;
-  // C³-OUT − B0 (positive = C³-OUT costs MORE). The BE field total_cost_savings is B0 − C³-OUT, so it is not shown raw.
   const costCmp = costVsB0(sh?.c3out_total_cost, sh?.b0_total_cost);
   const tabs = ['A', 'B', 'C'].map((id) => ({ id, label: id }));
   const trendRows = trend.data?.data ?? [];
   const trendHasData = trendRows.some((r) => r.actual !== null || r.predicted !== null);
-  // U-04: the sim clock is the demo's "today"; data dated after it is marked in the trend chart.
   const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : null;
   const trendBeyondClock = !!clockDate && trendRows.some((r) => r.actual !== null && r.date > clockDate);
-  // R5F-05: say why a series is missing instead of listing it in the legend with nothing drawn
   const trendNoForecast = trendHasData && !trendRows.some((r) => r.predicted !== null);
   const trendNoActual = trendHasData && !trendRows.some((r) => r.actual !== null);
-  // U-05: say plainly when the simulator misses the availability target.
   const availMiss =
     sh && sh.c3out_overall_availability != null && sh.target_availability != null && sh.c3out_overall_availability < sh.target_availability;
   const segAllNull = !!sh && sh.segment_availabilities.length > 0 && sh.segment_availabilities.every((r) => r.c3out_availability == null && r.b0_availability == null);
   const thetaSingle = !!theta.data && thetaView.rows.length === 1;
+
+  const advanceBtn = clock.canAdvance ? (
+    <Button size="sm" variant="secondary" leftIcon={<Play size={12} />} onClick={onAdvanceSevenDays}>
+      {t('dashboard.charts.advance_to_view')}
+    </Button>
+  ) : undefined;
 
   return (
     <>
       <PageHeader
         title={t('dashboard.title')}
         description={t('dashboard.description')}
-        meta={
-          <>
-            <Badge tone="accent">{isGlobal ? t('shell.store.all') : t('dashboard.store_label', { store: storeId })}</Badge>
-            <DataSourceNote source={t('dashboard.source_note')} asOf={asOf} note={sh ? `${sh.source}` : undefined} />
-          </>
-        }
+        meta={<Badge tone="neutral">{t('dashboard.source_note')}</Badge>}
       />
-
-      {isGlobal && (
-        <Section>
-          <Alert tone="info" title={t('dashboard.global.title')}>
-            {t('dashboard.global.body', { store: sid })}
-          </Alert>
-        </Section>
-      )}
 
       <Section>
         <ClockPanel />
-      </Section>
-
-      <Section>
-        <DemoNote store={sid} start={clock.clock?.start_date ?? null} />
       </Section>
 
       {availMiss && sh && (
@@ -434,15 +552,34 @@ export const Dashboard: React.FC = () => {
       )}
 
       <Section>
-        <div className="ui-grid ui-grid--kpi-cols" style={{ '--kpi-cols': 3 } as React.CSSProperties}>
+        <div className="dash-kpi-grid">
           <KpiTile
-            icon={<Target size={14} />}
-            label={t('dashboard.kpi.availability')}
+            className="dash-kpi-tile"
+            icon={<Target size={16} />}
+            label={
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 'var(--space-2)' }}>
+                <span>{t('dashboard.kpi.availability')}</span>
+                {sh?.c3out_overall_availability != null && sh.target_availability != null && (
+                  <Badge tone={sh.c3out_overall_availability >= sh.target_availability ? 'success' : 'warning'}>
+                    {sh.c3out_overall_availability >= sh.target_availability ? t('dashboard.seg.status_compliant') : t('dashboard.seg.status_warning')}
+                  </Badge>
+                )}
+              </span>
+            }
             loading={shadow.loading && !sh}
             value={sh?.c3out_overall_availability != null ? fmt.percent(sh.c3out_overall_availability, { scale: 'percent', digits: 1 }) : null}
-            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_overall_availability == null ? availabilityReason : undefined}
+            delta={
+              sh?.c3out_overall_availability != null && sh.b0_overall_availability != null
+                ? {
+                    value: (sh.c3out_overall_availability - sh.b0_overall_availability) * 100,
+                    text: `${sh.c3out_overall_availability >= sh.b0_overall_availability ? '+' : ''}${fmt.number((sh.c3out_overall_availability - sh.b0_overall_availability) * 100, { digits: 1 })}% vs B0`,
+                    goodWhen: 'up',
+                  }
+                : undefined
+            }
+            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_overall_availability == null ? t('dashboard.reason.availability') : undefined}
             hint={
-              sh
+              sh?.c3out_overall_availability != null
                 ? t('dashboard.kpi.availability_hint', {
                     target: sh.target_availability != null ? fmt.percent(sh.target_availability, { scale: 'percent', digits: 1 }) : t('dashboard.kpi.availability_target_missing'),
                     b0: fmt.percent(sh.b0_overall_availability, { scale: 'percent', digits: 1 }),
@@ -451,7 +588,8 @@ export const Dashboard: React.FC = () => {
             }
           />
           <KpiTile
-            icon={<PackageX size={14} />}
+            className="dash-kpi-tile"
+            icon={<PackageX size={16} />}
             label={t('dashboard.kpi.stockouts')}
             loading={kpis.loading && !k}
             value={k ? fmt.percent(k.stockout_rate, { scale: 'percent', digits: 1 }) : null}
@@ -459,7 +597,8 @@ export const Dashboard: React.FC = () => {
             hint={k ? t('dashboard.kpi.stockouts_hint', { rate: fmt.percent(k.stockout_rate, { scale: 'percent', digits: 1 }), total: fmt.integer(k.total_skus) }) : undefined}
           />
           <KpiTile
-            icon={<Boxes size={14} />}
+            className="dash-kpi-tile"
+            icon={<Boxes size={16} />}
             label={t('dashboard.kpi.inventory_value')}
             loading={kpis.loading && !k}
             value={k ? fmt.currency(k.total_inventory_value, { compact: true }) : null}
@@ -467,21 +606,23 @@ export const Dashboard: React.FC = () => {
             hint={t('dashboard.kpi.inventory_hint')}
           />
           <KpiTile
-            icon={<ClipboardList size={14} />}
+            className="dash-kpi-tile"
+            icon={<ClipboardList size={16} />}
             label={t('dashboard.kpi.orders')}
             loading={kpis.loading && !k}
             value={k ? fmt.integer(k.pending_replenishments_count) : null}
             unavailableReason={kpis.error ? apiErrorMessage(kpis.error, t) : undefined}
-            hint={k ? t('dashboard.kpi.orders_hint', { count: fmt.integer(k.reorder_alerts_count) }) + ' · ' + (k.orders_placed_count != null ? t('dashboard.kpi.orders_placed', { count: fmt.integer(k.orders_placed_count) }) : t('dashboard.kpi.orders_placed_missing')) : undefined}
+            hint={k ? t('dashboard.kpi.orders_hint', { count: fmt.integer(k.reorder_alerts_count) }) : undefined}
           />
           <KpiTile
-            icon={<CircleDollarSign size={14} />}
+            className="dash-kpi-tile"
+            icon={<CircleDollarSign size={16} />}
             label={t('dashboard.kpi.cost')}
             loading={shadow.loading && !sh}
             value={sh?.c3out_total_cost != null ? fmt.currency(sh.c3out_total_cost, { compact: true }) : null}
-            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? (sh?.cost_reason || sh?.cost_reason_code ? beCode(prefixCode('kpi', sh?.cost_reason_code), null, sh?.cost_reason) : t('dashboard.reason.cost')) : undefined}
+            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? t('dashboard.reason.cost') : undefined}
             hint={
-              sh ? (
+              sh?.c3out_total_cost != null ? (
                 <>
                   {t('dashboard.kpi.cost_hint', {
                     b0: sh.b0_total_cost != null ? fmt.currency(sh.b0_total_cost, { compact: true }) : (beCode(prefixCode('kpi', sh.b0_reason_code), null, sh.b0_reason) || '—'),
@@ -500,75 +641,19 @@ export const Dashboard: React.FC = () => {
             }
           />
           <KpiTile
-            icon={<Activity size={14} />}
+            className="dash-kpi-tile"
+            icon={<Activity size={16} />}
             label={t('dashboard.kpi.wrmsse')}
             loading={kpis.loading && !k}
             value={wrmsse != null ? fmt.number(wrmsse, { digits: 4 }) : null}
             unavailableReason={kpis.error ? apiErrorMessage(kpis.error, t) : wrmsse == null ? t('dashboard.kpi.wrmsse_unavailable') : undefined}
-            hint={k?.production_model_id ? `${t('dashboard.kpi.wrmsse_hint')} ${t('dashboard.kpi.wrmsse_model', { id: k.production_model_id })}` : t('dashboard.kpi.wrmsse_hint')}
+            hint={k?.production_model_id ? `${t('dashboard.kpi.wrmsse_hint')} (${k.production_model_id})` : t('dashboard.kpi.wrmsse_hint')}
           />
         </div>
       </Section>
 
       <Section>
-        <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))' }}>
-          <ChartFrame
-            title={t('dashboard.charts.cost_title')}
-            description={t('dashboard.charts.cost_desc')}
-            loading={shadow.loading && !sh}
-            error={shadow.error}
-            onRetry={shadow.refetch}
-            empty={!!sh && sh.cost_curves.length === 0}
-            unavailableReason={sh && sh.cost_curves.length === 0 && (sh.cost_reason || sh.cost_reason_code) ? beCode(prefixCode('kpi', sh.cost_reason_code), null, sh.cost_reason) : undefined}
-            source="/dashboard/kpi-dashboard"
-            asOf={asOf}
-            footer={<ChartLegend items={[{ label: t('dashboard.charts.cost_c3'), color: 'var(--chart-1)' }, { label: t('dashboard.charts.cost_b0'), color: 'var(--chart-2)', dash: '5 3' }]} />}
-          >
-            <CostChart rows={sh?.cost_curves ?? []} />
-          </ChartFrame>
-
-          <ChartFrame
-            title={t('dashboard.charts.theta_title')}
-            description={t('dashboard.charts.theta_desc')}
-            actions={<Tabs items={tabs} value={abc} onChange={setAbc} />}
-            loading={theta.loading && !theta.data}
-            error={theta.error?.kind === 'forbidden' ? undefined : theta.error}
-            onRetry={theta.refetch}
-            unavailableReason={theta.error?.kind === 'forbidden' ? t('dashboard.charts.theta_unavailable_forbidden') : thetaSingle ? t('dashboard.charts.theta_single') : undefined}
-            empty={!!theta.data && thetaView.rows.length === 0}
-            source="/calibration/history"
-            footer={
-              thetaView.rows.length > 1 ? (
-                <ChartLegend items={thetaView.classes.map((cls, i) => ({ label: cls, color: `var(--chart-${(i % 8) + 1})`, dash: thetaDash(cls) }))} />
-              ) : undefined
-            }
-          >
-            <ThetaChart rows={thetaView.rows} classes={thetaView.classes} />
-          </ChartFrame>
-
-          <ChartFrame
-            title={t('dashboard.charts.seg_title')}
-            description={t('dashboard.charts.seg_desc')}
-            loading={shadow.loading && !sh}
-            error={shadow.error}
-            onRetry={shadow.refetch}
-            empty={!!sh && sh.segment_availabilities.length === 0}
-            unavailableReason={segAllNull ? availabilityReason : undefined}
-            source="/dashboard/kpi-dashboard"
-            asOf={asOf}
-            footer={
-              <ChartLegend
-                items={[
-                  { label: t('dashboard.charts.cost_c3'), color: 'var(--chart-1)' },
-                  { label: 'B0', color: 'var(--chart-2)' },
-                  { label: t('dashboard.charts.target'), color: 'var(--chart-reference)' },
-                ]}
-              />
-            }
-          >
-            <SegmentChart rows={sh?.segment_availabilities ?? []} />
-          </ChartFrame>
-
+        <div className="dash-charts-grid">
           <ChartFrame
             title={t('dashboard.charts.trend_title')}
             description={t('dashboard.charts.trend_desc')}
@@ -576,7 +661,6 @@ export const Dashboard: React.FC = () => {
             error={trend.error}
             onRetry={trend.refetch}
             empty={!!trend.data && !trendHasData}
-            source="/dashboard/demand-trend"
             footer={
               <>
                 <ChartLegend
@@ -593,10 +677,89 @@ export const Dashboard: React.FC = () => {
           >
             <TrendChart rows={trendRows} clockDate={clockDate} />
           </ChartFrame>
+
+          <ChartFrame
+            title={t('dashboard.charts.cost_title')}
+            description={t('dashboard.charts.cost_desc')}
+            actions={costSavingsBadge}
+            loading={shadow.loading && !sh}
+            error={shadow.error}
+            onRetry={shadow.refetch}
+            empty={!!sh && sh.cost_curves.length === 0}
+            unavailableReason={sh && sh.cost_curves.length === 0 ? t('dashboard.reason.cost') : undefined}
+            asOf={asOf}
+            footer={
+              sh && sh.cost_curves.length > 0 ? (
+                <ChartLegend items={[{ label: t('dashboard.charts.cost_c3'), color: 'var(--chart-1)' }, { label: t('dashboard.charts.cost_b0'), color: 'var(--chart-2)', dash: '5 3' }]} />
+              ) : undefined
+            }
+          >
+            <CostChart rows={sh?.cost_curves ?? []} />
+          </ChartFrame>
+
+          <ChartFrame
+            title={t('dashboard.charts.seg_title')}
+            description={t('dashboard.charts.seg_desc')}
+            loading={shadow.loading && !sh}
+            error={shadow.error}
+            onRetry={shadow.refetch}
+            empty={!!sh && sh.segment_availabilities.length === 0}
+            unavailableReason={segAllNull ? t('dashboard.reason.availability') : undefined}
+            asOf={asOf}
+            footer={
+              !segAllNull && sh && sh.segment_availabilities.length > 0 ? (
+                <ChartLegend
+                  items={[
+                    { label: t('dashboard.charts.cost_c3'), color: 'var(--chart-1)' },
+                    { label: 'B0', color: 'var(--chart-2)' },
+                    { label: t('dashboard.charts.target'), color: 'var(--chart-reference)' },
+                  ]}
+                />
+              ) : undefined
+            }
+          >
+            <SegmentChart rows={sh?.segment_availabilities ?? []} />
+          </ChartFrame>
+
+          <ChartFrame
+            title={t('dashboard.charts.theta_title')}
+            description={t('dashboard.charts.theta_desc')}
+            actions={<Tabs items={tabs} value={abc} onChange={setAbc} />}
+            loading={theta.loading && !theta.data}
+            error={theta.error?.kind === 'forbidden' ? undefined : theta.error}
+            onRetry={theta.refetch}
+            unavailableReason={theta.error?.kind === 'forbidden' ? t('dashboard.charts.theta_unavailable_forbidden') : thetaSingle ? t('dashboard.charts.theta_single') : undefined}
+            empty={!!theta.data && thetaView.rows.length === 0}
+            footer={
+              thetaView.rows.length > 1 ? (
+                <ChartLegend items={thetaView.classes.map((cls, i) => ({ label: cls, color: `var(--chart-${(i % 8) + 1})`, dash: thetaDash(cls) }))} />
+              ) : undefined
+            }
+          >
+            <ThetaChart rows={thetaView.rows} classes={thetaView.classes} />
+          </ChartFrame>
         </div>
       </Section>
 
-      <Section title={t('dashboard.seg.col_class')}>
+      <Section
+        title={t('dashboard.seg.col_class')}
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            rightIcon={<ArrowRight size={14} />}
+            onClick={() => navigate('/classification')}
+          >
+            {t('nav.abc_xyz')}
+          </Button>
+        }
+      >
+        {segAllNull && (
+          <div style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+            <span>{t('dashboard.reason.availability')}</span>
+            {advanceBtn}
+          </div>
+        )}
         <Card flush>
           <Table
             columns={segCols}
@@ -623,17 +786,27 @@ export const Dashboard: React.FC = () => {
             : t('dashboard.alerts.description')
         }
         actions={
-          <Select
-            aria-label={t('dashboard.alerts.col_severity')}
-            value={severity}
-            onChange={setSeverity}
-            options={[
-              { value: '', label: t('dashboard.alerts.filter_all') },
-              { value: 'CRITICAL', label: t('dashboard.alerts.sev_critical') },
-              { value: 'WARNING', label: t('dashboard.alerts.sev_warning') },
-              { value: 'HEALTHY', label: t('dashboard.alerts.sev_healthy') },
-            ]}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <Select
+              aria-label={t('dashboard.alerts.col_severity')}
+              value={severity}
+              onChange={setSeverity}
+              options={[
+                { value: '', label: t('dashboard.alerts.filter_all') },
+                { value: 'CRITICAL', label: t('dashboard.alerts.sev_critical') },
+                { value: 'WARNING', label: t('dashboard.alerts.sev_warning') },
+                { value: 'HEALTHY', label: t('dashboard.alerts.sev_healthy') },
+              ]}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              rightIcon={<ArrowRight size={14} />}
+              onClick={() => navigate('/replenishment')}
+            >
+              {t('dashboard.alerts.view_all_replenishments')}
+            </Button>
+          </div>
         }
       >
         <Card flush>
@@ -645,13 +818,22 @@ export const Dashboard: React.FC = () => {
             error={alerts.error}
             onRetry={alerts.refetch}
             filtered={!!severity}
-            maxHeight={420}
+            maxHeight={360}
             dense
           />
         </Card>
-        {alerts.data && <DataSourceNote source="/dashboard/alerts" note={t('dashboard.alerts.shown', { shown: fmt.integer(alerts.data.items.length), total: fmt.integer(alerts.data.total) })} />}
-        <p className="ui-muted">{t('dashboard.realtime_note')}</p>
+        {alerts.data && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+            <span className="ui-muted" style={{ fontSize: 'var(--text-xs)' }}>
+              {t('dashboard.alerts.shown', { shown: fmt.integer(alerts.data.items.length), total: fmt.integer(alerts.data.total) })}
+            </span>
+            <span className="ui-muted" style={{ fontSize: 'var(--text-xs)' }}>
+              {t('dashboard.realtime_note')}
+            </span>
+          </div>
+        )}
       </Section>
+      {dialog}
     </>
   );
 };
