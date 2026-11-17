@@ -56,8 +56,9 @@ cp .env.example .env
 Các file artifact (parquet, npz, csv, `MODEL/*`) **không nằm trong git**; chủ dự án gửi trực tiếp cho thành viên.
 Danh sách file bắt buộc, vị trí và sha256 nằm ở `BE/scripts/artifacts_manifest.json`:
 - `BE/scripts/`: `forecasts_Ensemble.parquet`, `quantiles_tft.parquet`, `production_forecast.parquet`,
-  `production_sigma.parquet`, `tier2_input.parquet`, `c3ok_sku_class.csv`
-- `BE/MODEL/`: `c3ok_forecasts.npz`, `best_params.json`, `ensemble_manifest.json`
+  `production_sigma.parquet`, `tier2_input.parquet`, `c3ok_sku_class.csv`, `c3ok_forecast_calibration.csv`
+- `BE/MODEL/`: `c3ok_forecasts.npz`, `best_params.json`, `ensemble_manifest.json`, `c3ok_results.csv`,
+  `c3ok_csl_by_class.csv`, `c3ok_config.json`
 
 Kiểm tra (báo lỗi rõ ràng, thoát mã 1 nếu thiếu hoặc sai nội dung):
 ```bash
