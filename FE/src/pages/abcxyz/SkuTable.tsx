@@ -53,35 +53,40 @@ export const SkuTable: React.FC<Props> = ({ storeId, segment, onClearSegment, ve
 
   const filtered = !!(segment || category || search);
   return (
-    <Card title={t('abcxyz.skus.title')} flush>
-      <div className="abc-filters">
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            pg.setPage(1);
-          }}
-          placeholder={t('abcxyz.skus.search')}
-          aria-label={t('abcxyz.skus.search')}
-        />
-        <Select
-          value={category}
-          label={t('abcxyz.skus.category')}
-          onChange={(v) => {
-            setCategory(v);
-            pg.setPage(1);
-          }}
-          options={[{ value: '', label: t('abcxyz.skus.all_categories') }, ...(cats.data ?? []).map((c) => ({ value: c, label: c }))]}
-        />
-        {segment && (
-          <div className="ui-row">
-            <Badge tone="accent">{t('abcxyz.matrix.selected', { segment })}</Badge>
-            <Button size="sm" variant="ghost" onClick={onClearSegment}>
-              {t('abcxyz.matrix.clear')}
-            </Button>
-          </div>
-        )}
-      </div>
+    <Card
+      title={t('abcxyz.skus.title')}
+      actions={
+        <div className="abc-filters">
+          <SearchInput
+            value={search}
+            onChange={(v) => {
+              setSearch(v);
+              pg.setPage(1);
+            }}
+            placeholder={t('abcxyz.skus.search')}
+            aria-label={t('abcxyz.skus.search')}
+          />
+          <Select<string>
+            value={category}
+            aria-label={t('abcxyz.skus.category')}
+            onChange={(v) => {
+              setCategory(v);
+              pg.setPage(1);
+            }}
+            options={[{ value: '', label: t('abcxyz.skus.all_categories') }, ...(cats.data ?? []).map((c) => ({ value: c, label: c }))]}
+          />
+          {segment && (
+            <div className="ui-row" style={{ alignItems: 'center' }}>
+              <Badge tone="accent">{t('abcxyz.matrix.selected', { segment })}</Badge>
+              <Button size="sm" variant="ghost" onClick={onClearSegment}>
+                {t('abcxyz.matrix.clear')}
+              </Button>
+            </div>
+          )}
+        </div>
+      }
+      flush
+    >
       <Table
         columns={columns}
         rows={data?.items ?? []}

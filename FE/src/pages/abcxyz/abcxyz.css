@@ -306,23 +306,17 @@
 
 .abc-filters {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-3);
-  align-items: flex-end;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
+  flex-wrap: wrap;
 }
 
-.abc-filters > .ui-control {
-  min-width: 220px;
-  max-width: 320px;
-  flex: 1 1 240px;
+.abc-filters .ui-search {
+  width: 260px;
 }
 
-.abc-filters > .ui-field {
-  min-width: 180px;
-  max-width: 220px;
-  flex: 0 0 auto;
+.abc-filters .ui-select-wrap {
+  width: 180px;
 }
 
 .abc-policy-text {

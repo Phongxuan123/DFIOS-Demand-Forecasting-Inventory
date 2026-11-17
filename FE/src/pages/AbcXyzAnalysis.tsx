@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Badge, EmptyState, PageHeader, Tabs, type TabItem } from '../components/ui/index.ts';
+import { Badge, EmptyState, PageHeader } from '../components/ui/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
@@ -16,8 +16,6 @@ import './abcxyz/abcxyz.css';
 
 const SCATTER_SAMPLE = 500;
 
-type AbcTab = 'skus' | 'policy' | 'scatter';
-
 export const AbcXyzAnalysis: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
@@ -25,7 +23,6 @@ export const AbcXyzAnalysis: React.FC = () => {
   const { storeId, loading: storeLoading } = useStore();
   const manager = can(user?.role, 'replenishment:write');
   const [segment, setSegment] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<AbcTab>('skus');
   const [version, setVersion] = useState(0);
   const enabled = !!storeId;
 
@@ -74,9 +71,6 @@ export const AbcXyzAnalysis: React.FC = () => {
 
   const onSelectSegment = (seg: string | null) => {
     setSegment(seg);
-    if (seg && activeTab === 'scatter') {
-      setActiveTab('skus');
-    }
   };
 
   const meta = m?.last_updated ? (
@@ -84,23 +78,6 @@ export const AbcXyzAnalysis: React.FC = () => {
       {t('abcxyz.updated', { date: fmt.dateTime(m.last_updated) })}
     </span>
   ) : undefined;
-
-  const tabItems: TabItem<AbcTab>[] = [
-    {
-      id: 'skus',
-      label: t('abcxyz.tabs.skus'),
-      count: segment && m?.matrix?.[segment] ? m.matrix[segment].sku_count : m?.total_skus,
-    },
-    {
-      id: 'policy',
-      label: t('abcxyz.tabs.policy'),
-      count: recs.data?.length ?? 9,
-    },
-    {
-      id: 'scatter',
-      label: t('abcxyz.tabs.scatter'),
-    },
-  ];
 
   return (
     <div className="ui-stack">
@@ -199,50 +176,28 @@ export const AbcXyzAnalysis: React.FC = () => {
             onSelect={onSelectSegment}
           />
 
-          <div className="abc-tab-bar-wrap">
-            <Tabs items={tabItems} value={activeTab} onChange={setActiveTab} aria-label={t('abcxyz.title')} />
-            {segment && (
-              <div className="abc-tab-active-filter">
-                <Badge tone="accent">{t('abcxyz.matrix.selected', { segment })}</Badge>
-                <button
-                  type="button"
-                  className="abc-filter-clear-btn"
-                  onClick={() => setSegment(null)}
-                >
-                  {t('abcxyz.matrix.clear')}
-                </button>
-              </div>
-            )}
-          </div>
+          <PolicyCard
+            allowed={manager}
+            recs={recs.data}
+            recsLoading={recs.loading}
+            recsError={recs.error}
+            onRetry={recs.refetch}
+            matrix={m}
+            serviceLevel={level.data}
+            serviceLevelError={level.error}
+            selected={segment}
+          />
 
-          {activeTab === 'skus' && (
-            <SkuTable storeId={storeId} segment={segment} onClearSegment={() => setSegment(null)} version={version} />
-          )}
+          <ScatterCard
+            items={sample.data?.items}
+            total={sample.data?.total}
+            loading={sample.loading}
+            error={sample.error}
+            onRetry={sample.refetch}
+            storeId={storeId}
+          />
 
-          {activeTab === 'policy' && (
-            <PolicyCard
-              allowed={manager}
-              recs={recs.data}
-              recsLoading={recs.loading}
-              recsError={recs.error}
-              onRetry={recs.refetch}
-              matrix={m}
-              serviceLevel={level.data}
-              serviceLevelError={level.error}
-              selected={segment}
-            />
-          )}
-
-          {activeTab === 'scatter' && (
-            <ScatterCard
-              items={sample.data?.items}
-              total={sample.data?.total}
-              loading={sample.loading}
-              error={sample.error}
-              onRetry={sample.refetch}
-              storeId={storeId}
-            />
-          )}
+          <SkuTable storeId={storeId} segment={segment} onClearSegment={() => setSegment(null)} version={version} />
         </>
       )}
     </div>
