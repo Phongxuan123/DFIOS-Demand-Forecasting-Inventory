@@ -10,7 +10,7 @@ the effective lead time is exactly L = 3 days, P-21):
                 k - d, i.e. days [t_{k-d} + L, t_{k-d} + L + R - 1] (the days the order of that review serves,
                 teacher G-01). It is the most recent COMPLETE cycle (its end is < t) and exactly the one the
                 C3-OUT step of review k consumes; stored in ``service_outcomes`` (observed availability, §7.3)
-  3. J5         refit at quarter start
+  3. J5         refit every 91 days from the simulation start
   4. J3 / J4    review day: window quantiles (one bulk call), C3-OUT step, parameters, replenishment orders
                 (auto-ordered: APPROVED + on_order += qty; strict trigger IP < s, G-02)
   5. J1         sales of day t served from on_hand, the remainder is lost (lost-sales model)
@@ -59,6 +59,13 @@ from app.models.service_outcomes import ServiceOutcome
 from app.models.sim_clock import SimClock
 from app.models.sim_state import SimShadowDaily, SimSnapshot
 from app.services import policy_config as pc
+
+REFIT_PERIOD_DAYS = 91  # teacher: J5 quarters are start + 91 * j (no calendar quarters)
+
+
+def is_refit_day(delta_days: int) -> bool:
+    """J5 refit trigger: every 91 days counted from the simulation start (delta_days = day index since start)."""
+    return delta_days > 0 and delta_days % REFIT_PERIOD_DAYS == 0
 
 SIM_ACTOR = "simulator"
 B0_TAU = 0.95
@@ -540,8 +547,7 @@ class SimulatorService:
                     f"[{t}] Job J6: đóng chu kỳ {cycle_idx} ({c_start} -> {c_end}), lưu service_outcomes"
                 )
             if refit:
-                q_num = (t.month - 1) // 3 + 1
-                sid = f"{store_id}_quarter_{t.year}_Q{q_num}"
+                sid = f"{store_id}_refit_{(t - t0).days // REFIT_PERIOD_DAYS}"
                 optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
                 flush_state()
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
@@ -635,7 +641,7 @@ class SimulatorService:
                 sh_on_hand = sh_on_hand + sh_pipeline.pop(0)[1]
 
             is_review = delta_days > 0 and delta_days % R == 0
-            is_refit = (t.day == 1 and t.month in (1, 4, 7, 10)) or (delta_days > 0 and delta_days % 91 == 0)
+            is_refit = is_refit_day(delta_days)
             sh_order_today = np.zeros(n)
 
             if is_review or is_refit:
@@ -646,8 +652,7 @@ class SimulatorService:
                 review_k = delta_days // R
                 sh_order_today = review_block(t, review_k, refit=is_refit)
             elif is_refit:
-                q_num = (t.month - 1) // 3 + 1
-                sid = f"{store_id}_quarter_{t.year}_Q{q_num}"
+                sid = f"{store_id}_refit_{delta_days // REFIT_PERIOD_DAYS}"
                 optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
                 flush_state()
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")

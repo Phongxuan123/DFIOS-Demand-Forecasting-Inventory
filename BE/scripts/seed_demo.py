@@ -9,7 +9,7 @@ This script only fills what is MISSING and never overwrites results measured els
   * sim_clock reset to the demo start date (replay mode);
   * policy_selection (neutral policy m_g = 0, kappa = 1, setpoint = target availability) if the
     demo selection does not exist;
-  * calibration_state rev_0 (theta = 0) only if the store has no state at all (the theta trajectory is kept);
+  * calibration_state rev_0 (theta = pc.THETA_INIT = 0, teacher neutral start) only if the store has no state at all;
   * no invented service_outcomes: C3-OUT starts from a neutral error until the simulator produces real ones.
 """
 import os
@@ -55,18 +55,18 @@ def seed_demo_environment():
             db.add(PolicySelection(
                 selection_id=selection_id, class_id=class_id, policy_type="REFIT_RSS_EOQ_G",
                 m_g=spec["m_g"], kappa_g=spec["kappa_g"], tau=pc.TARGET_AVAILABILITY,
-                setpoint=pc.TARGET_AVAILABILITY, guard=pc.GUARD, gain_eta=pc.CONTROLLER_ETA,
+                setpoint=pc.C3_SETPOINT, guard=pc.GUARD, gain_eta=pc.CONTROLLER_ETA,
                 val_cost=spec["val_cost"], val_service=spec["val_service"], is_feasible=True,
                 econ_service=pc.TARGET_AVAILABILITY, created_at=now,
             ))
-        print(f"  [+] policy_selection {selection_id} present for 9 classes (m_g = 0, kappa = 1, setpoint {pc.TARGET_AVAILABILITY})")
+        print(f"  [+] policy_selection {selection_id} present for 9 classes (m_g = 0, kappa = 1, setpoint {pc.C3_SETPOINT})")
 
         if db.query(CalibrationState).filter(CalibrationState.store_id == STORE_ID).count() == 0:
             for class_id in ALL_CLASSES:
                 db.add(CalibrationState(
                     id=f"{STORE_ID}_{class_id}_rev_0", calibrator_id=f"c3out_main_{STORE_ID}", store_id=STORE_ID,
-                    class_id=class_id, review_index=0, review_date=START_DATE, theta=0.0, multiplier=1.0,
-                    error_rate=None, at_boundary=False, setpoint=pc.TARGET_AVAILABILITY,
+                    class_id=class_id, review_index=0, review_date=START_DATE, theta=pc.THETA_INIT, multiplier=1.0,
+                    error_rate=None, at_boundary=False, setpoint=pc.C3_SETPOINT,
                     eta=pc.CONTROLLER_ETA, created_at=now,
                 ))
             print("  [+] calibration_state: neutral rev_0 (theta = 0)")

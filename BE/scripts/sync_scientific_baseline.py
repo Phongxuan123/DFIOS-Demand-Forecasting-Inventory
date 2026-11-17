@@ -4,11 +4,10 @@ Align the database with the scientific artifacts (research.md, c3ok_artifacts). 
 One date convention (P-35 / N-11): policy_config.DEMO_START_DATE.
 - sim_clock -> demo start date (the quantile origin is created at that date by
   load_forecast_window_quantile; nothing is renamed in place any more).
-- policy_selection of the DEMO selection only (m_g = 0, kappa = 1, setpoint 0.95; val_* = artifact values).
+- policy_selection of the DEMO selection only (m_g = 0, kappa = 1, setpoint 0.96; val_* = artifact values).
   Other selections (J5 results) are never touched.
-- calibration_state: the theta trajectory is KEPT. When no trajectory exists (only the neutral rev_0), the
-  artifact final e^theta is added as a warm-start state at the next review index (m_g stays 0, so the
-  multiplier is applied exactly once, N-05).
+- calibration_state: neutral rev_0 (theta = 0, one-sided teacher controller, G-17). No warm-start from the old
+  two-sided artifact; a leftover artifact warm-start row (calibrator c3ok_artifact_final) is reset to theta 0.
 - model_registry: only the artifact WRMSSE values (RUN_SUMMARY_C3OK.md / c3ok_fidelity.json, h = 7).
 - inventory_params recomputed ONCE at the end with the single formula (B-20).
 - policy benchmark numbers are saved in system_settings (extract of the artifact).
@@ -69,41 +68,26 @@ def run_sync():
             SET m_g = 0.0, kappa_g = 1.0, val_cost = NULL, val_service = NULL, is_feasible = NULL,
                 source = 'artifact', setpoint = :sp, tau = :tau
             WHERE selection_id = :sid
-        """), {"sid": pc.DEMO_SELECTION_ID, "sp": pc.TARGET_AVAILABILITY + pc.GUARD, "tau": pc.TARGET_AVAILABILITY})
+        """), {"sid": pc.DEMO_SELECTION_ID, "sp": pc.C3_SETPOINT, "tau": pc.TARGET_AVAILABILITY})
         print(f"Updated policy_selection {pc.DEMO_SELECTION_ID} (source=artifact, no invented validation metrics)")
 
-        print("\n=== 4. TIER 3 CALIBRATION_STATE (trajectory kept) ===")
-        # Final e^theta of policy P C3-OUT tau=0.95 (RUN_SUMMARY_C3OK.md): AX 1.095, AY 1.201, AZ 1.481,
-        # BX 1.094, BY 1.172, BZ 1.468, CX 1.149, CY 1.133, CZ 1.397
-        theta_final = {"AX": 0.0908, "AY": 0.1832, "AZ": 0.3927, "BX": 0.0898, "BY": 0.1587,
-                       "BZ": 0.3839, "CX": 0.1389, "CY": 0.1249, "CZ": 0.3343}
-        for class_id, th in theta_final.items():
+        print("\n=== 4. TIER 3 CALIBRATION_STATE (neutral theta = 0, no artifact warm-start) ===")
+        for class_id in pc.ALL_CLASSES:
             mx = db.execute(text(
                 "SELECT max(review_index) FROM calibration_state WHERE store_id=:s AND class_id=:c"),
                 {"s": STORE, "c": class_id}).scalar()
-            warm = db.execute(text(
-                "SELECT review_index FROM calibration_state WHERE store_id=:s AND class_id=:c AND calibrator_id=:k"),
-                {"s": STORE, "c": class_id, "k": WARM_START_CALIBRATOR}).scalar()
-            if warm is not None:  # idempotent refresh of our own warm-start row
-                idx = warm
-                db.execute(text("""UPDATE calibration_state SET theta=:t, multiplier=:m, review_date=:d
-                                   WHERE store_id=:s AND class_id=:c AND review_index=:i"""),
-                           {"t": th, "m": round(math.exp(th), 4), "d": pc.DEMO_START_DATE, "s": STORE,
-                            "c": class_id, "i": idx})
-            elif mx is None or mx == 0:  # only the neutral rev_0 (or nothing): the warm start REPLACES rev_0
-                # review_index 0 (not 1): the simulator's reviews k = 1, 2, ... never collide with it and
-                # POST /clock/reset (which deletes review_index >= 1) restores exactly this baseline (Q-04).
-                db.execute(text("DELETE FROM calibration_state WHERE store_id=:s AND class_id=:c AND review_index = 0"),
-                           {"s": STORE, "c": class_id})
+            if mx is None:
                 db.execute(text("""
                     INSERT INTO calibration_state (id, calibrator_id, store_id, class_id, review_index, review_date,
                         theta, multiplier, error_rate, at_boundary, setpoint, eta, created_at)
-                    VALUES (:id, :k, :s, :c, 0, :d, :t, :m, NULL, false, :sp, :eta, NOW())
-                """), {"id": f"{STORE}_{class_id}_rev_0", "k": WARM_START_CALIBRATOR, "s": STORE, "c": class_id,
-                       "d": pc.DEMO_START_DATE, "t": th, "m": round(math.exp(th), 4),
-                       "sp": pc.TARGET_AVAILABILITY + pc.GUARD, "eta": pc.CONTROLLER_ETA})
-            else:
-                print(f"  {class_id}: theta trajectory present (max review {mx}), left unchanged")
+                    VALUES (:id, :k, :s, :c, 0, :d, :t, 1.0, NULL, false, :sp, :eta, NOW())
+                """), {"id": f"{STORE}_{class_id}_rev_0", "k": f"c3out_main_{STORE}", "s": STORE, "c": class_id,
+                       "d": pc.DEMO_START_DATE, "t": pc.THETA_INIT, "sp": pc.C3_SETPOINT, "eta": pc.CONTROLLER_ETA})
+            else:  # idempotent: reset a leftover artifact warm-start row to the neutral state, keep real history
+                db.execute(text("""UPDATE calibration_state SET theta=:t, multiplier=1.0, setpoint=:sp
+                                   WHERE store_id=:s AND class_id=:c AND calibrator_id=:k"""),
+                           {"t": pc.THETA_INIT, "sp": pc.C3_SETPOINT, "s": STORE, "c": class_id,
+                            "k": WARM_START_CALIBRATOR})
         print("Calibration states synced without deleting history.")
 
         print("\n=== 5. SYNCING MODEL_REGISTRY METRICS (artifact WRMSSE, h = 7) ===")
