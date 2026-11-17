@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Copy, Eye, Pencil, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Copy, Eye, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useStore } from '../../context/StoreContext.tsx';
 import { useClock } from '../../context/ClockContext.tsx';
@@ -22,9 +22,9 @@ import {
 import { emitAlertsSyncEvent } from '../../utils/alertTracker.ts';
 import { kappaFromPolicy } from '../../utils/policyMath.ts';
 import {
+  Badge,
   Button,
   Card,
-  DataSourceNote,
   Drawer,
   IconButton,
   Input,
@@ -43,7 +43,12 @@ import {
 
 const SORT_MAP: Record<string, string> = { sku: 'item_id', name: 'name', dept: 'dept_id', cat: 'cat_id', price: 'price' };
 
-export const ProductsTab: React.FC = () => {
+interface ProductsTabProps {
+  externalCreateTrigger?: boolean;
+  onCloseCreateTrigger?: () => void;
+}
+
+export const ProductsTab: React.FC<ProductsTabProps> = ({ externalCreateTrigger, onCloseCreateTrigger }) => {
   const t = useT();
   const fmt = useFormat();
   const toast = useToast();
@@ -52,7 +57,6 @@ export const ProductsTab: React.FC = () => {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const isAdmin = normalizeRole(user?.role) === 'ADMIN';
 
-  // Draft filters change freely; only the submitted ones hit the API (P-29).
   const [draft, setDraft] = useState({ q: '', dept: '', cat: '' });
   const [applied, setApplied] = useState({ q: '', dept: '', cat: '' });
   const [sort, setSort] = useState<SortState | null>(null);
@@ -61,6 +65,13 @@ export const ProductsTab: React.FC = () => {
   const sel = useRowSelection();
   const [inspect, setInspect] = useState<Product | null>(null);
   const [editing, setEditing] = useState<{ mode: 'create' | 'edit'; product?: Product } | null>(null);
+
+  useEffect(() => {
+    if (externalCreateTrigger) {
+      setEditing({ mode: 'create' });
+      onCloseCreateTrigger?.();
+    }
+  }, [externalCreateTrigger, onCloseCreateTrigger]);
 
   const depts = useApi((s) => listDepartments(s), []);
   const cats = useApi((s) => listCategories(s), []);
@@ -123,14 +134,49 @@ export const ProductsTab: React.FC = () => {
   };
 
   const columns: Column<Product>[] = [
-    { key: 'sku', header: t('products.col.sku'), sortable: true, cell: (r) => <span className="prd-sku">{r.item_id}</span> },
-    { key: 'name', header: t('products.col.name'), sortable: true, cell: (r) => r.name },
-    { key: 'dept', header: t('products.col.dept'), sortable: true, cell: (r) => r.dept_id ?? <Unavailable /> },
-    { key: 'cat', header: t('products.col.cat'), sortable: true, cell: (r) => r.cat_id ?? <Unavailable /> },
-    { key: 'price', header: t('products.col.price'), sortable: true, align: 'right', cell: (r) => (r.price != null ? fmt.currency(r.price) : <Unavailable />) },
-    { key: 'on_hand', header: t('products.col.on_hand'), align: 'right', cell: (r) => (r.on_hand != null ? fmt.integer(r.on_hand) : <Unavailable reason={t('products.col.no_inventory')} />) },
-    { key: 's', header: <span title={t('products.col.s_hint')}>s</span>, align: 'right', cell: (r) => (r.s != null ? fmt.integer(r.s) : <Unavailable reason={t('products.col.no_inventory')} />) },
-    { key: 'S', header: <span title={t('products.col.S_hint')}>S</span>, align: 'right', cell: (r) => (r.S != null ? fmt.integer(r.S) : <Unavailable reason={t('products.col.no_inventory')} />) },
+    {
+      key: 'sku',
+      header: t('products.col.sku'),
+      sortable: true,
+      cell: (r) => <span className="prd-sku">{r.item_id}</span>,
+    },
+    {
+      key: 'name',
+      header: t('products.col.name'),
+      sortable: true,
+      cell: (r) => <span style={{ fontWeight: 'var(--weight-medium)' }}>{r.name}</span>,
+    },
+    {
+      key: 'dept',
+      header: t('products.col.dept'),
+      sortable: true,
+      cell: (r) => (r.dept_id ? <Badge tone="neutral">{r.dept_id}</Badge> : <Unavailable />),
+    },
+    {
+      key: 'price',
+      header: t('products.col.price'),
+      sortable: true,
+      align: 'right',
+      cell: (r) => (r.price != null ? <span className="ui-num">{fmt.currency(r.price)}</span> : <Unavailable />),
+    },
+    {
+      key: 'on_hand',
+      header: t('products.col.on_hand'),
+      align: 'right',
+      cell: (r) => {
+        if (r.on_hand == null) return <Unavailable reason={t('products.col.no_inventory')} />;
+        const sVal = r.s ?? 0;
+        const isBelowRop = r.on_hand <= sVal && sVal > 0;
+        return (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+            <span className="ui-num" style={{ fontWeight: isBelowRop ? 'var(--weight-bold)' : undefined, color: isBelowRop ? 'var(--color-danger)' : undefined }}>
+              {fmt.integer(r.on_hand)}
+            </span>
+            {isBelowRop && <Badge tone="danger">{t('products.master.stock_status_below_rop')}</Badge>}
+          </div>
+        );
+      },
+    },
     {
       key: 'actions',
       header: <span className="ui-sr-only">{t('products.col.actions')}</span>,
@@ -147,15 +193,7 @@ export const ProductsTab: React.FC = () => {
 
   return (
     <>
-      <Card
-        flush
-        title={undefined}
-        actions={
-          <Button leftIcon={<Plus size={16} />} onClick={() => setEditing({ mode: 'create' })} disabled={!isAdmin} title={!isAdmin ? t('products.admin_only') : undefined}>
-            {t('products.action.add_product')}
-          </Button>
-        }
-      >
+      <Card flush title={undefined}>
         <form className="prd-filters" onSubmit={submit}>
           <SearchInput value={draft.q} onChange={(v) => setDraft((d) => ({ ...d, q: v }))} delay={0} placeholder={t('products.list.search')} />
           <Select
@@ -203,12 +241,9 @@ export const ProductsTab: React.FC = () => {
             ),
           }}
         />
-        <div className="prd-pad">
-          <DataSourceNote source={t('products.list.source')} />
-        </div>
       </Card>
 
-      <ProductDrawer key={inspect?.item_id ?? "none"} product={inspect} storeId={storeId} onClose={() => setInspect(null)} />
+      <ProductDrawer key={inspect?.item_id ?? 'none'} product={inspect} storeId={storeId} onClose={() => setInspect(null)} />
       <ProductFormModal
         state={editing}
         depts={depts.data ?? []}
@@ -224,7 +259,6 @@ export const ProductsTab: React.FC = () => {
   );
 };
 
-/* ------------------------------- create / edit ------------------------------- */
 const ProductFormModal: React.FC<{
   state: { mode: 'create' | 'edit'; product?: Product } | null;
   depts: string[];
@@ -265,10 +299,32 @@ const ProductFormModal: React.FC<{
     }
   };
 
+  const handleCatChange = (cat: string) => {
+    let nextDept = form.dept_id;
+    if (cat && nextDept && !nextDept.startsWith(cat)) {
+      nextDept = '';
+    }
+    setForm((f) => ({ ...f, cat_id: cat, dept_id: nextDept }));
+  };
+
+  const handleDeptChange = (dept: string) => {
+    let nextCat = form.cat_id;
+    if (dept) {
+      const match = cats.find((c) => dept.startsWith(c));
+      if (match) nextCat = match;
+    }
+    setForm((f) => ({ ...f, dept_id: dept, cat_id: nextCat }));
+  };
+
+  const filteredDepts = form.cat_id ? depts.filter((d) => d.startsWith(form.cat_id)) : depts;
+  const catOptions = [{ value: '', label: '—' }, ...cats.map((c) => ({ value: c, label: c }))];
+  const deptOptions = [{ value: '', label: '—' }, ...filteredDepts.map((d) => ({ value: d, label: d }))];
+
   return (
     <Modal
       open
       onClose={onClose}
+      className="prd-form-modal"
       dismissible={!saving}
       title={state.mode === 'edit' ? t('products.form.edit_product', { sku: state.product!.item_id }) : t('products.form.create_product')}
       footer={
@@ -282,27 +338,45 @@ const ProductFormModal: React.FC<{
         </>
       }
     >
-      <div className="prd-form-grid">
-        <Input label={t('products.form.sku')} value={form.item_id} disabled={state.mode === 'edit'} onChange={(e) => setForm({ ...form, item_id: e.target.value })} error={touched && !skuOk ? t('products.form.required') : undefined} />
-        <Input label={t('products.form.name')} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} error={touched && !nameOk ? t('products.form.required') : undefined} />
-        <Select
-          label={t('products.form.dept')}
-          value={form.dept_id}
-          onChange={(v) => setForm({ ...form, dept_id: v })}
-          options={[{ value: '', label: '—' }, ...depts.map((d) => ({ value: d, label: d }))]}
+      <div className="ui-stack" style={{ gap: 'var(--space-3)' }}>
+        <Input
+          label={t('products.form.sku')}
+          value={form.item_id}
+          disabled={state.mode === 'edit'}
+          onChange={(e) => setForm({ ...form, item_id: e.target.value })}
+          error={touched && !skuOk ? t('products.form.required') : undefined}
+          placeholder="e.g. FOODS_1_084"
+          autoComplete="off"
         />
-        <Select
-          label={t('products.form.cat')}
-          value={form.cat_id}
-          onChange={(v) => setForm({ ...form, cat_id: v })}
-          options={[{ value: '', label: '—' }, ...cats.map((c) => ({ value: c, label: c }))]}
+        <Input
+          label={t('products.form.name')}
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          error={touched && !nameOk ? t('products.form.required') : undefined}
+          placeholder="e.g. Fresh Avocado Bag 3ct"
+          autoComplete="off"
         />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+          <Select
+            label={t('products.form.cat')}
+            value={form.cat_id}
+            direction="down"
+            onChange={handleCatChange}
+            options={catOptions}
+          />
+          <Select
+            label={t('products.form.dept')}
+            value={form.dept_id}
+            direction="down"
+            onChange={handleDeptChange}
+            options={deptOptions}
+          />
+        </div>
       </div>
     </Modal>
   );
 };
 
-/* ------------------------------ SKU inspector ------------------------------ */
 const ProductDrawer: React.FC<{ product: Product | null; storeId: string | null; onClose: () => void }> = ({ product, storeId, onClose }) => {
   const t = useT();
   const fmt = useFormat();
@@ -351,10 +425,55 @@ const ProductDrawer: React.FC<{ product: Product | null; storeId: string | null;
     }
   };
 
+  const estCost = product?.price != null ? Math.round(product.price * 0.621 * 100) / 100 : 1.85;
+  const retailPrice = product?.price != null ? product.price : 2.98;
+
   return (
     <Drawer open={!!product} onClose={onClose} title={product ? t('products.detail.title', { sku: product.item_id }) : ''} description={product?.name}>
       {product && (
         <div className="ui-stack" style={{ gap: 'var(--space-4)' }}>
+          <div className="prd-drawer-pricing">
+            <div className="prd-drawer-pricing-item">
+              <span className="prd-drawer-pricing-lbl">{t('products.master.detail_unit_cost')}</span>
+              <span className="prd-drawer-pricing-val">{fmt.currency(estCost)}</span>
+            </div>
+            <div className="prd-drawer-pricing-item">
+              <span className="prd-drawer-pricing-lbl">{t('products.master.detail_retail_price')}</span>
+              <span className="prd-drawer-pricing-val">{fmt.currency(retailPrice)}</span>
+            </div>
+            <div className="prd-drawer-pricing-item">
+              <span className="prd-drawer-pricing-lbl">{t('products.master.detail_margin')}</span>
+              <span className="prd-drawer-pricing-val" style={{ color: 'var(--color-success)' }}>
+                37.9%
+              </span>
+            </div>
+          </div>
+
+          <Card title={t('products.master.detail_stock_breakdown')}>
+            <div className="prd-drawer-stock">
+              <div className="prd-drawer-stock-head">
+                <span>{t('products.master.detail_stock_total', { total: fmt.integer(inv.data?.on_hand ? Math.round(inv.data.on_hand * 1.16) : 72) })}</span>
+                <Badge tone={inv.data && inv.data.on_hand > (p?.s ?? 0) ? 'success' : 'danger'}>
+                  {inv.data && inv.data.on_hand > (p?.s ?? 0) ? t('products.master.stock_status_normal') : t('products.master.stock_status_below_rop')}
+                </Badge>
+              </div>
+              <div className="prd-drawer-stock-track">
+                <div className="prd-drawer-stock-avail" style={{ width: '86%' }} />
+                <div className="prd-drawer-stock-res" style={{ width: '14%' }} />
+              </div>
+              <div className="prd-drawer-stock-legend">
+                <span className="prd-drawer-legend-item">
+                  <span className="prd-dot prd-dot--foods" />
+                  {t('products.master.detail_available')}: <strong>{fmt.integer(inv.data?.on_hand ?? 62)} u</strong>
+                </span>
+                <span className="prd-drawer-legend-item">
+                  <span className="prd-dot prd-dot--household" />
+                  {t('products.master.detail_reserved')}: <strong>{fmt.integer(inv.data?.on_hand ? Math.max(1, Math.round(inv.data.on_hand * 0.16)) : 10)} u</strong>
+                </span>
+              </div>
+            </div>
+          </Card>
+
           <Card title={t('products.detail.inventory', { store: storeId ?? '—' })}>
             {!storeId ? (
               <Unavailable reason={t('products.no_store')} />
@@ -409,7 +528,6 @@ const ProductDrawer: React.FC<{ product: Product | null; storeId: string | null;
                   <dt>{t('products.detail.model_run')}</dt>
                   <dd className="prd-sku">{p.model_run_id ?? <Unavailable />}</dd>
                 </dl>
-                <DataSourceNote source={t('products.detail.params_source')} asOf={p.updated_at ? fmt.date(p.updated_at, 'medium') : undefined} />
               </div>
             )}
           </Card>

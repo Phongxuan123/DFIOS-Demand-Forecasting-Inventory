@@ -22,7 +22,6 @@ import {
   Alert,
   Button,
   Card,
-  DataSourceNote,
   Input,
   KpiTile,
   Modal,
@@ -42,7 +41,7 @@ export const SalesTab: React.FC = () => {
   const { storeId } = useStore();
   const { version } = useClock();
   const isAdmin = normalizeRole(user?.role) === 'ADMIN';
-  const canImport = can(user?.role, 'inventory:adjust'); // POST /imports is Manager/Admin
+  const canImport = can(user?.role, 'inventory:adjust');
   const [draft, setDraft] = useState(EMPTY);
   const [applied, setApplied] = useState(EMPTY);
   const [nonce, setNonce] = useState(0);
@@ -150,9 +149,6 @@ export const SalesTab: React.FC = () => {
           dense
           pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total: list.data?.total ?? 0 }}
         />
-        <div className="prd-pad">
-          <DataSourceNote source={t('products.sales.source', { store: storeId ?? '—' })} />
-        </div>
       </Card>
 
       {canImport && <ImportCard storeId={storeId} onDone={() => setNonce((n) => n + 1)} />}
@@ -170,7 +166,6 @@ export const SalesTab: React.FC = () => {
   );
 };
 
-/* ------------------------------- CSV import ------------------------------- */
 const ImportCard: React.FC<{ storeId: string | null; onDone: () => void }> = ({ storeId, onDone }) => {
   const t = useT();
   const fmt = useFormat();
@@ -216,7 +211,6 @@ const ImportCard: React.FC<{ storeId: string | null; onDone: () => void }> = ({ 
   const rejected = result?.rejected ?? 0;
   const written = inserted + updated;
   const rejectedRows = result?.rejected_rows ?? [];
-  // Never claim success when any row was rejected (R-38).
   const tone = !result ? 'info' : written === 0 ? 'danger' : rejected > 0 ? 'warning' : 'success';
   const title = written === 0 ? t('products.sales.result_title_none') : rejected > 0 ? t('products.sales.result_title_partial') : t('products.sales.result_title_ok');
   const warnings = result?.quality_report?.warnings ?? [];
@@ -282,7 +276,6 @@ const ImportCard: React.FC<{ storeId: string | null; onDone: () => void }> = ({ 
   );
 };
 
-/* -------------------------------- add a sale -------------------------------- */
 const SaleModal: React.FC<{ open: boolean; storeId: string | null; onClose: () => void; onSaved: () => void }> = ({ open, storeId, onClose, onSaved }) => {
   const t = useT();
   const toast = useToast();
