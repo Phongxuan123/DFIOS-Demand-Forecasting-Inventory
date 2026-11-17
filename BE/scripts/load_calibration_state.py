@@ -2,10 +2,9 @@
 Tier-3 C3-OUT state (calibration_state).
 
 P-35 / N-11: dated on the ONE demo convention (policy_config.DEMO_START_DATE).
-The theta TRAJECTORY is kept (never collapsed to a single value):
-  * if the artifact trajectory ``c3ok_theta.csv`` (policy "P C3-OUT tau=0.95") is available next to the other
-    artifacts, one row per review (review_day <= demo start, causal) is loaded with the real review dates;
-  * otherwise a neutral initial state theta = 0 at review 0 (the simulator then builds the trajectory).
+Teacher-aligned (G-17): the live controller always starts from the neutral state theta = 0 at review 0
+(one-sided C3-OUT, theta_0 = 0). The old two-sided artifact trajectory (c3ok_theta.csv) is NOT warm-started;
+the simulator builds the trajectory from real service outcomes.
 """
 import os
 import sys
@@ -38,31 +37,15 @@ def _find_theta_csv():
 
 
 records = []
-path = _find_theta_csv()
-if path:
-    th = pd.read_csv(path, encoding="utf-8")
-    th = th[th["policy"] == POLICY_NAME].sort_values("review_day")
-    th = th[th["review_day"] <= pc.date_to_day_index(pc.DEMO_START_DATE)]
-    for k, (_, row) in enumerate(th.iterrows()):
-        for c in pc.ALL_CLASSES:
-            theta = float(row[c])
-            records.append({
-                "id": f"{STORE_ID}_{c}_rev_{k}", "calibrator_id": CALIBRATOR_ID, "store_id": STORE_ID,
-                "class_id": c, "review_index": k, "review_date": pc.day_index_to_date(int(row["review_day"])),
-                "theta": theta, "multiplier": round(math.exp(theta), 4), "error_rate": None,
-                "at_boundary": bool(abs(theta) >= pc.THETA_MAX), "setpoint": pc.TARGET_AVAILABILITY,
-                "eta": pc.CONTROLLER_ETA, "created_at": now,
-            })
-    print(f"Loaded artifact theta trajectory: {len(th)} reviews from {path}")
 if not records:
     for c in pc.ALL_CLASSES:
         records.append({
             "id": f"{STORE_ID}_{c}_rev_0", "calibrator_id": CALIBRATOR_ID, "store_id": STORE_ID, "class_id": c,
-            "review_index": 0, "review_date": pc.DEMO_START_DATE, "theta": 0.0, "multiplier": 1.0,
-            "error_rate": None, "at_boundary": False, "setpoint": pc.TARGET_AVAILABILITY,
+            "review_index": 0, "review_date": pc.DEMO_START_DATE, "theta": pc.THETA_INIT, "multiplier": 1.0,
+            "error_rate": None, "at_boundary": False, "setpoint": pc.C3_SETPOINT,
             "eta": pc.CONTROLLER_ETA, "created_at": now,
         })
-    print("No artifact theta trajectory found: neutral initial state theta = 0 at review 0")
+    print("Neutral initial state theta = 0 at review 0 (no artifact warm-start)")
 
 df = pd.DataFrame(records)
 with engine.begin() as conn:
