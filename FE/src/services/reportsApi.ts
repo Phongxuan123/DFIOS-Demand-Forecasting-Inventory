@@ -287,3 +287,16 @@ export const postBacktest = async (storeId: string) =>
 
 export const getRegistryModels = (signal?: AbortSignal) =>
   getJson<{ items: RegistryModel[]; total: number }>('/ml/models', { params: { limit: 100 }, signal });
+
+export interface E10bReference {
+  available: boolean;
+  message?: string;
+  matches?: boolean;
+  replay?: Record<string, number | null>;
+  teacher?: Record<string, number>;
+  delta?: Record<string, number | null>;
+  checks?: Record<string, boolean>;
+  selection_schedule?: Array<{ start: number | string | null; m: unknown; kappa: unknown }>;
+}
+
+export const getE10bReference = (signal?: AbortSignal) => getJson<E10bReference>('/reference/e10b', { signal });
