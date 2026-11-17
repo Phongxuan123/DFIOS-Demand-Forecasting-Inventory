@@ -394,30 +394,30 @@ export const ModelPerformance: React.FC = () => {
         <div className="mp-champion-left">
           <div className="mp-champion-badge">
             <span className="mp-champion-pulse" />
-            <span>Mô hình đang chạy thực tế (Production)</span>
+            <span>{t('models.banner.production_active')}</span>
           </div>
-          <div className="mp-champion-name">{champion ? `${champion.name} (${champion.version})` : 'Chưa có mô hình Production'}</div>
+          <div className="mp-champion-name">{champion ? `${champion.name} (${champion.version})` : t('models.banner.no_production')}</div>
           <div className="mp-champion-meta">
-            <span>Thuật toán: <strong>{champion ? algoLabel(t, champion.algorithm) : '—'}</strong></span>
+            <span>{t('models.banner.algorithm')}: <strong>{champion ? algoLabel(t, champion.algorithm) : '—'}</strong></span>
             <span>·</span>
-            <span>Mã: <code>{champion ? champion.id : '—'}</code></span>
+            <span>{t('models.banner.id')}: <code>{champion ? champion.id : '—'}</code></span>
             <span>·</span>
-            <span>Phạm vi: <strong>{champion ? champion.scope : 'global'}</strong></span>
+            <span>{t('models.banner.scope')}: <strong>{champion ? champion.scope : 'global'}</strong></span>
           </div>
         </div>
 
         {champion && (
           <div className="mp-champion-right">
             <div className="mp-metric-chip">
-              <span className="mp-metric-chip-label">WRMSSE (M5)</span>
+              <span className="mp-metric-chip-label">{t('models.banner.wrmsse_m5')}</span>
               <span className="mp-metric-chip-val">{prodWrmsse !== null ? fmt.number(prodWrmsse, { digits: 3 }) : '—'}</span>
             </div>
             <div className="mp-metric-chip">
-              <span className="mp-metric-chip-label">MASE</span>
+              <span className="mp-metric-chip-label">{t('models.col.mase')}</span>
               <span className="mp-metric-chip-val">{prodMase !== null ? fmt.number(prodMase, { digits: 3 }) : '—'}</span>
             </div>
             <div className="mp-metric-chip">
-              <span className="mp-metric-chip-label">MAE</span>
+              <span className="mp-metric-chip-label">{t('models.col.mae')}</span>
               <span className="mp-metric-chip-val">{prodMae !== null ? fmt.number(prodMae, { digits: 3 }) : '—'}</span>
             </div>
           </div>

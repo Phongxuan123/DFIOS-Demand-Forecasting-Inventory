@@ -16,6 +16,14 @@ export const models = {
     details: 'Chi tiết kiểm định',
     refresh: 'Làm mới',
   },
+  banner: {
+    production_active: 'Mô hình đang chạy thực tế (Production)',
+    no_production: 'Chưa có mô hình Production',
+    algorithm: 'Thuật toán',
+    id: 'Mã',
+    scope: 'Phạm vi',
+    wrmsse_m5: 'WRMSSE (M5)',
+  },
   kpi: {
     champion: 'Mô hình Production',
     champion_hint: '{algorithm} · {version}',

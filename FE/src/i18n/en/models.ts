@@ -15,6 +15,14 @@ export const models: typeof Vi = {
     details: 'Validation details',
     refresh: 'Refresh',
   },
+  banner: {
+    production_active: 'Active Production Model',
+    no_production: 'No active Production model',
+    algorithm: 'Algorithm',
+    id: 'ID',
+    scope: 'Scope',
+    wrmsse_m5: 'WRMSSE (M5)',
+  },
   kpi: {
     champion: 'Production model',
     champion_hint: '{algorithm} · {version}',
