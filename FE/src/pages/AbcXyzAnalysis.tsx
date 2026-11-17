@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Badge, EmptyState, PageHeader } from '../components/ui/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
@@ -24,6 +24,7 @@ export const AbcXyzAnalysis: React.FC = () => {
   const manager = can(user?.role, 'replenishment:write');
   const [segment, setSegment] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const skuSectionRef = useRef<HTMLDivElement>(null);
   const enabled = !!storeId;
 
   const matrix = useApi((s) => getMatrix(storeId as string, s), [storeId, version], { enabled });
@@ -71,6 +72,11 @@ export const AbcXyzAnalysis: React.FC = () => {
 
   const onSelectSegment = (seg: string | null) => {
     setSegment(seg);
+    if (seg) {
+      setTimeout(() => {
+        skuSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+    }
   };
 
   const meta = m?.last_updated ? (
@@ -188,6 +194,10 @@ export const AbcXyzAnalysis: React.FC = () => {
             selected={segment}
           />
 
+          <div ref={skuSectionRef}>
+            <SkuTable storeId={storeId} segment={segment} onClearSegment={() => setSegment(null)} version={version} />
+          </div>
+
           <ScatterCard
             items={sample.data?.items}
             total={sample.data?.total}
@@ -196,8 +206,6 @@ export const AbcXyzAnalysis: React.FC = () => {
             onRetry={sample.refetch}
             storeId={storeId}
           />
-
-          <SkuTable storeId={storeId} segment={segment} onClearSegment={() => setSegment(null)} version={version} />
         </>
       )}
     </div>
