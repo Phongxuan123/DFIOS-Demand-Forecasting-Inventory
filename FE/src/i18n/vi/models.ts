@@ -1,7 +1,3 @@
-/**
- * Namespace `models` (Vietnamese, the source of truth for keys): trang Hiệu năng mô hình.
- * en/models.ts is typed against this file.
- */
 export const models = {
   page: {
     title: 'Hiệu năng mô hình',
