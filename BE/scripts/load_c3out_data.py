@@ -39,6 +39,58 @@ LEAD_TIME = ARTIFACT_WINDOW_DAYS = 7  # the artifact tier2_input / production_fo
 # load_inventory_params). inventory_params are produced ONLY by OptimizationService (L=3, R=7, H=10).
 
 
+def build_sku_classes(merged, store_id, thresholds, now):
+    """Rows for sku_classifications. SKUs with a class in the source file are ground_truth; SKUs without one
+    (class is NaN) are classified by the UC25 thresholds and marked class_source='thresholds' (X-01)."""
+    from app.services.classification_service import classification_service
+
+    sku_classes = []
+    seen_items = set()
+    total_rev = (merged["annual_demand"] * merged["unit_price"]).sum()
+    merged_sorted = merged.sort_values(by="annual_demand", ascending=False)
+    cum_share = 0.0
+
+    for idx, (_, row) in enumerate(merged_sorted.iterrows()):
+        item_id = row["item_id"]
+        if item_id in seen_items:
+            continue
+        seen_items.add(item_id)
+
+        rev = float(row["annual_demand"] * row["unit_price"])
+        rev_share = (rev / total_rev) * 100.0 if total_rev > 0 else 0.0
+        cum_share += rev_share
+
+        mean_d = float(row["demand_h7"] / ARTIFACT_WINDOW_DAYS)
+        std_d = float(row["sigma_d_h7"]) if "sigma_d_h7" in row and pd.notnull(row["sigma_d_h7"]) else 1.0
+        cv_val = float(std_d / mean_d) if mean_d > 0.001 else 1.0
+
+        raw = row["class"] if "class" in row else None
+        if isinstance(raw, str) and len(raw.strip()) >= 2:
+            seg = raw.strip().upper()
+            source = "ground_truth"
+        else:
+            seg = classification_service.threshold_segment(min(100.0, cum_share), cv_val, idx == 0, thresholds)
+            source = "thresholds"
+
+        sku_classes.append({
+            "id": f"class_{item_id}_{store_id}",
+            "item_id": item_id,
+            "store_id": store_id,
+            "class_source": source,
+            "abc_class": seg[0],
+            "xyz_class": seg[1],
+            "segment": seg,
+            "revenue": round(rev, 2),
+            "revenue_share": round(rev_share, 4),
+            "cumulative_share": round(min(100.0, cum_share), 4),
+            "mean_demand": round(mean_d, 2),
+            "std_demand": round(std_d, 2),
+            "cv": round(cv_val, 4),
+            "updated_at": now,
+        })
+    return sku_classes
+
+
 def main():
     print("=" * 60)
     print("DFIOS: Synchronizing C3-OUT inventory data (Model A3 & Research Spec)")
@@ -75,7 +127,7 @@ def main():
         tier2_ca1["safety_stock_h7"] = 1.645 * tier2_ca1["sigma_d_h7"].fillna(1.5) * np.sqrt(LEAD_TIME)
 
     merged = pd.merge(tier2_ca1, class_ca1[["item_id", "class"]], on="item_id", how="left")
-    merged["class"] = merged["class"].fillna("BY")
+    # X-01: SKUs absent from the ground-truth file are NOT forced to BY; they are classified by thresholds below.
 
     # real product prices (no invented price)
     with engine.connect() as conn:
@@ -85,46 +137,15 @@ def main():
     merged["annual_demand"] = ((merged["demand_h7"] / ARTIFACT_WINDOW_DAYS) * 365.0).round(2).clip(lower=1.0)
     now = datetime.now(timezone.utc)
 
-    # Xây dựng danh sách sku_classifications
-    sku_classes = []
-    seen_items = set()
-    total_rev = (merged["annual_demand"] * merged["unit_price"]).sum()
-    merged_sorted = merged.sort_values(by="annual_demand", ascending=False)
-    cum_share = 0.0
-
-    for _, row in merged_sorted.iterrows():
-        item_id = row["item_id"]
-        if item_id in seen_items:
-            continue
-        seen_items.add(item_id)
-
-        seg = row["class"]
-        abc = seg[0] if len(seg) >= 1 else "B"
-        xyz = seg[1] if len(seg) >= 2 else "Y"
-        rev = float(row["annual_demand"] * row["unit_price"])
-        rev_share = (rev / total_rev) * 100.0 if total_rev > 0 else 0.0
-        cum_share += rev_share
-
-        mean_d = float(row["demand_h7"] / ARTIFACT_WINDOW_DAYS)
-        std_d = float(row["sigma_d_h7"]) if "sigma_d_h7" in row and pd.notnull(row["sigma_d_h7"]) else 1.0
-        cv_val = float(std_d / mean_d) if mean_d > 0.001 else 1.0
-
-        sku_classes.append({
-            "id": f"class_{item_id}_{STORE_ID}",
-            "item_id": item_id,
-            "store_id": STORE_ID,
-            "class_source": "ground_truth",
-            "abc_class": abc,
-            "xyz_class": xyz,
-            "segment": seg,
-            "revenue": round(rev, 2),
-            "revenue_share": round(rev_share, 4),
-            "cumulative_share": round(min(100.0, cum_share), 4),
-            "mean_demand": round(mean_d, 2),
-            "std_demand": round(std_d, 2),
-            "cv": round(cv_val, 4),
-            "updated_at": now
-        })
+    from app.core.database import SessionLocal
+    from app.services.classification_service import classification_service
+    _db = SessionLocal()
+    try:
+        thresholds = classification_service.get_thresholds(_db)
+    finally:
+        _db.close()
+    now = datetime.now(timezone.utc)
+    sku_classes = build_sku_classes(merged, STORE_ID, thresholds, now)
     sku_classes_df = pd.DataFrame(sku_classes)
 
     # Initial stock: keep what is in the DB; otherwise cover H = L + R = 10 days of the artifact demand rate.
