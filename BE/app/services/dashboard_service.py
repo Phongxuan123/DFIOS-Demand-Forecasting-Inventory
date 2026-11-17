@@ -344,7 +344,7 @@ class DashboardService:
                 func.sum(model.lost_sales * Product.price).label("lv"),
             )
             .join(Product, Product.item_id == model.item_id)
-            .filter(model.store_id.in_(stores), model.date > start, model.date <= end)
+            .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
             .group_by(model.date)
             .all()
         )
@@ -399,7 +399,7 @@ class DashboardService:
 
         has_shadow = (
             db.query(func.count(SimShadowDaily.item_id))
-            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date > start)
+            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date >= start)
             .scalar()
         )
         if not has_shadow:
@@ -532,7 +532,7 @@ class DashboardService:
             db.query(ReplenishmentRecommendation.review_date, func.count(ReplenishmentRecommendation.id))
             .filter(
                 ReplenishmentRecommendation.store_id.in_(stores),
-                ReplenishmentRecommendation.review_date > start_date,
+                ReplenishmentRecommendation.review_date >= start_date,
                 ReplenishmentRecommendation.review_date <= curr_date,
                 ReplenishmentRecommendation.status.in_(("APPROVED", "COMPLETED")),
             )
@@ -542,7 +542,7 @@ class DashboardService:
         c3_orders = {d: float(n) * pc.ORDER_COST_C for d, n in placed if d is not None}
         sh_orders_rows = (
             db.query(SimShadowDaily.date, func.count(SimShadowDaily.item_id))
-            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date > start_date,
+            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date >= start_date,
                     SimShadowDaily.date <= curr_date, SimShadowDaily.order_qty > 0)
             .group_by(SimShadowDaily.date)
             .all()
@@ -557,7 +557,7 @@ class DashboardService:
             for cyc in range(reviews_elapsed + 1):
                 lo = start_date + timedelta(days=(cyc - 1) * R) if cyc else start_date
                 hi = min(start_date + timedelta(days=cyc * R), curr_date)
-                d = lo + timedelta(days=1)
+                d = lo if cyc == 0 else lo + timedelta(days=1)  # cycle 0 = the start date itself (day 0 is simulated)
                 while d <= hi:
                     h_, s_ = c3_daily.get(d, (0.0, 0.0))
                     ch += h_

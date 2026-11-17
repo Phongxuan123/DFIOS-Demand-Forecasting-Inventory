@@ -152,3 +152,32 @@ def test_artifact_policy_display_texts_are_honest_and_keys_unchanged():
     # the critical ratio really is b / (b + h * R) with the A3 rates
     cr = pc.STOCKOUT_PENALTY_RATE / (pc.STOCKOUT_PENALTY_RATE + pc.HOLDING_RATE_DAILY * pc.REVIEW_PERIOD_DAYS)
     assert round(cr, 4) == 0.9615
+
+
+def test_day0_rows_are_counted_in_dashboard_and_report_kpis():
+    """Clock still at START: only day-0 inventory / shadow / review rows exist and the KPIs must include them."""
+    from app.repositories.reports_repository import reports_repository
+    from app.services.dashboard_service import DashboardService, dashboard_service
+
+    db = _db(on_hand=5.0, demand=[3.0])
+    db.add(InventoryDaily(store_id="CA_1", item_id=ITEM, date=START, on_hand_end=2.0, sales=3.0, lost_sales=1.0))
+    db.add(SimShadowDaily(store_id="CA_1", item_id=ITEM, date=START, on_hand_end=1.0, sales=3.0, lost_sales=2.0,
+                          order_qty=4.0))
+    db.add(ReplenishmentRecommendation(item_id=ITEM, store_id="CA_1", status="APPROVED", review_date=START,
+                                       recommended_qty=1.0, final_qty=1.0))
+    db.commit()
+
+    daily = DashboardService._daily_costs(db, InventoryDaily, ["CA_1"], START, START)
+    assert daily[START] == pytest.approx((2.0 * PRICE * pc.HOLDING_RATE_DAILY, 1.0 * PRICE * pc.STOCKOUT_PENALTY_RATE))
+
+    cc = reports_repository.get_cost_comparison_report(db, "CA_1")
+    assert cc["reason"] is None
+    assert cc["ml_policy"]["order_cost"] == pc.ORDER_COST_C
+    assert cc["baseline_policy"]["order_cost"] == pc.ORDER_COST_C
+    assert cc["ml_policy"]["holding_cost"] > 0 and cc["ml_policy"]["stockout_penalty_cost"] > 0
+
+    kpi = dashboard_service.get_shadow_baseline_dashboard(db, "CA_1")
+    p0 = kpi.cost_curves[0]
+    assert p0 is not None
+    assert p0.c3out_ordering_cost == pc.ORDER_COST_C and p0.c3out_holding_cost > 0
+    assert p0.b0_ordering_cost == pc.ORDER_COST_C
