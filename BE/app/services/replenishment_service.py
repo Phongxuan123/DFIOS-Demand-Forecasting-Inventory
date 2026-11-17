@@ -55,7 +55,7 @@ class ReplenishmentService:
         auto_order: bool = False,
     ) -> int:
         """
-        UC33 - Tự động sinh đề xuất đặt hàng khi On_hand + On_order <= ROP.
+        UC33 - Tự động sinh đề xuất đặt hàng khi IP = On_hand + On_order < s (nghiêm ngặt, G-02), q = S - IP.
         Số lượng đề xuất = EOQ, gán mức ưu tiên (CRITICAL, HIGH, MEDIUM, LOW).
         Chống sinh trùng đề xuất PENDING cho cùng SKU/kho.
         Hỗ trợ tham số review_date và auto_order cho môi trường mô phỏng (J1 - J6, N-08 & N-11).
@@ -148,20 +148,22 @@ class ReplenishmentService:
             # Vị trí tồn kho IP = On_hand + On_order
             ip = on_hand + on_order
 
-            # Điều kiện kích hoạt chính sách (R, s, S): IP < s hoặc IP <= ROP
-            if ip < s_level or ip <= rop:
-                # Lượng đặt đề xuất theo chính sách (R, s, S): q = S - IP
-                recommended_qty = max(1.0, round(S_level - ip, 0))
+            # G-02 (teacher rss.py): the (R, s, S) trigger is STRICTLY IP < s and the quantity is exactly S - IP
+            # (no minimum of 1 unit). The ROP column of inventory_params is s itself (reorder_point = s), so the
+            # former extra "IP <= ROP" branch was not a distinct operational rule: it only turned the trigger into
+            # IP <= s (an SKU with s = 0 and IP = 0 was always ordered). It is removed.
+            if ip < s_level:
+                recommended_qty = float(round(S_level - ip, 0))
+                if recommended_qty <= 0:
+                    continue
 
-                # Xác định mức độ ưu tiên
+                # Xác định mức độ ưu tiên (IP < s holds here)
                 if on_hand <= 0:
                     priority = "CRITICAL"
                 elif on_hand <= safety_stock:
                     priority = "HIGH"
-                elif ip <= s_level:
-                    priority = "MEDIUM"
                 else:
-                    priority = "LOW"
+                    priority = "MEDIUM"
 
                 created_timestamp = (
                     datetime.combine(effective_review_date, datetime.min.time(), tzinfo=timezone.utc)
@@ -181,7 +183,7 @@ class ReplenishmentService:
                     # auto_order (simulator): the order is placed immediately -> APPROVED, received by J1 after L
                     # days and then set to COMPLETED; a COMPLETED order is never received twice (P-16).
                     status="APPROVED" if auto_order else "PENDING",
-                    reason=f"Đề xuất {policy_name}: IP ({ip:.1f}) ≤ s ({s_level:.1f}), đặt q = S - IP = {recommended_qty:.0f}",
+                    reason=f"Đề xuất {policy_name}: IP ({ip:.1f}) < s ({s_level:.1f}), đặt q = S - IP = {recommended_qty:.0f}",
                     order_up_to_S=S_level,
                     reorder_point_s=s_level,
                     inventory_position=ip,

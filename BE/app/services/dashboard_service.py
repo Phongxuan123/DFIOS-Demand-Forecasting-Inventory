@@ -367,6 +367,7 @@ class DashboardService:
             db.query(
                 ServiceOutcome.store_id, ServiceOutcome.class_id, ServiceOutcome.cycle_index,
                 ServiceOutcome.n_sku, ServiceOutcome.n_stockout,
+                ServiceOutcome.cycle_start, ServiceOutcome.cycle_end,
             )
             .filter(
                 ServiceOutcome.store_id.in_(stores),
@@ -381,7 +382,15 @@ class DashboardService:
         if not so:
             reason = KPI_REASONS["no_closed_cycle"]
             return out, reason, reason
-        closed = {(r.store_id, r.cycle_index) for r in so}
+        # G-01: a closed cycle is [cycle_start, cycle_end] as stored by J6 (days t_k + L .. t_k + L + R - 1); the
+        # shadow B0 is scored on exactly the same days, so no review-period arithmetic is redone here.
+        closed: Dict[Tuple[str, int], Tuple[date, date]] = {}
+        for r in so:
+            if r.cycle_start is not None and r.cycle_end is not None:
+                closed[(r.store_id, int(r.cycle_index))] = (r.cycle_start, r.cycle_end)
+        windows: Dict[str, List[Tuple[date, date, int]]] = {}
+        for (st, k), (cs, ce) in closed.items():
+            windows.setdefault(st, []).append((cs, ce, k))
         for r in so:
             if r.class_id in out:
                 out[r.class_id]["n_periods"] += int(r.n_sku or 0)
@@ -413,13 +422,13 @@ class DashboardService:
         seen = set()
         b0 = {c: 0 for c in pc.ALL_CLASSES}
         for st, item_id, d in sh_rows:
-            k = (d - start).days // R
-            if (st, k) not in closed or (st, item_id, k) in seen:
-                continue
-            seen.add((st, item_id, k))
-            seg = seg_of.get((st, item_id)) or seg_any.get(item_id)
-            if seg in b0:
-                b0[seg] += 1
+            for cs, ce, k in windows.get(st, ()):
+                if not (cs <= d <= ce) or (st, item_id, k) in seen:
+                    continue
+                seen.add((st, item_id, k))
+                seg = seg_of.get((st, item_id)) or seg_any.get(item_id)
+                if seg in b0:
+                    b0[seg] += 1
         for c in pc.ALL_CLASSES:
             out[c]["b0_stockout"] = b0[c]
         return out, None, None
@@ -583,7 +592,7 @@ class DashboardService:
         details: List[InsightDetail] = []  # same order as ``insights`` (stable codes for client-side i18n)
         if overall_c3 is not None:
             line = f"Availability quan sát (các chu kỳ đã đóng): C³-OUT {overall_c3}% (mục tiêu {target_pct}%)"
-            line += f", B0 raw quantile τ=0.95 {overall_b0}%." if overall_b0 is not None else f"; B0: {b0_reason}"
+            line += f", B0-MA-OUT-0.95 (shadow) {overall_b0}%." if overall_b0 is not None else f"; B0: {b0_reason}"
             insights.append(line)
             details.append(InsightDetail(code="availability_observed", params={
                 "c3out_pct": overall_c3, "target_pct": target_pct, "b0_pct": overall_b0,
@@ -606,7 +615,7 @@ class DashboardService:
         elif cost_reason or b0_reason:
             insights.append(cost_reason or b0_reason)
             details.append(InsightDetail(code=kpi_reason_code(cost_reason or b0_reason) or "no_cost"))
-        insights.append("B0 được mô phỏng song song trên cùng nhu cầu và tồn kho ban đầu (không dùng tỷ lệ cố định).")
+        insights.append("B0-MA-OUT-0.95 được mô phỏng song song trên cùng nhu cầu và tồn kho ban đầu: S = ceil(mean56·(L+R) + z0.95·σ56·√(L+R)), đặt S − IP khi IP < S mỗi kỳ (không dùng tỷ lệ cố định).")
         details.append(InsightDetail(code="b0_shadow_definition"))
 
         return KPIDashboardResponse(

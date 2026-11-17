@@ -10,8 +10,11 @@ replayed with the vectorised lost-sales backtest of ``policy_backtest`` (the eng
 * daily demand = realised sales of the replayed days (sales_history / M5 CSV); an item missing ANY replayed day,
   any review quantile or a price is excluded (never zero-filled, never an invented price);
 * s = ceil(Q_hat * e^(m_g [+ theta_g])), S = s + ceil(kappa_g * EOQ), EOQ from the review's point forecast with the
-  user's h and c; order S - IP when IP <= s, arrival L days later; costs h*price*end-of-day stock + b*price*lost
-  units + c per order line; availability = share of SKU-periods without a zero-stock day (observed, 8.1).
+  user's h and c; order S - IP when IP < s (strict, G-02), arrival at the start of day t + L; costs
+  h*price*end-of-day stock + b*price*lost units + c per order line; availability = share of SKU-cycles without a
+  zero-stock day, the cycle of review k being days t_k + L .. t_k + L + R - 1 (G-01, complete cycles only);
+* initial stock (G-03) = round(mean sales of the 28 days before the first replayed review * (L + R)), identical
+  for every policy; the legacy ceil(Q_hat) + ceil(EOQ) only for a SKU without any known sales in those 28 days.
 
 Constraints (answered with 422 + reason, never approximated):
 * R must equal the spacing of the stored causal review forecasts (weekly, 7 days): R = 1 would need daily
@@ -113,8 +116,16 @@ class WhatIfService:
             eoq_a3 = eoq
         else:
             eoq_a3 = eoq_for(pc.HOLDING_RATE_DAILY, pc.ORDER_COST_C)
+        # G-03: initial stock = round(mean of the 28 days before the first replayed review * (L + R))
+        win = policy_backtest.INIT_STOCK_WINDOW
+        hist = build_actuals_matrix(db, store_id, item_ids, reviews[0] - win, reviews[0])[ok]
+        no_hist = (~np.isnan(hist)).sum(axis=1) == 0
+        init = policy_backtest.initial_stock_from_history(hist, L, R) if hist.shape[1] else np.zeros(int(ok.sum()))
+        legacy = np.ceil(cm["q"][ok][:, 0]) + np.ceil(eoq_a3[:, 0])
+        init = np.where(no_hist, legacy, init)
         return {
             "dem": dem[ok], "q": cm["q"][ok], "eoq": eoq, "eoq_a3": eoq_a3, "price": price_ok, "reviews": reviews,
+            "init": init, "n_init_legacy": int(no_hist.sum()),
             "n_items": int(ok.sum()), "n_fallback": int(cm["fallback"][ok].any(axis=1).sum()),
         }, None
 
@@ -210,6 +221,7 @@ class WhatIfService:
                 res = policy_backtest.simulate_rss_candidates(
                     d["dem"], d["q"], eoq, d["price"], [m], [kappa], theta=theta, lead_time=L, review_period=R,
                     holding_rate=req.holding_rate, stockout_rate=req.stockout_penalty_rate, order_cost=req.order_cost,
+                    initial_on_hand=d["init"],
                 )
                 by_class.append(WhatIfClassResult(
                     class_id=c, m_g=m, kappa_g=kappa, theta_g=round(theta, 4), params_source=params_source,
@@ -246,7 +258,11 @@ class WhatIfService:
                 f"{pc.BACKTEST_WINDOW_DAYS} with H = L + R = {L + R}, plus the empirical tau-quantile of residuals of "
                 f"matured realised H-day windows (o-364 <= s, s + H <= o)"
             ),
-            initial_stock_basis="ceil(Q_hat) + ceil(EOQ) of the first replayed review, identical for every policy",
+            initial_stock_basis=(
+                f"round(mean sales of the {policy_backtest.INIT_STOCK_WINDOW} days before the first replayed review "
+                f"x (L + R)), identical for every policy; ceil(Q_hat) + ceil(EOQ) for "
+                f"{sum(d['n_init_legacy'] for d in inputs.values())} SKU(s) without sales in that window"
+            ),
             policies=results, skipped_classes=skipped, notes=notes,
         )
 
