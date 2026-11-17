@@ -340,7 +340,7 @@ class TestC3OutAndSimulation(unittest.TestCase):
             db.add_all([p, inv, param])
 
             # 2. Tạo sales history cho 14 ngày
-            for i in range(14):
+            for i in range(-1, 14):  # the start date is a simulated day too (P2)
                 s_date = start_d + timedelta(days=i + 1)
                 db.add(SalesHistory(id=f"sh_{i}", item_id="TEST_ITEM_01", store_id="CA_1", sale_date=s_date, quantity=2.0))
             db.commit()
@@ -358,9 +358,9 @@ class TestC3OutAndSimulation(unittest.TestCase):
             self.assertEqual(res["days_advanced"], 7)
             self.assertEqual(res["current_date"], date(2016, 5, 2))
 
-            # Kiểm tra InventoryDaily đã sinh 7 bản ghi
+            # Kiểm tra InventoryDaily đã sinh 8 bản ghi: ngày bắt đầu (ngày 0) + 7 ngày tua
             dailies = db.query(InventoryDaily).filter(InventoryDaily.item_id == "TEST_ITEM_01").all()
-            self.assertEqual(len(dailies), 7)
+            self.assertEqual(len(dailies), 8)
 
             # Kiểm tra đề xuất bổ sung sinh ở review day có review_date = 2016-05-02
             recs = db.query(ReplenishmentRecommendation).filter(ReplenishmentRecommendation.item_id == "TEST_ITEM_01").all()
