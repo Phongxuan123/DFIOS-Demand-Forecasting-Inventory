@@ -112,6 +112,10 @@ export interface PolicyParam {
   S?: number | null;
   model_run_id?: string | null;
   source: string;
+  holding_cost?: number;
+  order_cost?: number;
+  unit_price?: number;
+  annual_demand?: number;
 }
 export const getPolicyParam = (itemId: string, storeId: string, signal?: AbortSignal) =>
   getJson<{ items: PolicyParam[] }>('/optimization/parameters', {

@@ -63,7 +63,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (input: ToastInput) => {
       const id = nextId.current++;
       const tone = input.tone ?? 'info';
-      const duration = input.duration ?? (tone === 'error' ? 8000 : 5000);
+      const duration = input.duration ?? (tone === 'error' ? 6000 : 4000);
       setItems((prev) => [...prev.slice(-(MAX_VISIBLE - 1)), { ...input, id, tone }]);
       if (duration > 0) timers.current.set(id, setTimeout(() => dismiss(id), duration));
       return id;
