@@ -143,6 +143,7 @@ class CalibratorService:
                 Inventory,
                 (SKUClassification.item_id == Inventory.item_id) & (Inventory.store_id == store_id),
             )
+            .filter(SKUClassification.store_id == store_id)
             .all()
         )
         skus_by_class: Dict[str, List[str]] = {}
