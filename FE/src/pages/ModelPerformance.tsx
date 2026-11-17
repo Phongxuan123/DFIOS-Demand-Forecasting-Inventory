@@ -9,9 +9,7 @@ import {
   ChartFrame,
   ChartLegend,
   ChartTooltip,
-  DataSourceNote,
   Field,
-  HoldHeight,
   Input,
   KpiTile,
   Modal,
@@ -19,7 +17,6 @@ import {
   Select,
   Switch,
   Table,
-  Tabs,
   Unavailable,
   useChartTheme,
   useConfirm,
@@ -46,7 +43,6 @@ import {
 } from '../services/modelsApi.ts';
 import './ModelPerformance.css';
 
-type PageTab = 'registry' | 'training';
 type MetricKey = 'wrmsse' | 'mase' | 'mae' | 'rmse';
 const METRICS: readonly MetricKey[] = ['wrmsse', 'mase', 'mae', 'rmse'];
 const COVERAGE_KEYS = ['coverage_q95', 'coverage_95', 'coverage_0.95', 'q95_coverage'];
@@ -90,7 +86,6 @@ export const ModelPerformance: React.FC = () => {
   const { confirm, dialog } = useConfirm();
   const chart = useChartTheme();
 
-  const [tab, setTab] = useState<PageTab>('registry');
   const [chartMetric, setChartMetric] = useState<MetricKey>('wrmsse');
   const [validation, setValidation] = useState<Record<string, ValState>>({});
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -363,7 +358,6 @@ export const ModelPerformance: React.FC = () => {
       });
       toast.success(t('models.train.started', { id: res.job_id.slice(0, 8) }));
       setTrainOpen(false);
-      setTab('training');
       jobsPage.setPage(1);
       jobs.refetch();
     } catch (err) {
@@ -385,7 +379,6 @@ export const ModelPerformance: React.FC = () => {
       <PageHeader
         title={t('models.page.title')}
         description={t('models.page.description')}
-        meta={<DataSourceNote source={t('models.page.source')} />}
         actions={
           <>
             <Button variant="secondary" leftIcon={<ShieldCheck size={16} />} onClick={() => void validateAll()} disabled={models.length === 0}>
@@ -453,130 +446,108 @@ export const ModelPerformance: React.FC = () => {
         />
       </div>
 
-      <Tabs
-        aria-label={t('models.page.title')}
-        value={tab}
-        onChange={setTab}
-        items={[
-          { id: 'registry', label: t('models.tabs.registry'), count: registry.data?.total },
-          { id: 'training', label: t('models.tabs.training'), count: jobs.data?.total },
-        ]}
-      />
+      <Card title={t('models.registry.title')} description={t('models.registry.description')} flush>
+        <Table
+          columns={registryColumns}
+          rows={sortedModels}
+          rowKey={(m) => m.id}
+          loading={registry.loading}
+          error={registry.error}
+          onRetry={registry.refetch}
+          emptyTitle={t('models.registry.empty_title')}
+          emptyDescription={t('models.registry.empty_description')}
+          wrap
+        />
+        {registry.data && registry.data.total > models.length && (
+          <p style={{ padding: 'var(--space-3) var(--space-4)', margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
+            {t('models.registry.total_note', { shown: models.length, total: registry.data.total })}
+          </p>
+        )}
+      </Card>
 
-      <HoldHeight activeKey={tab} role="tabpanel" style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
-        {tab === 'registry' && (
+      <ChartFrame
+        title={t('models.chart.title')}
+        description={t('models.chart.description')}
+        height={Math.max(200, chartRows.length * 48 + 64)}
+        loading={registry.loading}
+        error={registry.error}
+        onRetry={registry.refetch}
+        empty={!registry.loading && !registry.error && chartRows.length === 0}
+        actions={
+          <Select<MetricKey>
+            aria-label={t('models.chart.metric')}
+            size="sm"
+            value={chartMetric}
+            onChange={setChartMetric}
+            options={METRICS.map((k) => ({ value: k, label: k.toUpperCase() }))}
+          />
+        }
+        footer={
           <>
-            <Card title={t('models.registry.title')} description={t('models.registry.description')} flush>
-              <Table
-                columns={registryColumns}
-                rows={sortedModels}
-                rowKey={(m) => m.id}
-                loading={registry.loading}
-                error={registry.error}
-                onRetry={registry.refetch}
-                emptyTitle={t('models.registry.empty_title')}
-                emptyDescription={t('models.registry.empty_description')}
-                wrap
-              />
-              {registry.data && registry.data.total > models.length && (
-                <p style={{ padding: 'var(--space-3) var(--space-4)', margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
-                  {t('models.registry.total_note', { shown: models.length, total: registry.data.total })}
-                </p>
-              )}
-            </Card>
-
-            <ChartFrame
-              title={t('models.chart.title')}
-              description={t('models.chart.description')}
-              source={t('models.chart.source')}
-              height={Math.max(200, chartRows.length * 48 + 64)}
-              loading={registry.loading}
-              error={registry.error}
-              onRetry={registry.refetch}
-              empty={!registry.loading && !registry.error && chartRows.length === 0}
-              actions={
-                <Select<MetricKey>
-                  aria-label={t('models.chart.metric')}
-                  size="sm"
-                  value={chartMetric}
-                  onChange={setChartMetric}
-                  options={METRICS.map((k) => ({ value: k, label: k.toUpperCase() }))}
-                />
-              }
-              footer={
-                <>
-                  <ChartLegend
-                    items={[
-                      { label: t('models.role.production'), color: chart.series[0] },
-                      { label: t('models.role.challenger'), color: chart.series[1] },
-                    ]}
-                  />
-                  {missingNames.length > 0 && chartRows.length > 0 && (
-                    <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
-                      {t('models.chart.missing', { metric: chartMetric.toUpperCase(), names: missingNames.join(', ') })}
-                    </p>
-                  )}
-                </>
-              }
-            >
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 56, bottom: 8, left: 12 }}>
-                  <CartesianGrid horizontal={false} stroke={chart.grid} />
-                  <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
-                  <YAxis type="category" dataKey="name" width={160} {...chart.axis} />
-                  <Tooltip cursor={{ fill: chart.grid, opacity: 0.4 }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
-                  <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
-                    {chartRows.map((r) => (
-                      <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
-                    ))}
-                    <LabelList dataKey="value" position="right" formatter={(v: unknown) => (typeof v === 'number' ? fmt.number(v, { digits: 3 }) : '')} fill={chart.tick} fontSize={11} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartFrame>
-          </>
-        )}
-
-        {tab === 'training' && (
-          <Card
-            title={t('models.training.title')}
-            description={t('models.training.description')}
-            actions={
-              <Button size="sm" variant="secondary" onClick={jobs.refetch} leftIcon={<RefreshCw size={14} />}>
-                {t('models.actions.refresh')}
-              </Button>
-            }
-            flush
-          >
-            {hasActiveJob && (
-              <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
-                <Alert tone="info">{t('models.training.polling')}</Alert>
-              </div>
-            )}
-            <Table
-              columns={jobColumns}
-              rows={jobItems ?? []}
-              rowKey={(j) => j.id}
-              loading={jobs.loading && !jobs.data}
-              error={jobs.error}
-              onRetry={jobs.refetch}
-              emptyTitle={t('models.training.empty_title')}
-              emptyDescription={t('models.training.empty_description')}
-              pagination={{
-                page: jobsPage.page,
-                pageSize: jobsPage.pageSize,
-                onPageChange: jobsPage.setPage,
-                onPageSizeChange: jobsPage.setPageSize,
-                total: jobs.data?.total ?? 0,
-              }}
-              wrap
+            <ChartLegend
+              items={[
+                { label: t('models.role.production'), color: chart.series[0] },
+                { label: t('models.role.challenger'), color: chart.series[1] },
+              ]}
             />
-            <div style={{ padding: '0 var(--space-4) var(--space-3)' }}>
-              <DataSourceNote source={t('models.training.source')} />
-            </div>
-          </Card>
+            {missingNames.length > 0 && chartRows.length > 0 && (
+              <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
+                {t('models.chart.missing', { metric: chartMetric.toUpperCase(), names: missingNames.join(', ') })}
+              </p>
+            )}
+          </>
+        }
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 56, bottom: 8, left: 12 }}>
+            <CartesianGrid horizontal={false} stroke={chart.grid} />
+            <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
+            <YAxis type="category" dataKey="name" width={160} {...chart.axis} />
+            <Tooltip cursor={{ fill: chart.grid, opacity: 0.4 }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
+            <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {chartRows.map((r) => (
+                <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
+              ))}
+              <LabelList dataKey="value" position="right" formatter={(v: unknown) => (typeof v === 'number' ? fmt.number(v, { digits: 3 }) : '')} fill={chart.tick} fontSize={11} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+
+      <Card
+        title={t('models.training.title')}
+        description={t('models.training.description')}
+        actions={
+          <Button size="sm" variant="secondary" onClick={jobs.refetch} leftIcon={<RefreshCw size={14} />}>
+            {t('models.actions.refresh')}
+          </Button>
+        }
+        flush
+      >
+        {hasActiveJob && (
+          <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
+            <Alert tone="info">{t('models.training.polling')}</Alert>
+          </div>
         )}
-      </HoldHeight>
+        <Table
+          columns={jobColumns}
+          rows={jobItems ?? []}
+          rowKey={(j) => j.id}
+          loading={jobs.loading && !jobs.data}
+          error={jobs.error}
+          onRetry={jobs.refetch}
+          emptyTitle={t('models.training.empty_title')}
+          emptyDescription={t('models.training.empty_description')}
+          pagination={{
+            page: jobsPage.page,
+            pageSize: jobsPage.pageSize,
+            onPageChange: jobsPage.setPage,
+            onPageSizeChange: jobsPage.setPageSize,
+            total: jobs.data?.total ?? 0,
+          }}
+          wrap
+        />
+      </Card>
 
       <Modal
         open={detailId !== null}
