@@ -68,6 +68,9 @@ MIN_RESIDUALS: int = 8  # Gaussian-fallback threshold, only used when GAUSSIAN_F
 POINT_FORECAST_MODEL_PATTERN: str = "Ensemble%"  # strict F_hat source (P-24)
 ROUTE_EMPIRICAL: str = "c"
 ROUTE_FALLBACK: str = "c_fb"  # Gaussian fallback, honest label (R-06)
+# P2 sandbox: window quantiles imported from the teacher's ensemble Q_H10 (scripts/load_teacher_data.py). When rows
+# with this route exist for a store, J3 reuses them as-is and J5 scores its candidates on them (no route-(c) rebuild).
+ROUTE_TEACHER: str = "teacher"
 # Teacher route (c): Q_hat(tau) = max(0, F_hat + empirical tau-quantile of the window residuals), nothing else.
 # The two DFIOS extras are OFF by default (G-26 / G-27) and can be switched on (module flag or per call):
 #   QUANTILE_FLOOR_ENABLED    -> Q_hat >= QUANTILE_FLOOR_UNITS when tau >= 0.90 and F_hat > 0 (old DFIOS rule)
