@@ -12,6 +12,7 @@ from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.forecast import Forecast
 from app.models.forecast_backtest import ForecastBacktest
+from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.sales_history import SalesHistory
 from app.models.inventory_param import InventoryParam
 from app.models.user import User
@@ -220,6 +221,12 @@ class OptimizationService:
         found = set()
         for k in range(0, len(item_ids), 900):
             chunk = item_ids[k:k + 900]
+            found.update(  # P2: imported teacher window quantiles also back the ML path
+                r[0] for r in db.query(ForecastWindowQuantile.item_id)
+                .filter(ForecastWindowQuantile.store_id == store_id, ForecastWindowQuantile.item_id.in_(chunk),
+                        ForecastWindowQuantile.route == pc.ROUTE_TEACHER)
+                .distinct().all()
+            )
             found.update(
                 r[0] for r in db.query(Forecast.item_id)
                 .filter(Forecast.store_id == store_id, Forecast.item_id.in_(chunk),
@@ -740,7 +747,9 @@ class OptimizationService:
         Its first review is the simulation start (teacher: VAL_START, the first forecast origin)."""
         R = pc.REVIEW_PERIOD_DAYS
         days: set = set()
-        for k in range(0, len(item_ids), 900):
+        # P2: imported teacher quantiles define the review chain when present (teacher: from VAL_START, step R)
+        days.update(window_quantile_service.teacher_review_days(db, store_id, pc.HORIZON_DAYS))
+        for k in range(0, 0 if days else len(item_ids), 900):
             days.update(
                 int(r[0]) for r in db.query(ForecastBacktest.review_day)
                 .filter(ForecastBacktest.store_id == store_id, ForecastBacktest.item_id.in_(item_ids[k:k + 900]))

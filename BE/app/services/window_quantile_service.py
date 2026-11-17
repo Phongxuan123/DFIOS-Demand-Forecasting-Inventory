@@ -394,7 +394,78 @@ class WindowQuantileService:
             R[i, k] = act[i, k] - D[i, k]
         return reviews, D, R
 
+    # ------------------------------------------------------------------------------------
+    # P2: imported (teacher) window quantiles, route = pc.ROUTE_TEACHER
+    # ------------------------------------------------------------------------------------
+    @staticmethod
+    def teacher_review_days(db: Session, store_id: str, H: int = pc.HORIZON_DAYS) -> List[int]:
+        """Day indices of the origins that carry imported teacher quantiles for the store (empty when none)."""
+        rows = db.query(ForecastWindowQuantile.origin_date).filter(
+            ForecastWindowQuantile.store_id == store_id,
+            ForecastWindowQuantile.horizon_days == int(H),
+            ForecastWindowQuantile.route == pc.ROUTE_TEACHER,
+        ).distinct().all()
+        return sorted(pc.date_to_day_index(r[0]) for r in rows)
+
+    def teacher_quantile_matrix(
+        self, db: Session, store_id: str, item_ids: Sequence[str], review_days: Sequence[int], tau: float,
+        H: int = pc.HORIZON_DAYS,
+    ) -> np.ndarray:
+        """(items x reviews) Q_hat(tau) from imported teacher rows; NaN where no such row exists."""
+        item_ids = list(item_ids)
+        review_days = [int(x) for x in review_days]
+        out = np.full((len(item_ids), len(review_days)), np.nan)
+        if not item_ids or not review_days:
+            return out
+        pos_i = {iid: i for i, iid in enumerate(item_ids)}
+        pos_k = {pc.day_index_to_date(d): k for k, d in enumerate(review_days)}
+        for k in range(0, len(item_ids), _IN_CHUNK):
+            chunk = item_ids[k:k + _IN_CHUNK]
+            for iid, od, ql, pw in db.query(
+                ForecastWindowQuantile.item_id, ForecastWindowQuantile.origin_date,
+                ForecastWindowQuantile.q_levels, ForecastWindowQuantile.point_window,
+            ).filter(
+                ForecastWindowQuantile.store_id == store_id,
+                ForecastWindowQuantile.item_id.in_(chunk),
+                ForecastWindowQuantile.horizon_days == int(H),
+                ForecastWindowQuantile.route == pc.ROUTE_TEACHER,
+                ForecastWindowQuantile.origin_date >= min(pos_k),
+                ForecastWindowQuantile.origin_date <= max(pos_k),
+            ).all():
+                kk = pos_k.get(od)
+                if kk is not None:
+                    out[pos_i[iid], kk] = self.tau_value(ql or {}, tau, pw or 0.0)
+        return out
+
     def causal_quantile_matrix(
+        self,
+        db: Session,
+        store_id: str,
+        item_ids: Sequence[str],
+        review_days: Sequence[int],
+        tau: float,
+        H: int = pc.HORIZON_DAYS,
+        quantile_floor: Optional[float] = None,
+        gaussian_fallback: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Causal Q_hat_tau for every (item, review), the input of the J5 policy backtest. Imported teacher
+        quantiles (route ``pc.ROUTE_TEACHER``) win where they exist; the rest is the route-(c) rebuild below."""
+        item_ids = list(dict.fromkeys(item_ids))
+        tq = self.teacher_quantile_matrix(db, store_id, item_ids, review_days, tau, H)
+        have = ~np.isnan(tq)
+        if have.size and have.all():
+            return {"point": tq.copy(), "q": tq, "n_res": np.zeros(tq.shape, dtype=int),
+                    "fallback": np.zeros(tq.shape, dtype=bool), "teacher": have}
+        out = self._route_c_quantile_matrix(db, store_id, item_ids, review_days, tau, H, quantile_floor,
+                                            gaussian_fallback)
+        if have.any():
+            out["q"][have] = tq[have]
+            out["point"][have] = tq[have]
+            out["fallback"][have] = False
+        out["teacher"] = have
+        return out
+
+    def _route_c_quantile_matrix(
         self,
         db: Session,
         store_id: str,
