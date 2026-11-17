@@ -421,6 +421,39 @@ select.ui-control__input {
   appearance: none;
   padding-right: var(--space-4);
   cursor: pointer;
+  color-scheme: inherit;
+}
+select.ui-control__input option,
+.ui-control select option,
+select option {
+  background-color: var(--color-surface);
+  color: var(--color-text);
+}
+select.ui-control__input option:disabled,
+select option:disabled {
+  color: var(--color-text-disabled);
+}
+[data-theme='dark'] select,
+[data-theme='dark'] select.ui-control__input,
+[data-theme='dark'] .ui-control select {
+  color-scheme: dark;
+}
+[data-theme='dark'] select option,
+[data-theme='dark'] select.ui-control__input option,
+[data-theme='dark'] .ui-control select option {
+  background-color: #161618;
+  color: #ededef;
+}
+[data-theme='light'] select,
+[data-theme='light'] select.ui-control__input,
+[data-theme='light'] .ui-control select {
+  color-scheme: light;
+}
+[data-theme='light'] select option,
+[data-theme='light'] select.ui-control__input option,
+[data-theme='light'] .ui-control select option {
+  background-color: #ffffff;
+  color: #0f172a;
 }
 .ui-select-wrap {
   position: relative;

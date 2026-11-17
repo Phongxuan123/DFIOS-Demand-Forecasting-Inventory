@@ -74,7 +74,7 @@ export const common = {
     label: 'Phân trang',
   },
   errors: {
-    network: 'Không kết nối được máy chủ. Kiểm tra mạng hoặc dịch vụ backend.',
+    network: 'Không kết nối được máy chủ. Vui lòng kiểm tra lại kết nối mạng.',
     timeout: 'Máy chủ phản hồi quá lâu. Vui lòng thử lại.',
     forbidden: 'Bạn không có quyền thực hiện thao tác này.',
     unauthorized: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
@@ -140,6 +140,6 @@ export const common = {
     target: 'Mục tiêu O2: {low}–{high}',
     in: 'Trong ngưỡng',
     out: 'Ngoài ngưỡng',
-    missing: 'Backend chưa trả giá trị này',
+    missing: 'Chưa có dữ liệu',
   },
 };

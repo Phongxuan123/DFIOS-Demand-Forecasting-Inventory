@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Badge, Button, Card, DataSourceNote, SearchInput, Select, Table, usePagination, type Column, type SortState } from '../../components/ui/index.ts';
+import { Badge, Button, Card, SearchInput, Select, Table, usePagination, type Column, type SortState } from '../../components/ui/index.ts';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { getCategories, getSkus, type SkuClassification } from '../../services/abcxyzApi.ts';
@@ -98,9 +98,6 @@ export const SkuTable: React.FC<Props> = ({ storeId, segment, onClearSegment, ve
         pagination={{ page: pg.page, pageSize: pg.pageSize, total: data?.total, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize }}
         dense
       />
-      <div style={{ padding: 'var(--space-2) var(--space-4) var(--space-3)' }}>
-        <DataSourceNote source={t('abcxyz.scatter.source', { store: storeId })} />
-      </div>
     </Card>
   );
 };

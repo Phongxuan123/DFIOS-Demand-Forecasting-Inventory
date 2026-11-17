@@ -5,7 +5,7 @@
 export const models = {
   page: {
     title: 'Hiệu năng mô hình',
-    description: 'Sổ đăng ký mô hình, chỉ số sai số, kiểm định toàn vẹn và lịch sử huấn luyện. Mọi số liệu lấy từ backend; chỉ số chưa có hiển thị "—" kèm lý do.',
+    description: 'Sổ đăng ký mô hình, chỉ số sai số, kiểm định toàn vẹn và lịch sử huấn luyện.',
     source: '/ml/models, /ml/train',
   },
   actions: {
@@ -30,7 +30,7 @@ export const models = {
     coverage_in: 'Trong ngưỡng mục tiêu',
     coverage_out: 'Ngoài ngưỡng mục tiêu',
     metric_missing: 'Registry chưa lưu chỉ số {metric} cho mô hình này',
-    coverage_missing: 'Backend chưa cung cấp độ phủ Q̂0,95 trong chỉ số của mô hình',
+    coverage_missing: 'Chưa có dữ liệu độ phủ Q̂0,95 trong chỉ số của mô hình',
     no_champion_metric: 'Không có mô hình Production để lấy chỉ số',
   },
   tabs: {

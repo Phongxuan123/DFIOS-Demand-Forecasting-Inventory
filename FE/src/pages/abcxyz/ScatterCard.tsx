@@ -80,13 +80,12 @@ const Legend: React.FC = () => {
   );
 };
 
-export const ScatterCard: React.FC<Props> = ({ items, total, loading, error, onRetry, storeId }) => {
+export const ScatterCard: React.FC<Props> = ({ items, total, loading, error, onRetry }) => {
   const t = useT();
   const fmt = useFormat();
   const groups = useMemo(() => {
     const g: Record<'A' | 'B' | 'C', Point[]> = { A: [], B: [], C: [] };
     for (const s of items ?? []) {
-      // log axis cannot draw non-positive revenue; those SKUs are counted in the sample note but not plotted
       if (!(s.revenue > 0) || !Number.isFinite(s.cv)) continue;
       const k = (s.abc === 'A' || s.abc === 'B' ? s.abc : 'C') as 'A' | 'B' | 'C';
       g[k].push({ item_id: s.item_id, cv: s.cv, revenue: s.revenue, segment: s.segment, name: s.product_name ?? s.item_id });
@@ -108,7 +107,6 @@ export const ScatterCard: React.FC<Props> = ({ items, total, loading, error, onR
       error={error}
       onRetry={onRetry}
       empty={!!items && items.length === 0}
-      source={t('abcxyz.scatter.source', { store: storeId })}
       asOf={note}
       footer={<Legend />}
     >

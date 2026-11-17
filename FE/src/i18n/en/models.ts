@@ -4,7 +4,7 @@ import type { models as Vi } from '../vi/models.ts';
 export const models: typeof Vi = {
   page: {
     title: 'Model performance',
-    description: 'Model registry, error metrics, integrity validation and training history. Every figure comes from the backend; a metric that is not available shows "—" with the reason.',
+    description: 'Model registry, error metrics, integrity validation and training history.',
     source: '/ml/models, /ml/train',
   },
   actions: {
@@ -29,7 +29,7 @@ export const models: typeof Vi = {
     coverage_in: 'Within target band',
     coverage_out: 'Outside target band',
     metric_missing: 'The registry has no {metric} value for this model',
-    coverage_missing: 'The backend does not provide Q̂0.95 coverage in the model metrics',
+    coverage_missing: 'Q̂0.95 coverage data is not available for this model',
     no_champion_metric: 'No Production model to read the metric from',
   },
   tabs: {
