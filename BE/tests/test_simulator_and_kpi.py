@@ -45,7 +45,7 @@ def _make_db(initial_on_hand=0.0, demand=2.0, n_days=21, price=10.0):
     db.add(SimClock(store_id="CA_1", current_date=START, start_date=START))
     db.add(Product(item_id=ITEM, name="Item", cat_id="FOODS", dept_id="FOODS_1", price=price))
     db.add(Inventory(item_id=ITEM, store_id="CA_1", on_hand=initial_on_hand, on_order=0.0))
-    for i in range(1, n_days + 1):
+    for i in range(0, n_days + 1):  # the start date is a simulated day too (P2)
         db.add(SalesHistory(id=f"s{i}", item_id=ITEM, store_id="CA_1", sale_date=START + timedelta(days=i), quantity=demand))
     db.commit()
     return engine, Session, db
@@ -105,10 +105,10 @@ class TestSimulator(unittest.TestCase):
         pipeline_service.advance_sim_clock(db, "CA_1", days=1)
         db.expire_all()
         self.assertEqual(db.query(ReplenishmentRecommendation).filter_by(id="due").one().status, "COMPLETED")
-        # 100 + 50 (once) - 1 sold; the COMPLETED 1000 never arrives
-        self.assertAlmostEqual(_inv(db)[0], 149.0)
-        pipeline_service.advance_sim_clock(db, "CA_1", days=1)
+        # 100 + 50 (once) - 1 sold on day 0 - 1 sold on day 1; the COMPLETED 1000 never arrives
         self.assertAlmostEqual(_inv(db)[0], 148.0)
+        pipeline_service.advance_sim_clock(db, "CA_1", days=1)
+        self.assertAlmostEqual(_inv(db)[0], 147.0)
 
     def test_day_step_is_atomic_failure_leaves_everything_untouched(self):
         """P-16 / N-08: error mid-advance -> rollback incl. clock, inventory and inventory_daily."""
@@ -187,9 +187,9 @@ class TestSimulator(unittest.TestCase):
         """N-03: B0 rows exist per day, are computed from their own stock/orders (not C3 x ratios)."""
         engine, Session, db = _make_db(initial_on_hand=14.0)
         r = pipeline_service.advance_sim_clock(db, "CA_1", days=14)
-        self.assertEqual(db.query(SimShadowDaily).count(), 15)  # 14 days + the day-0 row that stores the day-0 B0 order
+        self.assertEqual(db.query(SimShadowDaily).count(), 15)  # day 0 (simulated, with the day-0 B0 order) + 14 days
         self.assertIn("b0_shadow_stockouts_recorded", r)
-        shadow = db.query(SimShadowDaily).filter(SimShadowDaily.date > START).order_by(SimShadowDaily.date).all()
+        shadow = db.query(SimShadowDaily).order_by(SimShadowDaily.date).all()
         main = db.query(InventoryDaily).order_by(InventoryDaily.date).all()
         # same initial stock and demand -> identical until the first review decides differently
         self.assertEqual([s.on_hand_end for s in shadow[:6]], [m.on_hand_end for m in main[:6]])

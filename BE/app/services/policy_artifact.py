@@ -28,22 +28,30 @@ ARTIFACT_TEST_REVIEWS = 51
 ARTIFACT_REVIEW_PERIOD_DAYS = 7
 ARTIFACT_TEST_DAYS = ARTIFACT_TEST_REVIEWS * ARTIFACT_REVIEW_PERIOD_DAYS  # 357
 
-# canonical policy key -> (row name in c3ok_results.csv, label, short description)
+# canonical policy key -> (row name in c3ok_results.csv, display label, short description).
+# The keys (B0, B2, PCR, P6) and the artifact row names are stable identifiers; only the display texts say what
+# each row really is: "B0" of the artifact is the team's raw-quantile baseline RAW-0.95 (NOT the teacher's
+# B0-MA-OUT-0.95), B2 is the raw quantile at the validation-picked tau* = 0.99 (identical to raw tau = 0.99, NOT
+# the critical ratio), and P-CR is C3-OUT with setpoint = critical ratio b/(b+h*R) = 0.9615 (R = review period),
+# not a separately proven cost optimum.
 POLICY_ROWS = {
     "B0": (
         "B0 DFIOS τ=0.95",
-        "B0 - Raw quantile τ=0.95 (DFIOS gốc)",
-        "Baseline tĩnh: s = Q̂ raw của cửa sổ L+R ở τ=0.95, không hiệu chỉnh theo chu kỳ.",
+        "RAW-0.95 - Raw quantile τ=0.95 (DFIOS gốc)",
+        "Baseline tĩnh (RAW-0.95, không phải B0 của thầy): s = Q̂ raw của cửa sổ L+R ở τ=0.95, "
+        "không hiệu chỉnh theo chu kỳ.",
     ),
     "B2": (
         "B2 DFIOS τ*=0.99 [BIKIP]",
-        "B2 - Raw quantile τ*=0.99 (critical ratio)",
-        "Baseline tĩnh tối ưu chi phí: raw quantile ở τ* chọn trên validation (không có controller).",
+        "B2 - Raw quantile τ*=0.99 (τ* chọn trên validation; không phải critical ratio 0.9615)",
+        "Baseline raw quantile tĩnh ở τ* chọn trên lưới validation (ở đây 0.99, số liệu trùng raw τ=0.99). "
+        "τ* KHÔNG phải critical ratio (0.9615); không có controller.",
     ),
     "PCR": (
         "P-CR C³-OUT τ=0.9615 [BIKIP]",
         "P-CR - C³-OUT với setpoint = critical ratio (τ=0.9615)",
-        "C³-OUT với setpoint τ = b/(b+h·H) = 0.9615: chính sách tối thiểu chi phí A3 trong artifact.",
+        "Bộ điều khiển C³-OUT có setpoint = critical ratio τ = b/(b+h·R) = 0.9615 (R = chu kỳ review, chi phí A3). "
+        "Là C³-OUT với setpoint khác, không phải tối ưu chi phí đã được chứng minh riêng.",
     ),
     "P6": (
         "P C³-OUT τ=0.95",

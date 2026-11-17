@@ -14,8 +14,11 @@ from app.services.policy_artifact import (
     load_results,
 )
 
-# policy_id (API) -> artifact key. The labels follow what the artifact rows REALLY are (P-15):
-#   B0 = raw quantile tau=0.95 | B2 = raw quantile tau*=0.99 | P-CR = C3-OUT at the critical ratio |
+# policy_id (API) -> artifact key. The ids and keys are stable identifiers; the display labels follow what the
+# artifact rows REALLY are (P-15):
+#   B0 key = RAW-0.95, the team's raw quantile tau=0.95 (not the teacher's B0-MA-OUT-0.95) |
+#   B2 = raw quantile at tau*=0.99 picked on validation (= raw tau=0.99, NOT the critical ratio 0.9615) |
+#   P-CR = C3-OUT with setpoint = critical ratio b/(b+h*R) = 0.9615 (not a separately proven cost optimum) |
 #   P6 = C3-OUT tau=0.95 (service-level controller, not a cost reducer).
 POLICY_IDS = [
     ("B0_raw_quantile", "B0"),
@@ -163,7 +166,7 @@ class SimulationService:
             "availability_pcr_pct": pcr.availability, "availability_p6_pct": p6.availability,
         }))
         insights.append(
-            f"B0 (raw quantile τ=0.95) chỉ đạt availability {b0.availability:.1f}% dù đặt mục tiêu 95%; "
+            f"RAW-0.95 (raw quantile τ=0.95) chỉ đạt availability {b0.availability:.1f}% dù đặt mục tiêu 95%; "
             f"P6 điều khiển về {p6.availability:.1f}%. P6 là bộ điều khiển mức phục vụ, không phải bộ giảm chi phí."
         )
         details.append(InsightDetail(code="b0_vs_p6", params={
