@@ -230,10 +230,13 @@ class TestPolicyBacktestJ5(unittest.TestCase):
     def test_availability_definition_is_observed_not_lost_sales(self):
         """A period where stock reaches exactly 0 without lost sales is UNAVAILABLE (§8.1)."""
         R = pc.REVIEW_PERIOD_DAYS
-        dem = np.zeros((1, R))
+        # P1 G-01: the cycle of review 0 is days L .. L+R-1 and is scored only when complete, so the replay needs
+        # two reviews (2R days) to contain one complete cycle
+        dem = np.zeros((1, 2 * R))
         dem[0, 0] = 10.0  # sells exactly the initial stock on day 1
-        res = pb.simulate_rss_candidates(dem, np.array([[10.0]]), np.array([[1.0]]), np.array([1.0]),
+        res = pb.simulate_rss_candidates(dem, np.array([[10.0, 10.0]]), np.array([[1.0, 1.0]]), np.array([1.0]),
                                          [0.0], [0.0], initial_on_hand=np.array([10.0]))
+        self.assertEqual(res.n_cycles, 1)
         self.assertEqual(res.availability[0], 0.0)
         self.assertEqual(res.shortage[0], 0.0)  # no lost sales at all
 

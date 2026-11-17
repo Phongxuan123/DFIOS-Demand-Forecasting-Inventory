@@ -6,15 +6,22 @@ the effective lead time is exactly L = 3 days, P-21):
 
   1. arrivals   orders APPROVED with ``review_date + L <= t`` are received once and set to COMPLETED
                 (a COMPLETED order is NEVER received again, P-16)
-  2. J6         if t is a review day (t0 + k*R, k >= 1): close the previous cycle [t-R, t-1] into
-                ``service_outcomes`` (observed availability, §7.3)
+  2. J6         if t is review k (t = t0 + k*R) and k >= d = ceil((L+R)/R): close the service cycle of review
+                k - d, i.e. days [t_{k-d} + L, t_{k-d} + L + R - 1] (the days the order of that review serves,
+                teacher G-01). It is the most recent COMPLETE cycle (its end is < t) and exactly the one the
+                C3-OUT step of review k consumes; stored in ``service_outcomes`` (observed availability, §7.3)
   3. J5         refit at quarter start
   4. J3 / J4    review day: window quantiles (one bulk call), C3-OUT step, parameters, replenishment orders
-                (auto-ordered: APPROVED + on_order += qty)
+                (auto-ordered: APPROVED + on_order += qty; strict trigger IP < s, G-02)
   5. J1         sales of day t served from on_hand, the remainder is lost (lost-sales model)
 
-A shadow baseline B0 (raw quantile tau = 0.95, order-up-to S0 = ceil(Q_hat_0.95), no controller) is simulated in
-parallel from the same initial stock and demand (``sim_shadow_daily``), replacing the fixed C3 x ratio tables (N-03).
+A shadow baseline B0-MA-OUT-0.95 (teacher E10 ``e10_static_formula``, G-41) is simulated in parallel from the same
+initial stock and demand (``sim_shadow_daily``): at every review S = ceil(mu56 * (L+R) + z_0.95 * sigma56 *
+sqrt(L+R) - 1e-9), mu56 / sigma56 = mean / sample std (ddof = 1) of the daily sales of the 56 days BEFORE the review
+(fewer when the history is shorter), order S - IP when IP < S (order-up-to, strict). No forecast, no controller.
+
+Initial stock at the clock start (G-03): round(mean sales of the 28 days before the start * (L + R)) per SKU; the
+legacy S from ``inventory_params`` is used only when the store has no sales at all in that 28-day window.
 
 The whole advance is ONE transaction: the clock row is locked (``SELECT ... FOR UPDATE``), every service commit
 is turned into a flush, the clock is saved last and a single commit makes the advance visible. On any error the
@@ -25,8 +32,10 @@ inventory is written back with one UPDATE ... FROM unnest(...).
 """
 from __future__ import annotations
 
+import math
 import time
 from contextlib import contextmanager
+from statistics import NormalDist
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,6 +62,10 @@ from app.services import policy_config as pc
 
 SIM_ACTOR = "simulator"
 B0_TAU = 0.95
+B0_Z = NormalDist().inv_cdf(B0_TAU)   # 1.6449 (z_0.95 of the teacher's B0-MA-OUT-0.95)
+B0_MA_WINDOW_DAYS = 56                # teacher e10_static_formula.moving_stats WINDOW
+INIT_STOCK_WINDOW_DAYS = 28           # G-03
+CEIL_EPS = 1e-9
 MAX_ADVANCE_DAYS = 90
 _tables_ready_for: set = set()
 
@@ -151,12 +164,35 @@ class SimulatorService:
         return on_hand, on_order, len(missing)
 
     @staticmethod
-    def initial_inventory_levels(db: Session, store_id: str, item_ids: List[str]) -> np.ndarray:
+    def initial_inventory_levels(
+        db: Session, store_id: str, item_ids: List[str], as_of: Optional[date] = None,
+        lead_time_days: int = pc.LEAD_TIME_DAYS, review_period_days: int = pc.REVIEW_PERIOD_DAYS,
+    ) -> np.ndarray:
         """
-        R-09: initial stock consistent with (R, s, S), L = 3, R = 7: each SKU starts at its order-up-to level S
-        from inventory_params; if absent, at mean daily demand x H (H = L + R = 10).
+        G-03 (teacher e10b/e9c): initial stock = round(mean daily sales of the 28 days BEFORE the clock start *
+        (L + R)) per SKU. The mean is taken over the days of that window on which the store has sales rows (an SKU
+        without a row on such a day sold 0). ``as_of`` defaults to the clock's start_date.
+        Legacy fallback (R-09) when the store has NO sales in that window: the order-up-to level S from
+        inventory_params; if absent, mean daily demand x H (H = L + R = 10).
         """
         pos = {i: k for k, i in enumerate(item_ids)}
+        if as_of is None:
+            clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+            as_of = clock.start_date if clock else None
+        if as_of is not None:
+            lo = as_of - timedelta(days=INIT_STOCK_WINDOW_DAYS)
+            rows = db.execute(
+                select(SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity).where(
+                    SalesHistory.store_id == store_id, SalesHistory.sale_date >= lo, SalesHistory.sale_date < as_of)
+            ).all()
+            n_days = len({r[1] for r in rows})
+            if n_days:
+                tot = np.zeros(len(item_ids))
+                for iid, _d, q in rows:
+                    k = pos.get(iid)
+                    if k is not None:
+                        tot[k] += float(q or 0.0)
+                return np.round(tot / n_days * (int(lead_time_days) + int(review_period_days)))
         out = np.full(len(item_ids), np.nan)
         for iid, s_lvl, S_lvl, eoq, rop in db.execute(
             select(InventoryParam.item_id, InventoryParam.s, InventoryParam.S, InventoryParam.eoq,
@@ -183,6 +219,39 @@ class SimulatorService:
                 if miss[k]:
                     out[k] = float(means.get(iid) or 0.0) * pc.HORIZON_DAYS
         return np.ceil(np.maximum(out, 0.0))
+
+    @staticmethod
+    def b0_ma_out_order_up_to(history: np.ndarray, lead_time_days: int, review_period_days: int) -> np.ndarray:
+        """
+        G-41: order-up-to level of B0-MA-OUT-0.95 from a (n_items, days) matrix of the daily sales BEFORE the review
+        (the last ``B0_MA_WINDOW_DAYS`` columns are used): S = ceil(mu * (L+R) + z_0.95 * sigma * sqrt(L+R) - 1e-9)
+        with mu = mean and sigma = sample std (ddof = 1; 0 with < 2 days). No history -> S = 0.
+        """
+        h = np.asarray(history, dtype=float)[:, -B0_MA_WINDOW_DAYS:]
+        n_items, n_days = h.shape
+        if n_days == 0:
+            return np.zeros(n_items)
+        H = float(int(lead_time_days) + int(review_period_days))
+        mu = h.mean(axis=1)
+        sigma = h.std(axis=1, ddof=1) if n_days >= 2 else np.zeros(n_items)
+        return np.maximum(np.ceil(mu * H + B0_Z * sigma * math.sqrt(H) - CEIL_EPS), 0.0)
+
+    @staticmethod
+    def _sales_matrix(db: Session, store_id: str, pos: Dict[str, int], n: int, lo: date, hi: date) -> np.ndarray:
+        """Daily sales (n_items, days) of [lo, hi) from sales_history, restricted to the days on which the store has
+        rows (a missing SKU row on such a day = 0 sold); days without any store row are dropped."""
+        rows = db.execute(
+            select(SalesHistory.item_id, SalesHistory.sale_date, SalesHistory.quantity).where(
+                SalesHistory.store_id == store_id, SalesHistory.sale_date >= lo, SalesHistory.sale_date < hi)
+        ).all()
+        days = sorted({r[1] for r in rows})
+        col = {d: j for j, d in enumerate(days)}
+        M = np.zeros((n, len(days)))
+        for iid, d, q in rows:
+            k = pos.get(iid)
+            if k is not None:
+                M[k, col[d]] += float(q or 0.0)
+        return M
 
     @staticmethod
     def _max_sale_date(db: Session, store_id: str) -> Optional[date]:
@@ -458,14 +527,17 @@ class SimulatorService:
             no controller step (theta keeps its warm-start state)."""
             nonlocal on_hand, on_order, reviews_executed, recommendations_generated
             reviews_executed += 1
-            if review_k >= 1:
-                cycle_idx = review_k - 1
+            # G-01: cycle j = days [t_j + L, t_j + L + R - 1]; at review k the latest COMPLETE one is j = k - d,
+            # d = ceil((L + R) / R) (its end t_j + L + R - 1 <= t - 1), the cycle the C3-OUT step of review k reads.
+            cycle_idx = review_k - math.ceil((L + R) / R)
+            if cycle_idx >= 0:
+                c_start = t0 + timedelta(days=cycle_idx * R + L)
+                c_end = c_start + timedelta(days=R - 1)
                 calibrator_service.record_cycle_outcome(
-                    db=db, store_id=store_id, cycle_index=cycle_idx,
-                    cycle_start=t - timedelta(days=R), cycle_end=t - timedelta(days=1),
+                    db=db, store_id=store_id, cycle_index=cycle_idx, cycle_start=c_start, cycle_end=c_end,
                 )
                 job_events.append(
-                    f"[{t}] Job J6: đóng chu kỳ {cycle_idx} ({t - timedelta(days=R)} -> {t - timedelta(days=1)}), lưu service_outcomes"
+                    f"[{t}] Job J6: đóng chu kỳ {cycle_idx} ({c_start} -> {c_end}), lưu service_outcomes"
                 )
             if refit:
                 q_num = (t.month - 1) // 3 + 1
@@ -474,15 +546,9 @@ class SimulatorService:
                 flush_state()
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
             # --- J3: window quantiles, ONE bulk call
-            recs = window_quantile_service.get_or_create_window_quantiles_bulk(
+            window_quantile_service.get_or_create_window_quantiles_bulk(
                 db, store_id, item_ids, t, horizon_days=L + R
             )
-            # shadow B0 reads Q_hat(0.95) now (before the session objects are expired)
-            q95 = np.zeros(n)
-            for iid, rec in recs.items():
-                k = pos.get(iid)
-                if k is not None:
-                    q95[k] = window_quantile_service.tau_value(rec.q_levels or {}, B0_TAU, rec.point_window)
             # --- J4: C3-OUT step (not at k = 0), parameters, orders (auto-ordered)
             if review_k >= 1:
                 calibrator_service.run_calibration_step(
@@ -500,10 +566,12 @@ class SimulatorService:
             db.expire_all()
             on_hand, on_order, _ = self._inventory_arrays(db, store_id, item_ids)
 
-            # shadow B0 review: order up to S0 = ceil(raw Q_hat(0.95))
-            S0 = np.ceil(np.maximum(q95, 0.0))
+            # shadow B0-MA-OUT-0.95 review (G-41): S from the 56 days of sales before t; IP = on-hand (today's
+            # arrivals already received) + B0 orders still in transit; order S - IP when IP < S (strict)
+            hist = self._sales_matrix(db, store_id, pos, n, t - timedelta(days=B0_MA_WINDOW_DAYS), t)
+            S0 = self.b0_ma_out_order_up_to(hist, L, R)
             sh_ip = sh_on_hand + sum((q for _, q in sh_pipeline), np.zeros(n))
-            order_today = np.where(sh_ip <= S0, np.maximum(S0 - sh_ip, 0.0), 0.0)
+            order_today = np.where(sh_ip < S0, np.maximum(S0 - sh_ip, 0.0), 0.0)
             if (order_today > 0).any():
                 sh_pipeline.append((t + timedelta(days=L), order_today.copy()))
             job_events.append(
