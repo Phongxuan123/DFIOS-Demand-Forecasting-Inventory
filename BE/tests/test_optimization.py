@@ -116,6 +116,14 @@ class TestOptimizationEndpoints(unittest.TestCase):
             )
             session.add(sigma)
 
+            # P1 (G-10): the ML EOQ uses the mean of ACTUAL sales of the 56 days before the origin (no forecast
+            # proxy, no floor of 1), so the ML item needs observed sales before the demo origin to have EOQ > 0
+            for i in range(1, 57):
+                session.add(SalesHistory(
+                    id=f"sh_foods_{i}", item_id="FOODS_1_001", store_id="CA_1",
+                    sale_date=date(2016, 4, 25) - timedelta(days=i), quantity=20.0,
+                ))
+
             # Seed SalesHistory for HOBBIES_1_001 (Không có forecast -> Fallback Static)
             for i in range(1, 30):
                 s_date = base_date - timedelta(days=i)

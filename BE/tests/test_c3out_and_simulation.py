@@ -19,65 +19,31 @@ class TestC3OutAndSimulation(unittest.TestCase):
 
     def test_c3out_integral_update_math(self):
         """
-        Test TEST.1 - Kiểm định tính đúng đắn toán học của thuật toán C³-OUT (research.md §8.1, Sửa lỗi N-02):
-        theta_k = theta_{k-1} + eta * ( e~_{k-d} - (1 - setpoint) )
-        - Setpoint: 0.96 -> target error rate: 0.04
-        - eta = 1.0
-        - Kẹp biên hai phía: [-2.0, 2.0]
-        - Anti-windup: e~ = 0 khi theta >= 2.0; e~ = 1 khi theta <= -2.0
+        P1 (G-15..G-18): teacher one-sided C3-OUT (E9c), identical to e10b_replay.c3_update:
+          theta_k = clip(theta_{k-1} + eta * (e_{k-d} - (1 - setpoint)), 0, 2), setpoint 0.96, eta 1, theta_0 = 0,
+        NO boundary-convention substitution (theta = 0 is the resting state, not a boundary).
         """
         self.assertEqual(calibrator_service.MAX_THETA, 2.0)
-        self.assertEqual(calibrator_service.MIN_THETA, -2.0)
+        self.assertEqual(calibrator_service.MIN_THETA, 0.0)
+        self.assertEqual(calibrator_service.DEFAULT_SETPOINT, 0.96)
+        up = calibrator_service.update_theta
 
-        eta = 1.0
-        setpoint = 0.96
-        target_error = 1.0 - setpoint  # 0.04
-
-        # Trường hợp 1: Không có sai số (e~ = 0.04) -> theta không đổi
-        theta_0 = 0.0
-        obs_error_1 = 0.04
-        theta_1 = max(-2.0, min(2.0, theta_0 + eta * (obs_error_1 - target_error)))
-        self.assertEqual(round(theta_1, 4), 0.0)
-
-        # Trường hợp 2: Tỷ lệ thiếu hàng tăng lên e~ = 0.09 (vượt 5pp) -> theta tăng lên 0.05
-        obs_error_2 = 0.09
-        theta_2 = max(-2.0, min(2.0, theta_1 + eta * (obs_error_2 - target_error)))
-        self.assertEqual(round(theta_2, 4), 0.05)
-        multiplier_2 = round(math.exp(theta_2), 4)
-        self.assertGreater(multiplier_2, 1.0)
-
-        # Trường hợp 3 (Kiểm tra sửa dứt điểm N-02):
-        # Tại theta = 0.0 và 0 stockout (e~ = 0.0):
-        # Lỗi N-02 cũ: vì MIN_THETA=0 nên ép e~ = 1.0 làm theta nhảy vọt lên +0.96!
-        # Chuẩn §8.1: Quy ước biên chỉ áp dụng khi theta <= -2.0.
-        # Tại theta = 0.0, e~ = 0.0 -> delta_theta = -0.04, theta giảm nhẹ xuống -0.04, TUYỆT ĐỐI không nhảy lên +0.96.
-        prev_theta = 0.0
-        obs_error_real = 0.0  # 0 stockouts
-        if prev_theta >= calibrator_service.MAX_THETA:
-            obs_error_calc = 0.0
-        elif prev_theta <= calibrator_service.MIN_THETA:
-            obs_error_calc = 1.0
-        else:
-            obs_error_calc = obs_error_real
-
-        self.assertEqual(obs_error_calc, 0.0)  # Không bị ép thành 1.0
-        theta_3 = max(calibrator_service.MIN_THETA, min(calibrator_service.MAX_THETA, prev_theta + eta * (obs_error_calc - target_error)))
-        self.assertEqual(round(theta_3, 4), -0.04)
-        self.assertNotEqual(round(theta_3, 2), 0.96)
-
-        # Trường hợp 4: Anti-windup trần trên khi theta >= 2.0 (ép e~ = 0.0) -> kéo theta xuống
-        prev_high = 2.0
-        obs_error_high = 0.0 if prev_high >= calibrator_service.MAX_THETA else 0.5
-        self.assertEqual(obs_error_high, 0.0)
-        theta_pulled_down = prev_high + eta * (obs_error_high - target_error)
-        self.assertEqual(round(theta_pulled_down, 2), 1.96)
-
-        # Trường hợp 5: Anti-windup sàn dưới khi theta <= -2.0 (ép e~ = 1.0) -> kéo theta lên
-        prev_low = -2.0
-        obs_error_low = 1.0 if prev_low <= calibrator_service.MIN_THETA else 0.0
-        self.assertEqual(obs_error_low, 1.0)
-        theta_pulled_up = prev_low + eta * (obs_error_low - target_error)
-        self.assertEqual(round(theta_pulled_up, 2), -1.04)
+        # e = 0.04 (on target) -> theta unchanged
+        self.assertAlmostEqual(up(0.0, 0.04), 0.0)
+        # e = 0.09 (5 pp above) -> theta + 0.05
+        self.assertAlmostEqual(up(0.0, 0.09), 0.05)
+        self.assertGreater(math.exp(up(0.0, 0.09)), 1.0)
+        # theta = 0 and no stock-out: clipped at 0 (one-sided), NEVER the old +0.96 jump of the boundary convention
+        self.assertEqual(up(0.0, 0.0), 0.0)
+        # above 0 the controller relaxes normally
+        self.assertAlmostEqual(up(0.30, 0.0), 0.26)
+        # upper clip at 2, and from 2 with e = 0 it comes down by 0.04 (no substituted e)
+        self.assertEqual(up(1.99, 1.0), 2.0)
+        self.assertAlmostEqual(up(2.0, 0.0), 1.96)
+        # two-sided range only as an explicit ablation
+        lo, hi = calibrator_service.theta_bounds("two_sided")
+        self.assertEqual((lo, hi), (-2.0, 2.0))
+        self.assertAlmostEqual(up(0.0, 0.0, lo=lo, hi=hi), -0.04)
 
     def test_c3out_run_calibration_step_prev_theta_zero_no_windup(self):
         """
@@ -141,10 +107,12 @@ class TestC3OutAndSimulation(unittest.TestCase):
             cx_new = next(s for s in states if s.class_id == "CX")
             # Kiểm tra: error_rate phải giữ nguyên 0.0, TUYỆT ĐỐI không bị ép thành 1.0
             self.assertEqual(cx_new.error_rate, 0.0)
-            # Không có policy_selection -> setpoint mặc định 0.95: theta = 0 + 1.0 * (0.0 - 0.05) = -0.05,
-            # TUYỆT ĐỐI không nhảy lên +0.95
-            self.assertEqual(cx_new.theta, -0.05)
+            # P1: no policy_selection -> setpoint 0.96; one-sided: theta = clip(0 + (0.0 - 0.04), 0, 2) = 0,
+            # never the +0.96 jump of the old boundary convention, and theta = 0 is NOT a boundary
+            self.assertEqual(cx_new.theta, 0.0)
             self.assertNotEqual(cx_new.theta, 0.96)
+            self.assertFalse(cx_new.at_boundary)
+            self.assertEqual(cx_new.status, "Active")
         finally:
             db.close()
 

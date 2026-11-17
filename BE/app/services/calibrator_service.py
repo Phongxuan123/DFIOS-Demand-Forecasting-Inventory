@@ -26,21 +26,52 @@ def selection_store(selection_id: Optional[str]) -> Optional[str]:
 
 class CalibratorService:
     """
-    Module C³-OUT (Closed-Loop Continuous Calibrator) – Giai đoạn 5 (Task C3.1):
-    Bộ điều khiển tích phân chuẩn bounded integral control (research.md §8.1):
-      theta_{g, k} = theta_{g, k-1} + eta * ( e~_{g, k-d} - (1 - setpoint_g) )
-    - Setpoint chuẩn: lấy từ policy_selection.setpoint (mặc định = target 0.95, guard chỉ áp 1 lần ở J5)
-    - Hệ số khuếch đại: eta = 1.0
-    - Trễ thông tin chu kỳ: d = ceil((L + R) / R)
-    - Kẹp biên hai phía chuẩn: theta_g in [-2.0, 2.0] (research.md §8.1)
-    - Quy ước biên chống bão hòa (Anti-windup): e~ = 0 khi theta >= 2.0, e~ = 1 khi theta <= -2.0
+    Module C³-OUT (Closed-Loop Continuous Calibrator), teacher-aligned ONE-SIDED controller (E9c, ``rss.py``;
+    docs/teacher_map/00_INDEX.md sec. 4 and 13, reproduced exactly by ``e10b_replay.c3_update``):
+      theta_{g,k} = clip(theta_{g,k-1} + eta * (e_{g,k-d} - (1 - setpoint)), 0, 2),   theta_{g,0} = 0
+    - e_{g,k-d}: stock-out share of class g in service cycle k-d (days t_j + L .. t_j + L + R - 1, a SKU fails the
+      cycle when a day ends with on-hand <= 0), recorded by J6 in ``service_outcomes``;
+    - setpoint 0.96 (policy_selection.setpoint when set, J5 writes 0.96), eta = 1, d = ceil((L + R) / R);
+    - NO boundary-convention substitution and no other anti-windup: the clip is the only non-linearity
+      (theta = 0 is the normal resting state, NOT a boundary);
+    - theta is ADDED on top of the J5 grid m_g: s = ceil(Q_hat * exp(m_g + theta_g) - 1e-9).
+    Controller status per class: Warm-up (no matured cycle consumed yet), Active, Boundary (theta at the upper
+    limit 2.0). ABLATION (never default): ``variant='two_sided'`` clips to [-2, 2] (teacher's rejected C3-2S).
     """
 
     ALL_CLASSES = list(pc.ALL_CLASSES)
-    DEFAULT_SETPOINT = pc.TARGET_AVAILABILITY
+    DEFAULT_SETPOINT = pc.C3_SETPOINT
     DEFAULT_ETA = pc.CONTROLLER_ETA
     MAX_THETA = pc.THETA_MAX
     MIN_THETA = pc.THETA_MIN
+    STATUS_WARMUP = "Warm-up"
+    STATUS_ACTIVE = "Active"
+    STATUS_BOUNDARY = "Boundary"
+
+    @staticmethod
+    def theta_bounds(variant: Optional[str] = None) -> Tuple[float, float]:
+        """(lo, hi) of theta: [0, 2] for the default one-sided controller, [-2, 2] for the two-sided ablation."""
+        v = (variant or pc.C3_VARIANT).lower()
+        if v == pc.C3_VARIANT_TWO_SIDED:
+            return pc.THETA_MIN_TWO_SIDED, pc.THETA_MAX
+        if v != pc.C3_VARIANT:
+            raise ValueError(f"unknown C3-OUT variant {variant!r} (one_sided | two_sided)")
+        return pc.THETA_MIN, pc.THETA_MAX
+
+    @staticmethod
+    def update_theta(theta: float, e: float, setpoint: float = pc.C3_SETPOINT, eta: float = pc.CONTROLLER_ETA,
+                     lo: float = pc.THETA_MIN, hi: float = pc.THETA_MAX) -> float:
+        """One C3-OUT step, identical to ``e10b_replay.c3_update``: clip(theta + eta*(e - (1 - setpoint)), lo, hi)."""
+        return float(min(hi, max(lo, float(theta) + float(eta) * (float(e) - (1.0 - float(setpoint))))))
+
+    @classmethod
+    def controller_status(cls, theta: Optional[float], warm_up: bool = False, hi: float = pc.THETA_MAX) -> str:
+        """Warm-up / Active / Boundary (Boundary = theta at the upper limit)."""
+        if warm_up:
+            return cls.STATUS_WARMUP
+        if theta is not None and float(theta) >= hi - 1e-12:
+            return cls.STATUS_BOUNDARY
+        return cls.STATUS_ACTIVE
 
     def latest_states(
         self, db: Session, store_id: Optional[str] = "CA_1", as_of: Optional[date] = None
@@ -170,8 +201,8 @@ class CalibratorService:
             n_sku = len(sku_ids)
             n_stockout = sum(1 for i in sku_ids if i in stocked_out)
 
-            # Tính tỷ lệ lỗi e~ thực tế
-            error_rate = round(n_stockout / max(1, n_sku), 4) if n_sku > 0 else 0.0
+            # stock-out share e of the class (full precision: it drives theta, G-22)
+            error_rate = n_stockout / n_sku if n_sku > 0 else 0.0
 
             rec_id = f"{store_id}_{class_id}_cycle_{cycle_index}"
             existing = db.query(ServiceOutcome).filter(ServiceOutcome.id == rec_id).first()
@@ -212,24 +243,27 @@ class CalibratorService:
         lead_time_days: int = 3,
         review_period_days: int = 7,
         calibrator_id: Optional[str] = None,
+        variant: Optional[str] = None,
     ) -> Tuple[List[CalibrationState], List[str], int]:
         """
-        Job J4 - Thực thi một bước cập nhật tích phân C³-OUT tại Ngày Review k (t_k):
+        Job J4 - one C3-OUT step at review k (t_k), teacher one-sided update:
           d = ceil((L + R) / R)
-          theta_{g, k} = theta_{g, k-1} + eta * ( e~_{g, k-d} - (1 - setpoint_g) )
-        - e~_{g, k-d}: Đọc từ bảng service_outcomes của chu kỳ k-d đã chín.
-        - Kẹp biên: theta_g in [-2.0, 2.0].
-        - Nếu theta_g >= 2.0: Cảnh báo mô hình dự báo suy giảm.
+          theta_{g,k} = clip(theta_{g,k-1} + eta * (e_{g,k-d} - (1 - setpoint)), 0, 2)
+        - e_{g,k-d} comes from ``service_outcomes`` of the matured cycle k-d (J6). While k-d < 0 or the cycle has no
+          record yet the controller is in Warm-up and theta is left unchanged (teacher: no update before k-d >= 0).
+        - theta_{g,0} = 0 (no previous state). No boundary-convention substitution.
+        - ``variant='two_sided'`` is an explicit ABLATION ([-2, 2]); the default is one-sided.
         """
         cid = calibrator_id or f"c3out_main_{store_id}"
         now = datetime.now(timezone.utc)
+        lo, hi = self.theta_bounds(variant)
 
-        # 1. Xác định review_date
+        # 1. review_date
         if not review_date:
             clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
             review_date = clock.current_date if clock and clock.current_date else date.today()
 
-        # 2. Xác định review_index
+        # 2. review_index
         if review_index is None:
             max_rev = (
                 db.query(func.max(CalibrationState.review_index))
@@ -238,7 +272,7 @@ class CalibratorService:
             )
             review_index = (max_rev + 1) if max_rev is not None else 1
 
-        # 3. Tính độ trễ chu kỳ d = ceil((L + R) / R)
+        # 3. information delay d = ceil((L + R) / R)
         delay_d = math.ceil((lead_time_days + review_period_days) / float(review_period_days))
         consumed_cycle_index = review_index - delay_d
 
@@ -252,9 +286,7 @@ class CalibratorService:
             policy = store_policy_map.get(class_id)
             setpoint = float(policy.setpoint) if policy and policy.setpoint else self.DEFAULT_SETPOINT
             eta = float(policy.gain_eta) if policy and policy.gain_eta else self.DEFAULT_ETA
-            target_error_rate = 1.0 - setpoint
 
-            # Lấy trạng thái theta trước đó (k-1)
             prev_state = (
                 db.query(CalibrationState)
                 .filter(
@@ -265,10 +297,11 @@ class CalibratorService:
                 .order_by(CalibrationState.review_index.desc(), CalibrationState.created_at.desc())
                 .first()
             )
-            prev_theta = float(prev_state.theta) if prev_state and prev_state.theta is not None else 0.0
+            prev_theta = (float(prev_state.theta) if prev_state and prev_state.theta is not None
+                          else float(pc.THETA_INIT))
 
-            # Lấy tín hiệu lỗi e~_{g, k-d}
-            observed_error = target_error_rate  # Mặc định trung hòa nếu chưa có phản hồi chín
+            # e_{g,k-d}: stock-out share of the matured cycle k-d (None -> Warm-up, theta unchanged)
+            observed_error: Optional[float] = None
             if consumed_cycle_index >= 0:
                 outcome = (
                     db.query(ServiceOutcome)
@@ -279,68 +312,61 @@ class CalibratorService:
                     )
                     .first()
                 )
-                if outcome:
+                if outcome and outcome.error_rate is not None:
                     observed_error = float(outcome.error_rate)
                     outcome.consumed_at_review = review_index
 
-            # Quy ước biên C³-OUT chống bão hòa tích phân (Anti-windup theo research.md §8.1):
-            # ẽ = 0 khi prev_theta >= 2.0 (ngăn chặn windup khi kẹp trần trên)
-            # ẽ = 1 khi prev_theta <= -2.0 (ngăn chặn windup khi kẹp sàn dưới)
-            if prev_theta >= self.MAX_THETA:
-                observed_error = 0.0
-            elif prev_theta <= self.MIN_THETA:
-                observed_error = 1.0
+            warm_up = observed_error is None
+            if warm_up:
+                new_theta = min(hi, max(lo, prev_theta))
+            else:
+                new_theta = self.update_theta(prev_theta, observed_error, setpoint, eta, lo, hi)
+            at_boundary = bool(new_theta >= hi - 1e-12)
+            status = self.controller_status(new_theta, warm_up, hi)
 
-            # Công thức cập nhật tích phân C³-OUT (research.md §8.1)
-            error_signal = observed_error - target_error_rate
-            delta_theta = eta * error_signal
-            raw_theta = prev_theta + delta_theta
-
-            # Kẹp biên hai phía [-2.0, 2.0]
-            new_theta = max(self.MIN_THETA, min(self.MAX_THETA, raw_theta))
-            at_boundary = bool(new_theta >= self.MAX_THETA or new_theta <= self.MIN_THETA)
-
-            if new_theta >= self.MAX_THETA:
+            if at_boundary:
                 warnings.append(
-                    f"Nhóm {class_id}: Hệ số theta đạt trần tối đa 2.0 tại review {review_index} - Mô hình dự báo có thể đã xuống cấp!"
+                    f"Nhóm {class_id}: theta đạt trần {hi:g} tại review {review_index} (Boundary) - "
+                    f"mô hình dự báo có thể đã xuống cấp!"
                 )
-            elif new_theta <= self.MIN_THETA:
+            elif lo < 0 and new_theta <= lo + 1e-12:
                 warnings.append(
-                    f"Nhóm {class_id}: Hệ số theta chạm sàn tối thiểu -2.0 tại review {review_index} - Tồn kho an toàn đã giảm tối đa."
+                    f"Nhóm {class_id}: theta chạm sàn {lo:g} tại review {review_index} (ablation two_sided)."
                 )
 
             multiplier = round(math.exp(new_theta), 4)
+            stored_error = observed_error if observed_error is not None else None
 
-            # Lưu vào bảng calibration_state
             rec_id = f"{store_id}_{class_id}_rev_{review_index}"
             existing = db.query(CalibrationState).filter(CalibrationState.id == rec_id).first()
             if existing:
-                existing.theta = round(new_theta, 4)
+                existing.theta = new_theta
                 existing.multiplier = multiplier
-                existing.error_rate = round(observed_error, 4)
+                existing.error_rate = stored_error
                 existing.at_boundary = at_boundary
                 existing.setpoint = setpoint
                 existing.eta = eta
                 existing.review_date = review_date
-                updated_states.append(existing)
+                state = existing
             else:
-                new_state = CalibrationState(
+                state = CalibrationState(
                     id=rec_id,
                     calibrator_id=cid,
                     store_id=store_id,
                     class_id=class_id,
                     review_index=review_index,
                     review_date=review_date,
-                    theta=round(new_theta, 4),
+                    theta=new_theta,
                     multiplier=multiplier,
-                    error_rate=round(observed_error, 4),
+                    error_rate=stored_error,
                     at_boundary=at_boundary,
                     setpoint=setpoint,
                     eta=eta,
                     created_at=now,
                 )
-                db.add(new_state)
-                updated_states.append(new_state)
+                db.add(state)
+            state.status = status  # transient attribute (not a column): Warm-up / Active / Boundary
+            updated_states.append(state)
 
         db.commit()
         return updated_states, warnings, consumed_cycle_index
