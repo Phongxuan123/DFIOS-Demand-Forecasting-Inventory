@@ -71,13 +71,12 @@ export const ChartFrame: React.FC<ChartFrameProps> = ({
 
   let body: React.ReactNode;
   if (loading) body = <Skeleton height={height} style={{ borderRadius: 'var(--radius-md)' }} />;
-  else if (error) body = <ErrorState error={error} onRetry={onRetry} compact />;
+  else if (error) body = <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ErrorState error={error} onRetry={onRetry} compact /></div>;
   else if (unavailableReason)
-    body = <EmptyState compact title={t('common.state.unavailable')} description={t('common.state.unavailable_reason', { reason: unavailableReason })} />;
-  else if (empty) body = <EmptyState compact title={t('common.chart.no_data')} description="" />;
+    body = <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><EmptyState compact title={t('common.state.unavailable')} description={t('common.state.unavailable_reason', { reason: unavailableReason })} /></div>;
+  else if (empty) body = <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><EmptyState compact title={t('common.chart.no_data')} description="" /></div>;
   else
     body = (
-      // U-07: the drawing is announced as a figure named after the card; values stay reachable in the tooltip/table.
       <div style={{ height }} role="figure" aria-label={typeof title === 'string' ? title : undefined}>
         {chartTheme ? children : null}
       </div>

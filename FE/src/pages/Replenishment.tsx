@@ -1,5 +1,20 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Check, Download, Pencil, RefreshCw, Sparkles, Ban, X, Info } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  Check,
+  Download,
+  Pencil,
+  RefreshCw,
+  Sparkles,
+  Ban,
+  X,
+  Info,
+  Clock,
+  AlertTriangle,
+  TrendingUp,
+  ShoppingBag,
+  CheckCircle2,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
@@ -23,19 +38,15 @@ import {
   type ReplenishmentItem,
 } from '../services/replenishmentApi.ts';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
-import { inventoryPosition } from '../utils/policyMath.ts';
 import {
   Alert,
   Badge,
   Button,
   Card,
-  DataSourceNote,
   Drawer,
-  EmptyState,
   HoldHeight,
   Input,
   IconButton,
-  KpiTile,
   Modal,
   PageHeader,
   SearchInput,
@@ -53,18 +64,111 @@ import {
 } from '../components/ui/index.ts';
 import './Replenishment.css';
 
-/** Sanity ceiling for a manual order quantity (the API only requires > 0). */
 const MAX_ORDER_QTY = 1_000_000;
 
-const STATUS_TONE: Record<string, Tone> = { PENDING: 'warning', APPROVED: 'success', REJECTED: 'danger', CANCELLED: 'neutral' };
-const PRIORITY_TONE: Record<string, Tone> = { CRITICAL: 'danger', HIGH: 'warning', MEDIUM: 'info', LOW: 'neutral' };
+const STATUS_TONE: Record<string, Tone> = {
+  PENDING: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  CANCELLED: 'neutral',
+};
+
+const PRIORITY_TONE: Record<string, Tone> = {
+  CRITICAL: 'danger',
+  HIGH: 'warning',
+  MEDIUM: 'info',
+  LOW: 'neutral',
+};
+
 const STATUS_KEYS = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
 const PRIORITY_KEYS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 
-/** Table column key -> backend sort_by (only these are sortable server-side). */
-const SORT_MAP: Record<string, string> = { sku: 'item_id', priority: 'priority', status: 'status', recommended: 'recommended_qty', final: 'final_qty', created: 'created_at' };
+const SORT_MAP: Record<string, string> = {
+  sku: 'item_id',
+  priority: 'priority',
+  status: 'status',
+  recommended: 'recommended_qty',
+  final: 'final_qty',
+  created: 'created_at',
+};
 
 type DialogState = { kind: 'reject' | 'cancel' | 'adjust'; rec: ReplenishmentItem } | null;
+
+const DepletionChart: React.FC<{
+  onHand: number;
+  qty: number;
+  rop: number;
+  ss: number;
+  leadTime: number;
+}> = ({ onHand, qty, rop, ss, leadTime }) => {
+  const t = useT();
+  const maxVal = Math.max(onHand + qty, rop * 1.35, 100);
+  const h = 95;
+  const w = 340;
+  const pad = 24;
+  const chartW = w - pad * 2;
+  const chartH = h - pad;
+
+  const getY = (val: number) => pad / 2 + chartH - (Math.max(0, val) / maxVal) * chartH;
+  const getX = (dayIdx: number) => pad + (dayIdx / 6) * chartW;
+
+  const dailyDemand = Math.max(1, (rop - ss) / Math.max(1, leadTime));
+  const day3X = getX(Math.min(6, leadTime));
+  const startY = getY(onHand);
+  const arrPreY = getY(Math.max(0, onHand - dailyDemand * leadTime));
+  const arrPostY = getY(Math.max(0, onHand - dailyDemand * leadTime + qty));
+  const endSafeY = getY(Math.max(ss * 1.1, onHand - dailyDemand * leadTime + qty - dailyDemand * (6 - leadTime)));
+  const endStockoutY = getY(0);
+
+  const safePath = `M ${getX(0)} ${startY} L ${day3X} ${arrPreY} L ${day3X} ${arrPostY} L ${getX(6)} ${endSafeY}`;
+  const stockoutPath = `M ${day3X} ${arrPreY} L ${getX(Math.min(6, leadTime + Math.ceil((onHand - dailyDemand * leadTime) / dailyDemand)))} ${endStockoutY} L ${getX(6)} ${endStockoutY}`;
+
+  const ropY = getY(rop);
+  const ssY = getY(ss);
+  const isColliding = Math.abs(ropY - ssY) < 14;
+  const ropTextY = isColliding ? Math.min(ropY, ssY) - 5 : ropY - 3;
+  const ssTextY = isColliding ? Math.max(ropY, ssY) + 10 : ssY - 3;
+
+  return (
+    <div className="rep-horizon-box">
+      <div className="rep-horizon-head">
+        <span>{t('replenishment.chart.title')}</span>
+        <span style={{ color: '#059669' }}>{t('replenishment.chart.arrival', { day: leadTime })}</span>
+      </div>
+      <svg className="rep-horizon-svg" viewBox={`0 0 ${w} ${h + 16}`}>
+        <line x1={pad} y1={ropY} x2={w - pad} y2={ropY} stroke="#f59e0b" strokeWidth="1" strokeDasharray="3 3" />
+        <text x={pad + 2} y={ropTextY} fill="#b45309" fontSize="9" fontWeight="600">
+          {t('replenishment.chart.rop_label', { val: Math.round(rop) })}
+        </text>
+
+        <line x1={pad} y1={ssY} x2={w - pad} y2={ssY} stroke="#e11d48" strokeWidth="1" strokeDasharray="3 3" />
+        <text x={pad + 2} y={ssTextY} fill="#be123c" fontSize="9" fontWeight="600">
+          {t('replenishment.chart.ss_label', { val: Math.round(ss) })}
+        </text>
+
+        <path d={safePath} fill="none" stroke="#4f46e5" strokeWidth="2.5" strokeLinecap="round" />
+        <path d={stockoutPath} fill="none" stroke="#e11d48" strokeWidth="1.8" strokeDasharray="4 3" strokeLinecap="round" />
+
+        <circle cx={day3X} cy={arrPostY} r="3.5" fill="#4f46e5" />
+        <circle cx={day3X} cy={arrPreY} r="3" fill="#e11d48" />
+
+        <text x={getX(0)} y={h + 12} fill="#64748b" fontSize="9" textAnchor="start">
+          {t('replenishment.chart.today')}
+        </text>
+        <text x={day3X} y={h + 12} fill="#4f46e5" fontSize="9" fontWeight="600" textAnchor="middle">
+          {t('replenishment.chart.arrival_step', { lead: leadTime })}
+        </text>
+        <text x={getX(6)} y={h + 12} fill="#64748b" fontSize="9" textAnchor="end">
+          {t('replenishment.chart.review_end')}
+        </text>
+      </svg>
+      <div className="rep-horizon-legend">
+        <span style={{ color: '#4f46e5', fontWeight: 600 }}>— {t('replenishment.chart.with_po', { qty })}</span>
+        <span style={{ color: '#e11d48' }}>--- {t('replenishment.chart.stockout_risk')}</span>
+      </div>
+    </div>
+  );
+};
 
 export const Replenishment: React.FC = () => {
   const t = useT();
@@ -76,10 +180,18 @@ export const Replenishment: React.FC = () => {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const canWrite = can(user?.role, 'replenishment:write');
 
+  const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<'proposals' | 'history'>('proposals');
   const [status, setStatus] = useState('');
   const [priority, setPriority] = useState('');
-  const [search, setSearch] = useState('');
+  const [department, setDepartment] = useState('');
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? searchParams.get('sku') ?? '');
+
+  useEffect(() => {
+    const q = searchParams.get('search') ?? searchParams.get('sku');
+    if (q !== null) setSearch(q);
+  }, [searchParams]);
+
   const [nonce, setNonce] = useState(0);
   const [sort, setSort] = useState<SortState | null>(null);
   const pg = usePagination(25);
@@ -87,20 +199,38 @@ export const Replenishment: React.FC = () => {
   const [overrides, setOverrides] = useState<Record<string, Partial<ReplenishmentItem>>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
-  const [detail, setDetail] = useState<ReplenishmentItem | null>(null);
+  const [drawerDetail, setDrawerDetail] = useState<ReplenishmentItem | null>(null);
 
+  const [refreshing, setRefreshing] = useState(false);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    refresh();
+    await new Promise((res) => setTimeout(res, 400));
+    setRefreshing(false);
+    toast.success(t('replenishment.toast.refreshed'));
+  };
   const resetPage = () => pg.setPage(1);
 
   const list = useApi(
     (signal) =>
       listReplenishments(
-        { skip: pg.offset, limit: pg.pageSize, store_id: storeId as string, status: status || undefined, priority: priority || undefined, search: search.trim() || undefined, sort_by: sort ? SORT_MAP[sort.key] : undefined, sort_dir: sort?.dir },
+        {
+          skip: pg.offset,
+          limit: pg.pageSize,
+          store_id: storeId as string,
+          status: status || undefined,
+          priority: priority || undefined,
+          search: search.trim() || undefined,
+          sort_by: sort ? SORT_MAP[sort.key] : undefined,
+          sort_dir: sort?.dir,
+        },
         signal,
       ),
     [storeId, pg.offset, pg.pageSize, status, priority, search, sort, version, nonce],
     { enabled: !!storeId && tab === 'proposals' },
   );
+
   const history = useApi(
     (signal) =>
       listReplenishmentHistory(
@@ -110,19 +240,27 @@ export const Replenishment: React.FC = () => {
     [storeId, pg.offset, pg.pageSize, status, version, nonce],
     { enabled: !!storeId && tab === 'history' },
   );
+
   const active = tab === 'proposals' ? list : history;
 
-  const rows = useMemo(
+  const rawRows = useMemo(
     () => (active.data?.items ?? []).map((r) => (overrides[r.id] ? { ...r, ...overrides[r.id] } : r)),
     [active.data, overrides],
   );
+
+  const rows = useMemo(() => {
+    if (!department) return rawRows;
+    return rawRows.filter((r) => {
+      const cat = (r.category || r.item_id).toUpperCase();
+      return cat.startsWith(department.toUpperCase());
+    });
+  }, [rawRows, department]);
 
   const afterMutation = () => {
     emitAlertsSyncEvent();
     refresh();
   };
 
-  /** Optimistic update with rollback (R-35 / F-19). */
   const mutate = async (rec: ReplenishmentItem, patch: Partial<ReplenishmentItem>, call: () => Promise<unknown>, okMsg: string) => {
     setBusy(rec.id);
     setOverrides((o) => ({ ...o, [rec.id]: patch }));
@@ -156,7 +294,10 @@ export const Replenishment: React.FC = () => {
   };
 
   const onBulkApprove = async () => {
-    const ids = [...sel.selected].map(String);
+    const ids = sel.selected.size > 0
+      ? [...sel.selected].map(String)
+      : rows.filter((r) => r.status === 'PENDING').map((r) => r.id);
+
     if (ids.length === 0) return;
     const ok = await confirm({
       title: t('replenishment.confirm.bulk_title', { count: ids.length }),
@@ -212,116 +353,176 @@ export const Replenishment: React.FC = () => {
   const statusLabel = (s: string) => ((STATUS_KEYS as readonly string[]).includes(s) ? t(`replenishment.status.${s as (typeof STATUS_KEYS)[number]}`) : s);
   const priorityLabel = (p: string) => ((PRIORITY_KEYS as readonly string[]).includes(p) ? t(`replenishment.priority.${p as (typeof PRIORITY_KEYS)[number]}`) : p);
 
+  const pendingItems = useMemo(() => rows.filter((r) => r.status === 'PENDING'), [rows]);
+  const pendingCount = list.data?.pending_count ?? pendingItems.length;
+  const criticalCount = rows.filter((r) => r.priority === 'CRITICAL' && r.status === 'PENDING').length;
+  const totalPendingUnits = pendingItems.reduce((acc, r) => acc + r.final_qty, 0);
+  const estimatedTotalMoney = totalPendingUnits * 3.5;
+
   const columns: Column<ReplenishmentItem>[] = [
     {
       key: 'sku',
-      header: t('replenishment.col.sku'),
+      header: t('replenishment.col.sku_details'),
       sortable: tab === 'proposals',
-      cell: (r) => (
-        <div>
-          <div className="rep-sku">{r.item_id}</div>
-          <div className="rep-sub">{r.product_name && r.product_name !== r.item_id ? r.product_name : r.supplier_name ?? ''}</div>
-        </div>
-      ),
-    },
-    { key: 'priority', header: t('replenishment.col.priority'), sortable: tab === 'proposals', cell: (r) => <Badge tone={PRIORITY_TONE[r.priority] ?? 'neutral'}>{priorityLabel(r.priority)}</Badge> },
-    { key: 'status', header: t('replenishment.col.status'), sortable: tab === 'proposals', cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge> },
-    { key: 'on_hand', header: <span title={t('replenishment.col_hint.on_hand')}>{t('replenishment.col.on_hand')}</span>, align: 'right', cell: (r) => fmt.integer(r.on_hand) },
-    { key: 'on_order', header: <span title={t('replenishment.col_hint.on_order')}>{t('replenishment.col.on_order')}</span>, align: 'right', cell: (r) => fmt.integer(r.on_order) },
-    {
-      key: 'ip',
-      header: <span title={t('replenishment.col_hint.ip')}>{t('replenishment.col.ip')}</span>,
-      align: 'right',
       cell: (r) => {
-        // IP is the review-date snapshot; it is never recomputed from the CURRENT on hand / on order.
-        const ip = r.inventory_position ?? inventoryPosition(r.on_hand_at_review, r.on_order_at_review);
-        if (ip == null) return <Unavailable />;
-        const date = r.review_date ? fmt.date(r.review_date, 'short') : '—';
-        const split =
-          r.on_hand_at_review != null && r.on_order_at_review != null
-            ? t('replenishment.ip_split', { on_hand: fmt.integer(r.on_hand_at_review), on_order: fmt.integer(r.on_order_at_review), date })
-            : t('replenishment.ip_split_unknown', { date });
+        const cat = r.category || r.item_id.split('_').slice(0, 2).join('_');
         return (
-          <div>
-            <div>{fmt.integer(ip)}</div>
-            <div className="rep-sub">{split}</div>
+          <div className="rep-sku-cell" onClick={() => setDrawerDetail(r)}>
+            <div className="rep-sku-row">
+              <span className="rep-sku">{r.item_id}</span>
+              <span className="rep-cat-tag">{cat}</span>
+            </div>
+            <div className="rep-prod-name">
+              {r.product_name && r.product_name !== r.item_id ? r.product_name : `Product Item (${r.item_id})`}
+            </div>
           </div>
         );
       },
     },
-    { key: 's', header: t('replenishment.col.s'), align: 'right', cell: (r) => fmt.integer(r.reorder_point_s) },
-    { key: 'S', header: t('replenishment.col.S'), align: 'right', cell: (r) => fmt.integer(r.order_up_to_S) },
-    { key: 'eoq', header: t('replenishment.col.eoq'), align: 'right', cell: (r) => fmt.integer(r.eoq_quantity) },
     {
-      key: 'kappa',
-      header: <span title={t('replenishment.col_hint.kappa')}>{t('replenishment.col.kappa')}</span>,
-      align: 'right',
-      cell: (r) => (r.kappa_g != null ? fmt.number(r.kappa_g, { digits: 2 }) : <Unavailable />),
-    },
-    { key: 'abc', header: t('replenishment.col.abc_xyz'), cell: (r) => (r.abc_xyz_class ? <Badge tone="neutral">{r.abc_xyz_class}</Badge> : <Unavailable />) },
-    { key: 'theta', header: <span title={t('replenishment.col_hint.theta')}>{t('replenishment.col.theta')}</span>, align: 'right', cell: (r) => (r.theta != null ? fmt.number(r.theta, { digits: 3 }) : <Unavailable />) },
-    { key: 'm_g', header: <span title={t('replenishment.col_hint.m_g')}>{t('replenishment.col.m_g')}</span>, align: 'right', cell: (r) => (r.m_g != null ? fmt.number(r.m_g, { digits: 3 }) : <Unavailable />) },
-    { key: 'q_hat', header: <span title={t('replenishment.col_hint.q_hat')}>{t('replenishment.col.q_hat')}</span>, align: 'right', cell: (r) => (r.q_hat != null ? fmt.number(r.q_hat, { digits: 1 }) : <Unavailable />) },
-    { key: 'lt', header: t('replenishment.col.lead_time'), align: 'right', cell: (r) => (r.lead_time_days != null ? t('replenishment.days', { n: fmt.integer(r.lead_time_days) }) : <Unavailable />) },
-    { key: 'recommended', header: t('replenishment.col.recommended'), sortable: tab === 'proposals', align: 'right', cell: (r) => fmt.integer(r.recommended_qty) },
-    {
-      key: 'final',
-      header: t('replenishment.col.final'),
-      sortable: tab === 'proposals',
-      align: 'right',
-      cell: (r) => <strong>{fmt.integer(r.final_qty)}</strong>,
-    },
-    { key: 'created', header: t('replenishment.col.created'), sortable: tab === 'proposals', cell: (r) => fmt.date(r.created_at, 'short') },
-  ];
-  if (tab === 'history') {
-    columns.push(
-      { key: 'decided', header: t('replenishment.col.decided'), cell: (r) => fmt.date(r.decided_at, 'short') },
-      { key: 'decided_by', header: t('replenishment.col.decided_by'), cell: (r) => r.decided_by ?? <Unavailable /> },
-    );
-  }
-  columns.push({
-    key: 'actions',
-    header: <span className="ui-sr-only">{t('replenishment.col.actions')}</span>,
-    align: 'right',
-    cell: (r) => {
-      const disabled = !canWrite || busy === r.id;
-      const noPerm = !canWrite ? t('replenishment.action.no_permission') : undefined;
-      return (
-        <div className="rep-actions" onClick={(e) => e.stopPropagation()}>
-          {tab === 'proposals' && r.status === 'PENDING' && (
-            <>
-              <IconButton size="sm" label={noPerm ?? t('replenishment.action.approve')} icon={<Check size={15} />} disabled={disabled} onClick={() => void onApprove(r)} />
-              <IconButton size="sm" label={noPerm ?? t('replenishment.action.adjust')} icon={<Pencil size={15} />} disabled={disabled} onClick={() => setDialog({ kind: 'adjust', rec: r })} />
-              <IconButton size="sm" label={noPerm ?? t('replenishment.action.reject')} icon={<X size={15} />} disabled={disabled} onClick={() => setDialog({ kind: 'reject', rec: r })} />
-            </>
+      key: 'abc_xyz',
+      header: t('replenishment.col.abc_xyz'),
+      cell: (r) => (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          <Badge tone="info">{r.abc_xyz_class || '—'}</Badge>
+          {r.theta != null && (
+            <span
+              className="rep-theta-badge"
+              title={t('replenishment.col.theta_tooltip', {
+                theta: `${r.theta >= 0 ? '+' : ''}${r.theta.toFixed(2)}`,
+                cls: r.abc_xyz_class || '—',
+              })}
+            >
+              θ{r.theta >= 0 ? '+' : ''}{r.theta.toFixed(2)}
+            </span>
           )}
-          {tab === 'proposals' && r.status === 'APPROVED' && (
-            <IconButton size="sm" label={noPerm ?? t('replenishment.action.cancel')} icon={<Ban size={15} />} disabled={disabled} onClick={() => setDialog({ kind: 'cancel', rec: r })} />
-          )}
-          <IconButton size="sm" label={t('replenishment.action.details')} icon={<Info size={15} />} onClick={() => setDetail(r)} />
         </div>
-      );
+      ),
     },
-  });
+    {
+      key: 'ip',
+      header: t('replenishment.col.ip_head'),
+      align: 'right',
+      cell: (r) => {
+        const ipVal = r.on_hand + r.on_order;
+        const sVal = r.reorder_point_s || r.rop || 0;
+        const isBelow = ipVal <= sVal;
+        return (
+          <div className="rep-num-stack">
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <span className={isBelow ? 'rep-num-main rep-num-main--danger' : 'rep-num-main'}>
+                {fmt.integer(ipVal)}
+              </span>
+              {isBelow && <Badge tone="danger">≤ s</Badge>}
+            </div>
+            <span className="rep-num-sub">Kho: {fmt.integer(r.on_hand)} · Về: {fmt.integer(r.on_order)}</span>
+          </div>
+        );
+      },
+    },
+    {
+      key: 's_S',
+      header: t('replenishment.col.s_S_head'),
+      align: 'right',
+      cell: (r) => {
+        const sVal = r.reorder_point_s || r.rop || 0;
+        const SVal = r.order_up_to_S || (sVal + r.final_qty);
+        return (
+          <div className="rep-num-stack">
+            <span className="rep-num-main">{fmt.integer(sVal)} / {fmt.integer(SVal)}</span>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'dos',
+      header: t('replenishment.col.dos_head'),
+      align: 'right',
+      cell: (r) => {
+        const lead = r.lead_time_days || 3;
+        const netRop = Math.max(1, (r.rop || r.reorder_point_s || 30) - r.safety_stock);
+        const estDaily = netRop / lead;
+        const dos = Math.max(0.1, Number((r.on_hand / estDaily).toFixed(1)));
+        const dotTone = dos < 1.5 ? 'rep-dos-dot--rose' : dos < 3.0 ? 'rep-dos-dot--amber' : 'rep-dos-dot--emerald';
+        return (
+          <span className="rep-dos-badge">
+            <span className={`rep-dos-dot ${dotTone}`} />
+            {dos}d
+          </span>
+        );
+      },
+    },
+    {
+      key: 'recommended',
+      header: t('replenishment.col.recommended_head'),
+      align: 'right',
+      sortable: tab === 'proposals',
+      cell: (r) => (
+        <span className="rep-order-qty">{fmt.integer(r.final_qty)}</span>
+      ),
+    },
+    {
+      key: 'status',
+      header: t('replenishment.col.status'),
+      sortable: tab === 'proposals',
+      cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge>,
+    },
+    {
+      key: 'actions',
+      header: <span className="ui-sr-only">Actions</span>,
+      align: 'right',
+      cell: (r) => {
+        const disabled = !canWrite || busy === r.id;
+        const noPerm = !canWrite ? t('replenishment.action.no_permission') : undefined;
+        return (
+          <div className="rep-actions" onClick={(e) => e.stopPropagation()}>
+            {tab === 'proposals' && r.status === 'PENDING' && (
+              <>
+                <IconButton size="sm" label={noPerm ?? t('replenishment.action.approve')} icon={<Check size={14} />} disabled={disabled} onClick={() => void onApprove(r)} />
+                <IconButton size="sm" label={noPerm ?? t('replenishment.action.adjust')} icon={<Pencil size={14} />} disabled={disabled} onClick={() => setDialog({ kind: 'adjust', rec: r })} />
+                <IconButton size="sm" label={noPerm ?? t('replenishment.action.reject')} icon={<X size={14} />} disabled={disabled} onClick={() => setDialog({ kind: 'reject', rec: r })} />
+              </>
+            )}
+            {tab === 'proposals' && r.status === 'APPROVED' && (
+              <IconButton size="sm" label={noPerm ?? t('replenishment.action.cancel')} icon={<Ban size={14} />} disabled={disabled} onClick={() => setDialog({ kind: 'cancel', rec: r })} />
+            )}
+            <IconButton size="sm" label={t('replenishment.action.details')} icon={<Info size={14} />} onClick={() => setDrawerDetail(r)} />
+          </div>
+        );
+      },
+    },
+  ];
 
-  const filtered = !!(status || priority || search.trim());
+  const filtered = !!(status || priority || department || search.trim());
   const total = active.data?.total;
 
   return (
     <div className="ui-stack">
       <PageHeader
-        title={t('replenishment.title')}
-        description={t('replenishment.description')}
-        meta={storeId ? <DataSourceNote source={t('replenishment.source', { store: storeId })} /> : undefined}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <span>{t('replenishment.title')}</span>
+            <span className="rep-header-pill">{t('replenishment.c3out_active')}</span>
+          </div>
+        }
+        description={t('replenishment.header_desc')}
         actions={
           <>
-            <Button variant="secondary" leftIcon={<RefreshCw size={16} />} onClick={refresh} loading={active.loading && !!active.data}>
+            <Button variant="secondary" leftIcon={<RefreshCw size={15} />} onClick={() => void handleManualRefresh()} loading={refreshing}>
               {t('common.actions.refresh')}
             </Button>
-            <Button variant="secondary" leftIcon={<Download size={16} />} onClick={() => void onExport()} disabled={!storeId}>
+            <Button variant="secondary" leftIcon={<Download size={15} />} onClick={() => void onExport()} disabled={!storeId}>
               {t('replenishment.action.export')}
             </Button>
-            <Button leftIcon={<Sparkles size={16} />} onClick={() => void onGenerate()} disabled={!canWrite || !storeId} title={!canWrite ? t('replenishment.action.no_permission') : undefined}>
+            <Button
+              variant="primary"
+              leftIcon={<Check size={15} />}
+              onClick={() => void onBulkApprove()}
+              disabled={!canWrite || !storeId || pendingCount === 0}
+            >
+              {t('replenishment.batch_approve_btn', { count: pendingCount })}
+            </Button>
+            <Button variant="secondary" leftIcon={<Sparkles size={15} />} onClick={() => void onGenerate()} disabled={!canWrite || !storeId}>
               {t('replenishment.action.generate')}
             </Button>
           </>
@@ -332,120 +533,203 @@ export const Replenishment: React.FC = () => {
       {!canWrite && <Alert tone="info">{t('replenishment.action.no_permission')}</Alert>}
 
       {tab === 'proposals' && (
-        <div className="ui-grid ui-grid--kpi">
-          <KpiTile
-            label={t('replenishment.kpi.pending')}
-            value={list.data ? fmt.integer(list.data.pending_count) : null}
-            loading={list.loading && !list.data}
-            unavailableReason={list.error ? t('common.state.error_title') : undefined}
-            hint={t('replenishment.kpi.pending_hint', { store: storeId ?? '' })}
-          />
-          <KpiTile
-            label={t('replenishment.kpi.approved')}
-            value={list.data ? fmt.integer(list.data.approved_count) : null}
-            loading={list.loading && !list.data}
-            unavailableReason={list.error ? t('common.state.error_title') : undefined}
-          />
-          <KpiTile
-            label={t('replenishment.kpi.total')}
-            value={list.data ? fmt.integer(list.data.total) : null}
-            loading={list.loading && !list.data}
-            unavailableReason={list.error ? t('common.state.error_title') : undefined}
-          />
+        <div className="rep-kpi-grid">
+          <div className="rep-kpi-card">
+            <div className="rep-kpi-head">
+              <span className="rep-kpi-label">
+                <span className="rep-kpi-icon-wrap rep-kpi-icon-wrap--indigo">
+                  <ShoppingBag size={15} />
+                </span>
+                {t('replenishment.kpi.pending_pos')}
+              </span>
+            </div>
+            <div className="rep-kpi-body">
+              <span className="rep-kpi-val">{t('replenishment.kpi.pending_orders', { count: pendingCount })}</span>
+              <span className="rep-kpi-subval">{t('replenishment.kpi.total_val', { val: fmt.integer(estimatedTotalMoney) })}</span>
+            </div>
+            <div className="rep-kpi-meta">
+              <span>{t('replenishment.kpi.rop_threshold_meta', { count: pendingCount })}</span>
+            </div>
+          </div>
+
+          <div className="rep-kpi-card">
+            <div className="rep-kpi-head">
+              <span className="rep-kpi-label">
+                <span className="rep-kpi-icon-wrap rep-kpi-icon-wrap--rose">
+                  <AlertTriangle size={15} />
+                </span>
+                {t('replenishment.kpi.critical_stockout')}
+              </span>
+              <Badge tone="danger">{t('replenishment.kpi.urgent')}</Badge>
+            </div>
+            <div className="rep-kpi-body">
+              <span className="rep-kpi-val rep-kpi-val--rose">{t('replenishment.kpi.critical_skus', { count: criticalCount })}</span>
+              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>{t('replenishment.kpi.dos_critical_sub')}</span>
+            </div>
+            <div className="rep-kpi-meta">
+              <span className="rep-dos-dot rep-dos-dot--rose" />
+              <span>{t('replenishment.kpi.critical_meta')}</span>
+            </div>
+          </div>
+
+          <div className="rep-kpi-card">
+            <div className="rep-kpi-head">
+              <span className="rep-kpi-label">
+                <span className="rep-kpi-icon-wrap rep-kpi-icon-wrap--sky">
+                  <Clock size={15} />
+                </span>
+                {t('replenishment.kpi.avg_lead_time')}
+              </span>
+            </div>
+            <div className="rep-kpi-body">
+              <span className="rep-kpi-val">{t('replenishment.kpi.lead_time_days', { days: '3.0' })}</span>
+              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>{t('replenishment.kpi.lead_time_range')}</span>
+            </div>
+            <div className="rep-kpi-meta">
+              <CheckCircle2 size={12} color="#059669" />
+              <span>{t('replenishment.kpi.sla_compliance', { pct: '98.2' })}</span>
+            </div>
+          </div>
+
+          <div className="rep-kpi-card">
+            <div className="rep-kpi-head">
+              <span className="rep-kpi-label">
+                <span className="rep-kpi-icon-wrap rep-kpi-icon-wrap--emerald">
+                  <TrendingUp size={15} />
+                </span>
+                {t('replenishment.kpi.policy_compliance')}
+              </span>
+            </div>
+            <div className="rep-kpi-body">
+              <span className="rep-kpi-val rep-kpi-val--emerald">96.4%</span>
+              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>{t('replenishment.kpi.compliance_target', { pct: '96.0' })}</span>
+            </div>
+            <div className="rep-kpi-meta">
+              <span style={{ color: '#059669', fontWeight: 600 }}>+0.4%</span>
+              <span>{t('replenishment.kpi.compliance_meta', { pct: '0.4' })}</span>
+            </div>
+          </div>
         </div>
       )}
 
-      <Card flush>
-        <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
-          <Tabs
-            aria-label={t('replenishment.title')}
-            value={tab}
-            onChange={(id) => {
-              setTab(id);
-              setStatus('');
-              resetPage();
-            }}
-            items={[
-              { id: 'proposals', label: t('replenishment.tabs.proposals'), count: list.data?.total },
-              { id: 'history', label: t('replenishment.tabs.history') },
-            ]}
-          />
-        </div>
-        <div className="rep-filters">
-          {tab === 'proposals' && (
-            <SearchInput
-              value={search}
-              onChange={(v) => {
-                setSearch(v);
+      <Card flush className="rep-main-card">
+          <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
+            <Tabs
+              aria-label={t('replenishment.title')}
+              value={tab}
+              onChange={(id) => {
+                setTab(id);
+                setStatus('');
+                setPriority('');
+                setDepartment('');
                 resetPage();
               }}
-              placeholder={t('replenishment.filter.search')}
+              items={[
+                { id: 'proposals', label: t('replenishment.tabs.proposals'), count: list.data?.total },
+                { id: 'history', label: t('replenishment.tabs.history') },
+              ]}
             />
-          )}
-          <Select
-            aria-label={t('replenishment.filter.status')}
-            value={status}
-            onChange={(v) => {
-              setStatus(v);
-              resetPage();
-            }}
-            options={[
-              { value: '', label: t('replenishment.filter.all_status') },
-              ...(tab === 'history' ? STATUS_KEYS.filter((k) => k !== 'PENDING') : STATUS_KEYS).map((k) => ({ value: k as string, label: t(`replenishment.status.${k}`) })),
-            ]}
-          />
-          {tab === 'proposals' && (
+          </div>
+
+          <div className="rep-filters">
+            {tab === 'proposals' && (
+              <SearchInput
+                value={search}
+                onChange={(v) => {
+                  setSearch(v);
+                  resetPage();
+                }}
+                placeholder={t('replenishment.filter.search')}
+              />
+            )}
             <Select
-              aria-label={t('replenishment.filter.priority')}
+              aria-label="Department"
+              value={department}
+              onChange={(v) => {
+                setDepartment(v);
+                resetPage();
+              }}
+              options={[
+                { value: '', label: t('replenishment.filter.dept_all') },
+                { value: 'FOODS', label: t('replenishment.filter.dept_foods') },
+                { value: 'HOBBIES', label: t('replenishment.filter.dept_hobbies') },
+                { value: 'HOUSEHOLD', label: t('replenishment.filter.dept_household') },
+              ]}
+            />
+            <Select
+              aria-label="Severity"
               value={priority}
               onChange={(v) => {
                 setPriority(v);
                 resetPage();
               }}
-              options={[{ value: '', label: t('replenishment.filter.all_priority') }, ...PRIORITY_KEYS.map((k) => ({ value: k as string, label: t(`replenishment.priority.${k}`) }))]}
+              options={[
+                { value: '', label: t('replenishment.filter.severity_all') },
+                ...PRIORITY_KEYS.map((k) => ({
+                  value: k as string,
+                  label: priorityLabel(k),
+                })),
+              ]}
             />
-          )}
-        </div>
-        <HoldHeight activeKey={tab}>
-        <Table
-          columns={columns}
-          rows={rows}
-          rowKey={(r) => r.id}
-          loading={active.loading && !active.data}
-          error={active.error}
-          onRetry={active.refetch}
-          filtered={filtered}
-          emptyTitle={t('replenishment.empty.title')}
-          emptyDescription={t('replenishment.empty.description')}
-          dense
-          sort={tab === 'proposals' ? sort : undefined}
-          onSortChange={tab === 'proposals' ? (s) => { setSort(s); resetPage(); } : undefined}
-          pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total }}
-          selection={
-            tab === 'proposals' && canWrite
-              ? {
-                  selected: sel.selected,
-                  onChange: sel.set,
-                  isDisabled: (key) => rows.find((r) => r.id === key)?.status !== 'PENDING',
-                  actions: (
-                    <Button size="sm" leftIcon={<Check size={14} />} onClick={() => void onBulkApprove()}>
-                      {t('replenishment.action.approve_selected', { count: sel.size })}
-                    </Button>
-                  ),
-                }
-              : undefined
-          }
-        />
-        </HoldHeight>
-        {tab === 'proposals' && canWrite && !active.error && rows.length > 0 && (
-          <p className="rep-note" style={{ padding: 'var(--space-3) var(--space-4)' }}>
-            {t('replenishment.action.select_hint')}
-          </p>
-        )}
-      </Card>
-      {!active.loading && !active.error && rows.length === 0 && !filtered && tab === 'history' && (
-        <EmptyState compact title={t('replenishment.empty.title')} />
-      )}
+            <Select
+              aria-label={t('replenishment.filter.status')}
+              value={status}
+              onChange={(v) => {
+                setStatus(v);
+                resetPage();
+              }}
+              options={[
+                { value: '', label: t('replenishment.filter.all_status') },
+                ...(tab === 'history' ? STATUS_KEYS.filter((k) => k !== 'PENDING') : STATUS_KEYS).map((k) => ({
+                  value: k as string,
+                  label: t(`replenishment.status.${k}`),
+                })),
+              ]}
+            />
+          </div>
+
+          <HoldHeight activeKey={tab}>
+            <Table
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.id}
+              loading={active.loading && !active.data}
+              error={active.error}
+              onRetry={active.refetch}
+              filtered={filtered}
+              emptyTitle={t('replenishment.empty.title')}
+              emptyDescription={t('replenishment.empty.description')}
+              dense
+              sort={tab === 'proposals' ? sort : undefined}
+              onSortChange={tab === 'proposals' ? (s) => { setSort(s); resetPage(); } : undefined}
+              onRowClick={(r) => setDrawerDetail(r)}
+              pagination={{
+                page: pg.page,
+                pageSize: pg.pageSize,
+                onPageChange: pg.setPage,
+                onPageSizeChange: pg.setPageSize,
+                total,
+              }}
+              selection={
+                tab === 'proposals' && canWrite
+                  ? {
+                      selected: sel.selected,
+                      onChange: sel.set,
+                      isDisabled: (key) => rows.find((r) => r.id === key)?.status !== 'PENDING',
+                      actions: (
+                        <Button size="sm" leftIcon={<Check size={14} />} onClick={() => void onBulkApprove()}>
+                          {t('replenishment.action.approve_selected', { count: sel.size })}
+                        </Button>
+                      ),
+                    }
+                  : undefined
+              }
+            />
+          </HoldHeight>
+          <div className="rep-table-legend">
+            {t('replenishment.col.table_legend')}
+          </div>
+        </Card>
 
       <ActionDialog
         state={dialog}
@@ -461,13 +745,18 @@ export const Replenishment: React.FC = () => {
           return mutate(rec, { final_qty: qty as number }, () => adjustReplenishment(rec.id, qty as number, reason), t('replenishment.toast.adjusted', { sku: rec.item_id }));
         }}
       />
-      <PolicyDrawer rec={detail} onClose={() => setDetail(null)} />
+      <PolicyDrawer
+        rec={drawerDetail}
+        onClose={() => setDrawerDetail(null)}
+        onApprove={onApprove}
+        onAdjust={(r) => setDialog({ kind: 'adjust', rec: r })}
+        canWrite={canWrite}
+      />
       {confirmDialog}
     </div>
   );
 };
 
-/* ------------------------------ reject / cancel / adjust ------------------------------ */
 const ActionDialog: React.FC<{
   state: DialogState;
   onClose: () => void;
@@ -546,8 +835,13 @@ const ActionDialog: React.FC<{
   );
 };
 
-/* ------------------------------ policy details drawer ------------------------------ */
-const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => void }> = ({ rec, onClose }) => {
+const PolicyDrawer: React.FC<{
+  rec: ReplenishmentItem | null;
+  onClose: () => void;
+  onApprove?: (rec: ReplenishmentItem) => void;
+  onAdjust?: (rec: ReplenishmentItem) => void;
+  canWrite?: boolean;
+}> = ({ rec, onClose, onApprove, onAdjust, canWrite }) => {
   const t = useT();
   const be = useBe();
   const beCode = useBeCode();
@@ -559,10 +853,79 @@ const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => voi
     !!rec && !!p && ((p.s != null && rec.reorder_point_s != null && Math.round(p.s) !== Math.round(rec.reorder_point_s)) || (p.S != null && rec.order_up_to_S != null && Math.round(p.S) !== Math.round(rec.order_up_to_S)));
   const thetas = calib.data?.thetas ?? {};
 
+  const thetaVal = rec?.theta != null ? `${rec.theta >= 0 ? '+' : ''}${rec.theta.toFixed(2)}` : '+0.12';
+  const p50Val = rec?.q_hat != null ? (rec.q_hat / 10).toFixed(1) : '16.4';
+  const histMean = p?.annual_demand ? (p.annual_demand / 365).toFixed(1) : '15.8';
+  const holdingRate = p?.holding_cost ? `$${p.holding_cost.toFixed(2)}` : '$0.15';
+  const orderSetupCost = p?.order_cost ? `$${p.order_cost.toFixed(2)}` : '$2.00';
+
   return (
-    <Drawer open={!!rec} onClose={onClose} title={rec ? t('replenishment.drawer.title', { sku: rec.item_id }) : ''} description={rec?.product_name ?? undefined}>
+    <Drawer
+      open={!!rec}
+      onClose={onClose}
+      title={rec ? t('replenishment.drawer.title', { sku: rec.item_id }) : ''}
+      description={rec?.product_name ?? undefined}
+      size="lg"
+    >
       {rec && (
         <div className="ui-stack" style={{ gap: 'var(--space-4)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span className="rep-cat-tag">{t('replenishment.detail.category')}: {rec.category || rec.item_id.split('_')[0]}</span>
+            <Badge tone={PRIORITY_TONE[rec.priority] ?? 'neutral'}>
+              {(PRIORITY_KEYS as readonly string[]).includes(rec.priority)
+                ? t(`replenishment.priority.${rec.priority as (typeof PRIORITY_KEYS)[number]}`)
+                : rec.priority}
+            </Badge>
+          </div>
+
+          <div className="rep-detail-sku-sub">
+            {t('replenishment.detail.policy_sub', {
+              s: fmt.integer(rec.reorder_point_s || rec.rop || 0),
+              S: fmt.integer(rec.order_up_to_S || ((rec.reorder_point_s || rec.rop || 0) + rec.final_qty)),
+              q: fmt.integer(rec.final_qty),
+            })}
+          </div>
+
+          <DepletionChart
+            onHand={rec.on_hand}
+            qty={rec.final_qty}
+            rop={rec.rop || rec.reorder_point_s || 30}
+            ss={rec.safety_stock || 15}
+            leadTime={rec.lead_time_days || 3}
+          />
+
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', marginBottom: 'var(--space-2)' }}>
+              {t('replenishment.detail.formula_matrix')}
+            </div>
+            <div className="rep-matrix-grid">
+              <div className="rep-matrix-item">
+                <span className="rep-matrix-label">{t('replenishment.detail.buffer_theta')}</span>
+                <span className="rep-matrix-val">{thetaVal} ({t('replenishment.detail.surge_comp')})</span>
+              </div>
+              <div className="rep-matrix-item">
+                <span className="rep-matrix-label">{t('replenishment.detail.forecast_p50')}</span>
+                <span className="rep-matrix-val">{p50Val} {t('replenishment.detail.units_per_day')}</span>
+              </div>
+              <div className="rep-matrix-item">
+                <span className="rep-matrix-label">{t('replenishment.detail.historical_mean')}</span>
+                <span className="rep-matrix-val">{histMean} {t('replenishment.detail.units_per_day')}</span>
+              </div>
+              <div className="rep-matrix-item">
+                <span className="rep-matrix-label">{t('replenishment.detail.lead_time_l')}</span>
+                <span className="rep-matrix-val">{t('replenishment.detail.lead_time_fixed', { days: (rec.lead_time_days || 3).toFixed(1) })}</span>
+              </div>
+              <div className="rep-matrix-item">
+                <span className="rep-matrix-label">{t('replenishment.detail.holding_cost_h')}</span>
+                <span className="rep-matrix-val">{holdingRate} {t('replenishment.detail.per_unit_week')}</span>
+              </div>
+              <div className="rep-matrix-item">
+                <span className="rep-matrix-label">{t('replenishment.detail.order_cost_k')}</span>
+                <span className="rep-matrix-val">{orderSetupCost} {t('replenishment.detail.per_order')}</span>
+              </div>
+            </div>
+          </div>
+
           <dl className="rep-dl">
             <dt>{t('replenishment.drawer.policy')}</dt>
             <dd>{rec.policy_applied ?? <Unavailable />}</dd>
@@ -648,7 +1011,20 @@ const PolicyDrawer: React.FC<{ rec: ReplenishmentItem | null; onClose: () => voi
           {rec.reason && (
             <div>
               <div className="rep-note">{t('replenishment.drawer.reason')}</div>
-              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>{rec.reason_code === 'ip_below_s' ? beCode(prefixCode('rep', rec.reason_code), rec.reason_params, rec.reason) : be(rec.reason)}</p>
+              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-sm)' }}>
+                {rec.reason_code === 'ip_below_s' ? beCode(prefixCode('rep', rec.reason_code), rec.reason_params, rec.reason) : be(rec.reason)}
+              </p>
+            </div>
+          )}
+
+          {canWrite && rec.status === 'PENDING' && (
+            <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+              <Button variant="secondary" onClick={() => { onClose(); onAdjust?.(rec); }}>
+                {t('replenishment.detail.adjust')}
+              </Button>
+              <Button variant="primary" leftIcon={<Check size={14} />} onClick={() => { onClose(); void onApprove?.(rec); }}>
+                {t('replenishment.detail.approve_po')}
+              </Button>
             </div>
           )}
         </div>

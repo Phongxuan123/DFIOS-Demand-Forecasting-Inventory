@@ -9,7 +9,6 @@ import { createEvent, deleteEvent, listEventTypes, listEvents, type CalendarEven
 import {
   Button,
   Card,
-  DataSourceNote,
   IconButton,
   Input,
   Modal,
@@ -110,9 +109,6 @@ export const EventsTab: React.FC = () => {
           dense
           pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total: list.data?.total ?? 0 }}
         />
-        <div className="prd-pad">
-          <DataSourceNote source={t('products.events.source')} />
-        </div>
       </Card>
       <EventModal
         open={adding}
@@ -150,7 +146,6 @@ const EventModal: React.FC<{ open: boolean; types: string[]; onClose: () => void
     if (!nameOk || !dateOk) return;
     setSaving(true);
     try {
-      // F-18: only event_name, event_date and event_type exist in the backend schema.
       await createEvent({ event_name: form.event_name.trim(), event_date: form.event_date, event_type: form.event_type || undefined });
       toast.success(t('products.toast.created'));
       onSaved();
@@ -165,8 +160,9 @@ const EventModal: React.FC<{ open: boolean; types: string[]; onClose: () => void
     <Modal
       open={open}
       onClose={onClose}
+      className="prd-form-modal"
       dismissible={!saving}
-      size="sm"
+      size="md"
       title={t('products.form.create_event')}
       footer={
         <>
@@ -185,6 +181,7 @@ const EventModal: React.FC<{ open: boolean; types: string[]; onClose: () => void
         <Select
           label={t('products.form.event_type')}
           value={form.event_type}
+          direction="down"
           onChange={(v) => setForm({ ...form, event_type: v })}
           options={[{ value: '', label: '—' }, ...types.map((x) => ({ value: x, label: x }))]}
         />

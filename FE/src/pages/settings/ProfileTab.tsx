@@ -157,7 +157,6 @@ const PasswordForm: React.FC = () => {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** UC05 email change: the BE emails a link to the new address; /confirm-email completes it. */
 const EmailForm: React.FC = () => {
   const t = useT();
   const { user } = useAuth();

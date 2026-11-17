@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Badge, Button, Card, DataSourceNote, SearchInput, Select, Table, usePagination, type Column, type SortState } from '../../components/ui/index.ts';
+import { Badge, Button, Card, SearchInput, Select, Table, usePagination, type Column, type SortState } from '../../components/ui/index.ts';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { getCategories, getSkus, type SkuClassification } from '../../services/abcxyzApi.ts';
@@ -53,35 +53,40 @@ export const SkuTable: React.FC<Props> = ({ storeId, segment, onClearSegment, ve
 
   const filtered = !!(segment || category || search);
   return (
-    <Card title={t('abcxyz.skus.title')} flush>
-      <div className="abc-filters">
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            pg.setPage(1);
-          }}
-          placeholder={t('abcxyz.skus.search')}
-          aria-label={t('abcxyz.skus.search')}
-        />
-        <Select
-          value={category}
-          label={t('abcxyz.skus.category')}
-          onChange={(v) => {
-            setCategory(v);
-            pg.setPage(1);
-          }}
-          options={[{ value: '', label: t('abcxyz.skus.all_categories') }, ...(cats.data ?? []).map((c) => ({ value: c, label: c }))]}
-        />
-        {segment && (
-          <div className="ui-row">
-            <Badge tone="accent">{t('abcxyz.matrix.selected', { segment })}</Badge>
-            <Button size="sm" variant="ghost" onClick={onClearSegment}>
-              {t('abcxyz.matrix.clear')}
-            </Button>
-          </div>
-        )}
-      </div>
+    <Card
+      title={t('abcxyz.skus.title')}
+      actions={
+        <div className="abc-filters">
+          <SearchInput
+            value={search}
+            onChange={(v) => {
+              setSearch(v);
+              pg.setPage(1);
+            }}
+            placeholder={t('abcxyz.skus.search')}
+            aria-label={t('abcxyz.skus.search')}
+          />
+          <Select<string>
+            value={category}
+            aria-label={t('abcxyz.skus.category')}
+            onChange={(v) => {
+              setCategory(v);
+              pg.setPage(1);
+            }}
+            options={[{ value: '', label: t('abcxyz.skus.all_categories') }, ...(cats.data ?? []).map((c) => ({ value: c, label: c }))]}
+          />
+          {segment && (
+            <div className="ui-row" style={{ alignItems: 'center' }}>
+              <Badge tone="accent">{t('abcxyz.matrix.selected', { segment })}</Badge>
+              <Button size="sm" variant="ghost" onClick={onClearSegment}>
+                {t('abcxyz.matrix.clear')}
+              </Button>
+            </div>
+          )}
+        </div>
+      }
+      flush
+    >
       <Table
         columns={columns}
         rows={data?.items ?? []}
@@ -98,9 +103,6 @@ export const SkuTable: React.FC<Props> = ({ storeId, segment, onClearSegment, ve
         pagination={{ page: pg.page, pageSize: pg.pageSize, total: data?.total, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize }}
         dense
       />
-      <div style={{ padding: 'var(--space-2) var(--space-4) var(--space-3)' }}>
-        <DataSourceNote source={t('abcxyz.scatter.source', { store: storeId })} />
-      </div>
     </Card>
   );
 };

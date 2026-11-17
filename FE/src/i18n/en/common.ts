@@ -72,7 +72,7 @@ export const common: typeof Vi = {
     label: 'Pagination',
   },
   errors: {
-    network: 'Cannot reach the server. Check your network or the backend service.',
+    network: 'Cannot reach the server. Please check your network connection.',
     timeout: 'The server took too long to respond. Please try again.',
     forbidden: 'You do not have permission to perform this action.',
     unauthorized: 'Your session has expired. Please sign in again.',
@@ -138,6 +138,6 @@ export const common: typeof Vi = {
     target: 'O2 target: {low}–{high}',
     in: 'In band',
     out: 'Out of band',
-    missing: 'The backend does not return this value',
+    missing: 'Data not available',
   },
 };

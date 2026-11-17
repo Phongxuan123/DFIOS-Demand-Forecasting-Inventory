@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Bell, CalendarClock, ChevronDown, Languages, LogOut, Menu, Moon, RefreshCw, Store, Sun, User as UserIcon } from 'lucide-react';
+import { Bell, CalendarClock, Languages, LogOut, Menu, Moon, RefreshCw, Store, Sun, User as UserIcon } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useStore } from '../../context/StoreContext.tsx';
 import { CLOCK_ADVANCE_DAYS, useClock } from '../../context/ClockContext.tsx';
@@ -8,7 +8,7 @@ import { useTheme } from '../../theme/ThemeContext.tsx';
 import { useI18n } from '../../i18n/index.tsx';
 import { roleKey } from '../../auth/permissions.ts';
 import { apiErrorMessage } from '../../services/apiClient.ts';
-import { Badge, Button, IconButton, Skeleton, cx } from '../ui/primitives.tsx';
+import { Badge, Button, IconButton, cx } from '../ui/primitives.tsx';
 import { useConfirm } from '../ui/overlays.tsx';
 import { useToast } from '../ui/Toast.tsx';
 import { LanguageToggle, ThemeToggle } from '../common/PreferenceToggles.tsx';
@@ -18,33 +18,22 @@ import { useAlertFeed } from './useAlertFeed.ts';
 import { AdvanceProgress } from '../common/AdvanceProgress.tsx';
 import './shell.css';
 
-/* ------------------------------ Store selector ----------------------------- */
 const StoreSelector: React.FC = () => {
-  const { t } = useI18n();
-  const { storeId, stores, loading, error, setStoreId, reload, supportsGlobal } = useStore();
-
-  if (loading && stores.length === 0) return <Skeleton width={110} height={30} />;
-  if (error || stores.length === 0) {
-    return (
-      <Button size="sm" variant="secondary" leftIcon={<AlertTriangle size={14} />} onClick={reload} title={t('shell.store.error')}>
-        {t(error ? 'shell.store.error' : 'shell.store.empty')}
-      </Button>
-    );
-  }
   return (
-    <label className="shell-store" title={t('shell.store.select')}>
+    <div
+      className="shell-store"
+      style={{
+        paddingRight: 'var(--space-3)',
+        fontWeight: 'var(--weight-medium)',
+        color: 'var(--color-text)',
+        cursor: 'default',
+        userSelect: 'none',
+      }}
+      title="Kho CA_1"
+    >
       <Store size={15} aria-hidden="true" />
-      <span className="ui-sr-only">{t('shell.store.label')}</span>
-      <select value={storeId ?? ''} onChange={(e) => setStoreId(e.target.value)} aria-label={t('shell.store.select')}>
-        {supportsGlobal && <option value="GLOBAL">{t('shell.store.all')}</option>}
-        {stores.map((s) => (
-          <option key={s} value={s}>
-            {s}
-          </option>
-        ))}
-      </select>
-      <ChevronDown size={13} aria-hidden="true" />
-    </label>
+      <span>Kho CA_1</span>
+    </div>
   );
 };
 

@@ -1,6 +1,5 @@
-/** Namespace `auth`: login, forgot/reset password, account activation, email confirmation. */
 export const auth = {
-  footer: 'Đồ án DFIOS. Dữ liệu: bộ M5 (Walmart).',
+  footer: '© 2026 DFIOS Enterprise System. Bảo lưu mọi quyền.',
   back_to_login: 'Quay lại đăng nhập',
   go_to_login: 'Đến trang đăng nhập',
   email_label: 'Email',

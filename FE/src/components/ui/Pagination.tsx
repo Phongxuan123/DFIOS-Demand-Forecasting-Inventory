@@ -6,7 +6,6 @@ import { Select } from './forms.tsx';
 import './ui.css';
 
 export interface PaginationProps {
-  /** 1-based. */
   page: number;
   pageSize: number;
   total: number;
@@ -16,10 +15,6 @@ export interface PaginationProps {
   className?: string;
 }
 
-/**
- * Footer pagination, i18n aware. If `page` is out of range (data shrank, filter changed)
- * it reports the clamped page back through onPageChange (F-24).
- */
 export const Pagination: React.FC<PaginationProps> = ({
   page,
   pageSize,
@@ -51,6 +46,7 @@ export const Pagination: React.FC<PaginationProps> = ({
           <div className="ui-pagination__size">
             <Select
               size="sm"
+              direction="up"
               aria-label={t('common.pagination.rows_per_page')}
               value={pageSize}
               onChange={(v) => onPageSizeChange(Number(v))}

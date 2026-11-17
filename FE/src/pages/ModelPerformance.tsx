@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Award, CheckCircle2, Play, ShieldCheck } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Award, CheckCircle2, Play, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import {
   Alert,
   Badge,
@@ -8,10 +8,7 @@ import {
   Card,
   ChartFrame,
   ChartLegend,
-  ChartTooltip,
-  DataSourceNote,
   Field,
-  HoldHeight,
   Input,
   KpiTile,
   Modal,
@@ -19,7 +16,6 @@ import {
   Select,
   Switch,
   Table,
-  Tabs,
   Unavailable,
   useChartTheme,
   useConfirm,
@@ -44,8 +40,8 @@ import {
   type TrainJob,
   type ValidationResult,
 } from '../services/modelsApi.ts';
+import './ModelPerformance.css';
 
-type PageTab = 'registry' | 'training';
 type MetricKey = 'wrmsse' | 'mase' | 'mae' | 'rmse';
 const METRICS: readonly MetricKey[] = ['wrmsse', 'mase', 'mae', 'rmse'];
 const COVERAGE_KEYS = ['coverage_q95', 'coverage_95', 'coverage_0.95', 'q95_coverage'];
@@ -63,7 +59,7 @@ const ALGO_KEYS: Record<string, TKey> = {
   arima: 'models.algo.arima',
   sba: 'models.algo.sba',
 };
-/** In a training job the legacy names are aliases of the same in-house GBDT (R-03). */
+
 const TRAIN_ALIASES: Record<string, string> = { lightgbm: 'gbdt_lags', xgboost: 'gbdt_trend' };
 
 function algoLabel(t: TFunction, algo: string, training = false): string {
@@ -89,7 +85,6 @@ export const ModelPerformance: React.FC = () => {
   const { confirm, dialog } = useConfirm();
   const chart = useChartTheme();
 
-  const [tab, setTab] = useState<PageTab>('registry');
   const [chartMetric, setChartMetric] = useState<MetricKey>('wrmsse');
   const [validation, setValidation] = useState<Record<string, ValState>>({});
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -102,7 +97,16 @@ export const ModelPerformance: React.FC = () => {
   const models = useMemo(() => registry.data?.items ?? [], [registry.data]);
   const champion = useMemo(() => models.find((m) => m.is_production) ?? null, [models]);
 
-  // Poll while a training job is active (no fake progress: we re-read the real status).
+  const sortedModels = useMemo(() => {
+    return [...models].sort((a, b) => {
+      if (a.is_production) return -1;
+      if (b.is_production) return 1;
+      const scoreA = metricNumber(a.metrics, 'wrmsse') ?? 999;
+      const scoreB = metricNumber(b.metrics, 'wrmsse') ?? 999;
+      return scoreA - scoreB;
+    });
+  }, [models]);
+
   const jobItems = jobs.data?.items;
   const hasActiveJob = !!jobItems?.some((j) => JOB_ACTIVE.has(j.status));
   const refetchJobs = jobs.refetch;
@@ -120,7 +124,6 @@ export const ModelPerformance: React.FC = () => {
         setValidation((v) => ({ ...v, [m.id]: { state: 'done', result } }));
         return result.validation_passed ? 'passed' : 'failed';
       } catch (err) {
-        // A failed call is "unknown", never a pass (P-31).
         setValidation((v) => ({ ...v, [m.id]: { state: 'error', reason: apiErrorMessage(err, t) } }));
         return 'unknown';
       }
@@ -161,7 +164,6 @@ export const ModelPerformance: React.FC = () => {
     }
   };
 
-  /* ------------------------------- KPI strip ------------------------------- */
   const kpiMetric = (key: 'wrmsse' | 'mase') => {
     if (registry.loading) return { value: null, reason: undefined as string | undefined, loading: true };
     if (!champion) return { value: null, reason: t('models.kpi.no_champion_metric'), loading: false };
@@ -175,7 +177,6 @@ export const ModelPerformance: React.FC = () => {
   const coverage = champion ? metricNumber(champion.metrics, ...COVERAGE_KEYS) : null;
   const coverageDb = champion ? metricNumber(champion.metrics, 'coverage_q95_db_causal') : null;
 
-  /* ------------------------------- bar chart ------------------------------- */
   const chartRows = useMemo(
     () =>
       models
@@ -186,7 +187,6 @@ export const ModelPerformance: React.FC = () => {
   );
   const missingNames = models.filter((m) => metricNumber(m.metrics, chartMetric) === null).map((m) => `${m.name} ${m.version}`);
 
-  /* -------------------------------- columns -------------------------------- */
   const metricCell = (m: RegisteredModel, key: MetricKey) => {
     const n = metricNumber(m.metrics, key);
     return n === null ? <Unavailable reason={t('models.kpi.metric_missing', { metric: key.toUpperCase() })} /> : <span className="ui-num">{fmt.number(n, { digits: 3 })}</span>;
@@ -225,7 +225,7 @@ export const ModelPerformance: React.FC = () => {
       sortable: true,
       cell: (m) => (
         <div>
-          <div style={{ fontWeight: 'var(--weight-medium)' }}>{m.name}</div>
+          <div style={{ fontWeight: 'var(--weight-semibold)', color: 'var(--color-text)' }}>{m.name}</div>
           <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
             {m.version} · <span style={{ fontFamily: 'var(--font-mono)' }}>{m.id}</span>
           </div>
@@ -239,7 +239,9 @@ export const ModelPerformance: React.FC = () => {
       value: (m) => (m.is_production ? 0 : 1),
       sortable: true,
       cell: (m) => (
-        <Badge tone={m.is_production ? 'accent' : 'neutral'}>{m.is_production ? t('models.role.production') : t('models.role.challenger')}</Badge>
+        <Badge tone={m.is_production ? 'success' : 'neutral'} dot={m.is_production}>
+          {m.is_production ? t('models.role.production') : t('models.role.challenger')}
+        </Badge>
       ),
     },
     ...METRICS.map<Column<RegisteredModel>>((k) => ({
@@ -256,7 +258,7 @@ export const ModelPerformance: React.FC = () => {
       header: t('models.col.actions'),
       align: 'right',
       cell: (m) => (
-        <div style={{ display: 'inline-flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <div className="mp-table-actions">
           <Button size="sm" variant="secondary" loading={validation[m.id]?.state === 'running'} onClick={() => void runValidation(m)}>
             {t('models.actions.validate')}
           </Button>
@@ -333,7 +335,6 @@ export const ModelPerformance: React.FC = () => {
     },
   ];
 
-  /* ---------------------------- train modal state --------------------------- */
   const [trainOpen, setTrainOpen] = useState(false);
   const [trainModels, setTrainModels] = useState<string>('all');
   const [trainHorizon, setTrainHorizon] = useState<number>(28);
@@ -356,7 +357,6 @@ export const ModelPerformance: React.FC = () => {
       });
       toast.success(t('models.train.started', { id: res.job_id.slice(0, 8) }));
       setTrainOpen(false);
-      setTab('training');
       jobsPage.setPage(1);
       jobs.refetch();
     } catch (err) {
@@ -369,25 +369,62 @@ export const ModelPerformance: React.FC = () => {
   const detail = detailId ? validation[detailId] : undefined;
   const detailModel = detailId ? models.find((m) => m.id === detailId) : undefined;
 
+  const prodWrmsse = champion ? metricNumber(champion.metrics, 'wrmsse') : null;
+  const prodMase = champion ? metricNumber(champion.metrics, 'mase') : null;
+  const prodMae = champion ? metricNumber(champion.metrics, 'mae') : null;
+
   return (
-    <div style={{ display: 'grid', gap: 'var(--space-5)' }}>
+    <div className="mp-container">
       <PageHeader
         title={t('models.page.title')}
         description={t('models.page.description')}
-        meta={<DataSourceNote source={t('models.page.source')} />}
         actions={
           <>
             <Button variant="secondary" leftIcon={<ShieldCheck size={16} />} onClick={() => void validateAll()} disabled={models.length === 0}>
               {t('models.actions.validate_all')}
             </Button>
-            <Button leftIcon={<Play size={16} />} onClick={() => setTrainOpen(true)}>
+            <Button variant="primary" leftIcon={<Play size={16} />} onClick={() => setTrainOpen(true)}>
               {t('models.actions.train')}
             </Button>
           </>
         }
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+      <div className="mp-champion-banner">
+        <div className="mp-champion-left">
+          <div className="mp-champion-badge">
+            <span className="mp-champion-pulse" />
+            <span>{t('models.banner.production_active')}</span>
+          </div>
+          <div className="mp-champion-name">{champion ? `${champion.name} (${champion.version})` : t('models.banner.no_production')}</div>
+          <div className="mp-champion-meta">
+            <span>{t('models.banner.algorithm')}: <strong>{champion ? algoLabel(t, champion.algorithm) : '—'}</strong></span>
+            <span>·</span>
+            <span>{t('models.banner.id')}: <code>{champion ? champion.id : '—'}</code></span>
+            <span>·</span>
+            <span>{t('models.banner.scope')}: <strong>{champion ? champion.scope : 'global'}</strong></span>
+          </div>
+        </div>
+
+        {champion && (
+          <div className="mp-champion-right">
+            <div className="mp-metric-chip">
+              <span className="mp-metric-chip-label">{t('models.banner.wrmsse_m5')}</span>
+              <span className="mp-metric-chip-val">{prodWrmsse !== null ? fmt.number(prodWrmsse, { digits: 3 }) : '—'}</span>
+            </div>
+            <div className="mp-metric-chip">
+              <span className="mp-metric-chip-label">{t('models.col.mase')}</span>
+              <span className="mp-metric-chip-val">{prodMase !== null ? fmt.number(prodMase, { digits: 3 }) : '—'}</span>
+            </div>
+            <div className="mp-metric-chip">
+              <span className="mp-metric-chip-label">{t('models.col.mae')}</span>
+              <span className="mp-metric-chip-val">{prodMae !== null ? fmt.number(prodMae, { digits: 3 }) : '—'}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mp-kpi-grid">
         <KpiTile
           label={t('models.kpi.champion')}
           icon={<Award size={16} />}
@@ -408,130 +445,107 @@ export const ModelPerformance: React.FC = () => {
         />
       </div>
 
-      <Tabs
-        aria-label={t('models.page.title')}
-        value={tab}
-        onChange={setTab}
-        items={[
-          { id: 'registry', label: t('models.tabs.registry'), count: registry.data?.total },
-          { id: 'training', label: t('models.tabs.training'), count: jobs.data?.total },
-        ]}
-      />
+      <Card title={t('models.registry.title')} description={t('models.registry.description')} flush>
+        <Table
+          columns={registryColumns}
+          rows={sortedModels}
+          rowKey={(m) => m.id}
+          loading={registry.loading}
+          error={registry.error}
+          onRetry={registry.refetch}
+          emptyTitle={t('models.registry.empty_title')}
+          emptyDescription={t('models.registry.empty_description')}
+          wrap
+        />
+        {registry.data && registry.data.total > models.length && (
+          <p style={{ padding: 'var(--space-3) var(--space-4)', margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
+            {t('models.registry.total_note', { shown: models.length, total: registry.data.total })}
+          </p>
+        )}
+      </Card>
 
-      <HoldHeight activeKey={tab} role="tabpanel" style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
-      {tab === 'registry' && (
-        <>
-          <ChartFrame
-            title={t('models.chart.title')}
-            description={t('models.chart.description')}
-            source={t('models.chart.source')}
-            height={Math.max(180, chartRows.length * 44 + 60)}
-            loading={registry.loading}
-            error={registry.error}
-            onRetry={registry.refetch}
-            empty={!registry.loading && !registry.error && chartRows.length === 0}
-            actions={
-              <Select<MetricKey>
-                aria-label={t('models.chart.metric')}
-                size="sm"
-                value={chartMetric}
-                onChange={setChartMetric}
-                options={METRICS.map((k) => ({ value: k, label: k.toUpperCase() }))}
-              />
-            }
-            footer={
-              <>
-                <ChartLegend
-                  items={[
-                    { label: t('models.role.production'), color: chart.series[0] },
-                    { label: t('models.role.challenger'), color: chart.series[1] },
-                  ]}
-                />
-                {missingNames.length > 0 && chartRows.length > 0 && (
-                  <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
-                    {t('models.chart.missing', { metric: chartMetric.toUpperCase(), names: missingNames.join(', ') })}
-                  </p>
-                )}
-              </>
-            }
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartRows} layout="vertical" margin={{ top: 4, right: 48, bottom: 4, left: 8 }}>
-                <CartesianGrid horizontal={false} stroke={chart.grid} />
-                <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
-                <YAxis type="category" dataKey="name" width={150} {...chart.axis} />
-                <Tooltip cursor={{ fill: chart.grid, opacity: 0.4 }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
-                <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
-                  {chartRows.map((r) => (
-                    <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
-                  ))}
-                  <LabelList dataKey="value" position="right" formatter={(v: unknown) => (typeof v === 'number' ? fmt.number(v, { digits: 3 }) : '')} fill={chart.tick} fontSize={11} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartFrame>
-
-          <Card title={t('models.registry.title')} description={t('models.registry.description')} flush>
-            <Table
-              columns={registryColumns}
-              rows={models}
-              rowKey={(m) => m.id}
-              loading={registry.loading}
-              error={registry.error}
-              onRetry={registry.refetch}
-              emptyTitle={t('models.registry.empty_title')}
-              emptyDescription={t('models.registry.empty_description')}
-              wrap
+      <ChartFrame
+        title={t('models.chart.title')}
+        description={t('models.chart.description')}
+        height={Math.max(200, chartRows.length * 48 + 64)}
+        loading={registry.loading}
+        error={registry.error}
+        onRetry={registry.refetch}
+        empty={!registry.loading && !registry.error && chartRows.length === 0}
+        actions={
+          <Select<MetricKey>
+            aria-label={t('models.chart.metric')}
+            size="sm"
+            value={chartMetric}
+            onChange={setChartMetric}
+            options={METRICS.map((k) => ({ value: k, label: k.toUpperCase() }))}
+          />
+        }
+        footer={
+          <>
+            <ChartLegend
+              items={[
+                { label: t('models.role.production'), color: chart.series[0] },
+                { label: t('models.role.challenger'), color: chart.series[1] },
+              ]}
             />
-            {registry.data && registry.data.total > models.length && (
-              <p style={{ padding: 'var(--space-3) var(--space-4)', margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
-                {t('models.registry.total_note', { shown: models.length, total: registry.data.total })}
+            {missingNames.length > 0 && chartRows.length > 0 && (
+              <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
+                {t('models.chart.missing', { metric: chartMetric.toUpperCase(), names: missingNames.join(', ') })}
               </p>
             )}
-          </Card>
-        </>
-      )}
+          </>
+        }
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 56, bottom: 8, left: 12 }}>
+            <CartesianGrid horizontal={false} stroke={chart.grid} />
+            <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
+            <YAxis type="category" dataKey="name" width={160} {...chart.axis} />
+            <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {chartRows.map((r) => (
+                <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
+              ))}
+              <LabelList dataKey="value" position="right" formatter={(v: unknown) => (typeof v === 'number' ? fmt.number(v, { digits: 3 }) : '')} fill={chart.tick} fontSize={11} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartFrame>
 
-      {tab === 'training' && (
-        <Card
-          title={t('models.training.title')}
-          description={t('models.training.description')}
-          actions={
-            <Button size="sm" variant="secondary" onClick={jobs.refetch}>
-              {t('models.actions.refresh')}
-            </Button>
-          }
-          flush
-        >
-          {hasActiveJob && (
-            <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
-              <Alert tone="info">{t('models.training.polling')}</Alert>
-            </div>
-          )}
-          <Table
-            columns={jobColumns}
-            rows={jobItems ?? []}
-            rowKey={(j) => j.id}
-            loading={jobs.loading && !jobs.data}
-            error={jobs.error}
-            onRetry={jobs.refetch}
-            emptyTitle={t('models.training.empty_title')}
-            emptyDescription={t('models.training.empty_description')}
-            pagination={{
-              page: jobsPage.page,
-              pageSize: jobsPage.pageSize,
-              onPageChange: jobsPage.setPage,
-              onPageSizeChange: jobsPage.setPageSize,
-              total: jobs.data?.total ?? 0,
-            }}
-            wrap
-          />
-          <div style={{ padding: '0 var(--space-4) var(--space-3)' }}>
-            <DataSourceNote source={t('models.training.source')} />
+      <Card
+        title={t('models.training.title')}
+        description={t('models.training.description')}
+        actions={
+          <Button size="sm" variant="secondary" onClick={jobs.refetch} leftIcon={<RefreshCw size={14} />}>
+            {t('models.actions.refresh')}
+          </Button>
+        }
+        flush
+      >
+        {hasActiveJob && (
+          <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
+            <Alert tone="info">{t('models.training.polling')}</Alert>
           </div>
-        </Card>
-      )}
-      </HoldHeight>
+        )}
+        <Table
+          columns={jobColumns}
+          rows={jobItems ?? []}
+          rowKey={(j) => j.id}
+          loading={jobs.loading && !jobs.data}
+          error={jobs.error}
+          onRetry={jobs.refetch}
+          emptyTitle={t('models.training.empty_title')}
+          emptyDescription={t('models.training.empty_description')}
+          pagination={{
+            page: jobsPage.page,
+            pageSize: jobsPage.pageSize,
+            onPageChange: jobsPage.setPage,
+            onPageSizeChange: jobsPage.setPageSize,
+            total: jobs.data?.total ?? 0,
+          }}
+          wrap
+        />
+      </Card>
 
       <Modal
         open={detailId !== null}

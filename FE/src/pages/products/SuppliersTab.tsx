@@ -9,7 +9,6 @@ import { createSupplier, deleteSupplier, listSuppliers, updateSupplier, type Sup
 import {
   Button,
   Card,
-  DataSourceNote,
   IconButton,
   Input,
   Modal,
@@ -104,9 +103,6 @@ export const SuppliersTab: React.FC = () => {
           dense
           pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total: list.data?.total ?? 0 }}
         />
-        <div className="prd-pad">
-          <DataSourceNote source={t('products.suppliers.source')} />
-        </div>
       </Card>
       <SupplierModal
         state={editing}

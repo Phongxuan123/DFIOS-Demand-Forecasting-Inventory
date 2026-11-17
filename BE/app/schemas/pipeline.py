@@ -34,7 +34,7 @@ class BatchScheduleCreateRequest(BaseModel):
     model_name: str = Field(default="lightgbm", description="Tên mô hình AI")
     horizon: int = Field(default=28, ge=7, le=28, description="Số ngày dự báo")
     store_id: Optional[str] = Field(default="CA_1", description="Mã cửa hàng áp dụng")
-    auto_trigger_optimization: bool = Field(default=True, description="Tự động tính lại SS/ROP/EOQ và ABC-XYZ sau khi chạy (UC50)")
+    auto_trigger_optimization: bool = Field(default=True, description="Tự động tính lại SS/ROP/EOQ và ABC-XYZ sau khi chạy")
 
     @field_validator("cron_expression")
     @classmethod

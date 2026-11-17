@@ -51,19 +51,19 @@ def update_classification_thresholds(
     )
 
 
-@router.post("/recompute", response_model=ClassificationRecomputeResponse, summary="UC25 - Kích hoạt tính lại phân loại toàn bộ SKU (Manager & Admin only)")
+@router.post("/recompute", response_model=ClassificationRecomputeResponse, summary="Kích hoạt tính lại phân loại toàn bộ SKU (Manager & Admin only)")
 def trigger_recompute_classification(
     store_id: Optional[str] = Query("CA_1", description="Mã cửa hàng phân loại (chỉ kho này được tính lại)"),
     source: str = Query(
         "auto",
         pattern="^(auto|thresholds)$",
-        description="auto: ưu tiên lớp ground truth C3-OUT nếu có; thresholds: chỉ dùng ngưỡng UC25",
+        description="auto: ưu tiên lớp ground truth C3-OUT nếu có; thresholds: chỉ dùng ngưỡng phân loại chuẩn",
     ),
     db: Session = Depends(get_db),
     user: User = Depends(require_manager_or_admin),
 ):
     """
-    **UC25 - Recompute Classification**:
+    **Recompute Classification**:
     Chạy lại thuật toán phân loại Pareto ABC & CV XYZ cho MỘT kho theo dữ liệu mới nhất.
     Phân lớp của các kho khác không bị ảnh hưởng (P-10).
     """

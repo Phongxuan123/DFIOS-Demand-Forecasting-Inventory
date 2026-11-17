@@ -138,7 +138,7 @@ export const settings: typeof Vi = {
     model: 'Model',
     horizon: 'Forecast days (7 to 28)',
     store: 'Store',
-    auto_opt: 'Recompute SS/ROP/EOQ and ABC-XYZ after the run (UC50)',
+    auto_opt: 'Recompute SS/ROP/EOQ and ABC-XYZ after the run',
     name_required: 'Enter a schedule name.',
     cron_invalid: 'Cron needs exactly 5 space-separated fields.',
     horizon_invalid: 'Days must be between 7 and 28.',
@@ -287,7 +287,7 @@ export const settings: typeof Vi = {
     source: '/imports, /imports/template',
   },
   quality: {
-    title: 'Data quality check (UC46)',
+    title: 'Data quality check',
     description: 'Runs on the server: negative values, duplicate dates, SKUs missing from the catalogue, outliers (Z-score), missing-day rate and data leakage after a cutoff. Admins only.',
     store: 'Store',
     cutoff: 'Cutoff date (optional)',

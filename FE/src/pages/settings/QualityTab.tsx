@@ -32,7 +32,6 @@ const num = (s: string): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** UC46 data quality check (Admin). Every value is what the server measured; nothing is computed here. */
 export const QualityTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
