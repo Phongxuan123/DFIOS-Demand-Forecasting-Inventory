@@ -194,6 +194,7 @@ const PoliciesTab: React.FC = () => {
                 {b.n_skus != null && t('reports.policy.scale', { skus: fmt.integer(b.n_skus), days: fmt.integer(b.n_days), reviews: fmt.integer(b.n_reviews), lead: b.lead_time_days ?? '—', review: b.review_period_days ?? '—' })}
               </p>
             )}
+            <p className="ui-muted" role="note">{t('reports.policy.note')}</p>
             <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', margin: 'var(--space-4) 0' }}>
               <CoverageTiles
                 loading={bench.loading && !b}

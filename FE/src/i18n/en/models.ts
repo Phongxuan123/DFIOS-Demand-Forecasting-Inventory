@@ -122,6 +122,7 @@ export const models: typeof Vi = {
     empty_description: 'Click "New training run" to start one.',
     polling: 'A job is running, the table refreshes every 5 seconds',
     failed_reason: 'Error: {reason}',
+    rmsse_single: 'RMSSE (1 series)',
     status_pending: 'Pending',
     status_running: 'Running',
     status_done: 'Done',
