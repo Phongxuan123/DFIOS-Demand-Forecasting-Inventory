@@ -30,6 +30,7 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
+import { ReferenceE10b } from '../components/ReferenceE10b.tsx';
 import { WhatIfPanel } from './reports/WhatIfPanel.tsx';
 import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
@@ -324,6 +325,8 @@ const PoliciesTab: React.FC = () => {
           </>
         )}
       </Section>
+
+      <ReferenceE10b />
 
       {isManager ? <WhatIfPanel storeId={concreteStoreId} isGlobal={isGlobal} /> : (
         <Section title={t('reports.whatif.title')}>
