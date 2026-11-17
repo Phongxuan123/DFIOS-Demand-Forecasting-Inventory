@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, Award, Check, CheckCircle2, Plus, RefreshCw, TrendingUp } from 'lucide-react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Award, CheckCircle2, Play, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   Alert,
   Badge,
@@ -15,6 +15,7 @@ import {
   Input,
   KpiTile,
   Modal,
+  PageHeader,
   Select,
   Switch,
   Table,
@@ -102,18 +103,14 @@ export const ModelPerformance: React.FC = () => {
   const models = useMemo(() => registry.data?.items ?? [], [registry.data]);
   const champion = useMemo(() => models.find((m) => m.is_production) ?? null, [models]);
 
-  const candidateModel = useMemo(() => {
-    return models.find((m) => !m.is_production && (m.id.includes('lgb') || m.algorithm.includes('lightgbm') || m.algorithm.includes('gbdt'))) ??
-      models.find((m) => !m.is_production) ?? null;
-  }, [models]);
-
-  const challengerModel = useMemo(() => {
-    return models.find((m) => !m.is_production && m.id !== candidateModel?.id && (m.id.includes('tft') || m.id.includes('nbeats') || m.algorithm.includes('tft'))) ??
-      models.find((m) => !m.is_production && m.id !== candidateModel?.id) ?? null;
-  }, [models, candidateModel]);
-
-  const benchmarkModel = useMemo(() => {
-    return models.find((m) => m.algorithm.includes('naive') || m.algorithm.includes('sarima') || m.id.includes('naive')) ?? null;
+  const sortedModels = useMemo(() => {
+    return [...models].sort((a, b) => {
+      if (a.is_production) return -1;
+      if (b.is_production) return 1;
+      const scoreA = metricNumber(a.metrics, 'wrmsse') ?? 999;
+      const scoreB = metricNumber(b.metrics, 'wrmsse') ?? 999;
+      return scoreA - scoreB;
+    });
   }, [models]);
 
   const jobItems = jobs.data?.items;
@@ -196,15 +193,6 @@ export const ModelPerformance: React.FC = () => {
   );
   const missingNames = models.filter((m) => metricNumber(m.metrics, chartMetric) === null).map((m) => `${m.name} ${m.version}`);
 
-  const horizonDecayData = useMemo(() => {
-    const list = [];
-    for (let day = 1; day <= 28; day++) {
-      const err = 0.410 + (0.525 - 0.410) * Math.pow((day - 1) / 27, 0.72);
-      list.push({ day, wrmsse: Number(err.toFixed(3)) });
-    }
-    return list;
-  }, []);
-
   const metricCell = (m: RegisteredModel, key: MetricKey) => {
     const n = metricNumber(m.metrics, key);
     return n === null ? <Unavailable reason={t('models.kpi.metric_missing', { metric: key.toUpperCase() })} /> : <span className="ui-num">{fmt.number(n, { digits: 3 })}</span>;
@@ -243,7 +231,7 @@ export const ModelPerformance: React.FC = () => {
       sortable: true,
       cell: (m) => (
         <div>
-          <div style={{ fontWeight: 'var(--weight-medium)' }}>{m.name}</div>
+          <div style={{ fontWeight: 'var(--weight-semibold)', color: 'var(--color-text)' }}>{m.name}</div>
           <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
             {m.version} · <span style={{ fontFamily: 'var(--font-mono)' }}>{m.id}</span>
           </div>
@@ -257,7 +245,9 @@ export const ModelPerformance: React.FC = () => {
       value: (m) => (m.is_production ? 0 : 1),
       sortable: true,
       cell: (m) => (
-        <Badge tone={m.is_production ? 'accent' : 'neutral'}>{m.is_production ? t('models.role.production') : t('models.role.challenger')}</Badge>
+        <Badge tone={m.is_production ? 'success' : 'neutral'} dot={m.is_production}>
+          {m.is_production ? t('models.role.production') : t('models.role.challenger')}
+        </Badge>
       ),
     },
     ...METRICS.map<Column<RegisteredModel>>((k) => ({
@@ -274,7 +264,7 @@ export const ModelPerformance: React.FC = () => {
       header: t('models.col.actions'),
       align: 'right',
       cell: (m) => (
-        <div style={{ display: 'inline-flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <div className="mp-table-actions">
           <Button size="sm" variant="secondary" loading={validation[m.id]?.state === 'running'} onClick={() => void runValidation(m)}>
             {t('models.actions.validate')}
           </Button>
@@ -386,564 +376,207 @@ export const ModelPerformance: React.FC = () => {
   const detail = detailId ? validation[detailId] : undefined;
   const detailModel = detailId ? models.find((m) => m.id === detailId) : undefined;
 
-  const prodWrmsse = champion ? metricNumber(champion.metrics, 'wrmsse') ?? 0.4935 : 0.4935;
-  const candWrmsse = candidateModel ? metricNumber(candidateModel.metrics, 'wrmsse') ?? 0.512 : 0.512;
-  const chalWrmsse = challengerModel ? metricNumber(challengerModel.metrics, 'wrmsse') ?? 0.534 : 0.534;
-  const benchWrmsse = benchmarkModel ? metricNumber(benchmarkModel.metrics, 'wrmsse') ?? 0.782 : 0.782;
+  const prodWrmsse = champion ? metricNumber(champion.metrics, 'wrmsse') : null;
+  const prodMase = champion ? metricNumber(champion.metrics, 'mase') : null;
+  const prodMae = champion ? metricNumber(champion.metrics, 'mae') : null;
 
   return (
-    <div className="mp-page-wrap">
-      <div className="mp-header">
-        <div className="mp-header-main">
-          <div className="mp-title-row">
-            <h1 className="mp-title">Model Performance &amp; Registry (Hiệu năng Mô hình &amp; ModelOps)</h1>
-            <div className="mp-prod-pill">
-              <span className="mp-prod-dot" />
-              <span>Production: {champion?.name ?? 'model-ensemble-v1'} (Promoted May 16, 2016)</span>
-            </div>
+    <div className="mp-container">
+      <PageHeader
+        title={t('models.page.title')}
+        description={t('models.page.description')}
+        meta={<DataSourceNote source={t('models.page.source')} />}
+        actions={
+          <>
+            <Button variant="secondary" leftIcon={<ShieldCheck size={16} />} onClick={() => void validateAll()} disabled={models.length === 0}>
+              {t('models.actions.validate_all')}
+            </Button>
+            <Button variant="primary" leftIcon={<Play size={16} />} onClick={() => setTrainOpen(true)}>
+              {t('models.actions.train')}
+            </Button>
+          </>
+        }
+      />
+
+      <div className="mp-champion-banner">
+        <div className="mp-champion-left">
+          <div className="mp-champion-badge">
+            <span className="mp-champion-pulse" />
+            <span>Mô hình đang chạy thực tế (Production)</span>
           </div>
-          <p className="mp-subtitle">Continuous evaluation of M5 demand forecasting models and automated promotion pipeline.</p>
+          <div className="mp-champion-name">{champion ? `${champion.name} (${champion.version})` : 'Chưa có mô hình Production'}</div>
+          <div className="mp-champion-meta">
+            <span>Thuật toán: <strong>{champion ? algoLabel(t, champion.algorithm) : '—'}</strong></span>
+            <span>·</span>
+            <span>Mã: <code>{champion ? champion.id : '—'}</code></span>
+            <span>·</span>
+            <span>Phạm vi: <strong>{champion ? champion.scope : 'global'}</strong></span>
+          </div>
         </div>
 
-        <div className="mp-header-actions">
-          <div className="mp-std-pill">
-            <span>EVALUATION STANDARD:</span>
-            <strong>WRMSSE (Official M5)</strong>
+        {champion && (
+          <div className="mp-champion-right">
+            <div className="mp-metric-chip">
+              <span className="mp-metric-chip-label">WRMSSE (M5)</span>
+              <span className="mp-metric-chip-val">{prodWrmsse !== null ? fmt.number(prodWrmsse, { digits: 3 }) : '—'}</span>
+            </div>
+            <div className="mp-metric-chip">
+              <span className="mp-metric-chip-label">MASE</span>
+              <span className="mp-metric-chip-val">{prodMase !== null ? fmt.number(prodMase, { digits: 3 }) : '—'}</span>
+            </div>
+            <div className="mp-metric-chip">
+              <span className="mp-metric-chip-label">MAE</span>
+              <span className="mp-metric-chip-val">{prodMae !== null ? fmt.number(prodMae, { digits: 3 }) : '—'}</span>
+            </div>
           </div>
-          <Button variant="secondary" leftIcon={<Activity size={15} />} onClick={() => void validateAll()} disabled={models.length === 0}>
-            Run Benchmark Suite
-          </Button>
-          <Button variant="primary" leftIcon={<Plus size={15} />} onClick={() => setTrainOpen(true)}>
-            + Register Model Artifact
-          </Button>
-        </div>
+        )}
       </div>
 
-      <section>
-        <div className="mp-section-header">
-          <div className="mp-section-title-wrap">
-            <h2 className="mp-section-title">Leaderboard &amp; Candidate Tiers</h2>
-            <span className="mp-section-sub">Rolling 28-day validation window</span>
-          </div>
-          <div className="mp-section-sort">Sorted by: WRMSSE (Ascending)</div>
-        </div>
-
-        <div className="mp-leaderboard-grid">
-          <div className="mp-tier-card mp-tier-card--prod">
-            <div className="mp-tier-head">
-              <span className="mp-tier-run">{champion?.job_id ? `RUN-${champion.job_id.slice(0, 8)}` : 'RUN-20160516-ENS1'}</span>
-              <span className="mp-tier-badge mp-tier-badge--prod">● PRODUCTION</span>
-            </div>
-
-            <div className="mp-tier-ident">
-              <h3 className="mp-tier-name">{champion?.name ?? 'Ensemble Tier-1'}</h3>
-              <div className="mp-tier-model-id">{champion?.id ?? 'model-ensemble-v1'}</div>
-            </div>
-
-            <div className="mp-metric-block">
-              <div className="mp-metric-main">
-                <span className="mp-metric-caption">WRMSSE METRIC</span>
-                <span className="mp-metric-val">{fmt.number(prodWrmsse, { digits: 4 })}</span>
-              </div>
-              <div className="mp-metric-side">
-                <span className="mp-metric-side-label">M5 BENCHMARK</span>
-                <span className="mp-metric-tag mp-metric-tag--green">Top 2%</span>
-              </div>
-            </div>
-
-            <div className="mp-specs-list">
-              <div className="mp-spec-item">
-                <span>Inference Latency</span>
-                <span>120ms</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Model Composition</span>
-                <span>60% LGBM + 40% DeepAR</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Deployment Scope</span>
-                <span>Store CA_1</span>
-              </div>
-            </div>
-
-            <div className="mp-tier-bottom">
-              <div className="mp-tier-meta-row">
-                <span>Deployed: May 16, 2016</span>
-                <span className="mp-tier-active">
-                  <Check size={14} /> Active
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mp-tier-card mp-tier-card--cand">
-            <div className="mp-tier-head">
-              <span className="mp-tier-run">{candidateModel?.job_id ? `RUN-${candidateModel.job_id.slice(0, 8)}` : 'RUN-20160521-LGB2'}</span>
-              <span className="mp-tier-badge mp-tier-badge--cand">● CANDIDATE</span>
-            </div>
-
-            <div className="mp-tier-ident">
-              <h3 className="mp-tier-name">{candidateModel?.name ?? 'LightGBM Quantile'}</h3>
-              <div className="mp-tier-model-id">{candidateModel?.id ?? 'model-lgb-v2'}</div>
-            </div>
-
-            <div className="mp-metric-block">
-              <div className="mp-metric-main">
-                <span className="mp-metric-caption">WRMSSE METRIC</span>
-                <span className="mp-metric-val">{fmt.number(candWrmsse, { digits: 4 })}</span>
-              </div>
-              <div className="mp-metric-side">
-                <span className="mp-metric-side-label">LATENCY WIN</span>
-                <span className="mp-metric-tag mp-metric-tag--blue">3x Faster</span>
-              </div>
-            </div>
-
-            <div className="mp-specs-list">
-              <div className="mp-spec-item">
-                <span>Inference Latency</span>
-                <span>42ms</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Training Time</span>
-                <span>18 min</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Loss Function</span>
-                <span>Pinball [q=0.5, 0.9]</span>
-              </div>
-            </div>
-
-            <div className="mp-tier-bottom mp-tier-btn-block">
-              {candidateModel ? (
-                <Button
-                  variant="primary"
-                  loading={promotingId === candidateModel.id}
-                  onClick={() => void doPromote(candidateModel)}
-                  leftIcon={<Award size={15} />}
-                >
-                  Promote to Production
-                </Button>
-              ) : (
-                <Button variant="primary" disabled>
-                  Promote to Production
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <div className="mp-tier-card mp-tier-card--chal">
-            <div className="mp-tier-head">
-              <span className="mp-tier-run">{challengerModel?.job_id ? `RUN-${challengerModel.job_id.slice(0, 8)}` : 'RUN-20160520-NBT1'}</span>
-              <span className="mp-tier-badge mp-tier-badge--chal">● CHALLENGER</span>
-            </div>
-
-            <div className="mp-tier-ident">
-              <h3 className="mp-tier-name">{challengerModel?.name ?? 'N-BEATS Neural'}</h3>
-              <div className="mp-tier-model-id">{challengerModel?.id ?? 'model-nbeats-v1'}</div>
-            </div>
-
-            <div className="mp-metric-block">
-              <div className="mp-metric-main">
-                <span className="mp-metric-caption">WRMSSE METRIC</span>
-                <span className="mp-metric-val">{fmt.number(chalWrmsse, { digits: 4 })}</span>
-              </div>
-              <div className="mp-metric-side">
-                <span className="mp-metric-side-label">DELTA VS PROD</span>
-                <span className="mp-metric-tag mp-metric-tag--amber">+{fmt.number(Math.max(0, chalWrmsse - prodWrmsse), { digits: 4 })}</span>
-              </div>
-            </div>
-
-            <div className="mp-specs-list">
-              <div className="mp-spec-item">
-                <span>Inference Latency</span>
-                <span>310ms</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Epochs Completed</span>
-                <span>150 / 200</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Basis Expansion</span>
-                <span>Trend + Seasonality</span>
-              </div>
-            </div>
-
-            <div className="mp-tier-bottom mp-tier-btn-block">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setTab('registry');
-                  if (challengerModel) setDetailId(challengerModel.id);
-                }}
-                leftIcon={<TrendingUp size={15} />}
-              >
-                ≈ Compare Metrics
-              </Button>
-            </div>
-          </div>
-
-          <div className="mp-tier-card mp-tier-card--bench">
-            <div className="mp-tier-head">
-              <span className="mp-tier-run">{benchmarkModel?.job_id ? `BASE-${benchmarkModel.id.slice(0, 8)}` : 'BASE-SEASONAL-D7'}</span>
-              <span className="mp-tier-badge mp-tier-badge--bench">BENCHMARK</span>
-            </div>
-
-            <div className="mp-tier-ident">
-              <h3 className="mp-tier-name">{benchmarkModel?.name ?? 'Baseline Naive'}</h3>
-              <div className="mp-tier-model-id">{benchmarkModel?.id ?? 'model-naive-d7'}</div>
-            </div>
-
-            <div className="mp-metric-block">
-              <div className="mp-metric-main">
-                <span className="mp-metric-caption">WRMSSE METRIC</span>
-                <span className="mp-metric-val">{fmt.number(benchWrmsse, { digits: 4 })}</span>
-              </div>
-              <div className="mp-metric-side">
-                <span className="mp-metric-side-label">ERROR GAP</span>
-                <span className="mp-metric-tag mp-metric-tag--red">+58.4%</span>
-              </div>
-            </div>
-
-            <div className="mp-specs-list">
-              <div className="mp-spec-item">
-                <span>Inference Latency</span>
-                <span>1ms</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Strategy</span>
-                <span>Seasonal Lag (d-7)</span>
-              </div>
-              <div className="mp-spec-item">
-                <span>Purpose</span>
-                <span>Lower-bound control</span>
-              </div>
-            </div>
-
-            <div className="mp-tier-bottom">
-              <div className="mp-tier-meta-row">
-                <span>M5 Default Benchmark</span>
-                <span>Unparameterized</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="mp-bottom-grid">
-        <div className="mp-hier-card">
-          <div className="mp-hier-head">
-            <div>
-              <h3 className="mp-section-title" style={{ fontSize: 'var(--text-base)' }}>
-                M5 Hierarchical Evaluation Breakdown (WRMSSE across Aggregation Levels)
-              </h3>
-              <span className="mp-section-sub">Weighted scaled error decomposed through Wal-Mart CA_1 aggregation tree</span>
-            </div>
-            <div className="mp-hier-legend">
-              <span className="mp-legend-item">
-                <span className="mp-legend-swatch mp-legend-swatch--ens" /> Ensemble (Prod)
-              </span>
-              <span className="mp-legend-item">
-                <span className="mp-legend-swatch mp-legend-swatch--lgb" /> LightGBM
-              </span>
-              <span className="mp-legend-item">
-                <span className="mp-legend-swatch mp-legend-swatch--naive" /> Naive (d-7)
-              </span>
-            </div>
-          </div>
-
-          <div className="mp-hier-items">
-            <div className="mp-hier-row">
-              <div className="mp-hier-row-header">
-                <span>Level 1: Store Total CA_1</span>
-                <code>Ensemble: 0.421 | LGB: 0.445 | Naive: 0.710</code>
-              </div>
-              <div className="mp-hier-bar-group">
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">Ensemble</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--ens" style={{ width: '42.1%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.421</span>
-                </div>
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">LGBM</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--lgb" style={{ width: '44.5%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.445</span>
-                </div>
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">Naive</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--naive" style={{ width: '71.0%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.710</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mp-hier-row">
-              <div className="mp-hier-row-header">
-                <span>Level 2: Department Breakdown (FOODS, HOBBIES, HOUSEHOLD)</span>
-                <code>Ensemble: 0.468 | LGB: 0.489 | Naive: 0.742</code>
-              </div>
-              <div className="mp-hier-bar-group">
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">Ensemble</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--ens" style={{ width: '46.8%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.468</span>
-                </div>
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">LGBM</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--lgb" style={{ width: '48.9%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.489</span>
-                </div>
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">Naive</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--naive" style={{ width: '74.2%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.742</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mp-hier-row">
-              <div className="mp-hier-row-header">
-                <span>Level 3: Product Category (7 Categories)</span>
-                <code>Ensemble: 0.512 | LGB: 0.530 | Naive: 0.795</code>
-              </div>
-              <div className="mp-hier-bar-group">
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">Ensemble</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--ens" style={{ width: '51.2%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.512</span>
-                </div>
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">LGBM</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--lgb" style={{ width: '53.0%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.530</span>
-                </div>
-                <div className="mp-hier-bar-line">
-                  <span className="mp-hier-bar-label">Naive</span>
-                  <div className="mp-hier-track">
-                    <div className="mp-hier-fill mp-hier-fill--naive" style={{ width: '79.5%' }} />
-                  </div>
-                  <span className="mp-hier-val">0.795</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="mp-horizon-card">
-          <div className="mp-hier-head">
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                <h3 className="mp-section-title" style={{ fontSize: 'var(--text-base)' }}>Forecast Error Horizon Decay</h3>
-                <Badge tone="accent">h = 1..28</Badge>
-              </div>
-              <span className="mp-section-sub">Lead-time stability curve (h = 1..28 days ahead)</span>
-            </div>
-          </div>
-
-          <div className="mp-decay-kpis">
-            <span className="mp-decay-stat">
-              Lead-Time Window Stability: Variance: <strong>±0.038 WRMSSE</strong>
-            </span>
-            <Badge tone="success">Strict Replenishment OK</Badge>
-          </div>
-
-          <div className="mp-decay-chart-wrap">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={horizonDecayData} margin={{ top: 10, right: 10, bottom: 0, left: -24 }}>
-                <defs>
-                  <linearGradient id="decayGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#4f46e5" stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={chart.grid} />
-                <XAxis dataKey="day" {...chart.axis} tickFormatter={(d) => `d${d}`} />
-                <YAxis domain={[0.35, 0.6]} {...chart.axis} />
-                <Tooltip cursor={{ stroke: chart.grid }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
-                <Area type="monotone" dataKey="wrmsse" stroke="#4f46e5" strokeWidth={2} fillOpacity={1} fill="url(#decayGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="mp-milestones-row">
-            <div className="mp-milestone-box">
-              <div className="mp-milestone-label">Day 1 (Immediate)</div>
-              <div className="mp-milestone-val">0.410</div>
-            </div>
-            <div className="mp-milestone-box">
-              <div className="mp-milestone-label">Day 14 (Lead-time)</div>
-              <div className="mp-milestone-val">0.472</div>
-            </div>
-            <div className="mp-milestone-box">
-              <div className="mp-milestone-label">Day 28 (Cycle End)</div>
-              <div className="mp-milestone-val">0.525</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section style={{ display: 'grid', gap: 'var(--space-4)' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
-          <KpiTile
-            label={t('models.kpi.champion')}
-            icon={<Award size={16} />}
-            loading={registry.loading}
-            value={champion ? champion.name : null}
-            unavailableReason={champion || registry.loading ? undefined : t('models.kpi.champion_none_reason')}
-            hint={champion ? t('models.kpi.champion_hint', { algorithm: algoLabel(t, champion.algorithm), version: champion.version }) : undefined}
-          />
-          <KpiTile label={t('models.kpi.wrmsse')} value={wrmsse.value} loading={wrmsse.loading} unavailableReason={wrmsse.reason} hint={t('models.kpi.wrmsse_hint')} />
-          <KpiTile label={t('models.kpi.mase')} value={mase.value} loading={mase.loading} unavailableReason={mase.reason} hint={t('models.kpi.mase_hint')} />
-          <CoverageTiles
-            loading={registry.loading}
-            artifact={coverage}
-            artifactSource={champion ? (typeof champion.metrics?.coverage_source === 'string' ? champion.metrics.coverage_source : null) : null}
-            dbCausal={coverageDb}
-            dbCausalN={champion ? metricNumber(champion.metrics, 'coverage_q95_db_causal_n') : null}
-            missingReason={champion ? t('models.kpi.coverage_missing') : t('models.kpi.no_champion_metric')}
-          />
-        </div>
-
-        <Tabs
-          aria-label={t('models.page.title')}
-          value={tab}
-          onChange={setTab}
-          items={[
-            { id: 'registry', label: t('models.tabs.registry'), count: registry.data?.total },
-            { id: 'training', label: t('models.tabs.training'), count: jobs.data?.total },
-          ]}
+      <div className="mp-kpi-grid">
+        <KpiTile
+          label={t('models.kpi.champion')}
+          icon={<Award size={16} />}
+          loading={registry.loading}
+          value={champion ? champion.name : null}
+          unavailableReason={champion || registry.loading ? undefined : t('models.kpi.champion_none_reason')}
+          hint={champion ? t('models.kpi.champion_hint', { algorithm: algoLabel(t, champion.algorithm), version: champion.version }) : undefined}
         />
+        <KpiTile label={t('models.kpi.wrmsse')} value={wrmsse.value} loading={wrmsse.loading} unavailableReason={wrmsse.reason} hint={t('models.kpi.wrmsse_hint')} />
+        <KpiTile label={t('models.kpi.mase')} value={mase.value} loading={mase.loading} unavailableReason={mase.reason} hint={t('models.kpi.mase_hint')} />
+        <CoverageTiles
+          loading={registry.loading}
+          artifact={coverage}
+          artifactSource={champion ? (typeof champion.metrics?.coverage_source === 'string' ? champion.metrics.coverage_source : null) : null}
+          dbCausal={coverageDb}
+          dbCausalN={champion ? metricNumber(champion.metrics, 'coverage_q95_db_causal_n') : null}
+          missingReason={champion ? t('models.kpi.coverage_missing') : t('models.kpi.no_champion_metric')}
+        />
+      </div>
 
-        <HoldHeight activeKey={tab} role="tabpanel" style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
-          {tab === 'registry' && (
-            <>
-              <ChartFrame
-                title={t('models.chart.title')}
-                description={t('models.chart.description')}
-                source={t('models.chart.source')}
-                height={Math.max(180, chartRows.length * 44 + 60)}
+      <Tabs
+        aria-label={t('models.page.title')}
+        value={tab}
+        onChange={setTab}
+        items={[
+          { id: 'registry', label: t('models.tabs.registry'), count: registry.data?.total },
+          { id: 'training', label: t('models.tabs.training'), count: jobs.data?.total },
+        ]}
+      />
+
+      <HoldHeight activeKey={tab} role="tabpanel" style={{ display: 'grid', gap: 'var(--space-5)', minWidth: 0 }}>
+        {tab === 'registry' && (
+          <>
+            <Card title={t('models.registry.title')} description={t('models.registry.description')} flush>
+              <Table
+                columns={registryColumns}
+                rows={sortedModels}
+                rowKey={(m) => m.id}
                 loading={registry.loading}
                 error={registry.error}
                 onRetry={registry.refetch}
-                empty={!registry.loading && !registry.error && chartRows.length === 0}
-                actions={
-                  <Select<MetricKey>
-                    aria-label={t('models.chart.metric')}
-                    size="sm"
-                    value={chartMetric}
-                    onChange={setChartMetric}
-                    options={METRICS.map((k) => ({ value: k, label: k.toUpperCase() }))}
-                  />
-                }
-                footer={
-                  <>
-                    <ChartLegend
-                      items={[
-                        { label: t('models.role.production'), color: chart.series[0] },
-                        { label: t('models.role.challenger'), color: chart.series[1] },
-                      ]}
-                    />
-                    {missingNames.length > 0 && chartRows.length > 0 && (
-                      <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
-                        {t('models.chart.missing', { metric: chartMetric.toUpperCase(), names: missingNames.join(', ') })}
-                      </p>
-                    )}
-                  </>
-                }
-              >
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartRows} layout="vertical" margin={{ top: 4, right: 48, bottom: 4, left: 8 }}>
-                    <CartesianGrid horizontal={false} stroke={chart.grid} />
-                    <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
-                    <YAxis type="category" dataKey="name" width={150} {...chart.axis} />
-                    <Tooltip cursor={{ fill: chart.grid, opacity: 0.4 }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
-                    <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
-                      {chartRows.map((r) => (
-                        <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
-                      ))}
-                      <LabelList dataKey="value" position="right" formatter={(v: unknown) => (typeof v === 'number' ? fmt.number(v, { digits: 3 }) : '')} fill={chart.tick} fontSize={11} />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartFrame>
-
-              <Card title={t('models.registry.title')} description={t('models.registry.description')} flush>
-                <Table
-                  columns={registryColumns}
-                  rows={models}
-                  rowKey={(m) => m.id}
-                  loading={registry.loading}
-                  error={registry.error}
-                  onRetry={registry.refetch}
-                  emptyTitle={t('models.registry.empty_title')}
-                  emptyDescription={t('models.registry.empty_description')}
-                  wrap
-                />
-                {registry.data && registry.data.total > models.length && (
-                  <p style={{ padding: 'var(--space-3) var(--space-4)', margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
-                    {t('models.registry.total_note', { shown: models.length, total: registry.data.total })}
-                  </p>
-                )}
-              </Card>
-            </>
-          )}
-
-          {tab === 'training' && (
-            <Card
-              title={t('models.training.title')}
-              description={t('models.training.description')}
-              actions={
-                <Button size="sm" variant="secondary" onClick={jobs.refetch} leftIcon={<RefreshCw size={14} />}>
-                  {t('models.actions.refresh')}
-                </Button>
-              }
-              flush
-            >
-              {hasActiveJob && (
-                <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
-                  <Alert tone="info">{t('models.training.polling')}</Alert>
-                </div>
-              )}
-              <Table
-                columns={jobColumns}
-                rows={jobItems ?? []}
-                rowKey={(j) => j.id}
-                loading={jobs.loading && !jobs.data}
-                error={jobs.error}
-                onRetry={jobs.refetch}
-                emptyTitle={t('models.training.empty_title')}
-                emptyDescription={t('models.training.empty_description')}
-                pagination={{
-                  page: jobsPage.page,
-                  pageSize: jobsPage.pageSize,
-                  onPageChange: jobsPage.setPage,
-                  onPageSizeChange: jobsPage.setPageSize,
-                  total: jobs.data?.total ?? 0,
-                }}
+                emptyTitle={t('models.registry.empty_title')}
+                emptyDescription={t('models.registry.empty_description')}
                 wrap
               />
-              <div style={{ padding: '0 var(--space-4) var(--space-3)' }}>
-                <DataSourceNote source={t('models.training.source')} />
-              </div>
+              {registry.data && registry.data.total > models.length && (
+                <p style={{ padding: 'var(--space-3) var(--space-4)', margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
+                  {t('models.registry.total_note', { shown: models.length, total: registry.data.total })}
+                </p>
+              )}
             </Card>
-          )}
-        </HoldHeight>
-      </section>
+
+            <ChartFrame
+              title={t('models.chart.title')}
+              description={t('models.chart.description')}
+              source={t('models.chart.source')}
+              height={Math.max(200, chartRows.length * 48 + 64)}
+              loading={registry.loading}
+              error={registry.error}
+              onRetry={registry.refetch}
+              empty={!registry.loading && !registry.error && chartRows.length === 0}
+              actions={
+                <Select<MetricKey>
+                  aria-label={t('models.chart.metric')}
+                  size="sm"
+                  value={chartMetric}
+                  onChange={setChartMetric}
+                  options={METRICS.map((k) => ({ value: k, label: k.toUpperCase() }))}
+                />
+              }
+              footer={
+                <>
+                  <ChartLegend
+                    items={[
+                      { label: t('models.role.production'), color: chart.series[0] },
+                      { label: t('models.role.challenger'), color: chart.series[1] },
+                    ]}
+                  />
+                  {missingNames.length > 0 && chartRows.length > 0 && (
+                    <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>
+                      {t('models.chart.missing', { metric: chartMetric.toUpperCase(), names: missingNames.join(', ') })}
+                    </p>
+                  )}
+                </>
+              }
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 56, bottom: 8, left: 12 }}>
+                  <CartesianGrid horizontal={false} stroke={chart.grid} />
+                  <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
+                  <YAxis type="category" dataKey="name" width={160} {...chart.axis} />
+                  <Tooltip cursor={{ fill: chart.grid, opacity: 0.4 }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
+                  <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
+                    {chartRows.map((r) => (
+                      <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
+                    ))}
+                    <LabelList dataKey="value" position="right" formatter={(v: unknown) => (typeof v === 'number' ? fmt.number(v, { digits: 3 }) : '')} fill={chart.tick} fontSize={11} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartFrame>
+          </>
+        )}
+
+        {tab === 'training' && (
+          <Card
+            title={t('models.training.title')}
+            description={t('models.training.description')}
+            actions={
+              <Button size="sm" variant="secondary" onClick={jobs.refetch} leftIcon={<RefreshCw size={14} />}>
+                {t('models.actions.refresh')}
+              </Button>
+            }
+            flush
+          >
+            {hasActiveJob && (
+              <div style={{ padding: 'var(--space-3) var(--space-4) 0' }}>
+                <Alert tone="info">{t('models.training.polling')}</Alert>
+              </div>
+            )}
+            <Table
+              columns={jobColumns}
+              rows={jobItems ?? []}
+              rowKey={(j) => j.id}
+              loading={jobs.loading && !jobs.data}
+              error={jobs.error}
+              onRetry={jobs.refetch}
+              emptyTitle={t('models.training.empty_title')}
+              emptyDescription={t('models.training.empty_description')}
+              pagination={{
+                page: jobsPage.page,
+                pageSize: jobsPage.pageSize,
+                onPageChange: jobsPage.setPage,
+                onPageSizeChange: jobsPage.setPageSize,
+                total: jobs.data?.total ?? 0,
+              }}
+              wrap
+            />
+            <div style={{ padding: '0 var(--space-4) var(--space-3)' }}>
+              <DataSourceNote source={t('models.training.source')} />
+            </div>
+          </Card>
+        )}
+      </HoldHeight>
 
       <Modal
         open={detailId !== null}
