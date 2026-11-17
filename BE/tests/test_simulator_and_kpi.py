@@ -291,7 +291,7 @@ class TestSimulationEndpointAndKpi(unittest.TestCase):
         self.assertAlmostEqual(d["total_cost_savings"], d["b0_total_cost"] - d["c3out_total_cost"], places=1)
         last = d["cost_curves"][-1]
         # A3 recomputation from the raw rows
-        rows = db.query(InventoryDaily).filter(InventoryDaily.date > START, InventoryDaily.date <= START + timedelta(days=14)).all()
+        rows = db.query(InventoryDaily).filter(InventoryDaily.date >= START, InventoryDaily.date <= START + timedelta(days=14)).all()
         h = sum(r.on_hand_end * 4.0 * pc.HOLDING_RATE_DAILY for r in rows)
         b = sum(r.lost_sales * 4.0 * pc.STOCKOUT_PENALTY_RATE for r in rows)
         self.assertAlmostEqual(last["c3out_holding_cost"], h, delta=0.05)

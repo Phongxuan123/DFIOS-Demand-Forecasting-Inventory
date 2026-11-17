@@ -382,7 +382,7 @@ class ReportsRepository:
         def avg_inv(model) -> Optional[float]:
             sub = (
                 db.query(func.sum(model.on_hand_end).label("s"))
-                .filter(model.store_id.in_(stores), model.date > start, model.date <= end)
+                .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
                 .group_by(model.date)
                 .all()
             )
@@ -395,7 +395,7 @@ class ReportsRepository:
             v = (
                 db.query(func.sum(model.on_hand_end * Product.price))
                 .join(Product, Product.item_id == model.item_id)
-                .filter(model.store_id.in_(stores), model.date > start, model.date <= end)
+                .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
                 .scalar()
             )
             return float(v or 0.0) * pc.HOLDING_RATE_DAILY
@@ -438,7 +438,7 @@ class ReportsRepository:
                     func.sum(model.lost_sales * Product.price),
                 )
                 .join(Product, Product.item_id == model.item_id)
-                .filter(model.store_id.in_(stores), model.date > start, model.date <= end)
+                .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
                 .group_by(func.coalesce(Product.cat_id, "UNKNOWN"))
             )
             return {
@@ -457,7 +457,7 @@ class ReportsRepository:
             .join(Product, Product.item_id == ReplenishmentRecommendation.item_id)
             .filter(
                 ReplenishmentRecommendation.store_id.in_(stores),
-                ReplenishmentRecommendation.review_date > start, ReplenishmentRecommendation.review_date <= end,
+                ReplenishmentRecommendation.review_date >= start, ReplenishmentRecommendation.review_date <= end,
                 ReplenishmentRecommendation.status.in_(("APPROVED", "COMPLETED")),
             )
             .group_by(func.coalesce(Product.cat_id, "UNKNOWN"))
@@ -468,7 +468,7 @@ class ReportsRepository:
         for c, n in (
             db.query(func.coalesce(Product.cat_id, "UNKNOWN"), func.count(SimShadowDaily.item_id))
             .join(Product, Product.item_id == SimShadowDaily.item_id)
-            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date > start, SimShadowDaily.date <= end,
+            .filter(SimShadowDaily.store_id.in_(stores), SimShadowDaily.date >= start, SimShadowDaily.date <= end,
                     SimShadowDaily.order_qty > 0)
             .group_by(func.coalesce(Product.cat_id, "UNKNOWN"))
             .all()
