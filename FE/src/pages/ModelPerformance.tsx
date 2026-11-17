@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Award, CheckCircle2, Play, RefreshCw, ShieldCheck } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import {
   Alert,
   Badge,
@@ -8,7 +8,6 @@ import {
   Card,
   ChartFrame,
   ChartLegend,
-  ChartTooltip,
   Field,
   Input,
   KpiTile,
@@ -503,7 +502,6 @@ export const ModelPerformance: React.FC = () => {
             <CartesianGrid horizontal={false} stroke={chart.grid} />
             <XAxis type="number" {...chart.axis} domain={[0, 'auto']} />
             <YAxis type="category" dataKey="name" width={160} {...chart.axis} />
-            <Tooltip cursor={{ fill: chart.grid, opacity: 0.4 }} content={<ChartTooltip format={(v) => fmt.number(v, { digits: 3 })} />} />
             <Bar dataKey="value" name={t('models.chart.value')} radius={[0, 4, 4, 0]} maxBarSize={22}>
               {chartRows.map((r) => (
                 <Cell key={r.id} fill={r.prod ? chart.series[0] : chart.series[1]} />
