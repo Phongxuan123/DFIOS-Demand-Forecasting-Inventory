@@ -322,7 +322,7 @@ export const ModelPerformance: React.FC = () => {
           <div style={{ display: 'grid', gap: 2, fontSize: 'var(--text-xs)' }}>
             {entries.map(([name, m]) => (
               <div key={name} className="ui-num">
-                <strong>{name}</strong>: WRMSSE {fmt.number(metricNumber(m as MetricMap, 'wrmsse'), { digits: 3 })} · MASE{' '}
+                <strong>{name}</strong>: {t('models.training.rmsse_single')} {fmt.number(metricNumber(m as MetricMap, 'wrmsse'), { digits: 3 })} · MASE{' '}
                 {fmt.number(metricNumber(m as MetricMap, 'mase'), { digits: 3 })} · MAE {fmt.number(metricNumber(m as MetricMap, 'mae'), { digits: 3 })} · RMSE{' '}
                 {fmt.number(metricNumber(m as MetricMap, 'rmse'), { digits: 3 })}
               </div>
