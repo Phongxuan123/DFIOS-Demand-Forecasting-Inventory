@@ -143,9 +143,9 @@ export interface FastInferenceResponse {
 
 const sku = (s: string) => encodeURIComponent(s);
 
-export const listProducts = (params: { page: number; page_size: number; q?: string; cat_id?: string }, signal?: AbortSignal) =>
+export const listProducts = (params: { page: number; page_size: number; q?: string; cat_id?: string; dept_id?: string }, signal?: AbortSignal) =>
   getJson<ProductListResponse>('/products', {
-    params: { ...params, q: params.q || undefined, cat_id: params.cat_id || undefined },
+    params: { ...params, q: params.q || undefined, cat_id: params.cat_id || undefined, dept_id: params.dept_id || undefined },
     signal,
   });
 

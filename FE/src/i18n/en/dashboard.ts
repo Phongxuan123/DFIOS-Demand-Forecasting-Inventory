@@ -127,7 +127,7 @@ export const dashboard: typeof Vi = {
     action_create_po: 'Create Urgent PO',
     action_reorder: 'Reorder',
     action_stable: 'Normal',
-    view_all_replenishments: 'View all alerts in Replenishment →',
+    view_all_replenishments: 'View all',
     summary: '{critical} critical, {warning} warning, {healthy} healthy of {total} monitored SKUs',
     shown: 'Showing {shown} of {total} alerts',
   },

@@ -80,6 +80,7 @@ const App: React.FC = () => (
                     }
                   />
                   <Route path="abc-xyz" element={<AbcXyzAnalysis />} />
+                  <Route path="classification" element={<Navigate to="/abc-xyz" replace />} />
                   <Route path="reports" element={<Reports />} />
                   <Route path="products" element={<Products />} />
                   <Route

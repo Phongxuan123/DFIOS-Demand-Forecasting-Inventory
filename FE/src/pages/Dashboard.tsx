@@ -174,19 +174,15 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
               <label htmlFor="dash-clock-days" className="dash-clock-label">
                 {t('dashboard.clock.days')}
               </label>
-              <select
+              <Select<number>
                 id="dash-clock-days"
-                className="dash-clock-select"
+                size="sm"
                 value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
+                onChange={setDays}
+                options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
                 disabled={advancing}
-              >
-                {CLOCK_ADVANCE_DAYS.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
+                aria-label={t('dashboard.clock.days')}
+              />
             </div>
             <Button
               variant="primary"
@@ -748,7 +744,7 @@ export const Dashboard: React.FC = () => {
             variant="secondary"
             size="sm"
             rightIcon={<ArrowRight size={14} />}
-            onClick={() => navigate('/classification')}
+            onClick={() => navigate('/abc-xyz')}
           >
             {t('nav.abc_xyz')}
           </Button>

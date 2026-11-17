@@ -125,7 +125,7 @@ export const dashboard = {
     action_create_po: 'Tạo PO khẩn',
     action_reorder: 'Đặt hàng',
     action_stable: 'Ổn định',
-    view_all_replenishments: 'Xem tất cả cảnh báo trong trang Đặt hàng →',
+    view_all_replenishments: 'Xem tất cả',
     summary: '{critical} nghiêm trọng, {warning} cảnh báo, {healthy} ổn định trên {total} SKU theo dõi',
     shown: 'Hiển thị {shown} trên {total} cảnh báo',
   },
