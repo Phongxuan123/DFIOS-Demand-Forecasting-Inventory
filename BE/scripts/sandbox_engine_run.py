@@ -1,8 +1,16 @@
 """P2 sandbox: drive the LIVE engine (simulator J1-J6: J3 quantiles, C3-OUT, J5 refit every 91 days) over the teacher's
 test year for one store and score it like the teacher's replay (test segment, complete cycles only).
 
-Prerequisite: scripts/load_teacher_data.py has loaded the store (clock at 2015-05-25, teacher quantiles, classes).
-Same database guard as the loader (local ``dfios_sandbox`` or sqlite only).
+Prerequisite: scripts/load_teacher_data.py has loaded the store (clock at 2015-05-25, teacher quantiles, classes);
+optionally scripts/load_teacher_prices.py has loaded the daily prices (price_history, G-37).
+Database guard: sqlite or a localhost PostgreSQL database whose name starts with ``dfios_sandbox``.
+
+Start modes (``--start`` resets the store's clock/state with the loader's clock step before driving):
+    --start 2015-05-25   cold start at TEST_START (theta_0 = 0, stock round(mean 28 d * 10), J5 selection #0)
+    --start 2014-11-24   continuous like the teacher: clock at VAL_START (1395), selection #0 computed as of
+                         TEST_START (the teacher's validation choice, applied from 1395), no J5 refit before
+                         TEST_START (the teacher refits at 1577, 1668, 1759, 1850 only; --refit-in-validation keeps
+                         the engine's 91-day refit at 1486), the test year is scored from 2015-05-25
 
     python scripts/sandbox_engine_run.py --store CA_1 --out engine.json            # deployed policy (C3-OUT on)
     python scripts/sandbox_engine_run.py --store CA_1 --no-c3 --out engine_noc3.json   # ablation: theta frozen at 0
@@ -11,7 +19,8 @@ Same database guard as the loader (local ``dfios_sandbox`` or sqlite only).
 Scoring (teacher ``segment_summary``): holding 0.002 * end-of-day on-hand * price, lost 0.35 * lost units * price,
 ordering 2 per order line; fill = 1 - lost / demand; class CSL over the cycles [t_k + L, t_k + L + R - 1] of the
 reviews t_k in [TEST_START, T_END) that end before T_END, failure = a day ending with on-hand <= 0. Costs are given
-with the app's constant ``products.price`` AND re-priced with the teacher's daily ``price.npy``.
+with the app's constant ``products.price``, with the engine's own daily price (``price_history`` with the
+products.price fallback) AND re-priced with the teacher's daily ``price.npy``.
 Only the teacher's SKUs (the store's classification rows) are scored.
 """
 from __future__ import annotations
@@ -32,7 +41,8 @@ for p in (BE_DIR, SCRIPTS):
 
 import numpy as np  # noqa: E402
 
-from load_teacher_data import DAY0, TEST_START, T_END, assert_sandbox_url, day_to_date  # noqa: E402
+from load_teacher_data import DAY0, TEST_START, T_END, day_to_date  # noqa: E402
+from load_teacher_prices import assert_sandbox_prefix_url  # noqa: E402
 
 L, R = 3, 7
 
@@ -100,6 +110,8 @@ def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict
     n_orders = sum(1 for iid, _d, qty in orders_rows if iid in pos and float(qty or 0) > 0)
     units_ordered = sum(float(qty or 0) for iid, _d, qty in orders_rows if iid in pos)
 
+    from app.repositories import price_history_repository
+    engine_price = price_history_repository.price_matrix(db, store, items, start, end_excl)
     const_price = np.array([float(p) for p in (dict(db.execute(select(Product.item_id, Product.price)).all())
                                                .get(i, 1.0) for i in items)])
     # teacher daily price (read-only mmap), rows ordered like meta
@@ -142,6 +154,8 @@ def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict
     return {
         "segment": [start.isoformat(), (end_excl - timedelta(days=1)).isoformat()], "n_skus": n,
         "missing_days": missing_days, "constant_price": costs(const_price[:, None]),
+        "engine_daily_price": costs(engine_price),
+        "price_history_rows_used": bool(price_history_repository.has_prices(db, store)),
         "daily_teacher_price": costs(daily_price), "orders": n_orders, "units_ordered": units_ordered,
         "demand_units": float(demand.sum()), "lost_units": float(lost.sum()), "fill": float(fill),
         "n_cycles": ncyc, "class_csl": class_csl, "min_class_csl": min(class_csl.values()),
@@ -157,10 +171,14 @@ def main(argv=None) -> int:
     ap.add_argument("--until", default=day_to_date(T_END - 1).isoformat())
     ap.add_argument("--no-c3", action="store_true", help="ablation: C3-OUT step disabled (theta stays 0)")
     ap.add_argument("--score-only", action="store_true")
+    ap.add_argument("--start", default=None,
+                    help="reset the clock/state to this date first (2015-05-25 cold, 2014-11-24 continuous)")
+    ap.add_argument("--refit-in-validation", action="store_true",
+                    help="continuous start: keep the engine's J5 refits before TEST_START")
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
-    url = assert_sandbox_url(os.environ.get("DATABASE_URL"))
+    url = assert_sandbox_prefix_url(os.environ.get("DATABASE_URL"))
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     engine = create_engine(url)
@@ -170,6 +188,27 @@ def main(argv=None) -> int:
         if args.no_c3:
             from app.services.calibrator_service import calibrator_service
             calibrator_service.run_calibration_step = lambda *a, **k: ([], [], 0)  # type: ignore[assignment]
+        if args.start and not args.score_only:
+            from load_teacher_data import set_clock
+            sd = (date.fromisoformat(args.start) - DAY0).days
+            t1 = time.time()
+            rep["clock"] = set_clock(db, {"store": args.store, "TEST_START": TEST_START}, True, start_day=sd,
+                                     refit_as_of_day=TEST_START if sd < TEST_START else None)
+            rep["clock"]["seconds"] = round(time.time() - t1, 1)
+            print("clock:", rep["clock"], flush=True)
+            if sd < TEST_START and not args.refit_in_validation:
+                from app.services.optimization_service import optimization_service
+                orig = optimization_service.refit_quarterly_policies
+                test_date = day_to_date(TEST_START)
+
+                def refit_from_test(db_, store_id="CA_1", selection_id=None, **kw):
+                    origin = optimization_service._store_origin(db_, store_id)
+                    if origin < test_date:   # teacher: no refit inside the validation half-year
+                        return []
+                    return orig(db_, store_id=store_id, selection_id=selection_id, **kw)
+
+                optimization_service.refit_quarterly_policies = refit_from_test  # type: ignore[assignment]
+                rep["skipped_validation_refits"] = True
         t0 = time.time()
         if not args.score_only:
             rep["advances"] = drive(db, args.store, date.fromisoformat(args.until))
@@ -182,7 +221,7 @@ def main(argv=None) -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(rep, f, indent=1, default=str)
     s = rep["score"]
-    print(json.dumps({k: s[k] for k in ("constant_price", "daily_teacher_price", "orders", "fill", "min_class_csl",
+    print(json.dumps({k: s[k] for k in ("constant_price", "engine_daily_price", "daily_teacher_price", "orders", "fill", "min_class_csl",
                                         "class_csl", "n_cycles", "missing_days", "theta_last")}, indent=1))
     return 0
 
