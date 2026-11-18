@@ -13,7 +13,6 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
-  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -66,12 +65,18 @@ import {
   type OverrideRow,
   type ProductRow,
 } from '../services/forecastApi.ts';
+import { getDemandTrend } from '../services/dashboardApi.ts';
+import { getForecastAccuracy, type AccuracyMetric } from '../services/reportsApi.ts';
+import { FutureForecastPanel } from './forecast/FutureForecastPanel.tsx';
 import './ForecastExplorer.css';
 
-type MainTab = 'overview' | 'sku' | 'window' | 'schedule';
+type MainTab = 'overview' | 'sku' | 'window' | 'schedule' | 'future';
 type RowQuality = 'ok' | 'crossing' | 'missing';
 
 const DEPARTMENTS = ['FOODS_1', 'FOODS_2', 'HOBBIES_1', 'HOUSEHOLD_1', 'HOUSEHOLD_2'] as const;
+const CATEGORIES = ['FOODS', 'HOBBIES', 'HOUSEHOLD'] as const;
+type OverviewScope = 'ALL' | (typeof CATEGORIES)[number];
+const ABC_CLASSES = ['A', 'B', 'C'] as const;
 const EPS = 1e-9;
 const DAY_MS = 86_400_000;
 const GLOBAL_STORE = /^(GLOBAL|ALL)$/i;
@@ -83,6 +88,12 @@ interface ProcessedRow extends ForecastRow {
   modelValue: number;
 }
 
+interface AccuracyRow {
+  key: string;
+  label: string;
+  m: AccuracyMetric;
+}
+
 interface ChartPoint {
   date: string;
   actual: number | null;
@@ -91,119 +102,6 @@ interface ChartPoint {
   adjusted: number | null;
   row: ProcessedRow | null;
 }
-
-interface CategoryAccuracy {
-  department: string;
-  wrmsse: number;
-  scaleAccuracy: number;
-  bias: number;
-  status: 'Compliant' | 'Volatile';
-}
-
-interface DepartmentStat {
-  demand: number;
-  dailyAvg: number;
-  range: string;
-  wrmsse: number;
-  bias: number;
-  status: 'Compliant' | 'Volatile';
-  uncertainty: string;
-  bandRange: string;
-  share: string;
-}
-
-const DEPARTMENT_STATS: Record<string, DepartmentStat> = {
-  FOODS_1: {
-    demand: 152920,
-    dailyAvg: 5461,
-    range: '4.9k - 6.3k/day',
-    wrmsse: 0.442,
-    bias: 1.2,
-    status: 'Compliant',
-    uncertainty: '±6.8%',
-    bandRange: '5,020 - 5,900',
-    share: '64%',
-  },
-  FOODS_2: {
-    demand: 43010,
-    dailyAvg: 1536,
-    range: '1.3k - 1.8k/day',
-    wrmsse: 0.468,
-    bias: -0.4,
-    status: 'Compliant',
-    uncertainty: '±7.9%',
-    bandRange: '1,410 - 1,660',
-    share: '18%',
-  },
-  HOBBIES_1: {
-    demand: 21500,
-    dailyAvg: 768,
-    range: '620 - 920/day',
-    wrmsse: 0.589,
-    bias: 3.1,
-    status: 'Volatile',
-    uncertainty: '±12.4%',
-    bandRange: '670 - 860',
-    share: '9%',
-  },
-  HOUSEHOLD_1: {
-    demand: 14330,
-    dailyAvg: 512,
-    range: '420 - 610/day',
-    wrmsse: 0.512,
-    bias: -1.1,
-    status: 'Compliant',
-    uncertainty: '±9.1%',
-    bandRange: '465 - 558',
-    share: '6%',
-  },
-  HOUSEHOLD_2: {
-    demand: 7180,
-    dailyAvg: 256,
-    range: '190 - 320/day',
-    wrmsse: 0.621,
-    bias: -2.8,
-    status: 'Volatile',
-    uncertainty: '±14.2%',
-    bandRange: '220 - 292',
-    share: '3%',
-  },
-};
-
-const CATEGORY_ACCURACY: CategoryAccuracy[] = [
-  { department: 'FOODS_1', wrmsse: 0.442, scaleAccuracy: 95.8, bias: 1.2, status: 'Compliant' },
-  { department: 'FOODS_2', wrmsse: 0.468, scaleAccuracy: 94.2, bias: -0.4, status: 'Compliant' },
-  { department: 'HOBBIES_1', wrmsse: 0.589, scaleAccuracy: 88.6, bias: 3.1, status: 'Volatile' },
-  { department: 'HOUSEHOLD_1', wrmsse: 0.512, scaleAccuracy: 92.1, bias: -1.1, status: 'Compliant' },
-  { department: 'HOUSEHOLD_2', wrmsse: 0.621, scaleAccuracy: 86.4, bias: -2.8, status: 'Volatile' },
-];
-
-const FALLBACK_SHAP: Record<string, Array<{ feature_name: string; importance_score: number; direction: string }>> = {
-  FOODS: [
-    { feature_name: 'sales_lag_28', importance_score: 0.342, direction: 'pos' },
-    { feature_name: 'sales_roll_mean_7', importance_score: 0.285, direction: 'pos' },
-    { feature_name: 'event_snap_ca', importance_score: 0.194, direction: 'pos' },
-    { feature_name: 'sell_price_ratio', importance_score: -0.158, direction: 'neg' },
-    { feature_name: 'day_of_week_sat', importance_score: 0.124, direction: 'pos' },
-    { feature_name: 'sales_roll_std_28', importance_score: 0.088, direction: 'pos' },
-  ],
-  HOBBIES: [
-    { feature_name: 'sales_lag_28', importance_score: 0.312, direction: 'pos' },
-    { feature_name: 'day_of_week_sun', importance_score: 0.264, direction: 'pos' },
-    { feature_name: 'sales_roll_mean_14', importance_score: 0.215, direction: 'pos' },
-    { feature_name: 'event_memorial_day', importance_score: 0.182, direction: 'pos' },
-    { feature_name: 'sell_price_ratio', importance_score: -0.142, direction: 'neg' },
-    { feature_name: 'sales_roll_std_7', importance_score: 0.095, direction: 'pos' },
-  ],
-  HOUSEHOLD: [
-    { feature_name: 'sales_lag_28', importance_score: 0.355, direction: 'pos' },
-    { feature_name: 'sales_roll_mean_7', importance_score: 0.248, direction: 'pos' },
-    { feature_name: 'event_snap_ca', importance_score: 0.165, direction: 'pos' },
-    { feature_name: 'sell_price_ratio', importance_score: -0.138, direction: 'neg' },
-    { feature_name: 'day_of_week_sat', importance_score: 0.118, direction: 'pos' },
-    { feature_name: 'sales_roll_mean_28', importance_score: 0.076, direction: 'pos' },
-  ],
-};
 
 function rowQuality(r: ForecastRow): RowQuality {
   if (r.p10 === null || r.p50 === null || r.p90 === null) return 'missing';
@@ -215,76 +113,6 @@ function shiftIso(dateIso: string, days: number): string {
   const d = new Date(dateIso);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
-}
-
-function generateMacroChartData(isStore: boolean, dept: string, rangeDays: number): ChartPoint[] {
-  const points: ChartPoint[] = [];
-  const mult = isStore ? 1.0 : dept === 'FOODS_1' ? 0.64 : dept === 'FOODS_2' ? 0.18 : dept === 'HOBBIES_1' ? 0.09 : dept === 'HOUSEHOLD_1' ? 0.06 : 0.03;
-  const cutoverMs = Date.parse('2016-05-23T00:00:00Z');
-  const startMs = cutoverMs - rangeDays * DAY_MS;
-  const endMs = cutoverMs + 27 * DAY_MS;
-
-  for (let t = startMs; t <= endMs; t += DAY_MS) {
-    const d = new Date(t);
-    const iso = d.toISOString().slice(0, 10);
-    const dayOfWeek = d.getUTCDay();
-    const weekendLift = dayOfWeek === 6 ? 1.14 : dayOfWeek === 0 ? 1.09 : dayOfWeek === 1 ? 0.96 : 1.0;
-    const wave = Math.sin(((t - startMs) / (DAY_MS * 7)) * Math.PI) * 260;
-
-    let eventLift = 1.0;
-    if (iso === '2016-05-08') eventLift = 1.21;
-    else if (iso === '2016-05-15' || iso === '2016-05-31') eventLift = 1.07;
-    else if (iso >= '2016-05-28' && iso <= '2016-05-30') eventLift = 1.15;
-    else if (iso >= '2016-06-01' && iso <= '2016-06-10') eventLift = 1.11;
-
-    const baseVal = Math.round((8450 + wave) * weekendLift * eventLift);
-
-    if (t < cutoverMs) {
-      const actualVal = Math.round(baseVal * mult);
-      points.push({
-        date: iso,
-        actual: actualVal,
-        forecast: null,
-        band: null,
-        adjusted: null,
-        row: null,
-      });
-    } else {
-      const h = Math.round((t - cutoverMs) / DAY_MS) + 1;
-      const forecastVal = Math.round(baseVal * mult);
-      const spread = !isStore && DEPARTMENT_STATS[dept] ? (dept === 'HOBBIES_1' || dept === 'HOUSEHOLD_2' ? 0.12 : 0.07) : 0.085;
-      const p10 = Math.round(forecastVal * (1 - spread));
-      const p90 = Math.round(forecastVal * (1 + spread));
-      points.push({
-        date: iso,
-        actual: null,
-        forecast: forecastVal,
-        band: [p10, p90],
-        adjusted: null,
-        row: {
-          id: String(h),
-          h,
-          forecast_date: iso,
-          y_pred: forecastVal,
-          p10,
-          p50: forecastVal,
-          p90,
-          model_version: 'Ensemble Tier-1',
-          store_id: 'CA_1',
-          item_id: dept,
-          generated_at: '2016-05-23T00:00:00Z',
-          original_value: forecastVal,
-          is_overridden: false,
-          override_reason: null,
-          product_name: dept,
-          category: dept,
-          quality: 'ok',
-          modelValue: forecastVal,
-        },
-      });
-    }
-  }
-  return points;
 }
 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)' };
@@ -299,43 +127,27 @@ const ForecastTooltip: React.FC<{ active?: boolean; payload?: ReadonlyArray<{ pa
   const line = (label: string, v: number | null | undefined) => (
     <div className="ui-chart-tooltip__row" key={label}>
       <span>{label}</span>
-      <span className="ui-chart-tooltip__value">{fmt.number(v, { digits: 0 })}</span>
+      <span className="ui-chart-tooltip__value">{v !== null && v !== undefined && Number.isFinite(v) ? fmt.number(v, { digits: 0 }) : '—'}</span>
     </div>
   );
-  const eventInfo =
-    p.date === '2016-05-08'
-      ? { name: t('forecast.explorer.event_mothers_day'), lift: '+8.6% Tác động lịch', color: '#6366f1' }
-      : p.date === '2016-05-30'
-        ? { name: t('forecast.explorer.event_memorial_day'), lift: '+18.4% Thực phẩm & Dã ngoại', color: '#f59e0b' }
-        : p.date >= '2016-06-01' && p.date <= '2016-06-10'
-          ? { name: t('forecast.explorer.event_snap_lift'), lift: '+14.2% Trợ cấp CalFresh', color: '#10b981' }
-          : null;
-
   return (
     <div className="ui-chart-tooltip">
       <div className="ui-chart-tooltip__title">{fmt.date(p.date, 'medium')}</div>
       {p.actual !== null && line(t('forecast.chart.actual'), p.actual)}
       {p.forecast !== null && line(t('forecast.chart.forecast'), p.forecast)}
-      {p.band && (
+      {p.band ? (
         <>
           {line(t('forecast.chart.tooltip_p10'), p.band[0])}
           {line(t('forecast.chart.tooltip_p90'), p.band[1])}
         </>
-      )}
+      ) : p.forecast !== null ? (
+        <>
+          {line(t('forecast.chart.tooltip_p10'), null)}
+          {line(t('forecast.chart.tooltip_p90'), null)}
+        </>
+      ) : null}
       {p.adjusted !== null && line(t('forecast.chart.adjusted'), p.adjusted)}
       {r && line(t('forecast.chart.tooltip_step'), r.h)}
-      {eventInfo && (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed var(--color-border-subtle)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={{ fontSize: 11, fontWeight: 'var(--weight-semibold)', color: eventInfo.color, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span>🏷️ {eventInfo.name}</span>
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>{eventInfo.lift}</div>
-        </div>
-      )}
-      <div className="ui-chart-tooltip__row" style={{ marginTop: 4, borderTop: '1px dashed var(--color-border-subtle)', paddingTop: 4 }}>
-        <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{t('forecast.explorer.category_share')}</span>
-        <span style={{ fontSize: 11, fontWeight: 'var(--weight-semibold)' }}>FOODS 64% · HOBBIES 18%</span>
-      </div>
     </div>
   );
 };
@@ -386,19 +198,20 @@ export const ForecastExplorer: React.FC = () => {
   const { confirm, dialog } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const canEdit = can(user?.role, 'replenishment:write');
+  const canEdit = can(user?.role, 'forecast:write');
   const sku = searchParams.get('sku') ?? '';
   const isGlobal = !!storeId && GLOBAL_STORE.test(storeId);
   const store = storeId && !isGlobal ? storeId : 'CA_1';
 
   const [mainTab, setMainTab] = useState<MainTab>(() => {
     const p = searchParams.get('tab');
-    return p === 'sku' || p === 'window' || p === 'schedule' ? p : 'overview';
+    return p === 'sku' || p === 'window' || p === 'schedule' || p === 'future' ? p : 'overview';
   });
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
+  /** Overview scope: whole store or one M5 category (the filter GET /dashboard/demand-trend supports). */
+  const [overviewCat, setOverviewCat] = useState<OverviewScope>('ALL');
   const [rangeDays, setRangeDays] = useState<30 | 60 | 90>(30);
   const [showBand, setShowBand] = useState<boolean>(true);
-  const [showEvents, setShowEvents] = useState<boolean>(true);
 
   const [horizon] = useState<number>(28);
   const [query, setQuery] = useState('');
@@ -497,21 +310,45 @@ export const ForecastExplorer: React.FC = () => {
     return Array.from(m.values()).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }, [historyPoints, rows]);
 
-  const macroChartData = useMemo(() => {
-    return generateMacroChartData(selectedDept === 'ALL', selectedDept, rangeDays);
-  }, [selectedDept, rangeDays]);
+  // Overview: store / category demand, actual vs forecast, bounded by the simulated clock (GET /dashboard/demand-trend)
+  const trend = useApi(
+    (signal) => getDemandTrend(store, rangeDays, signal, overviewCat === 'ALL' ? undefined : overviewCat),
+    [store, rangeDays, overviewCat, clock.version],
+    { enabled: mainTab === 'overview' && !isGlobal },
+  );
+  const trendChartData = useMemo<ChartPoint[]>(
+    () => (trend.data?.data ?? []).map((p) => ({ date: p.date, actual: p.actual, forecast: p.predicted, band: null, adjusted: null, row: null })),
+    [trend.data],
+  );
+  const trendActualTotal = useMemo(() => {
+    const withActual = trendChartData.filter((p) => p.actual !== null && Number.isFinite(p.actual));
+    if (!withActual.length) return null;
+    const total = withActual.reduce((s, p) => s + (p.actual as number), 0);
+    return { total, days: withActual.length, last: withActual[withActual.length - 1].date };
+  }, [trendChartData]);
 
-  const activeChartData = mainTab === 'sku' ? chartData : macroChartData;
+  // Store-level accuracy (MAE / RMSE / MASE / WRMSSE overall and per ABC class) from the reports API
+  const accuracy = useApi((signal) => getForecastAccuracy(store, signal), [store, clock.version], { enabled: !isGlobal });
 
-  const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : '2016-05-23';
-  const cutoverDate = '2016-05-23';
-  const afterClockStart = clockDate ? activeChartData.find((p) => p.date > clockDate)?.date ?? null : null;
-  const afterClockEnd = activeChartData.length ? activeChartData[activeChartData.length - 1].date : null;
-  const clockInRange = clockDate && activeChartData.length > 0 && activeChartData[0].date <= clockDate && afterClockStart !== null;
+  const clockDate = clock.status === 'ready' && clock.clock ? clock.clock.current_date.slice(0, 10) : null;
+  /** h = 1 of the SKU forecast shown (its first forecast date), not a fixed date. */
+  const cutoverDate = firstDate ?? null;
+
+  const hasAnyBand = useMemo(() => rows.some((r) => r.p10 !== null && r.p90 !== null), [rows]);
+  /** Half-width of the P10-P90 band relative to P50 over the forecast days with a full band: Σ(P90 − P10) / 2 / ΣP50
+   *  (a ratio of sums, so slow movers with a tiny P50 on some days do not blow it up). */
+  const relativeBand = useMemo(() => {
+    const ok = rows.filter((r) => r.quality === 'ok');
+    const sumP50 = ok.reduce((s, r) => s + (r.p50 as number), 0);
+    if (!ok.length || !(sumP50 > 0)) return null;
+    const halfWidth = ok.reduce((s, r) => s + ((r.p90 as number) - (r.p10 as number)) / 2, 0);
+    return { mean: halfWidth / sumP50, n: ok.length };
+  }, [rows]);
 
   const totalDemand = rows.length ? rows.reduce((s, r) => s + r.y_pred, 0) : null;
   const isStatsModel = (v: string | undefined) => !!v && /sba/i.test(v);
   const modelLabel = (v: string | undefined) => (!v ? '' : isStatsModel(v) ? t('forecast.model.sba') : v);
+  const overallWrmsse = accuracy.data?.overall_metrics?.wrmsse ?? null;
 
   const exportCsv = () => {
     if (!rows.length) {
@@ -527,14 +364,26 @@ export const ForecastExplorer: React.FC = () => {
     toast.success(t('forecast.ctl.export_done', { n: rows.length, file: filename }));
   };
 
+  const accuracyRows = useMemo<AccuracyRow[]>(() => {
+    const a = accuracy.data;
+    if (!a) return [];
+    const out: AccuracyRow[] = [{ key: 'ALL', label: t('forecast.explorer.acc_overall'), m: a.overall_metrics }];
+    for (const c of ABC_CLASSES) if (a.abc_breakdown?.[c]) out.push({ key: c, label: c, m: a.abc_breakdown[c] });
+    return out;
+  }, [accuracy.data, t]);
+
   const exportDiagnosticsCsv = () => {
+    if (!accuracyRows.length) {
+      toast.warning(t('forecast.ctl.export_none'));
+      return;
+    }
     const filename = `diagnostics_accuracy_${store}.csv`;
     downloadCsv(
       filename,
-      ['Department', 'WRMSSE', 'Scale_Accuracy_Pct', 'Bias_Pct', 'Status'],
-      CATEGORY_ACCURACY.map((c) => [c.department, c.wrmsse, c.scaleAccuracy, c.bias, c.status]),
+      ['Group', 'MAE', 'RMSE', 'MASE', 'WRMSSE', 'Samples', 'Model', 'Period'],
+      accuracyRows.map((r) => [r.key, r.m.mae, r.m.rmse, r.m.mase, r.m.wrmsse, r.m.sample_count, accuracy.data?.model_name, accuracy.data?.evaluated_period]),
     );
-    toast.success(t('forecast.ctl.export_done', { n: CATEGORY_ACCURACY.length, file: filename }));
+    toast.success(t('forecast.ctl.export_done', { n: accuracyRows.length, file: filename }));
   };
 
   const [ovRow, setOvRow] = useState<ProcessedRow | null>(null);
@@ -738,67 +587,27 @@ export const ForecastExplorer: React.FC = () => {
       : []),
   ];
 
-  const activeFeatures = useMemo(() => {
-    if (explanation.data?.features && explanation.data.features.length > 0) {
-      return explanation.data.features;
-    }
-    const cat = selectedProduct?.cat_id || (selectedDept !== 'ALL' ? selectedDept.split('_')[0] : 'FOODS');
-    return FALLBACK_SHAP[cat] || FALLBACK_SHAP.FOODS;
-  }, [explanation.data, selectedProduct, selectedDept]);
+  // Only the server's SHAP values: no invented fallback when the explanation is missing
+  const activeFeatures = useMemo(() => explanation.data?.features ?? [], [explanation.data]);
 
   const maxShap = Math.max(...activeFeatures.map((f) => Math.abs(f.importance_score)), 0) || 1;
 
   if (isGlobal) return <EmptyState title={t('forecast.global.title')} description={t('forecast.global.description')} />;
 
-  const categoryAccuracyColumns: Column<CategoryAccuracy>[] = [
+  const metricCell = (v: number | null | undefined, digits: number) => (
+    <span style={mono}>{v !== null && v !== undefined && Number.isFinite(v) ? fmt.number(v, { digits }) : '—'}</span>
+  );
+  const accuracyColumns: Column<AccuracyRow>[] = [
     {
-      key: 'department',
-      header: t('forecast.explorer.acc_col_dept'),
-      value: (c) => c.department,
-      cell: (c) => (
-        <span style={{ fontWeight: 'var(--weight-medium)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.status === 'Compliant' ? '#059669' : '#e11d48' }} />
-          {c.department}
-        </span>
-      ),
+      key: 'group',
+      header: t('forecast.explorer.acc_col_group'),
+      cell: (r) => <span style={{ fontWeight: r.key === 'ALL' ? 'var(--weight-semibold)' : 'var(--weight-medium)' }}>{r.label}</span>,
     },
-    {
-      key: 'wrmsse',
-      header: t('forecast.explorer.acc_col_wrmsse'),
-      align: 'right',
-      value: (c) => c.wrmsse,
-      cell: (c) => <span style={mono}>{c.wrmsse.toFixed(4)}</span>,
-    },
-    {
-      key: 'scale',
-      header: t('forecast.explorer.acc_col_scale'),
-      value: (c) => c.scaleAccuracy,
-      cell: (c) => (
-        <div className="fe-bar-wrap" style={{ width: 100 }}>
-          <div className="fe-bar-fill" style={{ width: `${c.scaleAccuracy}%`, background: c.status === 'Compliant' ? '#4f46e5' : '#f59e0b' }} />
-        </div>
-      ),
-    },
-    {
-      key: 'bias',
-      header: t('forecast.explorer.acc_col_bias'),
-      align: 'right',
-      value: (c) => c.bias,
-      cell: (c) => (
-        <span style={{ ...mono, color: c.bias >= 0 ? '#059669' : '#e11d48' }}>
-          {c.bias > 0 ? `+${c.bias.toFixed(1)}%` : `${c.bias.toFixed(1)}%`}
-        </span>
-      ),
-    },
-    {
-      key: 'status',
-      header: t('forecast.explorer.acc_col_status'),
-      cell: (c) => (
-        <Badge tone={c.status === 'Compliant' ? 'success' : 'warning'}>
-          {c.status === 'Compliant' ? t('forecast.explorer.status_compliant') : t('forecast.explorer.status_volatile')}
-        </Badge>
-      ),
-    },
+    { key: 'mae', header: 'MAE', align: 'right', value: (r) => r.m.mae, cell: (r) => metricCell(r.m.mae, 3) },
+    { key: 'rmse', header: 'RMSE', align: 'right', value: (r) => r.m.rmse, cell: (r) => metricCell(r.m.rmse, 3) },
+    { key: 'mase', header: 'MASE', align: 'right', value: (r) => r.m.mase, cell: (r) => metricCell(r.m.mase, 3) },
+    { key: 'wrmsse', header: t('forecast.explorer.acc_col_wrmsse'), align: 'right', value: (r) => r.m.wrmsse, cell: (r) => metricCell(r.m.wrmsse, 4) },
+    { key: 'n', header: t('forecast.explorer.acc_col_n'), align: 'right', value: (r) => r.m.sample_count, cell: (r) => <span style={mono}>{fmt.integer(r.m.sample_count)}</span> },
   ];
 
   return (
@@ -825,41 +634,32 @@ export const ForecastExplorer: React.FC = () => {
               <span className="fe-kpi-icon-wrap fe-kpi-icon-wrap--indigo">
                 <Box size={15} />
               </span>
-              {t('forecast.explorer.kpi_demand_title')}
+              {mainTab === 'overview'
+                ? t('forecast.explorer.kpi_actual_title', { days: rangeDays })
+                : t('forecast.explorer.kpi_demand_title', { days: rows.length || horizon })}
             </span>
           </div>
           <div className="fe-kpi-body">
             <span className="fe-kpi-val">
-              {mainTab === 'sku' && totalDemand !== null
-                ? fmt.number(totalDemand, { digits: 0 })
-                : selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]
-                  ? fmt.number(DEPARTMENT_STATS[selectedDept].demand, { digits: 0 })
-                  : '238,940'}
+              {mainTab === 'overview'
+                ? trendActualTotal ? fmt.number(trendActualTotal.total, { digits: 0 }) : '—'
+                : totalDemand !== null ? fmt.number(totalDemand, { digits: 0 }) : '—'}
             </span>
             <span className="fe-num-sub">{t('forecast.explorer.kpi_demand_unit')}</span>
           </div>
           <div className="fe-kpi-meta">
-            {mainTab === 'sku' ? (
-              <>
-                <span style={{ color: 'var(--color-success-text)', fontWeight: 600 }}>
-                  TB: {totalDemand !== null ? (totalDemand / 28).toFixed(1) : '—'} đv/ngày
-                </span>
-                <span>· Dự báo 28 ngày</span>
-              </>
-            ) : (
-              <>
-                <span style={{ color: 'var(--color-success-text)', fontWeight: 600 }}>
-                  {selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]
-                    ? `+${DEPARTMENT_STATS[selectedDept].share}`
-                    : '+3.8%'}
-                </span>
-                <span>
-                  {selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]
-                    ? `· TB: ${fmt.number(DEPARTMENT_STATS[selectedDept].dailyAvg, { digits: 0 })} đv/ngày`
-                    : `· ${t('forecast.explorer.kpi_demand_sub')}`}
-                </span>
-              </>
-            )}
+            <span>
+              {mainTab === 'overview'
+                ? trendActualTotal
+                  ? t('forecast.explorer.kpi_actual_sub', {
+                      avg: fmt.number(trendActualTotal.total / trendActualTotal.days, { digits: 1 }),
+                      date: trendActualTotal.last ? fmt.date(trendActualTotal.last) : '—',
+                    })
+                  : '—'
+                : totalDemand !== null && rows.length
+                  ? t('forecast.explorer.kpi_demand_sub', { avg: fmt.number(totalDemand / rows.length, { digits: 1 }), sku })
+                  : '—'}
+            </span>
           </div>
         </div>
 
@@ -871,20 +671,15 @@ export const ForecastExplorer: React.FC = () => {
               </span>
               {t('forecast.explorer.kpi_model_title')}
             </span>
-            <Badge tone="accent">{t('forecast.explorer.kpi_model_status')}</Badge>
           </div>
           <div className="fe-kpi-body">
             <span className="fe-kpi-val" style={{ fontSize: 'var(--text-lg)' }}>
-              {t('forecast.explorer.kpi_model_val')}
+              {mainTab === 'overview' ? accuracy.data?.model_name || '—' : modelLabel(processed.version) || '—'}
             </span>
           </div>
           <div className="fe-kpi-meta">
             <span>
-              {mainTab === 'sku'
-                ? `LightGBM · SKU: ${sku}`
-                : selectedDept !== 'ALL'
-                  ? `LightGBM · ${selectedDept} Quantile`
-                  : processed.version ? modelLabel(processed.version) : t('forecast.explorer.kpi_model_sub')}
+              {mainTab === 'overview' ? t('forecast.explorer.kpi_model_sub_store', { store }) : t('forecast.explorer.kpi_model_sub_sku', { sku })}
             </span>
           </div>
         </div>
@@ -897,20 +692,21 @@ export const ForecastExplorer: React.FC = () => {
               </span>
               {t('forecast.explorer.kpi_acc_title')}
             </span>
-            <Badge tone={selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]?.status === 'Volatile' ? 'warning' : 'success'}>
-              {selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]
-                ? DEPARTMENT_STATS[selectedDept].status === 'Compliant' ? t('forecast.explorer.status_compliant') : t('forecast.explorer.status_volatile')
-                : t('forecast.explorer.kpi_acc_badge')}
-            </Badge>
           </div>
           <div className="fe-kpi-body">
             <span className="fe-kpi-val fe-kpi-val--emerald">
-              {selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept] ? DEPARTMENT_STATS[selectedDept].wrmsse.toFixed(4) : '0.4935'}
+              {accuracy.loading && !accuracy.data ? '…' : overallWrmsse !== null ? fmt.number(overallWrmsse, { digits: 4 }) : '—'}
             </span>
             <span className="fe-num-sub">WRMSSE</span>
           </div>
           <div className="fe-kpi-meta">
-            <span>{t('forecast.explorer.kpi_acc_footer')}</span>
+            <span>
+              {accuracy.data
+                ? t('forecast.explorer.kpi_acc_footer', { store, period: accuracy.data.evaluated_period || '—' })
+                : accuracy.error
+                  ? t('forecast.explorer.acc_unavailable')
+                  : '—'}
+            </span>
           </div>
         </div>
 
@@ -922,23 +718,16 @@ export const ForecastExplorer: React.FC = () => {
               </span>
               {t('forecast.explorer.kpi_unc_title')}
             </span>
-            <Badge tone={selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]?.status === 'Volatile' ? 'warning' : 'info'}>
-              {t('forecast.explorer.kpi_unc_risk')}
-            </Badge>
           </div>
           <div className="fe-kpi-body">
-            <span className="fe-kpi-val">
-              {selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept] ? DEPARTMENT_STATS[selectedDept].uncertainty : '±8.4%'}
-            </span>
+            <span className="fe-kpi-val">{relativeBand ? `±${fmt.number(relativeBand.mean * 100, { digits: 1 })}%` : '—'}</span>
             <span className="fe-num-sub">P10 – P90</span>
           </div>
           <div className="fe-kpi-meta">
             <span>
-              {mainTab === 'sku'
-                ? 'Dải phân vị: P10 / P50 / P90'
-                : selectedDept !== 'ALL' && DEPARTMENT_STATS[selectedDept]
-                  ? `Dải: ${DEPARTMENT_STATS[selectedDept].bandRange}`
-                  : t('forecast.explorer.kpi_unc_sub')}
+              {relativeBand
+                ? t('forecast.explorer.kpi_unc_sub', { sku, n: relativeBand.n })
+                : t('forecast.explorer.kpi_unc_none', { sku: sku || '—' })}
             </span>
           </div>
         </div>
@@ -955,6 +744,7 @@ export const ForecastExplorer: React.FC = () => {
               { id: 'sku', label: t('forecast.explorer.tab_sku') },
               { id: 'window', label: t('inventory.window.tab') },
               { id: 'schedule', label: t('forecast.explorer.tab_schedule'), count: overrides.data?.filter((o) => o.is_active).length },
+              { id: 'future', label: t('forecast.future.tab') },
             ]}
           />
         </div>
@@ -962,48 +752,33 @@ export const ForecastExplorer: React.FC = () => {
         {mainTab === 'overview' && (
           <>
             <div className="fe-filters">
-              <Select
-                aria-label="Department Scope"
-                value={selectedDept}
-                onChange={(val) => setSelectedDept(val)}
+              <Select<OverviewScope>
+                aria-label={t('forecast.explorer.scope_label')}
+                value={overviewCat}
+                onChange={setOverviewCat}
                 options={[
-                  { value: 'ALL', label: 'Toàn kho CA_1 (3,049 SKU)' },
-                  ...DEPARTMENTS.map((d) => ({ value: d, label: `Ngành hàng: ${d}` })),
+                  { value: 'ALL', label: t('forecast.explorer.scope_all', { store }) },
+                  ...CATEGORIES.map((c) => ({ value: c, label: t('forecast.explorer.scope_cat', { cat: c }) })),
                 ]}
               />
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                <Button size="sm" variant={rangeDays === 30 ? 'primary' : 'secondary'} onClick={() => setRangeDays(30)}>
-                  {t('forecast.explorer.chart_range_30d')}
-                </Button>
-                <Button size="sm" variant={rangeDays === 60 ? 'primary' : 'secondary'} onClick={() => setRangeDays(60)}>
-                  {t('forecast.explorer.chart_range_60d')}
-                </Button>
-                <Button size="sm" variant={rangeDays === 90 ? 'primary' : 'secondary'} onClick={() => setRangeDays(90)}>
-                  {t('forecast.explorer.chart_range_90d')}
-                </Button>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', marginLeft: 'auto' }}>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={showBand} onChange={(e) => setShowBand(e.target.checked)} />
-                  <span>{t('forecast.explorer.chart_show_band')}</span>
-                </label>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} />
-                  <span>{t('forecast.explorer.chart_show_events')}</span>
-                </label>
+                {([30, 60, 90] as const).map((d) => (
+                  <Button key={d} size="sm" variant={rangeDays === d ? 'primary' : 'secondary'} onClick={() => setRangeDays(d)}>
+                    {t(`forecast.explorer.chart_range_${d}d` as TKey)}
+                  </Button>
+                ))}
               </div>
             </div>
 
             <div className="fe-chart-container">
               <div className="fe-chart-header">
                 <div>
-                  <div className="fe-chart-title">{t('forecast.explorer.chart_title', { days: rangeDays })}</div>
+                  <div className="fe-chart-title">{t('forecast.explorer.chart_title_overview', { days: rangeDays })}</div>
                   <div className="fe-chart-subtitle">
-                    {selectedDept === 'ALL'
+                    {overviewCat === 'ALL'
                       ? t('forecast.explorer.chart_scope_store', { store })
-                      : t('forecast.explorer.chart_scope_dept', { dept: selectedDept, store })}
+                      : t('forecast.explorer.chart_scope_cat', { cat: overviewCat, store })}
                   </div>
                 </div>
                 <div className="fe-chart-legend">
@@ -1015,172 +790,79 @@ export const ForecastExplorer: React.FC = () => {
                     <span className="fe-legend-dot fe-legend-dot--forecast" />
                     <span>{t('forecast.explorer.legend_forecast')}</span>
                   </div>
-                  {showBand && (
-                    <div className="fe-legend-item">
-                      <span className="fe-legend-dot fe-legend-dot--band" />
-                      <span>{t('forecast.explorer.legend_band')}</span>
-                    </div>
-                  )}
-                  {showEvents && (
-                    <div className="fe-legend-item">
-                      <span style={{ width: 14, height: 0, borderTop: '2px dashed #f59e0b' }} />
-                      <span style={{ color: 'var(--color-text-secondary)' }}>{t('forecast.explorer.legend_events')}</span>
-                    </div>
-                  )}
                 </div>
               </div>
 
               <div style={{ height: 380, width: '100%' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={activeChartData} margin={{ top: 16, right: 16, bottom: 4, left: 0 }}>
-                    <CartesianGrid vertical={false} stroke={chart.grid} />
-                    <XAxis dataKey="date" {...chart.axis} minTickGap={28} tickFormatter={(d: string) => fmt.date(d, 'axis')} />
-                    <YAxis {...chart.axis} width={48} domain={[0, 'auto']} />
-                    <Tooltip cursor={chart.cursor} content={<ForecastTooltip />} />
-
-                    <ReferenceLine
-                      x={cutoverDate}
-                      stroke="var(--color-text)"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 4"
-                      label={{
-                        value: t('forecast.explorer.cutover_label'),
-                        fill: 'var(--color-text)',
-                        fontSize: 11,
-                        position: 'insideTopLeft',
-                      }}
-                    />
-
-                    {showEvents && (
-                      <>
+                {trend.error ? (
+                  <ErrorState error={trend.error} onRetry={trend.refetch} />
+                ) : trend.loading && !trend.data ? (
+                  <Skeleton height={360} />
+                ) : trendChartData.length === 0 ? (
+                  <EmptyState compact title={t('forecast.explorer.trend_empty')} />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={trendChartData} margin={{ top: 16, right: 16, bottom: 4, left: 0 }}>
+                      <CartesianGrid vertical={false} stroke={chart.grid} />
+                      <XAxis dataKey="date" {...chart.axis} minTickGap={28} tickFormatter={(d: string) => fmt.date(d, 'axis')} />
+                      <YAxis {...chart.axis} width={48} domain={[0, 'auto']} />
+                      <Tooltip cursor={chart.cursor} content={<ForecastTooltip />} />
+                      {clockDate && (
                         <ReferenceLine
-                          x="2016-05-08"
-                          stroke="#6366f1"
+                          x={clockDate}
+                          stroke="var(--color-text)"
                           strokeWidth={1.5}
-                          strokeDasharray="3 3"
+                          strokeDasharray="4 4"
+                          label={{ value: t('forecast.explorer.clock_label', { date: fmt.date(clockDate) }), fill: 'var(--color-text)', fontSize: 11, position: 'insideTopLeft' }}
                         />
-                        <ReferenceLine
-                          x="2016-05-30"
-                          stroke="#f59e0b"
-                          strokeWidth={1.5}
-                          strokeDasharray="3 3"
-                        />
-                        <ReferenceLine
-                          x="2016-06-01"
-                          stroke="#10b981"
-                          strokeWidth={1.5}
-                          strokeDasharray="3 3"
-                        />
-                      </>
-                    )}
-
-                    {clockInRange && afterClockStart && afterClockEnd && (
-                      <ReferenceArea
-                        x1={afterClockStart}
-                        x2={afterClockEnd}
-                        fill={chart.reference}
-                        fillOpacity={0.08}
-                        stroke="none"
-                      />
-                    )}
-
-                    {showBand && (
-                      <Area
-                        dataKey="band"
-                        name={t('forecast.chart.band')}
-                        stroke="none"
-                        fill="#6366f1"
-                        fillOpacity={0.14}
-                        isAnimationActive={false}
+                      )}
+                      <Line dataKey="actual" name={t('forecast.chart.actual')} stroke="#4f46e5" strokeWidth={2.5} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false} />
+                      <Line
+                        dataKey="forecast"
+                        name={t('forecast.chart.forecast')}
+                        stroke="#f59e0b"
+                        strokeWidth={2.5}
+                        strokeDasharray="5 3"
+                        dot={{ r: 2 }}
                         connectNulls={false}
+                        isAnimationActive={false}
                       />
-                    )}
-                    <Line
-                      dataKey="actual"
-                      name={t('forecast.chart.actual')}
-                      stroke="#4f46e5"
-                      strokeWidth={2.5}
-                      dot={{ r: 2 }}
-                      connectNulls={false}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="forecast"
-                      name={t('forecast.chart.forecast')}
-                      stroke="#f59e0b"
-                      strokeWidth={2.5}
-                      strokeDasharray="5 3"
-                      dot={{ r: 2 }}
-                      connectNulls={false}
-                      isAnimationActive={false}
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                )}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)', fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                <span>{t('forecast.explorer.forecast_window_footer')}</span>
+                <span>{trend.data?.forecast_note || t('forecast.explorer.trend_footer')}</span>
               </div>
             </div>
 
-            <div className="fe-diag-grid">
-              <Card
-                title={t('forecast.explorer.acc_breakdown_title')}
-                description={t('forecast.explorer.acc_breakdown_desc', { store })}
-                actions={
-                  <Button size="sm" variant="secondary" leftIcon={<Download size={14} />} onClick={exportDiagnosticsCsv}>
-                    {t('forecast.explorer.download_diagnostics')}
-                  </Button>
-                }
-              >
+            <Card
+              title={t('forecast.explorer.acc_breakdown_title')}
+              description={
+                accuracy.data
+                  ? t('forecast.explorer.acc_breakdown_desc', { store, model: accuracy.data.model_name, period: accuracy.data.evaluated_period || '—' })
+                  : undefined
+              }
+              actions={
+                <Button size="sm" variant="secondary" leftIcon={<Download size={14} />} onClick={exportDiagnosticsCsv} disabled={!accuracyRows.length}>
+                  {t('forecast.explorer.download_diagnostics')}
+                </Button>
+              }
+            >
+              {accuracy.error ? (
+                <ErrorState compact error={accuracy.error} onRetry={accuracy.refetch} />
+              ) : (
                 <Table
-                  columns={categoryAccuracyColumns}
-                  rows={CATEGORY_ACCURACY}
-                  rowKey={(c) => c.department}
+                  columns={accuracyColumns}
+                  rows={accuracyRows}
+                  rowKey={(r) => r.key}
                   dense
-                  onRowClick={(c) => setSelectedDept(c.department)}
+                  loading={accuracy.loading && !accuracy.data}
+                  emptyTitle={t('forecast.explorer.acc_empty')}
+                  emptyDescription={accuracy.data?.metrics_reason ?? undefined}
                 />
-                <div style={{ marginTop: 'var(--space-3)', fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                  {t('forecast.explorer.eval_protocol')}
-                </div>
-              </Card>
-
-              <Card
-                title={t('forecast.explorer.events_title')}
-                description={t('forecast.explorer.events_desc', { store })}
-              >
-                <div className="fe-event-list">
-                  <div className="fe-event-card">
-                    <div className="fe-event-top">
-                      <span>{t('forecast.explorer.event_snap_title')}</span>
-                      <Badge tone="success">{t('forecast.explorer.event_snap_badge')}</Badge>
-                    </div>
-                    <div className="fe-event-desc">{t('forecast.explorer.event_snap_desc')}</div>
-                    <div className="fe-event-meta">{t('forecast.explorer.event_snap_horizon')}</div>
-                  </div>
-
-                  <div className="fe-event-card">
-                    <div className="fe-event-top">
-                      <span>{t('forecast.explorer.event_memorial_title')}</span>
-                      <Badge tone="warning">{t('forecast.explorer.event_memorial_badge')}</Badge>
-                    </div>
-                    <div className="fe-event-desc">{t('forecast.explorer.event_memorial_desc')}</div>
-                    <div className="fe-event-meta">{t('forecast.explorer.event_memorial_horizon')}</div>
-                  </div>
-
-                  <div className="fe-event-card">
-                    <div className="fe-event-top">
-                      <span>{t('forecast.explorer.event_payday_title')}</span>
-                      <Badge tone="info">{t('forecast.explorer.event_payday_badge')}</Badge>
-                    </div>
-                    <div className="fe-event-desc">{t('forecast.explorer.event_payday_desc')}</div>
-                    <div className="fe-event-meta">{t('forecast.explorer.event_payday_horizon')}</div>
-                  </div>
-                </div>
-                <div style={{ marginTop: 'var(--space-3)', fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                  {t('forecast.explorer.events_footer')}
-                </div>
-              </Card>
-            </div>
+              )}
+            </Card>
           </>
         )}
 
@@ -1190,13 +872,13 @@ export const ForecastExplorer: React.FC = () => {
               <SearchInput value={query} onChange={setQuery} placeholder={t('forecast.sku.search_placeholder')} />
 
               <Select
-                aria-label="Department Filter"
+                aria-label={t('forecast.explorer.dept_filter')}
                 value={selectedDept === 'ALL' ? 'FOODS_1' : selectedDept}
                 onChange={(v) => {
                   setSelectedDept(v);
                   setSku(`${v}_001`);
                 }}
-                options={DEPARTMENTS.map((d) => ({ value: d, label: `Ngành hàng: ${d}` }))}
+                options={DEPARTMENTS.map((d) => ({ value: d, label: t('forecast.explorer.dept_option', { dept: d }) }))}
               />
 
               <div className="fe-sku-select">
@@ -1210,6 +892,11 @@ export const ForecastExplorer: React.FC = () => {
                   }))}
                 />
               </div>
+
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', cursor: 'pointer', marginLeft: 'auto' }}>
+                <input type="checkbox" checked={showBand} onChange={(e) => setShowBand(e.target.checked)} />
+                <span>{t('forecast.explorer.chart_show_band')}</span>
+              </label>
             </div>
 
             <div className="fe-sku-banner">
@@ -1227,17 +914,20 @@ export const ForecastExplorer: React.FC = () => {
                 </span>
               </div>
               <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                <Badge tone="neutral">Mã SKU: {sku}</Badge>
-                <Badge tone="accent">Kho {store}</Badge>
+                <Badge tone="neutral">{t('forecast.explorer.sku_badge', { sku })}</Badge>
+                <Badge tone="accent">{t('forecast.explorer.store_badge', { store })}</Badge>
               </div>
             </div>
 
             <div className="fe-chart-container">
               <div className="fe-chart-header">
                 <div>
-                  <div className="fe-chart-title">{t('forecast.explorer.chart_title')}</div>
+                  <div className="fe-chart-title">{t('forecast.explorer.chart_title_sku', { days: rangeDays, h: rows.length || horizon })}</div>
                   <div className="fe-chart-subtitle">
-                    {selectedProduct?.name && selectedProduct.name !== selectedProduct.item_id ? `${selectedProduct.name} (${sku})` : sku} · Kho {store}
+                    {t('forecast.explorer.chart_scope_sku', {
+                      sku: selectedProduct?.name && selectedProduct.name !== selectedProduct.item_id ? `${selectedProduct.name} (${sku})` : sku,
+                      store,
+                    })}
                   </div>
                 </div>
                 <div className="fe-chart-legend">
@@ -1255,6 +945,11 @@ export const ForecastExplorer: React.FC = () => {
                       <span>{t('forecast.explorer.legend_band')}</span>
                     </div>
                   )}
+                  {!hasAnyBand && rows.length > 0 && (
+                    <div className="fe-legend-item" style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
+                      <span>({t('forecast.explorer.no_band_for_sku')})</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1266,18 +961,20 @@ export const ForecastExplorer: React.FC = () => {
                     <YAxis {...chart.axis} width={44} domain={[0, 'auto']} />
                     <Tooltip cursor={chart.cursor} content={<ForecastTooltip />} />
 
-                    <ReferenceLine
-                      x={cutoverDate}
-                      stroke="var(--color-text)"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 4"
-                      label={{
-                        value: t('forecast.explorer.cutover_label'),
-                        fill: 'var(--color-text)',
-                        fontSize: 11,
-                        position: 'insideTopLeft',
-                      }}
-                    />
+                    {cutoverDate && (
+                      <ReferenceLine
+                        x={cutoverDate}
+                        stroke="var(--color-text)"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 4"
+                        label={{
+                          value: t('forecast.explorer.cutover_label', { date: fmt.date(cutoverDate) }),
+                          fill: 'var(--color-text)',
+                          fontSize: 11,
+                          position: 'insideTopLeft',
+                        }}
+                      />
+                    )}
 
                     {showBand && (
                       <Area
@@ -1326,7 +1023,7 @@ export const ForecastExplorer: React.FC = () => {
               <Card
                 title={t('forecast.shap.title')}
                 description={t('forecast.shap.description')}
-                actions={<Badge tone="neutral">M5 LightGBM TreeExplainer</Badge>}
+                actions={explanation.data?.model_name ? <Badge tone="neutral">{explanation.data.model_name}</Badge> : undefined}
               >
                 {!canEdit ? (
                   <Alert tone="info">{t('forecast.shap.restricted')}</Alert>
@@ -1334,11 +1031,13 @@ export const ForecastExplorer: React.FC = () => {
                   <Skeleton height={140} />
                 ) : explanation.error ? (
                   <ErrorState compact error={explanation.error} onRetry={explanation.refetch} />
+                ) : activeFeatures.length === 0 ? (
+                  <EmptyState compact title={t('forecast.explorer.shap_empty')} />
                 ) : (
                   <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
                     <div style={muted}>
-                      {t('forecast.shap.model', { name: explanation.data?.model_name || 'Ensemble Tier-1', version: explanation.data?.model_version || '1.0' })} · {t('forecast.shap.base')}:{' '}
-                      <span className="ui-num">{fmt.number(explanation.data?.base_value || 4.25, { digits: 2 })}</span>
+                      {t('forecast.shap.model', { name: explanation.data?.model_name || '—', version: explanation.data?.model_version || '—' })} · {t('forecast.shap.base')}:{' '}
+                      <span className="ui-num">{typeof explanation.data?.base_value === 'number' ? fmt.number(explanation.data.base_value, { digits: 2 }) : '—'}</span>
                     </div>
                     {activeFeatures.slice(0, 6).map((f) => (
                       <div key={f.feature_name} style={{ display: 'grid', gap: 4 }}>
@@ -1387,6 +1086,12 @@ export const ForecastExplorer: React.FC = () => {
               </Card>
             </div>
           </>
+        )}
+
+        {mainTab === 'future' && (
+          <div style={{ padding: 'var(--space-4)' }}>
+            <FutureForecastPanel sku={sku} store={store} />
+          </div>
         )}
 
         {mainTab === 'window' && (

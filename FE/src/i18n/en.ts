@@ -14,6 +14,7 @@ import { settings } from './en/settings.ts';
 import { inventory } from './en/inventory.ts';
 import { metrics } from './en/metrics.ts';
 import { be } from './en/be.ts';
+import { ops } from './en/ops.ts';
 
 export const en: Dictionary = {
   common,
@@ -31,4 +32,5 @@ export const en: Dictionary = {
   inventory,
   metrics,
   be,
+  ops,
 };

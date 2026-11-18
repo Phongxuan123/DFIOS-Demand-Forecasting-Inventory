@@ -2,7 +2,10 @@ import React, { useState } from 'react';
 import { Download, Plus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
-import { useT } from '../i18n/index.tsx';
+import { useFormat, useT } from '../i18n/index.tsx';
+import { useApi } from '../hooks/useApi.ts';
+import { useClock } from '../context/ClockContext.tsx';
+import { getKpis } from '../services/dashboardApi.ts';
 import { can, normalizeRole } from '../auth/permissions.ts';
 import { Alert, Badge, Button, HoldHeight, PageHeader, Tabs, type TabItem } from '../components/ui/index.ts';
 import { ProductsTab } from './products/ProductsTab.tsx';
@@ -17,8 +20,14 @@ type TabId = 'products' | 'suppliers' | 'adjustments' | 'sales' | 'events';
 
 export const Products: React.FC = () => {
   const t = useT();
+  const fmt = useFormat();
   const { user } = useAuth();
   const { storeId } = useStore();
+  const { version, clock } = useClock();
+  // Catalogue KPIs of the store (every role): SKUs, SKUs at or below s, suppliers, valued stock
+  const kpis = useApi((s) => getKpis(storeId as string, s), [storeId, version], { enabled: !!storeId });
+  const k = kpis.data;
+  const n = (v: number | null | undefined) => (v !== null && v !== undefined ? fmt.integer(v) : '—');
   const [tab, setTab] = useState<TabId>('products');
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const isManager = can(user?.role, 'inventory:adjust');
@@ -33,36 +42,26 @@ export const Products: React.FC = () => {
   ];
 
   const exportMasterCsv = () => {
-    const rows = [
-      ['Metric', 'Value'],
-      ['Store', storeId ?? 'CA_1'],
-      ['Total Master SKUs', '3049'],
-      ['Active SKUs Ratio', '100%'],
-      ['Foods SKUs', '1437'],
-      ['Hobbies SKUs', '565'],
-      ['Household SKUs', '1047'],
-      ['Below Reorder Point SKUs', '49'],
-      ['Active Tier-1 Suppliers', '12'],
-      ['Total On-Hand Stock', '184290'],
-      ['Asset Valuation USD', '1248500'],
+    const rows: Array<[string, string | number | null]> = [
+      ['Store', storeId ?? ''],
+      ['As of', clock?.current_date ?? null],
+      ['SKUs', k?.total_skus ?? null],
+      ['SKUs at or below reorder point', k?.reorder_alerts_count ?? null],
+      ['Pending replenishment proposals', k?.pending_replenishments_count ?? null],
+      ['Suppliers', k?.total_suppliers ?? null],
+      ['Inventory value', k?.total_inventory_value ?? null],
     ];
-    downloadCsv(`master-catalog-${storeId ?? 'CA_1'}.csv`, ['Metric', 'Value'], rows);
+    downloadCsv(`master-catalog-${storeId ?? 'store'}.csv`, ['Metric', 'Value'], rows);
   };
 
   return (
     <div className="ui-stack prd-container">
       <div className="prd-breadcrumb">
-        <span>{t('products.master.breadcrumb_store', { store: storeId ?? 'CA_1' })}</span>
+        <span>{t('products.master.breadcrumb_store', { store: storeId ?? '—' })}</span>
         <span>/</span>
         <span>{t('products.master.breadcrumb_catalog')}</span>
         <span>/</span>
         <span className="prd-breadcrumb-tag">{t('products.master.breadcrumb_m5')}</span>
-        <span>·</span>
-        <span className="prd-breadcrumb-tag" style={{ color: 'var(--color-success-text)' }}>
-          ● {t('products.master.sync_status')}
-        </span>
-        <span>|</span>
-        <span className="prd-breadcrumb-tag">{t('products.master.engine_ver')}</span>
       </div>
 
       <PageHeader
@@ -99,12 +98,11 @@ export const Products: React.FC = () => {
                 <div>
                   <div className="prd-kpi-head">
                     <span className="prd-kpi-title">{t('products.master.kpi_total_skus')}</span>
-                    <Badge tone="success">● {t('products.master.kpi_total_skus_badge')}</Badge>
                   </div>
-                  <div className="prd-kpi-val">3,049</div>
+                  <div className="prd-kpi-val">{n(k?.total_skus)}</div>
                 </div>
                 <div className="prd-kpi-foot">
-                  <span>{t('products.master.kpi_skus_breakdown')}</span>
+                  <span>{t('products.master.kpi_skus_breakdown', { store: storeId ?? '—' })}</span>
                 </div>
               </div>
 
@@ -112,16 +110,14 @@ export const Products: React.FC = () => {
                 <div>
                   <div className="prd-kpi-head">
                     <span className="prd-kpi-title">{t('products.master.kpi_below_rop')}</span>
-                    <Badge tone="danger">{t('products.master.kpi_below_rop_badge')}</Badge>
+                    {!!k?.reorder_alerts_count && <Badge tone="danger">{t('products.master.kpi_below_rop_badge')}</Badge>}
                   </div>
                   <div className="prd-kpi-val">
-                    49 <span className="prd-kpi-unit">SKUs</span>
+                    {n(k?.reorder_alerts_count)} <span className="prd-kpi-unit">SKU</span>
                   </div>
                 </div>
                 <div className="prd-kpi-foot">
-                  <span style={{ color: 'var(--color-danger-text)', fontWeight: 'var(--weight-semibold)' }}>
-                    {t('products.master.kpi_below_rop_risk')}
-                  </span>
+                  <span>{k ? t('products.master.kpi_below_rop_risk', { count: n(k.pending_replenishments_count) }) : '—'}</span>
                 </div>
               </div>
 
@@ -129,12 +125,11 @@ export const Products: React.FC = () => {
                 <div>
                   <div className="prd-kpi-head">
                     <span className="prd-kpi-title">{t('products.master.kpi_suppliers')}</span>
-                    <Badge tone="info">{t('products.master.kpi_suppliers_badge')}</Badge>
                   </div>
-                  <div className="prd-kpi-val">12</div>
+                  <div className="prd-kpi-val">{n(k?.total_suppliers)}</div>
                 </div>
                 <div className="prd-kpi-foot">
-                  <span>{t('products.master.kpi_suppliers_sub')}</span>
+                  <span>{clock?.lead_time_days != null ? t('products.master.kpi_suppliers_sub', { l: clock.lead_time_days }) : '—'}</span>
                 </div>
               </div>
 
@@ -142,14 +137,11 @@ export const Products: React.FC = () => {
                 <div>
                   <div className="prd-kpi-head">
                     <span className="prd-kpi-title">{t('products.master.kpi_onhand')}</span>
-                    <Badge tone="neutral">10 Stores Aggregated</Badge>
                   </div>
-                  <div className="prd-kpi-val">
-                    184,290 <span className="prd-kpi-unit">{t('products.master.kpi_onhand_units')}</span>
-                  </div>
+                  <div className="prd-kpi-val">{k ? fmt.currency(k.total_inventory_value) : '—'}</div>
                 </div>
                 <div className="prd-kpi-foot">
-                  <span>{t('products.master.kpi_onhand_sub')}</span>
+                  <span>{clock?.current_date ? t('products.master.kpi_onhand_sub', { date: fmt.date(clock.current_date) }) : '—'}</span>
                 </div>
               </div>
             </div>

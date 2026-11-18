@@ -17,7 +17,7 @@ class SimSnapshot(Base):
 
 class SimShadowDaily(Base):
     """
-    Day-by-day state of the SHADOW baseline B0 (raw quantile tau=0.95, no controller) simulated in parallel
+    Day-by-day state of the SHADOW baseline B0-MA-OUT-0.95 (56-day mean / deviation, no controller) simulated in parallel
     with the main policy by ``/clock/advance`` (N-03). ``order_qty`` is the quantity ordered at the START of
     that day (arrives L days later). The row of the last day gives the current on_hand/on_order.
     """

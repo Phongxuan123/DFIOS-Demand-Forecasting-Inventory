@@ -17,6 +17,7 @@ import { settings } from './vi/settings.ts';
 import { inventory } from './vi/inventory.ts';
 import { metrics } from './vi/metrics.ts';
 import { be } from './vi/be.ts';
+import { ops } from './vi/ops.ts';
 
 export const vi = {
   common,
@@ -34,6 +35,7 @@ export const vi = {
   inventory,
   metrics,
   be,
+  ops,
 };
 
 export type Dictionary = typeof vi;

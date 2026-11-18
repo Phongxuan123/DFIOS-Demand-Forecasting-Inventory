@@ -5,10 +5,12 @@ import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { useApi } from '../hooks/useApi.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
-import { getMatrix, getRecommendations, getServiceLevel, getSkus } from '../services/abcxyzApi.ts';
+import { getCurrentPolicies, getMatrix, getRecommendations, getServiceLevel, getSkus } from '../services/abcxyzApi.ts';
 import { getCalibrationStatus } from '../services/replenishmentApi.ts';
+import { getKpiShadowDashboard, type SegmentAvailability } from '../services/dashboardApi.ts';
 import { MatrixCard } from './abcxyz/MatrixCard.tsx';
 import { PolicyCard } from './abcxyz/PolicyCard.tsx';
+import { CurrentPolicyCard } from './abcxyz/CurrentPolicyCard.tsx';
 import { RecomputeButton } from './abcxyz/RecomputeButton.tsx';
 import { ScatterCard } from './abcxyz/ScatterCard.tsx';
 import { SkuTable } from './abcxyz/SkuTable.tsx';
@@ -16,12 +18,40 @@ import './abcxyz/abcxyz.css';
 
 const SCATTER_SAMPLE = 500;
 
+type ClassService = { avail: number; target: number; below: number; n: number } | null;
+
+const ClassBadge: React.FC<{ info: ClassService }> = ({ info }) => {
+  const t = useT();
+  if (!info) return <Badge tone="neutral">{t('abcxyz.kpi.no_service')}</Badge>;
+  return info.below === 0 ? (
+    <Badge tone="success">✓ {t('abcxyz.kpi.compliant')}</Badge>
+  ) : (
+    <Badge tone="warning">⚠ {t('abcxyz.kpi.below_target', { below: info.below, n: info.n })}</Badge>
+  );
+};
+
+const ClassServiceLine: React.FC<{ info: ClassService }> = ({ info }) => {
+  const t = useT();
+  const fmt = useFormat();
+  if (!info) return <span className="ui-muted">{t('abcxyz.kpi.no_service_hint')}</span>;
+  const diff = info.avail - info.target;
+  return (
+    <span style={{ color: diff < 0 ? 'var(--color-warning-text)' : undefined }}>
+      {t('abcxyz.kpi.sla_label', {
+        sla: fmt.percent(info.avail, { scale: 'percent', digits: 1 }),
+        diff: fmt.percent(diff, { scale: 'percent', digits: 1, signed: true }),
+        target: fmt.percent(info.target, { scale: 'percent', digits: 1 }),
+      })}
+    </span>
+  );
+};
+
 export const AbcXyzAnalysis: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
   const { user } = useAuth();
   const { storeId, loading: storeLoading } = useStore();
-  const manager = can(user?.role, 'replenishment:write');
+  const manager = can(user?.role, 'policy:manage');
   const [segment, setSegment] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const skuSectionRef = useRef<HTMLDivElement>(null);
@@ -36,6 +66,10 @@ export const AbcXyzAnalysis: React.FC = () => {
   const recs = useApi((s) => getRecommendations(s), [version], { enabled: manager });
   const level = useApi((s) => getServiceLevel(s), [version], { enabled: manager });
   const calib = useApi((s) => getCalibrationStatus(storeId as string, s), [storeId, version], { enabled });
+  // Observed availability per ABC x XYZ class (simulator, closed cycles) and the commitment target
+  const service = useApi((s) => getKpiShadowDashboard(storeId as string, s), [storeId, version], { enabled });
+  // (m_g, kappa_g) chosen by J5 and theta_g in force per class: the parameters J4 uses at the next review
+  const current = useApi((s) => getCurrentPolicies(storeId as string, s), [storeId, version], { enabled });
 
   if (!storeId) {
     return (
@@ -64,6 +98,17 @@ export const AbcXyzAnalysis: React.FC = () => {
   const aRev = aSeg.reduce((n, s) => n + s.revenue_percentage, 0);
   const bRev = bSeg.reduce((n, s) => n + s.revenue_percentage, 0);
   const cRev = cSeg.reduce((n, s) => n + s.revenue_percentage, 0);
+
+  const segService = service.data?.segment_availabilities ?? [];
+  /** Availability of an ABC row: the class figures weighted by their observed SKU-periods. */
+  const rowService = (abc: 'A' | 'B' | 'C'): ClassService => {
+    const rows = segService.filter((sg: SegmentAvailability) => sg.class_id.startsWith(abc) && sg.c3out_availability !== null);
+    const w = rows.reduce((n, sg) => n + (sg.n_periods ?? 0), 0);
+    if (!rows.length || w <= 0) return null;
+    const avail = rows.reduce((n, sg) => n + (sg.c3out_availability as number) * (sg.n_periods ?? 0), 0) / w;
+    const below = rows.filter((sg) => (sg.c3out_availability as number) < sg.target).length;
+    return { avail, target: rows[0].target, below, n: rows.length };
+  };
 
   const onDone = () => {
     setSegment(null);
@@ -105,7 +150,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <span className="abc-dot abc-dot--indigo" />
                   {t('abcxyz.kpi.class_a_title')}
                 </span>
-                <Badge tone="success">✓ {t('abcxyz.kpi.compliant')}</Badge>
+                <ClassBadge info={rowService('A')} />
               </div>
               <div className="abc-portfolio-card__body">
                 <div className="abc-portfolio-card__val">
@@ -118,7 +163,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <span>{t('abcxyz.kpi.cumulative_rev', { pct: fmt.percent(aRev, { scale: 'percent', digits: 1 }) })}</span>
                 </div>
                 <div className="abc-portfolio-sla">
-                  {t('abcxyz.kpi.sla_label', { sla: '97.2%', diff: '+1.2%' })}
+                  <ClassServiceLine info={rowService('A')} />
                 </div>
               </div>
             </div>
@@ -129,7 +174,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <span className="abc-dot abc-dot--sky" />
                   {t('abcxyz.kpi.class_b_title')}
                 </span>
-                <Badge tone="success">✓ {t('abcxyz.kpi.compliant')}</Badge>
+                <ClassBadge info={rowService('B')} />
               </div>
               <div className="abc-portfolio-card__body">
                 <div className="abc-portfolio-card__val">
@@ -142,7 +187,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <span>{t('abcxyz.kpi.cumulative_rev', { pct: fmt.percent(bRev, { scale: 'percent', digits: 1 }) })}</span>
                 </div>
                 <div className="abc-portfolio-sla">
-                  {t('abcxyz.kpi.sla_label', { sla: '96.1%', diff: '+0.1%' })}
+                  <ClassServiceLine info={rowService('B')} />
                 </div>
               </div>
             </div>
@@ -153,7 +198,7 @@ export const AbcXyzAnalysis: React.FC = () => {
                   <span className="abc-dot abc-dot--amber" />
                   {t('abcxyz.kpi.class_c_title')}
                 </span>
-                <Badge tone="warning">⚠ {t('abcxyz.kpi.warning', { diff: '-0.2%' })}</Badge>
+                <ClassBadge info={rowService('C')} />
               </div>
               <div className="abc-portfolio-card__body">
                 <div className="abc-portfolio-card__val">
@@ -165,8 +210,8 @@ export const AbcXyzAnalysis: React.FC = () => {
                 <div className="abc-portfolio-meta">
                   <span>{t('abcxyz.kpi.cumulative_rev', { pct: fmt.percent(cRev, { scale: 'percent', digits: 1 }) })}</span>
                 </div>
-                <div className="abc-portfolio-sla abc-portfolio-sla--warning">
-                  {t('abcxyz.kpi.sla_label', { sla: '95.8%', diff: '-0.2%' })}
+                <div className="abc-portfolio-sla">
+                  <ClassServiceLine info={rowService('C')} />
                 </div>
               </div>
             </div>
@@ -175,11 +220,23 @@ export const AbcXyzAnalysis: React.FC = () => {
           <MatrixCard
             matrix={m}
             thetas={calib.data?.thetas}
+            service={segService}
+            serviceLoading={service.loading && !service.data}
             loading={matrix.loading}
             error={matrix.error}
             onRetry={matrix.refetch}
             selected={segment}
             onSelect={onSelectSegment}
+          />
+
+          <CurrentPolicyCard
+            policies={current.data}
+            loading={current.loading && !current.data}
+            error={current.error}
+            onRetry={current.refetch}
+            matrix={m}
+            service={segService}
+            selected={segment}
           />
 
           <PolicyCard

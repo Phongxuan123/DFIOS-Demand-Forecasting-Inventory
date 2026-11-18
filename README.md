@@ -174,8 +174,26 @@ python -m pytest -q
 ```bash
 python -m pytest -q
 ```
-Số lượng test hiện tại: xem dòng tổng kết của `pytest` (khoảng 240 test, mất vài phút).
+Số lượng test hiện tại: xem dòng tổng kết của `pytest` (khoảng 520 test, mất vài phút).
 Test cần artifact `MODEL/tft_model.pth` tự bỏ qua (skip) khi file không có trên máy.
+
+**Frontend unit test** (từ `FE/`): `npm test` (Vitest).
+
+**E2E Playwright** (demo.md §8: các bước 2, 6, 7 của kịch bản demo và kiểm tra quyền Admin / Planner).
+Chạy trên stack đang chạy: BE (`uvicorn`, **chỉ DB local**, vì test đặt lại đồng hồ mô phỏng) và FE (`npm run dev`).
+Cần tài khoản Planner: đặt `PLANNER_PASSWORD` trong `BE/.env` rồi chạy `python scripts/load_users.py`.
+
+```bash
+cd FE
+npx playwright install chromium          # một lần (hoặc đặt PW_CHROMIUM_PATH tới một Chromium có sẵn)
+export E2E_ADMIN_EMAIL=admin@dfios.com E2E_ADMIN_PASSWORD=...        # lấy từ BE/.env, không commit
+export E2E_PLANNER_EMAIL=planner@dfios.com E2E_PLANNER_PASSWORD=...  # tùy chọn
+npm run e2e
+```
+Các test: đăng nhập và Dashboard (bước 2); tua 1 kỳ review rồi kiểm tra dòng ADVANCE trong Lịch sử batch (bước 7);
+tua 1 kỳ ở chế độ "Planner duyệt", mở đề xuất chờ duyệt từ banner, sửa số lượng có lý do, duyệt, xuất CSV (bước 6);
+Admin thấy Lịch sử batch / Phiên bản mô hình / Chính sách đang áp dụng; Planner không thấy điều khiển đồng hồ.
+Thiếu biến `E2E_ADMIN_*` thì test tự bỏ qua.
 
 ---
 

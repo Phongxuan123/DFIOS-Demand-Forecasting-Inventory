@@ -11,6 +11,8 @@ export const nav = {
   abc_xyz: 'Phân lớp ABC/XYZ',
   reports: 'Báo cáo',
   model_performance: 'Hiệu năng mô hình',
+  model_versions: 'Phiên bản mô hình',
+  batch_runs: 'Lịch sử batch',
   settings: 'Cài đặt',
   design_system: 'Design system',
   main_label: 'Điều hướng chính',

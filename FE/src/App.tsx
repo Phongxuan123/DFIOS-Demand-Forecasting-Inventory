@@ -22,6 +22,8 @@ const Reports = lazy(() => import('./pages/Reports.tsx').then((m) => ({ default:
 const InventoryManagement = lazy(() => import('./pages/InventoryManagement.tsx').then((m) => ({ default: m.InventoryManagement })));
 const Products = lazy(() => import('./pages/Products.tsx').then((m) => ({ default: m.Products })));
 const ModelPerformance = lazy(() => import('./pages/ModelPerformance.tsx').then((m) => ({ default: m.ModelPerformance })));
+const BatchRuns = lazy(() => import('./pages/BatchRuns.tsx').then((m) => ({ default: m.BatchRuns })));
+const ModelVersions = lazy(() => import('./pages/ModelVersions.tsx').then((m) => ({ default: m.ModelVersions })));
 const Settings = lazy(() => import('./pages/Settings.tsx').then((m) => ({ default: m.Settings })));
 const DesignSystem = import.meta.env.DEV ? lazy(() => import('./pages/DesignSystem.tsx').then((m) => ({ default: m.DesignSystem }))) : null;
 
@@ -86,10 +88,26 @@ const App: React.FC = () => (
                   <Route path="inventory" element={<InventoryManagement />} />
                   <Route path="products" element={<Products />} />
                   <Route
+                    path="batch-runs"
+                    element={
+                      <RequireRole action="batch:view">
+                        <BatchRuns />
+                      </RequireRole>
+                    }
+                  />
+                  <Route
                     path="model-performance"
                     element={
                       <RequireRole action="view:models">
                         <ModelPerformance />
+                      </RequireRole>
+                    }
+                  />
+                  <Route
+                    path="model-versions"
+                    element={
+                      <RequireRole action="forecast_sources:view">
+                        <ModelVersions />
                       </RequireRole>
                     }
                   />

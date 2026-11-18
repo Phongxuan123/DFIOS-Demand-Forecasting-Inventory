@@ -84,6 +84,7 @@ export const common: typeof Vi = {
   roles: {
     admin: 'Administrator',
     manager: 'Warehouse manager',
+    planner: 'Planner',
     viewer: 'Viewer',
   },
   theme: {

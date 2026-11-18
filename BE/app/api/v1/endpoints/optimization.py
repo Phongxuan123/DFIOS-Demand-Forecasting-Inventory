@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     get_db,
+    get_current_user,
     require_admin,
     require_manager_or_admin,
     get_client_ip,
@@ -23,6 +24,7 @@ from app.schemas.optimization import (
     RefitPoliciesRequest,
     RefitPoliciesResponse,
     PolicySelectionItem,
+    CurrentPolicyItem,
 )
 from app.services.batch_service import batch_service
 from app.services.optimization_service import optimization_service
@@ -236,3 +238,37 @@ def refit_policies(
         run_id=run["run_id"],
     )
 
+
+
+# --- demo.md 6.3 GET /policies/current: (m_g, kappa_g) in force per class + current theta_g ---
+
+@router.get(
+    "/policies/current",
+    response_model=List[CurrentPolicyItem],
+    summary="Chính sách đang áp dụng cho 9 nhóm ABC×XYZ của cửa hàng: (m_g, kappa_g) do J5 chọn và theta_g hiện tại",
+)
+def get_current_policies(
+    store_id: str = Query("CA_1", description="Mã cửa hàng"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Same resolution as the engine (store-specific J5 selection first, else the global one; newest wins), so the
+    screen shows exactly the parameters J4 uses at the next review. Classes without any selection are omitted.
+    Role: every signed-in user (read only)."""
+    from app.services.calibrator_service import calibrator_service, selection_store
+
+    policies = calibrator_service.resolve_policies(db, store_id)
+    thetas = calibrator_service.get_current_thetas(db, store_id=store_id)
+    out = []
+    for class_id in calibrator_service.ALL_CLASSES:
+        p = policies.get(class_id)
+        if p is None:
+            continue
+        out.append(CurrentPolicyItem(
+            class_id=class_id, selection_id=p.selection_id,
+            scope="store" if selection_store(p.selection_id) == store_id else "global",
+            policy_type=p.policy_type or "REFIT_RSS_EOQ_G", m_g=float(p.m_g or 0.0), kappa_g=float(p.kappa_g or 0.0),
+            setpoint=p.setpoint, val_cost=p.val_cost, val_service=p.val_service, is_feasible=p.is_feasible,
+            source=p.source, selected_at=p.created_at, theta=thetas.get(class_id),
+        ))
+    return out
