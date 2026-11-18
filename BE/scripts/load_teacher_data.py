@@ -24,6 +24,9 @@ What it writes (idempotent; every step can be re-run):
              t = VAL_START .. T_END - 1 for each H (H = L + R: 4 for the what-if with R = 1, 10 for R = 7), same
              model_run_id / route; origins that already hold teacher rows for every SKU at that H (the weekly
              H = 10 rows) are kept, never duplicated (see ``load_daily_quantiles``).
+  sources    (optional, --steps sources --source-models ensemble chronos_bolt) every model's window quantiles at the
+             review origins into window_quantile_source, the input of the Admin model switch
+             (POST /forecast-sources/activate, demo.md step 10). The engine never reads this table.
   clock      sim_clock(store) start = current = TEST_START (2015-05-25; --clock-start-day 1395 = 2014-11-24 for the
              teacher's continuous run, with --refit-as-of-day 1577 for selection #0), the store's simulation state is cleared
              (snapshot, shadow, service outcomes, inventory_daily, simulator orders, C3 states k >= 1, store-scoped
@@ -69,6 +72,8 @@ QUANTILE_LEVELS = (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.925, 0.95,
                    0.99, 0.995, 0.999)
 CLASS_SOURCE_TEACHER = "teacher_meta"
 STEPS = ("classes", "sales", "prices", "quantiles", "clock")
+# optional, never in the default run: per-model source quantiles for the in-app model switch (forecast_source_service)
+OPTIONAL_STEPS = ("sources",)
 
 
 # --------------------------------------------------------------------------- safety
@@ -337,16 +342,18 @@ def load_quantiles(db, td: Dict[str, object]) -> Dict[str, int]:
             ForecastWindowQuantile.model_run_id == DEFAULT_MODEL_RUN_ID,
             ForecastWindowQuantile.horizon_days == H,
             ForecastWindowQuantile.origin_date.in_(origin_dates[k:k + 20])))
+    sw = td.get("switch")
     rows = []
     for k, od in enumerate(origin_dates):
         qk = np.round(q[k], 4)
+        src_model = (sw["to"] if int(reviews[k]) >= int(sw["day"]) else sw["from"]) if sw else td.get("model")
         for i, iid in enumerate(item_ids):
             rows.append({
                 "id": f"{DEFAULT_MODEL_RUN_ID}_{store}_{iid}_{od}_{H}", "model_run_id": DEFAULT_MODEL_RUN_ID,
                 "store_id": store, "item_id": iid, "origin_date": od, "horizon_days": H,
                 "point_window": float(qk[i, i50]),
                 "q_levels": {kk: float(v) for kk, v in zip(keys, qk[i])},
-                "route": pc.ROUTE_TEACHER, "created_at": now,
+                "route": pc.ROUTE_TEACHER, "source_model": src_model, "created_at": now,
             })
     _bulk_insert(db.connection(), ForecastWindowQuantile.__table__, rows)
     db.commit()
@@ -355,6 +362,39 @@ def load_quantiles(db, td: Dict[str, object]) -> Dict[str, int]:
            "model": td.get("model")}
     if td.get("switch"):
         out["switch"] = td["switch"]
+    return out
+
+
+def load_sources(db, td: Dict[str, object], teacher_dir: str, models: Sequence[str]) -> Dict[str, object]:
+    """Each model's (L+R)-window quantiles at the review origins into window_quantile_source (replace per model)."""
+    from sqlalchemy import delete
+    from app.models.window_quantile_source import WindowQuantileSource
+
+    store, meta, reviews, H, sl = td["store"], td["meta"], td["reviews"], int(td["H"]), td["slice"]
+    item_ids = meta["item_id"].astype(str).tolist()
+    keys = [str(lv) for lv in QUANTILE_LEVELS]
+    i50 = QUANTILE_LEVELS.index(0.5)
+    origin_dates = [day_to_date(int(r)) for r in reviews]
+    out: Dict[str, object] = {}
+    for model in models:
+        q, fdir = review_quantiles(teacher_dir, model, sl, reviews, H)
+        db.execute(delete(WindowQuantileSource).where(WindowQuantileSource.store_id == store,
+                                                      WindowQuantileSource.model == model,
+                                                      WindowQuantileSource.horizon_days == H))
+        n = 0
+        for k0 in range(0, len(origin_dates), 13):   # ~38k rows per batch: bounded memory
+            rows = []
+            for k in range(k0, min(len(origin_dates), k0 + 13)):
+                od, qk = origin_dates[k], np.round(q[k], 4)
+                for i, iid in enumerate(item_ids):
+                    rows.append({"id": f"{model}_{store}_{iid}_{od}_{H}", "store_id": store, "model": model,
+                                 "item_id": iid, "origin_date": od, "horizon_days": H,
+                                 "point_window": float(qk[i, i50]),
+                                 "q_levels": {kk: float(v) for kk, v in zip(keys, qk[i])}, "source_dir": fdir})
+            _bulk_insert(db.connection(), WindowQuantileSource.__table__, rows)
+            n += len(rows)
+        db.commit()
+        out[model] = {"rows": n, "origins": len(origin_dates), "dir": fdir}
     return out
 
 
@@ -514,14 +554,16 @@ def set_clock(db, td: Dict[str, object], initial_refit: bool = True, start_day: 
 def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", start_day: int = 1031,
         steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print, switch_from: Optional[str] = None,
         switch_to: Optional[str] = None, switch_day: Optional[int] = None, clock_start_day: Optional[int] = None,
-        refit_as_of_day: Optional[int] = None, daily_horizons: Optional[Sequence[int]] = None) -> Dict[str, object]:
+        refit_as_of_day: Optional[int] = None, daily_horizons: Optional[Sequence[int]] = None,
+        source_models: Optional[Sequence[str]] = None) -> Dict[str, object]:
     t0 = time.time()
     td = read_teacher(teacher_dir, store, model, start_day, switch_from=switch_from, switch_to=switch_to,
                       switch_day=switch_day)
     report: Dict[str, object] = {"store": store, "n_skus": int(td["y"].shape[0]),
                                  "read_seconds": round(time.time() - t0, 1)}
     log(f"read teacher arrays: {report['n_skus']} SKUs ({report['read_seconds']}s)")
-    fns = {"classes": load_classes, "sales": load_sales, "prices": load_prices, "quantiles": load_quantiles}
+    fns = {"classes": load_classes, "sales": load_sales, "prices": load_prices, "quantiles": load_quantiles,
+           "sources": lambda db_, td_: load_sources(db_, td_, teacher_dir, source_models or ["ensemble"])}
     if daily_horizons:  # --daily-origins: the quantiles step stores daily-origin rows for each H instead
         fns["quantiles"] = lambda db_, td_: load_daily_quantiles(db_, td_, teacher_dir, daily_horizons)
     for step in steps:
@@ -541,7 +583,9 @@ def main(argv=None) -> int:
     ap.add_argument("--store", default="CA_1")
     ap.add_argument("--model", default="ensemble")
     ap.add_argument("--start-day", type=int, default=1031)
-    ap.add_argument("--steps", nargs="+", default=list(STEPS), choices=STEPS)
+    ap.add_argument("--steps", nargs="+", default=list(STEPS), choices=STEPS + OPTIONAL_STEPS)
+    ap.add_argument("--source-models", nargs="+", default=["ensemble", "chronos_bolt"],
+                    help="sources step: models whose window quantiles are kept for the in-app model switch")
     ap.add_argument("--no-initial-refit", action="store_true")
     ap.add_argument("--switch-from", default=None, metavar="MODEL", help="model of the reviews before --switch-day")
     ap.add_argument("--switch-to", default=None, metavar="MODEL", help="model of the reviews from --switch-day on")
@@ -574,7 +618,8 @@ def main(argv=None) -> int:
                   not args.no_initial_refit, switch_from=args.switch_from, switch_to=args.switch_to,
                   switch_day=args.switch_day, clock_start_day=args.clock_start_day,
                   refit_as_of_day=args.refit_as_of_day,
-                  daily_horizons=args.horizons if args.daily_origins else None)
+                  daily_horizons=args.horizons if args.daily_origins else None,
+                  source_models=args.source_models)
     finally:
         db.close()
     if args.report:

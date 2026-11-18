@@ -14,6 +14,9 @@ class ForecastWindowQuantile(Base):
     point_window = Column(Float, nullable=False)
     q_levels = Column(JSON, nullable=False)
     route = Column(String(10), default="c")
+    # forecasting model that produced the row (e.g. "ensemble", "chronos_bolt"); NULL = not recorded (route (c)
+    # rebuilds, rows loaded before the column existed). Set by the teacher loader and by a model activation.
+    source_model = Column(String(40), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (

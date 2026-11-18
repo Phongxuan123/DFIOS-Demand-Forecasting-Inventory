@@ -31,6 +31,7 @@ from app.models.forecast_backtest import ForecastBacktest
 from app.models.sim_state import SimSnapshot, SimShadowDaily
 from app.models.price_history import PriceHistory
 from app.models.batch_run import BatchRun
+from app.models.window_quantile_source import WindowModelActivation, WindowQuantileSource
 
 __all__ = [
     "SimSnapshot",
@@ -69,4 +70,6 @@ __all__ = [
     "ForecastBacktest",
     "PriceHistory",
     "BatchRun",
+    "WindowQuantileSource",
+    "WindowModelActivation",
 ]
