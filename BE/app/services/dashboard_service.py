@@ -1,10 +1,13 @@
 import logging
 from datetime import date, timedelta, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.core.events import event_bus
+from app.repositories import price_history_repository
 from app.repositories.dashboard_repository import dashboard_repository
 from app.models.alert import Alert
 from app.schemas.dashboard import (
@@ -52,6 +55,94 @@ def kpi_reason_code(reason: Optional[str]) -> Optional[str]:
     if not reason:
         return None
     return _KPI_REASON_CODES.get(reason, "other")
+
+
+def valued_stock_sums(
+    db: Session, model, stores: List[str], start: date, end: date, by: Optional[str] = "date",
+) -> Dict[Any, Tuple[float, float]]:
+    """{key: (sum on_hand_end * price, sum lost_sales * price)} of ``model`` (inventory_daily / sim_shadow_daily)
+    rows of ``stores`` on [start, end] (inclusive), every row valued at the price of ITS date (G-37).
+
+    ``by`` = "date" (key = date), "cat" (key = upper-cased category, "UNKNOWN" when none) or None (one key None).
+    Stores without any price_history row keep the original single SQL aggregate over ``products.price`` (identical
+    numbers); a store with daily prices reads its rows once and prices them with ONE ``price_matrix`` call (daily row,
+    else products.price; a row without any price contributes 0, like the NULL price of the SQL join)."""
+    sums: Dict[Any, List[float]] = {}
+    priced = [s for s in stores if price_history_repository.has_prices(db, s)]
+    plain = [s for s in stores if s not in set(priced)]
+
+    if plain:
+        cols = [func.sum(model.on_hand_end * Product.price), func.sum(model.lost_sales * Product.price)]
+        if by == "date":
+            key_col = model.date
+        elif by == "cat":
+            key_col = func.coalesce(Product.cat_id, "UNKNOWN")
+        else:
+            key_col = None
+        q = db.query(*([key_col] if key_col is not None else []), *cols).join(
+            Product, Product.item_id == model.item_id
+        ).filter(model.store_id.in_(plain), model.date >= start, model.date <= end)
+        if key_col is not None:
+            for k, hv, lv in q.group_by(key_col).all():
+                k = str(k).upper() if by == "cat" else k
+                acc = sums.setdefault(k, [0.0, 0.0])
+                acc[0] += float(hv or 0.0)
+                acc[1] += float(lv or 0.0)
+        else:
+            hv, lv = q.one()
+            if hv is not None or lv is not None:
+                acc = sums.setdefault(None, [0.0, 0.0])
+                acc[0] += float(hv or 0.0)
+                acc[1] += float(lv or 0.0)
+
+    T = (end - start).days + 1
+    for s in priced:
+        rows = (
+            db.query(model.item_id, model.date, model.on_hand_end, model.lost_sales)
+            .filter(model.store_id == s, model.date >= start, model.date <= end)
+            .all()
+        )
+        if not rows or T <= 0:
+            continue
+        items = sorted({r[0] for r in rows})
+        pos = {it: k for k, it in enumerate(items)}
+        P = price_history_repository.price_matrix(db, s, items, start, end + timedelta(days=1))
+        cat_of: Dict[str, str] = {}
+        for k in range(0, len(items), 900):
+            for iid, cat in db.query(Product.item_id, Product.cat_id).filter(
+                Product.item_id.in_(items[k:k + 900])
+            ).all():
+                cat_of[iid] = str(cat if cat is not None else "UNKNOWN").upper()
+        ii = np.fromiter((pos[r[0]] for r in rows), dtype=np.int64, count=len(rows))
+        di = np.fromiter(((r[1] - start).days for r in rows), dtype=np.int64, count=len(rows))
+        oh = np.fromiter((float(r[2]) if r[2] is not None else 0.0 for r in rows), dtype=float, count=len(rows))
+        ls = np.fromiter((float(r[3]) if r[3] is not None else 0.0 for r in rows), dtype=float, count=len(rows))
+        p = P[ii, di]
+        fin = ~np.isnan(p)
+        pz = np.where(fin, p, 0.0)
+        hv_r, lv_r = oh * pz, ls * pz
+        # a row counts (creates its key) when it is priced or its product exists (SQL inner join semantics)
+        has_prod = np.array([it in cat_of for it in items], dtype=bool)[ii]
+        counted = fin | has_prod
+        if by == "date":
+            gid, keys = di, [start + timedelta(days=int(j)) for j in range(T)]
+        elif by == "cat":
+            cats = sorted(set(cat_of.values()) | {"UNKNOWN"})
+            cpos = {c: j for j, c in enumerate(cats)}
+            item_cat = np.array([cpos[cat_of.get(it, "UNKNOWN")] for it in items], dtype=np.int64)
+            gid, keys = item_cat[ii], cats
+        else:
+            gid, keys = np.zeros(len(rows), dtype=np.int64), [None]
+        G = len(keys)
+        hv_g, lv_g, n_g = np.zeros(G), np.zeros(G), np.zeros(G)
+        np.add.at(hv_g, gid, hv_r)
+        np.add.at(lv_g, gid, lv_r)
+        np.add.at(n_g, gid, counted.astype(float))
+        for j in np.flatnonzero(n_g > 0):
+            acc = sums.setdefault(keys[j], [0.0, 0.0])
+            acc[0] += float(hv_g[j])
+            acc[1] += float(lv_g[j])
+    return {k: (v[0], v[1]) for k, v in sums.items()}
 
 
 class DashboardService:
@@ -336,24 +427,12 @@ class DashboardService:
 
     @staticmethod
     def _daily_costs(db: Session, model, stores: List[str], start: date, end: date) -> Dict[date, Tuple[float, float]]:
-        """{date: (holding, shortage)} in A3 money: h*price*on_hand_end, b*price*lost, summed over SKUs."""
-        rows = (
-            db.query(
-                model.date,
-                func.sum(model.on_hand_end * Product.price).label("hv"),
-                func.sum(model.lost_sales * Product.price).label("lv"),
-            )
-            .join(Product, Product.item_id == model.item_id)
-            .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
-            .group_by(model.date)
-            .all()
-        )
+        """{date: (holding, shortage)} in A3 money: h*price*on_hand_end, b*price*lost, summed over SKUs, each day
+        valued at the price of that day (G-37: price_history, else products.price)."""
+        sums = valued_stock_sums(db, model, stores, start, end, by="date")
         return {
-            r.date: (
-                float(r.hv or 0.0) * pc.HOLDING_RATE_DAILY,
-                float(r.lv or 0.0) * pc.STOCKOUT_PENALTY_RATE,
-            )
-            for r in rows
+            d: (hv * pc.HOLDING_RATE_DAILY, lv * pc.STOCKOUT_PENALTY_RATE)
+            for d, (hv, lv) in sums.items()
         }
 
     def _availability_by_class(
