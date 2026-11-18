@@ -17,6 +17,7 @@ from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
 from app.models.sim_clock import SimClock
 from app.models.sim_state import SimShadowDaily
+from app.repositories import price_history_repository
 from app.services import policy_config as pc
 
 _GLOBAL = ("GLOBAL", "ALL")
@@ -113,6 +114,25 @@ class ReportsRepository:
             p.item_id: float(p.price) for p in db.query(Product.item_id, Product.price).filter(Product.item_id.in_(item_ids)).all()
             if p.price is not None
         }
+        # G-37: the 28-day dollar sales of a series on a store with daily prices = sum(units of day d * price of d)
+        # (price_history, else products.price); ONE price_matrix per such store. Other stores: units * products.price.
+        daily_dollar: Dict[Tuple[str, str], Optional[float]] = {}
+        for st in sorted({k[1] for k in keys}):
+            if not price_history_repository.has_prices(db, st):
+                continue
+            st_keys = [k for k in keys if k[1] == st and len(hist.get(k, [])) >= 2]
+            if not st_keys:
+                continue
+            st_items = sorted({k[0] for k in st_keys})
+            lo = min(hist[k][-28:][0][0] for k in st_keys)
+            P = price_history_repository.price_matrix(
+                db, st, st_items, lo, eval_start,
+                fallback=np.array([prices[i] if i in prices else np.nan for i in st_items], dtype=float))
+            pos = {i: j for j, i in enumerate(st_items)}
+            for k in st_keys:
+                tail = hist[k][-28:]
+                p = P[pos[k[0]], [(d - lo).days for d, _ in tail]]
+                daily_dollar[k] = None if np.isnan(p).any() else float(np.sum(np.asarray([v for _, v in tail]) * p))
 
         stats: Dict[Tuple[str, str], Dict[str, float]] = {}
         for key, sd in series.items():
@@ -130,7 +150,9 @@ class ReportsRepository:
                 if s_mae > 0 and s_rmse > 0:
                     scale_mae, scale_rmse = s_mae, s_rmse
                 last28 = y[-28:]
-                if key[0] in prices:
+                if key in daily_dollar:
+                    dollar = daily_dollar[key]
+                elif key[0] in prices:
                     dollar = float(last28.sum()) * prices[key[0]]
             stats[key] = {
                 "n": n, "mae": mae_i, "rmse": rmse_i, "sq_sum": float(np.sum(err ** 2)), "abs_sum": float(np.sum(np.abs(err))),
@@ -274,6 +296,25 @@ class ReportsRepository:
             query = query.filter(Product.cat_id == category.strip())
         records = query.order_by(Inventory.store_id, Inventory.item_id).all()
 
+        # G-37: stock is valued at the price of the valuation date = the store's simulated clock date (the date of the
+        # on-hand quantity): price_history of that day, else products.price, else inventory_params.unit_price, else 0.
+        def base_price(r) -> float:
+            return float(r.price if r.price is not None else (r.param_price if r.param_price is not None else 0.0))
+
+        day_price: Dict[Tuple[str, str], float] = {}
+        valuation_dates: Dict[str, str] = {}
+        clock_of = {c.store_id: c.current_date for c in db.query(SimClock.store_id, SimClock.current_date).all()}
+        for st in sorted({r.store_id for r in records}):
+            vd = clock_of.get(st)
+            if vd is None or not price_history_repository.has_prices(db, st):
+                continue
+            st_recs = [r for r in records if r.store_id == st]
+            p = price_history_repository.price_on(
+                db, st, [r.item_id for r in st_recs], vd, fallback=np.array([base_price(r) for r in st_recs]))
+            for r, v in zip(st_recs, p):
+                day_price[(st, r.item_id)] = float(v)
+            valuation_dates[st] = str(vd)
+
         total_value = dead_stock_val = 0.0
         stockout_count = 0
         turnovers: List[float] = []
@@ -281,7 +322,7 @@ class ReportsRepository:
         item_list = []
         for r in records:
             on_hand = max(0.0, float(r.on_hand or 0.0))
-            price = float(r.price if r.price is not None else (r.param_price if r.param_price is not None else 0.0))
+            price = day_price.get((r.store_id, r.item_id), base_price(r))
             val = round(on_hand * price, 2)
             total_value += val
             if on_hand <= 0.0:
@@ -315,6 +356,7 @@ class ReportsRepository:
             "items": paginated,
             "total": len(records),
             "source": "inventory+inventory_params",
+            "price_valuation_dates": valuation_dates,
             "n_skus": len(records),
             "n_skus_with_demand": len(turnovers),
             "reason": reason,
@@ -345,7 +387,7 @@ class ReportsRepository:
         UC41: kết quả ĐO của bộ mô phỏng: C³-OUT (chính sách chạy) so với B0 shadow song song trên cùng nhu cầu.
         Không có CSL / fill-rate nhúng sẵn. Chưa mô phỏng -> các chỉ số null + reason.
         """
-        from app.services.dashboard_service import dashboard_service, kpi_reason_code
+        from app.services.dashboard_service import dashboard_service, kpi_reason_code, valued_stock_sums
 
         stores, start, end = self._sim_window(db, store_id)
         base = {
@@ -392,12 +434,8 @@ class ReportsRepository:
         base["baseline_avg_inventory"] = avg_inv(SimShadowDaily)
 
         def holding(model) -> float:
-            v = (
-                db.query(func.sum(model.on_hand_end * Product.price))
-                .join(Product, Product.item_id == model.item_id)
-                .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
-                .scalar()
-            )
+            # G-37: end-of-day stock valued at the price of its day (price_history, else products.price)
+            v = valued_stock_sums(db, model, stores, start, end, by=None).get(None, (0.0, 0.0))[0]
             return float(v or 0.0) * pc.HOLDING_RATE_DAILY
 
         base["holding_cost_savings"] = round(holding(SimShadowDaily) - holding(InventoryDaily), 2)
@@ -430,20 +468,13 @@ class ReportsRepository:
         cat_filter = category.strip().upper() if category and category.strip() and category.upper() != "ALL" else None
         out["total_skus"] = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id.in_(stores)).scalar() or 0
 
+        from app.services.dashboard_service import valued_stock_sums
+
         def money(model) -> Dict[str, Tuple[float, float]]:
-            q = (
-                db.query(
-                    func.coalesce(Product.cat_id, "UNKNOWN"),
-                    func.sum(model.on_hand_end * Product.price),
-                    func.sum(model.lost_sales * Product.price),
-                )
-                .join(Product, Product.item_id == model.item_id)
-                .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
-                .group_by(func.coalesce(Product.cat_id, "UNKNOWN"))
-            )
+            # G-37: holding / lost valued at the price of each row's day (price_history, else products.price)
             return {
-                str(c).upper(): (float(h or 0.0) * pc.HOLDING_RATE_DAILY, float(s or 0.0) * pc.STOCKOUT_PENALTY_RATE)
-                for c, h, s in q.all()
+                c: (h * pc.HOLDING_RATE_DAILY, s * pc.STOCKOUT_PENALTY_RATE)
+                for c, (h, s) in valued_stock_sums(db, model, stores, start, end, by="cat").items()
             }
 
         c3_money, b0_money = money(InventoryDaily), money(SimShadowDaily)

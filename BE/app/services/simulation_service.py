@@ -1,11 +1,14 @@
 from typing import List, Optional, Tuple
 
+import numpy as np
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.inventory import Inventory
 from app.models.product import Product
+from app.models.sim_clock import SimClock
+from app.repositories import price_history_repository
 from app.schemas.simulation import InsightDetail, PolicySimulationMetric, PolicyComparisonResponse
 from app.services import policy_config as pc
 from app.services.policy_artifact import (
@@ -45,8 +48,23 @@ class SimulationService:
 
     @staticmethod
     def _store_basis(db: Session, store_id: str) -> Tuple[int, Optional[float], str]:
-        """(#SKUs of the store, mean unit price, price source). Price = products.price (A3 price)."""
+        """(#SKUs of the store, mean unit price, price source). Price = products.price (A3 price); G-37: a store with
+        daily prices and a simulated clock uses the price of the clock date (price_history, else products.price)."""
         sku_count = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id == store_id).scalar() or 0
+        clock_date = db.query(SimClock.current_date).filter(SimClock.store_id == store_id).scalar()
+        if sku_count and clock_date is not None and price_history_repository.has_prices(db, store_id):
+            rows = (
+                db.query(Inventory.item_id, Product.price)
+                .outerjoin(Product, Inventory.item_id == Product.item_id)
+                .filter(Inventory.store_id == store_id)
+                .order_by(Inventory.item_id)
+                .all()
+            )
+            base = np.array([float(p) if p is not None else np.nan for _, p in rows], dtype=float)
+            p_day = price_history_repository.price_on(db, store_id, [i for i, _ in rows], clock_date, fallback=base)
+            p_day = p_day[~np.isnan(p_day)]
+            avg = float(p_day.mean()) if p_day.size else None
+            return int(sku_count), (avg if avg else None), f"price_history@{clock_date.isoformat()}"
         if sku_count:
             avg_price = (
                 db.query(func.avg(Product.price))

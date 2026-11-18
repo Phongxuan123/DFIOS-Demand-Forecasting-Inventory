@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.models.classification import SKUClassification
 from app.models.forecast_backtest import ForecastBacktest
 from app.models.product import Product
+from app.repositories import price_history_repository
 from app.schemas.simulation import (
     WhatIfClassResult,
     WhatIfMetrics,
@@ -100,15 +101,25 @@ class WhatIfService:
         price = np.array([float(prices[i]) if prices.get(i) and float(prices[i]) > 0 else np.nan for i in item_ids])
         days_idx = np.concatenate([np.arange(s - reviews[0], s - reviews[0] + R) for s in reviews])
         dem = A[:, days_idx]
-        ok = ~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1) & ~np.isnan(price)
+        # G-37: same daily-price rules as the engine (J5): every replayed day is valued at its own price
+        # (price_history, else products.price) and the EOQ of review k uses the price of the review day; an item
+        # without a price on ANY replayed day is excluded. No price_history row -> exactly the constant price.
+        p_span = price_history_repository.price_matrix(
+            db, store_id, item_ids, pc.day_index_to_date(reviews[0]), pc.day_index_to_date(reviews[-1] + R),
+            fallback=price)
+        p_day = p_span[:, days_idx]
+        ok = (~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1)
+              & ~np.isnan(p_day).any(axis=1) & ~(p_day <= 0).any(axis=1))
         if not ok.any():
             return None, WhatIfSkippedClass(
                 class_id=class_id, reason_code="no_complete_items",
                 reason="No SKU has realised demand on every replayed day, a quantile at every review and a price.")
-        point, price_ok = cm["point"][ok], price[ok]
+        point, p_day_ok = cm["point"][ok], p_day[ok]
+        price_ok = np.where(np.isnan(price[ok]), p_day_ok[:, 0], price[ok])
+        p_review = p_day_ok[:, [k * R for k in range(len(reviews))]]   # price of each review day
 
         def eoq_for(h: float, c: float) -> np.ndarray:
-            return np.stack([policy_backtest.eoq_units(point[:, k] / H, price_ok, h, c)
+            return np.stack([policy_backtest.eoq_units(point[:, k] / H, p_review[:, k], h, c)
                              for k in range(len(reviews))], axis=1)
 
         eoq = eoq_for(holding_rate, order_cost)
@@ -126,7 +137,8 @@ class WhatIfService:
         legacy = np.ceil(cm["q"][ok][:, 0]) + np.ceil(eoq_a3[:, 0])
         init = np.where(no_hist, legacy, init)
         return {
-            "dem": dem[ok], "q": cm["q"][ok], "eoq": eoq, "eoq_a3": eoq_a3, "price": price_ok, "reviews": reviews,
+            "dem": dem[ok], "q": cm["q"][ok], "eoq": eoq, "eoq_a3": eoq_a3, "price": price_ok,
+            "daily_price": p_day_ok, "reviews": reviews,
             "init": init, "n_init_legacy": int(no_hist.sum()),
             "n_items": int(ok.sum()), "n_fallback": int(cm["fallback"][ok].any(axis=1).sum()),
         }, None
@@ -223,7 +235,7 @@ class WhatIfService:
                 res = policy_backtest.simulate_rss_candidates(
                     d["dem"], d["q"], eoq, d["price"], [m], [kappa], theta=theta, lead_time=L, review_period=R,
                     holding_rate=req.holding_rate, stockout_rate=req.stockout_penalty_rate, order_cost=req.order_cost,
-                    initial_on_hand=d["init"],
+                    initial_on_hand=d["init"], daily_price=d["daily_price"],
                 )
                 by_class.append(WhatIfClassResult(
                     class_id=c, m_g=m, kappa_g=kappa, theta_g=round(theta, 4), params_source=params_source,
