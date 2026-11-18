@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import math
 import time
+import uuid
 from contextlib import contextmanager
 from statistics import NormalDist
 from datetime import date, datetime, timedelta, timezone
@@ -53,6 +54,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db_bulk import psql_insert_copy
 from app.models.base import Base
+from app.models.batch_run import BatchRun
 from app.models.calibration_state import CalibrationState
 from app.models.inventory import Inventory
 from app.models.inventory_daily import InventoryDaily
@@ -74,6 +76,16 @@ def is_refit_day(delta_days: int) -> bool:
     return delta_days > 0 and delta_days % REFIT_PERIOD_DAYS == 0
 
 SIM_ACTOR = "simulator"
+# Order approval of the simulated reviews (demo.md §4.4 / §6 step 6-7):
+#   auto    every proposal is placed at once (APPROVED, decided_by = simulator) - replay / equivalence runs
+#   planner the review leaves its proposals PENDING (origin = simulator); the advance STOPS at that review day so the
+#           planner edits / approves them (q_final = final_qty is what arrives L days later); the next advance is
+#           refused while proposals of the simulator are still open, unless expire_pending=True (they then become
+#           REJECTED "expired": not ordered)
+APPROVAL_AUTO = "auto"
+APPROVAL_PLANNER = "planner"
+APPROVAL_MODES = (APPROVAL_AUTO, APPROVAL_PLANNER)
+OPEN_STATUSES = ("PENDING", "PROPOSED")
 B0_TAU = 0.95
 B0_Z = NormalDist().inv_cdf(B0_TAU)   # 1.6449 (z_0.95 of the teacher's B0-MA-OUT-0.95)
 B0_MA_WINDOW_DAYS = 56                # teacher e10_static_formula.moving_stats WINDOW
@@ -81,6 +93,27 @@ INIT_STOCK_WINDOW_DAYS = 28           # G-03
 CEIL_EPS = 1e-9
 MAX_ADVANCE_DAYS = 90
 _tables_ready_for: set = set()
+
+
+class _JobTimer:
+    """Collects the per-job timings of one advance (written to ``batch_runs``, E7)."""
+
+    def __init__(self) -> None:
+        self.rows: List[Dict[str, Any]] = []
+        self.j1_ms = 0.0
+        self.j1_days = 0
+        self.n_items: Optional[int] = None
+
+    @contextmanager
+    def job(self, job: str, sim_date: date, review_index: Optional[int] = None, n_items: Optional[int] = None):
+        started = datetime.now(timezone.utc)
+        t = time.perf_counter()
+        row: Dict[str, Any] = {"job": job, "sim_date": sim_date, "review_index": review_index, "n_items": n_items,
+                               "started_at": started}
+        yield row
+        row["duration_ms"] = round((time.perf_counter() - t) * 1000.0, 2)
+        row["finished_at"] = datetime.now(timezone.utc)
+        self.rows.append(row)
 
 
 @contextmanager
@@ -106,7 +139,7 @@ def ensure_tables(db: Session) -> None:
     if key in _tables_ready_for:
         return
     Base.metadata.create_all(
-        bind=bind, tables=[SimSnapshot.__table__, SimShadowDaily.__table__], checkfirst=True
+        bind=bind, tables=[SimSnapshot.__table__, SimShadowDaily.__table__, BatchRun.__table__], checkfirst=True
     )
     _tables_ready_for.add(key)
 
@@ -326,7 +359,8 @@ class SimulatorService:
                 db.execute(
                     delete(ReplenishmentRecommendation).execution_options(synchronize_session=False).where(
                         ReplenishmentRecommendation.store_id == store_id,
-                        ReplenishmentRecommendation.decided_by == SIM_ACTOR,
+                        (ReplenishmentRecommendation.decided_by == SIM_ACTOR)
+                        | (ReplenishmentRecommendation.origin == SIM_ACTOR),
                     )
                 )
                 snap = {
@@ -377,12 +411,22 @@ class SimulatorService:
         until: Optional[date] = None,
         lead_time_days: int = pc.LEAD_TIME_DAYS,
         review_period_days: int = pc.REVIEW_PERIOD_DAYS,
+        approval_mode: str = APPROVAL_AUTO,
+        expire_pending: bool = False,
+        triggered_by: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         from app.services.calibrator_service import calibrator_service
         from app.services.optimization_service import optimization_service
         from app.services.replenishment_service import replenishment_service
         from app.services.window_quantile_service import window_quantile_service
 
+        if approval_mode not in APPROVAL_MODES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"approval_mode phải là một trong {list(APPROVAL_MODES)} (nhận '{approval_mode}').",
+            )
+        planner = approval_mode == APPROVAL_PLANNER
         t_start = time.time()
         ensure_tables(db)
         clock = self._lock_clock(db, store_id)
@@ -390,6 +434,7 @@ class SimulatorService:
             raise ValueError(f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
         prev_date, t0 = clock.current_date, clock.start_date
         L, R = int(lead_time_days), int(review_period_days)
+        clean_start = self._is_clean_start(db, store_id, prev_date, t0)
 
         if until:
             target_date = until
@@ -405,6 +450,34 @@ class SimulatorService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Ngày đích ({target_date}) phải lớn hơn ngày hiện tại ({prev_date}).",
             )
+
+        # planner-in-the-loop: open proposals of the previous simulated review must be decided first
+        pending_expired = 0
+        if planner:
+            open_ids = [r[0] for r in db.execute(
+                select(ReplenishmentRecommendation.id).where(
+                    ReplenishmentRecommendation.store_id == store_id,
+                    ReplenishmentRecommendation.origin == SIM_ACTOR,
+                    ReplenishmentRecommendation.status.in_(OPEN_STATUSES),
+                )
+            ).all()]
+            if open_ids and not expire_pending:
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Còn {len(open_ids)} đề xuất đặt hàng của kỳ review trước đang chờ duyệt. Duyệt / sửa / từ "
+                        f"chối chúng trước khi tua tiếp, hoặc gửi expire_pending=true để bỏ qua (không đặt hàng)."
+                    ),
+                )
+            pending_expired = len(open_ids)
+
+        # planner-in-the-loop: stop at the first review day of the span so the planner decides its proposals
+        stopped_at_review = False
+        if planner:
+            next_review = self._first_review_day(prev_date, t0, R, clean_start)
+            if next_review is not None and next_review <= target_date:
+                target_date, stopped_at_review = next_review, True
         total_days = (target_date - prev_date).days
         if total_days > MAX_ADVANCE_DAYS:
             db.rollback()
@@ -415,7 +488,14 @@ class SimulatorService:
 
         # demand must exist for every simulated day (never silently simulate zero demand); on the clean start the
         # start date itself is simulated as well
-        first_day = prev_date if prev_date == t0 else prev_date + timedelta(days=1)
+        first_day = prev_date if clean_start else prev_date + timedelta(days=1)
+        if target_date < first_day:
+            # only possible in planner mode: day 0 was already simulated and the clip found no later review
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ngày đích ({target_date}) phải lớn hơn ngày hiện tại ({prev_date}).",
+            )
         have_days = {
             r[0] for r in db.execute(
                 select(SalesHistory.sale_date).where(
@@ -436,34 +516,138 @@ class SimulatorService:
                 ),
             )
 
+        run_id = run_id or str(uuid.uuid4())
+        timer = _JobTimer()
+        started_at = datetime.now(timezone.utc)
+        params = {"prev_date": str(prev_date), "target_date": str(target_date), "approval_mode": approval_mode,
+                  "expire_pending": bool(expire_pending), "L": L, "R": R}
         try:
             with atomic(db):
+                if planner and pending_expired:
+                    db.execute(
+                        update(ReplenishmentRecommendation).execution_options(synchronize_session=False)
+                        .where(
+                            ReplenishmentRecommendation.store_id == store_id,
+                            ReplenishmentRecommendation.origin == SIM_ACTOR,
+                            ReplenishmentRecommendation.status.in_(OPEN_STATUSES),
+                        )
+                        .values(
+                            status="REJECTED", decided_by=SIM_ACTOR, decided_at=datetime.now(timezone.utc),
+                            reason="Hết hạn: không được duyệt trước kỳ tua tiếp theo (không đặt hàng)",
+                        )
+                    )
                 result = self._run(
                     db, clock, store_id, prev_date, target_date, t0, L, R,
                     calibrator_service, optimization_service, replenishment_service, window_quantile_service,
+                    clean_start=clean_start, auto_order=not planner, timer=timer,
                 )
                 clock.current_date = target_date
                 clock.updated_at = datetime.now(timezone.utc)
+                self._write_batch_runs(db, run_id, store_id, target_date, started_at, timer, result, params,
+                                       triggered_by)
                 db.flush()
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            self._write_failed_run(db, run_id, store_id, target_date, started_at, params, triggered_by, exc)
             raise
+        result["run_id"] = run_id
+        result.update({
+            "approval_mode": approval_mode,
+            "stopped_at_review": stopped_at_review,
+            "pending_expired": pending_expired,
+        })
         result["duration_seconds"] = round(time.time() - t_start, 2)
         return result
+
+    @staticmethod
+    def _write_batch_runs(db: Session, run_id: str, store_id: str, target_date: date, started_at: datetime,
+                          timer: "_JobTimer", result: Dict[str, Any], params: Dict[str, Any],
+                          triggered_by: Optional[str]) -> None:
+        """ADVANCE row + J1 (aggregated over the simulated days) + one row per review job, same transaction."""
+        finished = datetime.now(timezone.utc)
+        rows = [{
+            "job": "ADVANCE", "sim_date": target_date, "started_at": started_at, "finished_at": finished,
+            "duration_ms": round((finished - started_at).total_seconds() * 1000.0, 2),
+            "n_items": getattr(timer, "n_items", None),
+            "details": {**params, "days_simulated": result.get("days_simulated"),
+                        "reviews_executed": result.get("reviews_executed"),
+                        "orders": result.get("recommendations_generated"),
+                        "orders_received": result.get("orders_received")},
+        }, {
+            "job": "J1", "sim_date": target_date, "started_at": started_at, "finished_at": finished,
+            "duration_ms": round(timer.j1_ms, 2), "n_items": getattr(timer, "n_items", None),
+            "details": {"days": timer.j1_days, "stockouts": result.get("stockouts_recorded"),
+                        "orders_received": result.get("orders_received")},
+        }] + timer.rows
+        # an async job (batch_service) left an ADVANCE row 'running' under this run_id: replace it
+        db.execute(delete(BatchRun).execution_options(synchronize_session=False)
+                   .where(BatchRun.run_id == run_id, BatchRun.status.in_(("queued", "running"))))
+        db.execute(BatchRun.__table__.insert(), [{
+            "id": str(uuid.uuid4()), "run_id": run_id, "store_id": store_id, "status": "success",
+            "triggered_by": triggered_by, "job": r["job"], "sim_date": r.get("sim_date"),
+            "review_index": r.get("review_index"), "started_at": r["started_at"], "finished_at": r.get("finished_at"),
+            "duration_ms": r.get("duration_ms"), "n_items": r.get("n_items"), "details": r.get("details"),
+            "error": None,
+        } for r in rows])
+
+    @staticmethod
+    def _write_failed_run(db: Session, run_id: str, store_id: str, target_date: date, started_at: datetime,
+                          params: Dict[str, Any], triggered_by: Optional[str], exc: BaseException) -> None:
+        """The advance was rolled back as a whole: record it alone as failed (never masks the original error)."""
+        detail = getattr(exc, "detail", None) or str(exc) or exc.__class__.__name__
+        finished = datetime.now(timezone.utc)
+        try:
+            db.execute(delete(BatchRun).execution_options(synchronize_session=False)
+                       .where(BatchRun.run_id == run_id, BatchRun.status.in_(("queued", "running"))))
+            db.execute(BatchRun.__table__.insert(), [{
+                "id": str(uuid.uuid4()), "run_id": run_id, "store_id": store_id, "job": "ADVANCE",
+                "sim_date": target_date, "status": "failed", "started_at": started_at, "finished_at": finished,
+                "duration_ms": round((finished - started_at).total_seconds() * 1000.0, 2), "n_items": None,
+                "triggered_by": triggered_by, "error": f"{exc.__class__.__name__}: {detail}"[:4000], "details": params,
+                "review_index": None,
+            }])
+            db.commit()
+        except Exception:  # noqa: BLE001 - logging the failure must not hide it
+            db.rollback()
+
+    @staticmethod
+    def _is_clean_start(db: Session, store_id: str, prev_date: date, t0: date) -> bool:
+        """Nothing simulated yet: the clock is at t0 AND day t0 has no ``inventory_daily`` row. The second test lets
+        a planner-mode advance stop right after day 0 (clock still at t0, day 0 simulated) without the next advance
+        re-running the day-0 review."""
+        if prev_date != t0:
+            return False
+        done = db.execute(
+            select(InventoryDaily.item_id).where(InventoryDaily.store_id == store_id, InventoryDaily.date == t0).limit(1)
+        ).first()
+        return done is None
+
+    @staticmethod
+    def _first_review_day(prev_date: date, t0: date, R: int, clean_start: bool) -> Optional[date]:
+        """First day after the clock (t0 itself on a clean start) at which a review runs (t0 + k*R)."""
+        if clean_start:
+            return t0
+        delta = (prev_date - t0).days + 1   # first day still to simulate
+        k = -(-delta // R)                   # ceil
+        return t0 + timedelta(days=max(k, 1) * R)
 
     # ------------------------------------------------------------------ core loop
     def _run(
         self, db, clock, store_id, prev_date, target_date, t0, L, R,
         calibrator_service, optimization_service, replenishment_service, window_quantile_service,
+        clean_start: Optional[bool] = None, auto_order: bool = True, timer: Optional["_JobTimer"] = None,
     ) -> Dict[str, Any]:
+        timer = timer if timer is not None else _JobTimer()
+        if clean_start is None:
+            clean_start = prev_date == t0
         item_ids = [r[0] for r in db.execute(select(Product.item_id).order_by(Product.item_id)).all()]
         n = len(item_ids)
         pos = {i: k for k, i in enumerate(item_ids)}
         on_hand, on_order, _created = self._inventory_arrays(db, store_id, item_ids)
 
         # snapshot of the initial state (only from a clean start, so reset can restore it)
-        if prev_date == t0:
+        if clean_start:
             has_snap = db.execute(select(func.count()).select_from(SimSnapshot).where(SimSnapshot.store_id == store_id)).scalar()
             if not has_snap:
                 db.execute(
@@ -496,7 +680,6 @@ class SimulatorService:
             sh_pipeline = sorted(by_date.items())
 
         # ---- demand matrix for the days to simulate: (prev_date, target], plus t0 itself on the clean start
-        clean_start = prev_date == t0
         first_day = prev_date if clean_start else prev_date + timedelta(days=1)
         days_list = [first_day + timedelta(days=i) for i in range((target_date - first_day).days + 1)]
         didx = {d: k for k, d in enumerate(days_list)}
@@ -551,36 +734,45 @@ class SimulatorService:
             if cycle_idx >= 0:
                 c_start = t0 + timedelta(days=cycle_idx * R + L)
                 c_end = c_start + timedelta(days=R - 1)
-                calibrator_service.record_cycle_outcome(
-                    db=db, store_id=store_id, cycle_index=cycle_idx, cycle_start=c_start, cycle_end=c_end,
-                )
+                with timer.job("J6", t, review_k, n_items=n) as jr:
+                    calibrator_service.record_cycle_outcome(
+                        db=db, store_id=store_id, cycle_index=cycle_idx, cycle_start=c_start, cycle_end=c_end,
+                    )
+                    jr["details"] = {"cycle_index": cycle_idx, "cycle_start": str(c_start), "cycle_end": str(c_end)}
                 job_events.append(
                     f"[{t}] Job J6: đóng chu kỳ {cycle_idx} ({c_start} -> {c_end}), lưu service_outcomes"
                 )
             if refit:
                 sid = f"{store_id}_refit_{(t - t0).days // REFIT_PERIOD_DAYS}"
-                optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
-                flush_state()
+                with timer.job("J5", t, review_k) as jr:
+                    optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
+                    flush_state()
+                    jr["details"] = {"selection_id": sid}
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
             # --- J3: window quantiles, ONE bulk call
-            window_quantile_service.get_or_create_window_quantiles_bulk(
-                db, store_id, item_ids, t, horizon_days=L + R
-            )
-            # --- J4: C3-OUT step (not at k = 0), parameters, orders (auto-ordered)
-            if review_k >= 1:
-                calibrator_service.run_calibration_step(
-                    db=db, store_id=store_id, review_index=review_k, review_date=t,
-                    lead_time_days=L, review_period_days=R,
+            with timer.job("J3", t, review_k, n_items=n):
+                window_quantile_service.get_or_create_window_quantiles_bulk(
+                    db, store_id, item_ids, t, horizon_days=L + R
                 )
-            optimization_service.recompute_parameters(db, store_id=store_id)
-            db.flush()
-            db.expire_all()
-            recs_count = replenishment_service.generate_recommendations(
-                db, store_id=store_id, review_date=t, auto_order=True
-            )
-            recommendations_generated += recs_count
-            db.flush()
-            db.expire_all()
+            # --- J4: C3-OUT step (not at k = 0), parameters, orders (auto-ordered or left to the planner)
+            with timer.job("J4", t, review_k) as jr:
+                if review_k >= 1:
+                    calibrator_service.run_calibration_step(
+                        db=db, store_id=store_id, review_index=review_k, review_date=t,
+                        lead_time_days=L, review_period_days=R,
+                    )
+                optimization_service.recompute_parameters(db, store_id=store_id)
+                db.flush()
+                db.expire_all()
+                recs_count = replenishment_service.generate_recommendations(
+                    db, store_id=store_id, review_date=t, auto_order=auto_order, origin=SIM_ACTOR
+                )
+                recommendations_generated += recs_count
+                db.flush()
+                db.expire_all()
+                jr["n_items"] = int(recs_count)
+                jr["details"] = {"orders": int(recs_count), "approval": "auto" if auto_order else "planner",
+                                 "c3_step": review_k >= 1}
             on_hand, on_order, _ = self._inventory_arrays(db, store_id, item_ids)
 
             # shadow B0-MA-OUT-0.95 review (G-41): S from the 56 days of sales before t; IP = on-hand (today's
@@ -603,6 +795,7 @@ class SimulatorService:
             arrive_dt = datetime.combine(t, datetime.min.time(), tzinfo=timezone.utc)
 
             # --- 1. arrivals (main): APPROVED only, each order is received exactly once -> COMPLETED
+            j1_t = time.perf_counter()
             cutoff = t - timedelta(days=L)
             due = db.execute(
                 select(ReplenishmentRecommendation.id, ReplenishmentRecommendation.item_id,
@@ -634,6 +827,7 @@ class SimulatorService:
             # --- 1b. arrivals (shadow B0)
             while sh_pipeline and sh_pipeline[0][0] <= t:
                 sh_on_hand = sh_on_hand + sh_pipeline.pop(0)[1]
+            timer.j1_ms += (time.perf_counter() - j1_t) * 1000.0
 
             is_day0 = clean_start and t == t0
             is_review = delta_days > 0 and delta_days % R == 0
@@ -653,11 +847,15 @@ class SimulatorService:
                 sh_order_today = review_block(t, review_k, refit=is_refit)
             elif is_refit:
                 sid = f"{store_id}_refit_{delta_days // REFIT_PERIOD_DAYS}"
-                optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
-                flush_state()
+                with timer.job("J5", t, None) as jr:
+                    optimization_service.refit_quarterly_policies(db, store_id=store_id, selection_id=sid)
+                    flush_state()
+                    jr["details"] = {"selection_id": sid}
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
 
             # --- 5. J1: sales of day t (vectorised) - main policy
+            j1_t = time.perf_counter()
+            timer.j1_days += 1
             d = D[ti]
             sold = np.minimum(on_hand, d)
             lost = d - sold
@@ -686,9 +884,13 @@ class SimulatorService:
                     "stockout": sh_lost > 0, "order_qty": sh_order_today, "created_at": now,
                 }),
             })
+            timer.j1_ms += (time.perf_counter() - j1_t) * 1000.0
 
         clock.current_date = target_date
-        flush_state()
+        j1_t = time.perf_counter()
+        flush_state()   # writes the remaining inventory_daily / shadow rows (J1 persistence)
+        timer.j1_ms += (time.perf_counter() - j1_t) * 1000.0
+        timer.n_items = n
         total_days = (target_date - prev_date).days
         return {
             "success": True,

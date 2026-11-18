@@ -30,6 +30,7 @@ from app.models.data_imports import DataImport
 from app.models.forecast_backtest import ForecastBacktest
 from app.models.sim_state import SimSnapshot, SimShadowDaily
 from app.models.price_history import PriceHistory
+from app.models.batch_run import BatchRun
 
 __all__ = [
     "SimSnapshot",
@@ -67,4 +68,5 @@ __all__ = [
     "DataImport",
     "ForecastBacktest",
     "PriceHistory",
+    "BatchRun",
 ]

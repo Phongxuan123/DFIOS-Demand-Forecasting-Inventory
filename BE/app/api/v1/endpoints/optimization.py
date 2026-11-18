@@ -1,5 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -22,6 +24,7 @@ from app.schemas.optimization import (
     RefitPoliciesResponse,
     PolicySelectionItem,
 )
+from app.services.batch_service import batch_service
 from app.services.optimization_service import optimization_service
 
 router = APIRouter()
@@ -190,33 +193,37 @@ def run_cost_sensitivity_analysis(
 @router.post(
     "/refit-policies",
     response_model=RefitPoliciesResponse,
-    summary="Job J5 - Tái chọn tham số chính sách (m_g, kappa_g) định kỳ theo Quý (Admin only)",
+    responses={202: {"description": "async_job=true: job J5 đã nhận, theo dõi qua poll_url"}},
+    summary="Job J5 - Tái chọn tham số chính sách (m_g, kappa_g) định kỳ theo Quý (Manager, Admin)",
 )
 def refit_policies(
     body: Optional[RefitPoliciesRequest] = None,
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_manager_or_admin),
 ):
     """
     **Job J5 - Quarterly Policy Refit**:
     Tái chọn cặp tham số chính sách (m_g, kappa_g) cho 9 nhóm phân loại ABC/XYZ.
     Tối ưu hóa tổng chi phí lưu kho và đặt hàng dưới ràng buộc Availability >= target + guard (backtest (R,s,S) thật).
-    Lưu vết vào bảng policy_selection.
-    Role: Admin only.
+    Lưu vết vào bảng policy_selection; mỗi lần chạy ghi một dòng batch_runs (job J5).
+    Role: Warehouse Manager, Admin (demo.md §5: Manager chạy J5).
     """
     store_id = body.store_id if body and body.store_id else "CA_1"
     selection_id = body.selection_id if body else None
     target_avail = body.target_availability if body and body.target_availability else None
     c3out_active = body.c3out_active if body else None
 
-    results = optimization_service.refit_quarterly_policies(
-        db=db,
-        store_id=store_id,
+    refit_kwargs = dict(
         selection_id=selection_id,
         target_availability=target_avail,
         c3out_active=c3out_active,
         search_mode=body.search_mode if body else None,
     )
+    if body is not None and body.async_job:
+        handle = batch_service.submit_refit(db, store_id=store_id, triggered_by=admin.email, **refit_kwargs)
+        return JSONResponse(status_code=202, content=jsonable_encoder(handle))
+    run = batch_service.run_refit(db, store_id=store_id, triggered_by=admin.email, **refit_kwargs)
+    results = run["results"]
 
     sid = results[0]["selection_id"] if results else "quarterly_refit"
     policy_items = [PolicySelectionItem(**p) for p in results]
@@ -226,5 +233,6 @@ def refit_policies(
         selection_id=sid,
         policies=policy_items,
         message=f"Đã tái chọn và lưu thành công chính sách REFIT-RSS-EOQ-G cho {len(policy_items)} nhóm hàng.",
+        run_id=run["run_id"],
     )
 

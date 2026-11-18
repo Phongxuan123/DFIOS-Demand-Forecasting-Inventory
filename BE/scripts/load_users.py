@@ -27,6 +27,10 @@ sample_users = [
     {"email": "manager@dfios.com", "password": os.getenv("MANAGER_PASSWORD"), "role": "Warehouse Manager", "display_name": "Warehouse Manager"},
     {"email": "viewer@dfios.com", "password": os.getenv("VIEWER_PASSWORD"), "role": "Viewer", "display_name": "Viewer"},
 ]
+# demo.md §5 Planner (reviews / edits / approves orders). Optional so an existing .env without it keeps working.
+if os.getenv("PLANNER_PASSWORD"):
+    sample_users.append({"email": "planner@dfios.com", "password": os.getenv("PLANNER_PASSWORD"), "role": "Planner",
+                         "display_name": "Planner"})
 
 with Session() as session:
     for u in sample_users:

@@ -19,6 +19,7 @@ from app.api.v1.endpoints.optimization import router as optimization_router
 from app.api.v1.endpoints.replenishments import router as replenishments_router
 from app.api.v1.endpoints.calibration import router as calibration_router
 from app.api.v1.endpoints.clock import router as clock_router
+from app.api.v1.endpoints.batch_runs import router as batch_runs_router
 from app.api.v1.endpoints.reports import router as reports_router
 from app.api.v1.endpoints.pipeline import router as pipeline_router
 from app.api.v1.endpoints.imports import router as imports_router
@@ -73,6 +74,7 @@ api_router.include_router(calibration_router, prefix="/calibration", tags=["C³-
 
 # Stage 6 & 7 / Task API.1: Sim Clock Control & Batch Orchestration
 api_router.include_router(clock_router, prefix="/clock", tags=["Simulation Clock & Batch Orchestration (Task API.1)"])
+api_router.include_router(batch_runs_router, prefix="/batch-runs", tags=["Batch Runs (J1-J6 history, E7)"])
 
 # Realtime Server-Sent Events (SSE)
 api_router.include_router(events_router, tags=["Realtime Events"])

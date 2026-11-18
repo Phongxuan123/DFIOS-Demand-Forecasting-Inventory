@@ -316,14 +316,20 @@ class PipelineService:
         until: Optional[date] = None,
         lead_time_days: int = pc.LEAD_TIME_DAYS,
         review_period_days: int = pc.REVIEW_PERIOD_DAYS,
+        approval_mode: str = "auto",
+        expire_pending: bool = False,
+        triggered_by: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Batch jobs J1-J6 over the simulated days (atomic, vectorised) - see ``simulator_service``.
         Review at the START of the day (A4), orders arrive L days later, COMPLETED orders are never received twice.
+        ``approval_mode="planner"`` stops at the next review and leaves its proposals PENDING for the planner.
         """
         return simulator_service.advance(
             db, store_id=store_id, days=days, reviews=reviews, until=until,
             lead_time_days=lead_time_days, review_period_days=review_period_days,
+            approval_mode=approval_mode, expire_pending=expire_pending, triggered_by=triggered_by, run_id=run_id,
         )
 
     def reset_sim_clock(

@@ -159,7 +159,7 @@ class InMemoryEventBus(BaseEventBus):
 
             # 2. Payload sanitization: Mask email in actor_id for non-privileged subscribers
             event_to_dispatch = event
-            if user_role not in ("Admin", "Warehouse Manager"):
+            if user_role not in ("Admin", "Warehouse Manager", "Planner"):
                 if isinstance(event.data, dict) and "actor_id" in event.data:
                     raw_actor = event.data["actor_id"]
                     if isinstance(raw_actor, str) and "@" in raw_actor:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import (
     get_db,
     get_current_user,
-    require_manager_or_admin,
+    require_planner_or_above,
     get_client_ip,
 )
 from app.models.user import User
@@ -27,7 +27,7 @@ router = APIRouter()
 @router.get(
     "",
     response_model=ReplenishmentListResponse,
-    summary="UC33 - Xem danh sách đề xuất đặt hàng bổ sung (Warehouse Manager, Admin)",
+    summary="UC33 - Xem danh sách đề xuất đặt hàng bổ sung (Planner, Warehouse Manager, Admin)",
 )
 def list_replenishments(
     skip: int = Query(0, ge=0, description="Số bản ghi bỏ qua (phân trang)"),
@@ -42,7 +42,7 @@ def list_replenishments(
     response: Response = None,
     auto_generate: bool = Query(False, description="Tự động sinh đề xuất nếu bảng chưa có đơn PENDING (mặc định False để đảm bảo phương thức GET không có tác dụng phụ)"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC33 - View Replenishment Recommendation List**:
@@ -75,7 +75,7 @@ def list_replenishments(
 def generate_replenishments(
     store_id: str = Query("CA_1", description="Mã kho/cửa hàng cần quét sinh đề xuất"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC33 - Auto-generate Replenishment Recommendations**:
@@ -137,7 +137,7 @@ def get_replenishment_history(
 
 @router.get(
     "/export",
-    summary="UC38 - Xuất danh sách đề xuất nhập hàng ra CSV/Excel (Warehouse Manager, Admin)",
+    summary="UC38 - Xuất danh sách đề xuất nhập hàng ra CSV/Excel (Planner, Warehouse Manager, Admin)",
 )
 @router.get(
     "/export.csv",
@@ -147,7 +147,7 @@ def export_replenishments(
     store_id: Optional[str] = Query(None, description="Lọc theo kho/cửa hàng"),
     status_filter: Optional[str] = Query(None, alias="status", description="Lọc theo trạng thái"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC38 - Export Replenishment List**:
@@ -170,7 +170,7 @@ def export_replenishments(
 @router.put(
     "/{rec_id}/adjust",
     response_model=ReplenishmentItemResponse,
-    summary="UC34 - Điều chỉnh số lượng đặt hàng đề xuất (Warehouse Manager, Admin)",
+    summary="UC34 - Điều chỉnh số lượng đặt hàng đề xuất (Planner, Warehouse Manager, Admin)",
 )
 @router.patch(
     "/{rec_id}",
@@ -182,7 +182,7 @@ def adjust_replenishment_quantity(
     body: ReplenishmentAdjustRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC34 - Adjust Recommended Order Quantity**:
@@ -206,14 +206,14 @@ def adjust_replenishment_quantity(
 @router.post(
     "/{rec_id}/approve",
     response_model=ReplenishmentItemResponse,
-    summary="UC35 - Phê duyệt đề xuất nhập hàng (Warehouse Manager, Admin)",
+    summary="UC35 - Phê duyệt đề xuất nhập hàng (Planner, Warehouse Manager, Admin)",
 )
 def approve_replenishment(
     rec_id: str,
     request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC35 - Approve Replenishment**:
@@ -238,14 +238,14 @@ def approve_replenishment(
 @router.post(
     "/{rec_id}/reject",
     response_model=ReplenishmentItemResponse,
-    summary="UC36 - Từ chối đề xuất nhập hàng (Warehouse Manager, Admin)",
+    summary="UC36 - Từ chối đề xuất nhập hàng (Planner, Warehouse Manager, Admin)",
 )
 def reject_replenishment(
     rec_id: str,
     body: ReplenishmentActionRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC36 - Reject Replenishment**:
@@ -266,7 +266,7 @@ def reject_replenishment(
 @router.post(
     "/{rec_id}/cancel",
     response_model=ReplenishmentItemResponse,
-    summary="UC36 - Hủy đơn đặt hàng đã phê duyệt (Warehouse Manager, Admin)",
+    summary="UC36 - Hủy đơn đặt hàng đã phê duyệt (Planner, Warehouse Manager, Admin)",
 )
 def cancel_replenishment(
     rec_id: str,
@@ -274,7 +274,7 @@ def cancel_replenishment(
     request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **UC36 - Cancel Approved Order**:
