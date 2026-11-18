@@ -17,7 +17,8 @@ import {
 import { useApi } from '../hooks/useApi.ts';
 import { useStore } from '../context/StoreContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
-import { useFormat } from '../i18n/index.tsx';
+import { useFormat, useT, type TKey } from '../i18n/index.tsx';
+import { apiErrorMessage } from '../services/apiClient.ts';
 import {
   getBatchRunDetail,
   listBatchRuns,
@@ -32,25 +33,17 @@ const STATUS_TONES: Record<string, Tone> = {
   queued: 'neutral',
 };
 
-const JOB_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'Tất cả Jobs' },
-  { value: 'ADVANCE', label: 'ADVANCE (Tua đồng hồ)' },
-  { value: 'J1', label: 'J1 (Replay & Daily Inventory)' },
-  { value: 'J3', label: 'J3 (Route (c) Distribution)' },
-  { value: 'J4', label: 'J4 (C³-OUT & Replenishment)' },
-  { value: 'J5', label: 'J5 (Quarterly Refit)' },
-  { value: 'J6', label: 'J6 (Service Outcomes)' },
-];
-
-const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'Tất cả trạng thái' },
-  { value: 'running', label: 'Đang chạy (Running)' },
-  { value: 'success', label: 'Thành công (Success)' },
-  { value: 'failed', label: 'Thất bại (Failed)' },
-];
+const JOBS = ['ADVANCE', 'J1', 'J3', 'J4', 'J5', 'J6'] as const;
+/** GET /batch-runs filters on these; 'queued' only exists while the compose worker has not picked a job up. */
+const STATUS_FILTERS = ['running', 'success', 'failed'] as const;
+const STATUSES = ['queued', 'running', 'success', 'failed'] as const;
 
 export const BatchRuns: React.FC = () => {
+  const t = useT();
   const fmt = useFormat();
+  const statusLabel = (s: string) => ((STATUSES as readonly string[]).includes(s) ? t(`ops.batch.status_${s}` as TKey) : s);
+  const jobOptions = [{ value: '', label: t('ops.batch.job_all') }, ...JOBS.map((j) => ({ value: j, label: t(`ops.batch.job_${j}` as TKey) }))];
+  const statusOptions = [{ value: '', label: t('ops.batch.status_all') }, ...STATUS_FILTERS.map((s) => ({ value: s, label: statusLabel(s) }))];
   const toast = useToast();
   const { concreteStoreId: storeId } = useStore();
   const clock = useClock();
@@ -86,8 +79,8 @@ export const BatchRuns: React.FC = () => {
     try {
       const data = await getBatchRunDetail(runId);
       setDetailData(data);
-    } catch (err: any) {
-      toast.error('Không tải được chi tiết batch run', err?.message || String(err));
+    } catch (err) {
+      toast.error(t('ops.batch.detail_failed'), apiErrorMessage(err, t));
       setDetailRunId(null);
     } finally {
       setDetailLoading(false);
@@ -108,7 +101,7 @@ export const BatchRuns: React.FC = () => {
   const columns: Column<BatchRunItem>[] = [
     {
       key: 'job',
-      header: 'Job',
+      header: t('ops.batch.col_job'),
       cell: (r) => (
         <span style={{ fontWeight: 'var(--weight-semibold)', fontFamily: 'var(--font-mono)' }}>
           {r.job}
@@ -117,27 +110,27 @@ export const BatchRuns: React.FC = () => {
     },
     {
       key: 'status',
-      header: 'Trạng thái',
+      header: t('ops.batch.col_status'),
       cell: (r) => (
         <Badge tone={STATUS_TONES[r.status] || 'neutral'} dot>
-          {r.status}
+          {statusLabel(r.status)}
         </Badge>
       ),
     },
     {
       key: 'sim_date',
-      header: 'Ngày mô phỏng',
+      header: t('ops.batch.col_sim_date'),
       cell: (r) => (r.sim_date ? fmt.date(r.sim_date) : '—'),
     },
     {
       key: 'review_index',
-      header: 'Kỳ review #',
+      header: t('ops.batch.col_review'),
       align: 'right',
       cell: (r) => (r.review_index !== null && r.review_index !== undefined ? `#${r.review_index}` : '—'),
     },
     {
       key: 'duration',
-      header: 'Thời lượng',
+      header: t('ops.batch.col_duration'),
       align: 'right',
       cell: (r) => (
         <span style={{ fontFamily: 'var(--font-mono)' }}>{formatDuration(r.duration_ms)}</span>
@@ -145,28 +138,28 @@ export const BatchRuns: React.FC = () => {
     },
     {
       key: 'n_items',
-      header: 'Số mục',
+      header: t('ops.batch.col_items'),
       align: 'right',
       cell: (r) => (r.n_items !== null && r.n_items !== undefined ? fmt.integer(r.n_items) : '—'),
     },
     {
       key: 'triggered_by',
-      header: 'Người kích hoạt',
-      cell: (r) => r.triggered_by || 'Hệ thống (auto)',
+      header: t('ops.batch.col_by'),
+      cell: (r) => r.triggered_by || t('ops.batch.by_system'),
     },
     {
       key: 'started_at',
-      header: 'Bắt đầu lúc',
-      cell: (r) => fmt.date(r.started_at, 'long'),
+      header: t('ops.batch.col_started'),
+      cell: (r) => fmt.dateTime(r.started_at),
     },
     {
       key: 'actions',
-      header: 'Thao tác',
+      header: t('ops.batch.col_actions'),
       align: 'right',
       cell: (r) => (
         <IconButton
           size="sm"
-          label="Xem chi tiết"
+          label={t('ops.batch.view_detail')}
           icon={<Eye size={15} />}
           onClick={() => void openDetail(r.run_id)}
         />
@@ -177,23 +170,23 @@ export const BatchRuns: React.FC = () => {
   const subJobColumns: Column<BatchRunItem>[] = [
     {
       key: 'job',
-      header: 'Job con',
+      header: t('ops.batch.col_job'),
       cell: (j) => <span style={{ fontWeight: 'var(--weight-semibold)' }}>{j.job}</span>,
     },
     {
       key: 'status',
-      header: 'Trạng thái',
-      cell: (j) => <Badge tone={STATUS_TONES[j.status] || 'neutral'}>{j.status}</Badge>,
+      header: t('ops.batch.col_status'),
+      cell: (j) => <Badge tone={STATUS_TONES[j.status] || 'neutral'}>{statusLabel(j.status)}</Badge>,
     },
     {
       key: 'duration',
-      header: 'Thời lượng',
+      header: t('ops.batch.col_duration'),
       align: 'right',
       cell: (j) => <span style={{ fontFamily: 'var(--font-mono)' }}>{formatDuration(j.duration_ms)}</span>,
     },
     {
       key: 'n_items',
-      header: 'Số mục',
+      header: t('ops.batch.col_items'),
       align: 'right',
       cell: (j) => (j.n_items !== null && j.n_items !== undefined ? fmt.integer(j.n_items) : '—'),
     },
@@ -205,10 +198,10 @@ export const BatchRuns: React.FC = () => {
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
             <Clock size={22} />
-            <span>Lịch sử batch (Batch Runs)</span>
+            <span>{t('ops.batch.title')}</span>
           </div>
         }
-        description="Theo dõi chi tiết các tiến trình chạy nền J1–J6, tua đồng hồ mô phỏng và tái tối ưu chính sách tồn kho."
+        description={t('ops.batch.description')}
         actions={
           <Button
             variant="secondary"
@@ -216,7 +209,7 @@ export const BatchRuns: React.FC = () => {
             onClick={() => setNonce((n) => n + 1)}
             loading={runsApi.loading}
           >
-            Làm mới
+            {t('ops.batch.refresh')}
           </Button>
         }
       />
@@ -229,8 +222,8 @@ export const BatchRuns: React.FC = () => {
               size="sm"
               value={selectedJob}
               onChange={setSelectedJob}
-              options={JOB_OPTIONS}
-              aria-label="Lọc theo Job"
+              options={jobOptions}
+              aria-label={t('ops.batch.filter_job')}
             />
           </div>
           <div style={{ minWidth: 180 }}>
@@ -239,12 +232,12 @@ export const BatchRuns: React.FC = () => {
               size="sm"
               value={selectedStatus}
               onChange={setSelectedStatus}
-              options={STATUS_OPTIONS}
-              aria-label="Lọc theo Trạng thái"
+              options={statusOptions}
+              aria-label={t('ops.batch.filter_status')}
             />
           </div>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginLeft: 'auto' }}>
-            Kho: <strong>{storeId || 'CA_1'}</strong> · Tổng cộng: <strong>{runsApi.data?.total ?? 0}</strong> lần chạy
+            {t('ops.batch.summary', { store: storeId || 'CA_1', total: fmt.integer(runsApi.data?.total ?? 0) })}
           </span>
         </div>
 
@@ -269,45 +262,45 @@ export const BatchRuns: React.FC = () => {
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
             <Layers size={18} />
-            <span>Chi tiết Batch Run #{detailRunId?.slice(0, 8)}</span>
+            <span>{t('ops.batch.detail_title', { id: detailRunId?.slice(0, 8) ?? '' })}</span>
           </div>
         }
         size="lg"
       >
         {detailLoading ? (
           <div style={{ padding: 'var(--space-6)', textAlign: 'center' }}>
-            <p className="ui-muted">Đang tải thông tin batch run…</p>
+            <p className="ui-muted">{t('ops.batch.detail_loading')}</p>
           </div>
         ) : detailData ? (
           <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-3)' }}>
               <div className="ui-summary-item">
-                <span className="ui-summary-item__label">Job chính</span>
+                <span className="ui-summary-item__label">{t('ops.batch.detail_job')}</span>
                 <span className="ui-summary-item__value">{detailData.job}</span>
               </div>
               <div className="ui-summary-item">
-                <span className="ui-summary-item__label">Trạng thái</span>
+                <span className="ui-summary-item__label">{t('ops.batch.col_status')}</span>
                 <span className="ui-summary-item__value">
                   <Badge tone={STATUS_TONES[detailData.status] || 'neutral'} dot>
-                    {detailData.status}
+                    {statusLabel(detailData.status)}
                   </Badge>
                 </span>
               </div>
               <div className="ui-summary-item">
-                <span className="ui-summary-item__label">Thời lượng tổng</span>
+                <span className="ui-summary-item__label">{t('ops.batch.detail_total')}</span>
                 <span className="ui-summary-item__value" style={{ fontFamily: 'var(--font-mono)' }}>
                   {formatDuration(detailData.duration_ms)}
                 </span>
               </div>
               <div className="ui-summary-item">
-                <span className="ui-summary-item__label">Người thực hiện</span>
-                <span className="ui-summary-item__value">{detailData.triggered_by || 'Simulator'}</span>
+                <span className="ui-summary-item__label">{t('ops.batch.detail_by')}</span>
+                <span className="ui-summary-item__value">{detailData.triggered_by || t('ops.batch.by_system')}</span>
               </div>
             </div>
 
             {detailData.error && (
               <div style={{ padding: 'var(--space-3)', backgroundColor: 'var(--color-danger-subtle)', borderRadius: 'var(--radius-md)', color: 'var(--color-danger)' }}>
-                <strong>Lỗi tiến trình:</strong>
+                <strong>{t('ops.batch.detail_error')}</strong>
                 <pre style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap' }}>
                   {detailData.error}
                 </pre>
@@ -317,7 +310,7 @@ export const BatchRuns: React.FC = () => {
             {detailData.totals_by_job && Object.keys(detailData.totals_by_job).length > 0 && (
               <div>
                 <h4 style={{ margin: '0 0 var(--space-2) 0', fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-semibold)' }}>
-                  Tổng hợp thời lượng theo từng Job (E7)
+                  {t('ops.batch.detail_totals')}
                 </h4>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 'var(--space-2)' }}>
                   {Object.entries(detailData.totals_by_job).map(([jobName, summary]) => (
@@ -332,7 +325,7 @@ export const BatchRuns: React.FC = () => {
                     >
                       <div style={{ fontWeight: 'var(--weight-bold)', fontSize: 'var(--text-xs)' }}>{jobName}</div>
                       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                        {formatDuration(summary.duration_ms)} ({summary.count} lần)
+                        {t('ops.batch.detail_totals_value', { duration: formatDuration(summary.duration_ms), count: summary.count })}
                       </div>
                     </div>
                   ))}
@@ -343,7 +336,7 @@ export const BatchRuns: React.FC = () => {
             {detailData.jobs && detailData.jobs.length > 0 && (
               <div>
                 <h4 style={{ margin: '0 0 var(--space-2) 0', fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-semibold)' }}>
-                  Các bước thực thi con ({detailData.jobs.length} jobs)
+                  {t('ops.batch.detail_jobs', { count: detailData.jobs.length })}
                 </h4>
                 <Table
                   columns={subJobColumns}
