@@ -76,7 +76,7 @@ Kaggle "M5 Forecasting - Accuracy" và đặt đường dẫn vào `M5_SALES_CSV
 
 ### 2.5. Dựng cơ sở dữ liệu bằng MỘT lệnh
 Từ thư mục `BE/` (đã có `BE/.env` hoặc biến môi trường `DATABASE_URL`, `M5_*`, `ADMIN_PASSWORD`,
-`MANAGER_PASSWORD`, `VIEWER_PASSWORD`):
+`MANAGER_PASSWORD`, `VIEWER_PASSWORD`, tùy chọn `PLANNER_PASSWORD`):
 ```bash
 python scripts/bootstrap.py --reset
 ```
@@ -104,6 +104,61 @@ npm install
 npm run dev
 ```
 Giao diện chạy tại [http://localhost:5173](http://localhost:5173). Danh sách kho cho bộ chọn kho: `GET /api/v1/inventory/stores`.
+
+### 2.8. Năm replay đầy đủ (dữ liệu nghiên cứu, chỉ DB local)
+`bootstrap.py` chỉ nạp 28 ngày demo. Để tua cả năm test (từ 25/05/2015) như demo.md, nạp dữ liệu nghiên cứu của
+CA_1 (thư mục `26FA_SET490_Inventory`, đặt `TEACHER_DIR`) vào một DB local tên bắt đầu bằng `dfios_sandbox`
+(script từ chối mọi DB khác):
+```bash
+# tạo DB: docker exec dfios-postgres psql -U dfios -d dfios -c "create database dfios_sandbox template template0"
+export DATABASE_URL=postgresql+psycopg2://dfios:dfios123@localhost:5432/dfios_sandbox DFIOS_LOCAL_ONLY=1
+python scripts/bootstrap.py --reset
+python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR"     # ~3 phút, 2,68 triệu dòng
+python scripts/load_teacher_prices.py --store CA_1 --teacher-dir "$TEACHER_DIR"   # giá theo ngày
+python scripts/sandbox_engine_run.py --store CA_1 --start 2015-05-25 --out engine.json  # tua + chấm DFIOS và B0
+```
+Kết quả tham chiếu CA_1 (năm test, L=3, R=7): DFIOS lớp thấp nhất 0,963 (cả 9 nhóm ≥ 0,95), chi phí 274.145;
+B0-MA-OUT-0,95 lớp thấp nhất 0,868, chi phí 392.928 (DFIOS rẻ hơn 30,2%, ít hơn 68% số đơn).
+
+**Snapshot cho buổi demo** (bản sao DB trong Postgres, khôi phục khoảng 1 phút; mỗi bản ~2,2 GB trong đĩa ảo Docker,
+cần vài GB trống và đủ RAM, nên đóng bớt ứng dụng trước khi chạy):
+```bash
+python scripts/demo_snapshot.py save demo_start      # đồng hồ 25/05/2015, J5 #0
+python scripts/demo_snapshot.py restore demo_start   # dừng API đang dùng dfios_sandbox trước, hoặc thêm --force
+python scripts/demo_snapshot.py list
+```
+
+**Đổi mô hình (demo bước 10, E9c)**: nạp quantile của từng mô hình làm nguồn (một lần), rồi Admin kích hoạt:
+```bash
+python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR" --steps sources \
+    --source-models ensemble chronos_bolt
+# POST /api/v1/forecast-sources/activate {"store_id": "CA_1", "model": "chronos_bolt"}   (Admin)
+# rollback: cùng lệnh với "model": "ensemble";  GET /api/v1/forecast-sources: mô hình đang dùng + lịch sử
+```
+Chỉ các kỳ review mà đồng hồ chưa tới bị thay quantile (quyết định đã có không đổi). Kích hoạt ở 22/11/2015 cho kết
+quả trùng khớp từng con số với kịch bản `--switch-from ensemble --switch-to chronos_bolt --switch-day 1759`.
+
+### 2.9. Planner duyệt đơn trong vòng lặp và batch job
+- `POST /api/v1/clock/advance` với `"approval_mode": "planner"`: lệnh tua dừng ở kỳ review kế tiếp, đơn của kỳ đó ở
+  trạng thái PENDING. Planner sửa (`PATCH /replenishments/{id}`, bắt buộc lý do) và duyệt
+  (`POST /replenishments/{id}/approve`); số đã duyệt (`final_qty`) về kho sau L = 3 ngày. Lệnh tua tiếp theo trả
+  409 khi còn đơn chờ duyệt, trừ khi gửi `"expire_pending": true` (đơn đó bị bỏ, không đặt hàng). Mặc định
+  `"approval_mode": "auto"` giữ nguyên hành vi cũ (replay, test tương đương).
+- Vai trò **Planner** (`planner@dfios.com`, tạo khi đặt `PLANNER_PASSWORD`): xem dự báo, sửa dự báo có lý do, sửa và
+  duyệt đơn. Manager có mọi quyền của Planner, thêm chạy J5 (`POST /optimization/refit-policies`).
+- Mỗi lệnh tua ghi `batch_runs` (ADVANCE, J1, J3-J6, J5: trạng thái, thời lượng ms, lỗi):
+  `GET /api/v1/batch-runs`, `GET /api/v1/batch-runs/{run_id}` (số liệu E7). Thêm `"async_job": true` vào lệnh tua
+  hoặc J5 để nhận ngay `202 + run_id` rồi theo dõi bằng `GET /batch-runs/{run_id}`.
+
+### 2.10. Chạy toàn bộ bằng Docker Compose
+```bash
+docker compose --profile app up -d --build
+```
+Các container: `postgres` (db), `backend` (api), `worker` (`python -m app.worker`: chạy batch job và lịch batch),
+`frontend` (web), `nginx` (một cổng duy nhất [http://localhost:8080](http://localhost:8080), `/api` → backend).
+Trong compose, API chỉ xếp job vào hàng đợi (`DFIOS_BATCH_EXECUTOR=queue`), worker nhận và chạy. Chạy trực tiếp trên
+máy (mục 2.6) thì job chạy trên một thread nền của API, không cần worker. HTTPS: gắn chứng chỉ vào
+`deploy/nginx/default.conf` (`listen 443 ssl`); cấu hình mặc định chỉ có HTTP cho máy local.
 
 ---
 

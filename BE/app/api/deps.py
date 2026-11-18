@@ -100,6 +100,9 @@ def require_roles(allowed_roles: List[str]):
 # Helper shortcuts cho các role
 require_admin = require_roles(["Admin"])
 require_manager_or_admin = require_roles(["Admin", "Warehouse Manager"])
+# demo.md §5: Planner = view forecasts, override a forecast with a reason, edit and approve orders; the Manager has
+# every Planner right (plus targets, J5, reports) and so does the Admin
+require_planner_or_above = require_roles(["Admin", "Warehouse Manager", "Planner"])
 
 
 def _is_trusted_proxy(host: Optional[str]) -> bool:

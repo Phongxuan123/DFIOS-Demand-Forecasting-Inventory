@@ -53,6 +53,7 @@ class ReplenishmentService:
         store_id: str = "CA_1",
         review_date: Optional[date] = None,
         auto_order: bool = False,
+        origin: Optional[str] = None,
     ) -> int:
         """
         UC33 - Tự động sinh đề xuất đặt hàng khi IP = On_hand + On_order < s (nghiêm ngặt, G-02), q = S - IP.
@@ -98,14 +99,15 @@ class ReplenishmentService:
             params = db.query(InventoryParam).filter(InventoryParam.store_id == store_id).all()
             param_map = {p.item_id: p for p in params}
 
-        pending_recs = (
-            db.query(ReplenishmentRecommendation.item_id)
-            .filter(
-                ReplenishmentRecommendation.store_id == store_id,
-                ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]),
-            )
-            .all()
+        pending_q = db.query(ReplenishmentRecommendation.item_id).filter(
+            ReplenishmentRecommendation.store_id == store_id,
+            ReplenishmentRecommendation.status.in_(["PENDING", "PROPOSED"]),
         )
+        if origin is not None:
+            # planner-in-the-loop review: only the open proposals of the same origin (the simulator's own reviews)
+            # block a new one; seeded / manual proposals outside the simulation do not hide an SKU from the review
+            pending_q = pending_q.filter(ReplenishmentRecommendation.origin == origin)
+        pending_recs = pending_q.all()
         # P-12: in simulator mode (auto_order) the inventory position IP = on_hand + on_order already counts every
         # order in transit, so stale PENDING proposals (loader rows, never received) must NOT block reordering.
         pending_set = set() if auto_order else {p[0] for p in pending_recs}
@@ -192,6 +194,7 @@ class ReplenishmentService:
                     eoq_quantity=eoq,
                     policy_applied=policy_name,
                     review_date=effective_review_date,
+                    origin=origin,
                     decided_by="simulator" if auto_order else None,
                     created_at=created_timestamp,
                     decided_at=created_timestamp if auto_order else None,

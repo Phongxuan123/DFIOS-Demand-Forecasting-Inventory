@@ -1,8 +1,13 @@
 # DFIOS local stack.
-#   docker compose up -d                      -> chỉ PostgreSQL (mặc định)
-#   docker compose --profile app up -d --build -> thêm backend (cổng 8000) và frontend (cổng 5173)
+#   docker compose up -d                       -> chỉ PostgreSQL (mặc định, dùng khi chạy BE/FE trực tiếp trên máy)
+#   docker compose --profile app up -d --build -> đủ các container theo demo.md §3:
+#       postgres (db) · backend (api) · worker (J1-J6, J5, lịch batch) · frontend (web) · nginx (cổng 8080)
+#   (redis của demo.md là tùy chọn và CHƯA được dùng trong code, nên không có container redis)
 # Mật khẩu DB: đặt POSTGRES_PASSWORD trong môi trường hoặc file .env cạnh docker-compose.yml
 # (mặc định dfios123 chỉ dùng cho máy cục bộ; nhớ cập nhật DATABASE_URL tương ứng).
+#
+# Trong profile app, API chỉ GHI job vào batch_runs (DFIOS_BATCH_EXECUTOR=queue) và container worker chạy job;
+# lịch batch (scheduler) chỉ chạy trong worker (API đặt DFIOS_SCHEDULER=0) để không chạy trùng.
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,6 +26,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks: [dfios]
 
   backend:
     profiles: ["app"]
@@ -31,12 +37,34 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+psycopg2://dfios:${POSTGRES_PASSWORD:-dfios123}@postgres:5432/dfios
     env_file:
       - ./BE/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://dfios:${POSTGRES_PASSWORD:-dfios123}@postgres:5432/dfios
+      DFIOS_BATCH_EXECUTOR: queue     # heavy jobs go to the worker container
+      DFIOS_SCHEDULER: "0"            # the worker owns the schedules
+      TRUSTED_PROXIES: 172.28.0.10    # only nginx may set X-Forwarded-For
     ports:
       - "8000:8000"
+    networks: [dfios]
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: ./BE
+      dockerfile: Dockerfile
+    container_name: dfios-worker
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./BE/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://dfios:${POSTGRES_PASSWORD:-dfios123}@postgres:5432/dfios
+      DFIOS_SCHEDULER: "1"
+    networks: [dfios]
 
   frontend:
     profiles: ["app"]
@@ -48,6 +76,28 @@ services:
       - backend
     ports:
       - "5173:5173"
+    networks: [dfios]
+
+  nginx:
+    profiles: ["app"]
+    image: nginx:1.27-alpine
+    container_name: dfios-nginx
+    depends_on:
+      - backend
+      - frontend
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    networks:
+      dfios:
+        ipv4_address: 172.28.0.10
+
+networks:
+  dfios:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   dfios_pgdata:

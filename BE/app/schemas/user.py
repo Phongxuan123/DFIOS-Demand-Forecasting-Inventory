@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-UserRole = Literal["Admin", "Warehouse Manager", "Viewer"]
+UserRole = Literal["Admin", "Warehouse Manager", "Planner", "Viewer"]
 
 class UserResponse(BaseModel):
     id: str
@@ -18,7 +18,7 @@ class UserResponse(BaseModel):
 class UserCreateRequest(BaseModel):
     email: str = Field(..., description="Email người dùng")
     password: Optional[str] = Field(None, min_length=6, max_length=72, description="Mật khẩu (6 đến 72 ký tự, tối đa 72 bytes, để trống để gửi link kích hoạt)")
-    role: UserRole = Field(..., description="Vai trò: Admin | Warehouse Manager | Viewer")
+    role: UserRole = Field(..., description="Vai trò: Admin | Warehouse Manager | Planner | Viewer")
     display_name: Optional[str] = Field(None, description="Tên hiển thị")
 
     @field_validator("password")

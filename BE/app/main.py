@@ -30,6 +30,14 @@ async def lifespan(_app: FastAPI):
             with SessionLocal() as db:
                 if pipeline_service.ensure_default_schedule(db):
                     logger.warning("Default ML pipeline schedule created")
+            # batch jobs left 'running' by a previous (dead) API process can never finish: mark them failed. Only
+            # when this process is the executor (thread mode); in queue mode the worker container owns the jobs.
+            from app.services.batch_service import EXECUTOR_THREAD, batch_service, executor_mode
+            if executor_mode() == EXECUTOR_THREAD:
+                with SessionLocal() as db:
+                    n_orphans = batch_service.recover_orphans(db)
+                    if n_orphans:
+                        logger.warning("Marked %d orphan batch_runs row(s) as failed", n_orphans)
     except Exception as exc:  # noqa: BLE001 - startup must not fail on an optional seed
         logger.error("Default schedule check failed: %s", exc)
     task = None

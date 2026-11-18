@@ -1,10 +1,12 @@
 from datetime import timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_admin, require_manager_or_admin
+from app.api.deps import get_db, require_admin, require_planner_or_above
 from app.models.inventory import Inventory
 from app.models.user import User
 from app.services import policy_config as pc
@@ -14,7 +16,9 @@ from app.schemas.clock import (
     ClockAdvanceResponse,
     ClockResetRequest,
     ClockSpeedRequest,
+    BatchJobAccepted,
 )
+from app.services.batch_service import batch_service
 from app.services.pipeline_service import pipeline_service
 
 router = APIRouter()
@@ -55,12 +59,12 @@ def _clock_response(db: Session, clock, **extra) -> SimClockResponse:
 def get_clock(
     store_id: str = Query("CA_1", description="Mã kho/cửa hàng"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_manager_or_admin),
+    current_user: User = Depends(require_planner_or_above),
 ):
     """
     **Task API.1 - Get Sim Clock**:
     Lấy ngày mô phỏng hiện tại, trạng thái, tốc độ tua và số chu kỳ review đã qua.
-    Role: Warehouse Manager, Admin.
+    Role: Planner, Warehouse Manager, Admin.
     """
     clock = pipeline_service.get_sim_clock(db, store_id=store_id, auto_create=False)
     if not clock:
@@ -74,6 +78,7 @@ def get_clock(
 @router.post(
     "/advance",
     response_model=ClockAdvanceResponse,
+    responses={202: {"model": BatchJobAccepted, "description": "async_job=true: job đã nhận, theo dõi qua poll_url"}},
     summary="Task API.1 - Tua đồng hồ ảo và điều phối chuỗi Batch Jobs J1 - J6 (Admin only)",
 )
 def advance_clock(
@@ -94,6 +99,16 @@ def advance_clock(
     Role: Admin only.
     """
     store_id = body.store_id or "CA_1"
+    if body.async_job:
+        if pipeline_service.get_sim_clock(db, store_id=store_id, auto_create=False) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"Đồng hồ mô phỏng (SimClock) không tồn tại cho cửa hàng '{store_id}'")
+        handle = batch_service.submit_advance(
+            db, store_id=store_id, triggered_by=admin.email, days=body.days, reviews=body.reviews,
+            until=body.until, approval_mode=body.approval_mode, expire_pending=body.expire_pending,
+        )
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED,
+                            content=jsonable_encoder(BatchJobAccepted(**handle)))
     try:
         result = pipeline_service.advance_sim_clock(
             db=db,
@@ -101,6 +116,9 @@ def advance_clock(
             days=body.days,
             reviews=body.reviews,
             until=body.until,
+            approval_mode=body.approval_mode,
+            expire_pending=body.expire_pending,
+            triggered_by=admin.email,
         )
     except ValueError as e:
         status_code = status.HTTP_400_BAD_REQUEST if "vượt quá" in str(e) else status.HTTP_404_NOT_FOUND

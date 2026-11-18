@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_manager_or_admin, get_client_ip
+from app.api.deps import get_db, get_current_user, require_planner_or_above, get_client_ip
 from app.models.user import User
 from app.models.product import Product
 from app.models.sim_clock import SimClock
@@ -66,12 +66,12 @@ def get_forecasts(
     )
 
 
-@router.post("/bulk-override", response_model=BulkOverrideResponse, status_code=status.HTTP_201_CREATED, summary="Can thiệp dự báo hàng loạt (Manager & Admin only)")
+@router.post("/bulk-override", response_model=BulkOverrideResponse, status_code=status.HTTP_201_CREATED, summary="Can thiệp dự báo hàng loạt (Planner, Manager & Admin)")
 def bulk_forecast_override(
     body: BulkOverrideRequest,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_planner_or_above),
 ):
     """
     **Bulk Forecast Override**:
@@ -157,14 +157,14 @@ def get_uncertainty_band(
     )
 
 
-@router.get("/{sku}/explanation", response_model=ForecastExplanationResponse, summary="UC23 - Giải thích dự báo SHAP (Manager & Admin only)")
+@router.get("/{sku}/explanation", response_model=ForecastExplanationResponse, summary="UC23 - Giải thích dự báo SHAP (Planner, Manager & Admin)")
 def get_forecast_explanation(
     sku: str,
     store_id: Optional[str] = Query(None, description="Lọc theo mã cửa hàng"),
     model_version: Optional[str] = Query(None, description="Phiên bản mô hình"),
     model_name: Optional[str] = Query(None, description="Tên mô hình (lightgbm, xgboost, arima,...)"),
     db: Session = Depends(get_db),
-    user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_planner_or_above),
 ):
     """
     **UC23 - View Forecast Explanation (SHAP)**:
@@ -180,13 +180,13 @@ def get_forecast_explanation(
     )
 
 
-@router.post("/{sku}/override", response_model=ForecastOverrideResponse, status_code=status.HTTP_201_CREATED, summary="UC24 - Điều chỉnh thủ công dự báo (Manager & Admin only)")
+@router.post("/{sku}/override", response_model=ForecastOverrideResponse, status_code=status.HTTP_201_CREATED, summary="UC24 - Điều chỉnh thủ công dự báo (Planner, Manager & Admin)")
 def create_forecast_override(
     sku: str,
     body: ForecastOverrideCreate,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_planner_or_above),
 ):
     """
     **UC24 - Manual Forecast Override**:
@@ -203,13 +203,13 @@ def create_forecast_override(
     )
 
 
-@router.delete("/{sku}/override/{id}", response_model=ForecastOverrideRevertResponse, summary="UC24 - Hoàn tác điều chỉnh thủ công (Manager & Admin only)")
+@router.delete("/{sku}/override/{id}", response_model=ForecastOverrideRevertResponse, summary="UC24 - Hoàn tác điều chỉnh thủ công (Planner, Manager & Admin)")
 def revert_forecast_override(
     sku: str,
     id: str,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(require_manager_or_admin),
+    user: User = Depends(require_planner_or_above),
 ):
     """
     **UC24 - Revert Manual Forecast Override**:

@@ -30,3 +30,7 @@ class ReplenishmentRecommendation(Base):
     eoq_quantity = Column(Float, nullable=True)
     policy_applied = Column(String(50), nullable=True, default="REFIT-RSS-EOQ-G")
     review_date = Column(Date, nullable=True)
+    # Who created the proposal: "simulator" for every proposal the J4 review of the simulated clock generated
+    # (auto-ordered or left PENDING for the planner, demo.md §4.4), NULL for proposals created outside the simulation.
+    # The clock reset removes the simulator's proposals by this column (a planner-approved one has decided_by = email).
+    origin = Column(String(20), nullable=True, index=True)

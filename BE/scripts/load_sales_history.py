@@ -32,9 +32,12 @@ def main():
         df_q = df_q[df_q["id"].str.contains(f"_{STORE_ID}_")].copy()
         df_ens = pd.merge(df_ens, df_q[["id", "date", "h", "P10", "P50", "P90"]], on=["id", "date", "h"], how="left")
     else:
-        df_ens["P10"] = df_ens["y_pred"] * 0.7
-        df_ens["P50"] = df_ens["y_pred"]
-        df_ens["P90"] = df_ens["y_pred"] * 1.3
+        # no TFT quantile artifact: the band is UNKNOWN (NULL), never invented from the point forecast
+        # (the former y_pred * 0.7 / 1.3 band was a made-up number, demo.md §1 "không dùng số giả")
+        print(f"WARNING: {QUANTILES_PATH} missing - p10/p50/p90 stored as NULL")
+        df_ens["P10"] = float("nan")
+        df_ens["P50"] = float("nan")
+        df_ens["P90"] = float("nan")
 
     df_ens["sale_date"] = pd.to_datetime(df_ens["date"]).dt.date
     df_ens["history_id"] = df_ens["item_id"] + "_" + df_ens["store_id"] + "_" + df_ens["sale_date"].astype(str)
@@ -55,9 +58,10 @@ def main():
         "forecast_date": df_ens["sale_date"],
         "h": df_ens["h"].astype(int),
         "y_pred": df_ens["y_pred"].fillna(0.0).round(4),
-        "p10": df_ens["P10"].fillna(0.0).round(4),
-        "p50": df_ens["P50"].fillna(0.0).round(4),
-        "p90": df_ens["P90"].fillna(0.0).round(4),
+        # a missing quantile stays NULL (not 0: a 0 band would claim certainty the model never gave)
+        "p10": df_ens["P10"].round(4).astype(object).where(df_ens["P10"].notna(), None),
+        "p50": df_ens["P50"].round(4).astype(object).where(df_ens["P50"].notna(), None),
+        "p90": df_ens["P90"].round(4).astype(object).where(df_ens["P90"].notna(), None),
         "available": True,
         "model_version": "Ensemble bundle 1.0",
         "generated_at": now,

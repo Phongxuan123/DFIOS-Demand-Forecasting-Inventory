@@ -205,6 +205,7 @@ class RefitPoliciesRequest(BaseModel):
     target_availability: Optional[float] = Field(None, ge=0.85, le=0.999, description="Mức Availability mục tiêu (mặc định: cấu hình hệ thống default_service_level)")
     c3out_active: Optional[bool] = Field(None, description="True: giữ m_g = 0 (P6), chỉ chọn kappa. Mặc định theo setting c3out_active (True)")
     search_mode: Optional[str] = Field(None, description="auto (mặc định) | kappa_only | m_grid: kết quả nào được lưu vào policy_selection; cả hai luôn được trả về")
+    async_job: bool = Field(False, description="true: chạy nền, trả 202 + run_id (GET /batch-runs/{run_id})")
 
 
 class RefitPoliciesResponse(BaseModel):
@@ -212,4 +213,5 @@ class RefitPoliciesResponse(BaseModel):
     selection_id: str
     policies: List[PolicySelectionItem]
     message: str
+    run_id: Optional[str] = Field(None, description="batch_runs.run_id of this J5 run")
 

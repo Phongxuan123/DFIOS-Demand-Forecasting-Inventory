@@ -17,7 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.deps import get_db, require_manager_or_admin
+from app.api.deps import get_db, require_manager_or_admin, require_planner_or_above
 from app.main import app
 from app.models.base import Base
 from app.models.calibration_state import CalibrationState
@@ -125,6 +125,7 @@ def client_db():
 
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[require_manager_or_admin] = lambda: object()
+    app.dependency_overrides[require_planner_or_above] = lambda: object()  # forecast-quality: Planner and up
     try:
         yield TestClient(app), Session
     finally:
