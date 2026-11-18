@@ -2,7 +2,6 @@ import logging
 from datetime import date, timedelta, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -95,53 +94,42 @@ def valued_stock_sums(
                 acc[0] += float(hv or 0.0)
                 acc[1] += float(lv or 0.0)
 
-    T = (end - start).days + 1
-    for s in priced:
-        rows = (
-            db.query(model.item_id, model.date, model.on_hand_end, model.lost_sales)
-            .filter(model.store_id == s, model.date >= start, model.date <= end)
-            .all()
-        )
-        if not rows or T <= 0:
-            continue
-        items = sorted({r[0] for r in rows})
-        pos = {it: k for k, it in enumerate(items)}
-        P = price_history_repository.price_matrix(db, s, items, start, end + timedelta(days=1))
-        cat_of: Dict[str, str] = {}
-        for k in range(0, len(items), 900):
-            for iid, cat in db.query(Product.item_id, Product.cat_id).filter(
-                Product.item_id.in_(items[k:k + 900])
-            ).all():
-                cat_of[iid] = str(cat if cat is not None else "UNKNOWN").upper()
-        ii = np.fromiter((pos[r[0]] for r in rows), dtype=np.int64, count=len(rows))
-        di = np.fromiter(((r[1] - start).days for r in rows), dtype=np.int64, count=len(rows))
-        oh = np.fromiter((float(r[2]) if r[2] is not None else 0.0 for r in rows), dtype=float, count=len(rows))
-        ls = np.fromiter((float(r[3]) if r[3] is not None else 0.0 for r in rows), dtype=float, count=len(rows))
-        p = P[ii, di]
-        fin = ~np.isnan(p)
-        pz = np.where(fin, p, 0.0)
-        hv_r, lv_r = oh * pz, ls * pz
-        # a row counts (creates its key) when it is priced or its product exists (SQL inner join semantics)
-        has_prod = np.array([it in cat_of for it in items], dtype=bool)[ii]
-        counted = fin | has_prod
+    # E7: one SQL aggregate per priced store (the database joins each row to its day's price) instead of reading
+    # every row and every daily price into Python (~10 s on a full replay year, now well under a second).
+    # Same rule as price_history_repository.price_matrix: the day's price_history row when > 0, else
+    # products.price when > 0, else no price (the row contributes 0). A key exists when at least one of its rows is
+    # priced or has a product (the SQL inner-join semantics of the plain branch).
+    if priced and (end - start).days >= 0:
+        from sqlalchemy import and_, case, or_
+
+        from app.models.price_history import PriceHistory
+
+        price = case((PriceHistory.price > 0, PriceHistory.price), (Product.price > 0, Product.price), else_=None)
+        counted = func.sum(case((or_(price.is_not(None), Product.item_id.is_not(None)), 1), else_=0))
         if by == "date":
-            gid, keys = di, [start + timedelta(days=int(j)) for j in range(T)]
+            key_col = model.date
         elif by == "cat":
-            cats = sorted(set(cat_of.values()) | {"UNKNOWN"})
-            cpos = {c: j for j, c in enumerate(cats)}
-            item_cat = np.array([cpos[cat_of.get(it, "UNKNOWN")] for it in items], dtype=np.int64)
-            gid, keys = item_cat[ii], cats
+            key_col = func.upper(func.coalesce(Product.cat_id, "UNKNOWN"))
         else:
-            gid, keys = np.zeros(len(rows), dtype=np.int64), [None]
-        G = len(keys)
-        hv_g, lv_g, n_g = np.zeros(G), np.zeros(G), np.zeros(G)
-        np.add.at(hv_g, gid, hv_r)
-        np.add.at(lv_g, gid, lv_r)
-        np.add.at(n_g, gid, counted.astype(float))
-        for j in np.flatnonzero(n_g > 0):
-            acc = sums.setdefault(keys[j], [0.0, 0.0])
-            acc[0] += float(hv_g[j])
-            acc[1] += float(lv_g[j])
+            key_col = None
+        cols = [func.sum(model.on_hand_end * price), func.sum(model.lost_sales * price), counted]
+        q = (
+            db.query(*([key_col] if key_col is not None else []), *cols)
+            .select_from(model)
+            .outerjoin(Product, Product.item_id == model.item_id)
+            .outerjoin(PriceHistory, and_(PriceHistory.store_id == model.store_id,
+                                          PriceHistory.item_id == model.item_id, PriceHistory.date == model.date,
+                                          # same rows, but lets PostgreSQL read only the period's prices
+                                          PriceHistory.date >= start, PriceHistory.date <= end))
+            .filter(model.store_id.in_(priced), model.date >= start, model.date <= end)
+        )
+        rows = q.group_by(key_col).all() if key_col is not None else [(None, *q.one())]
+        for k, hv, lv, n in rows:
+            if not n:
+                continue
+            acc = sums.setdefault(k, [0.0, 0.0])
+            acc[0] += float(hv or 0.0)
+            acc[1] += float(lv or 0.0)
     return {k: (v[0], v[1]) for k, v in sums.items()}
 
 
