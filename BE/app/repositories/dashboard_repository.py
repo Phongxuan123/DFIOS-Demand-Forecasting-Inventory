@@ -12,6 +12,7 @@ from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
 from app.models.supplier import Supplier
 from app.models.sim_clock import SimClock
+from app.repositories import price_history_repository
 from app.services import policy_config as pc
 
 
@@ -19,6 +20,25 @@ class DashboardRepository:
     """
     Repository truy vấn và tổng hợp số liệu cho Module B — Dashboard & Alerts (UC07 - UC10).
     """
+
+    @staticmethod
+    def _clock_date_prices(db: Session, rows) -> Dict[Tuple[str, str], float]:
+        """{(store, item): price at the store's sim-clock date} for the stores that have daily prices and a clock;
+        items/stores not in the map are valued at their constant ``unit_price``."""
+        import numpy as np
+
+        clock_of = {c.store_id: c.current_date for c in db.query(SimClock.store_id, SimClock.current_date).all()}
+        out: Dict[Tuple[str, str], float] = {}
+        for st in sorted({r.store_id for r in rows}):
+            vd = clock_of.get(st)
+            if vd is None or not price_history_repository.has_prices(db, st):
+                continue
+            st_rows = [r for r in rows if r.store_id == st]
+            base = np.array([float(r.unit_price if r.unit_price is not None else 0.0) for r in st_rows])
+            p = price_history_repository.price_on(db, st, [r.item_id for r in st_rows], vd, fallback=base)
+            for r, v in zip(st_rows, p):
+                out[(st, r.item_id)] = float(v)
+        return out
 
     def get_kpis(self, db: Session, store_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -51,8 +71,13 @@ class DashboardRepository:
         total_monitored = len(rows)
 
         if total_monitored > 0:
+            # G-37: stock is valued at the price of the store's simulated clock date (price_history, else the
+            # constant unit_price); a store without price_history rows keeps the constant-price value exactly.
+            day_price = self._clock_date_prices(db, rows)
             total_value = sum(
-                max(0.0, float(r.on_hand or 0.0)) * float(r.unit_price if r.unit_price is not None else 0.0)
+                max(0.0, float(r.on_hand or 0.0))
+                * day_price.get(
+                    (r.store_id, r.item_id), float(r.unit_price if r.unit_price is not None else 0.0))
                 for r in rows
             )
             stockout_count = sum(1 for r in rows if float(r.on_hand or 0.0) <= 0.0)
