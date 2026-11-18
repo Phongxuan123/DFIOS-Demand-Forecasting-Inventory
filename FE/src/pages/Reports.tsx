@@ -31,6 +31,7 @@ import { can } from '../auth/permissions.ts';
 import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
 import { ReferenceE10b } from '../components/ReferenceE10b.tsx';
 import { WhatIfPanel } from './reports/WhatIfPanel.tsx';
+import { RefitPanel } from './reports/RefitPanel.tsx';
 import { ForecastQualityPanel } from './reports/ForecastQualityPanel.tsx';
 import { ControllerPanel } from './reports/ControllerPanel.tsx';
 import { downloadCsv } from '../utils/csv.ts';
@@ -768,7 +769,12 @@ export const Reports: React.FC = () => {
             {subTab === 'policies' && <PoliciesTab />}
             {subTab === 'accuracy' && <AccuracyTab />}
             {subTab === 'inventory' && <InventoryTab />}
-            {subTab === 'whatif' && <WhatIfPanel storeId={storeId ?? 'CA_1'} isGlobal={!storeId} />}
+            {subTab === 'whatif' && (
+              <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
+                <WhatIfPanel storeId={storeId ?? 'CA_1'} isGlobal={!storeId} />
+                {storeId && can(user?.role, 'policy:manage') && <RefitPanel storeId={storeId} />}
+              </div>
+            )}
           </HoldHeight>
         </Section>
       </div>

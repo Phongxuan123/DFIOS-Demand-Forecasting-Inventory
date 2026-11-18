@@ -267,6 +267,42 @@ export function isWhatIfResponse(v: unknown): v is WhatIfResponse {
 }
 
 /** POST /simulation/what-if (FR10). A REAL replay on the store history; long-running. */
+/** One ABC-XYZ class of a J5 selection (POST /optimization/refit-policies). */
+export interface PolicySelectionItem {
+  selection_id: string;
+  class_id: string;
+  policy_type: string;
+  m_g: number;
+  kappa_g: number;
+  val_cost: number | null;
+  val_service: number | null;
+  setpoint: number;
+  is_feasible: boolean | null;
+  n_items: number | null;
+  n_validation_reviews: number | null;
+  c3out_active: boolean | null;
+  search_mode: string | null;
+  source: string | null;
+}
+
+export interface RefitPoliciesRequest {
+  store_id: string;
+  target_availability?: number;
+  search_mode?: 'auto' | 'kappa_only' | 'm_grid';
+}
+
+export interface RefitPoliciesResponse {
+  success: boolean;
+  selection_id: string;
+  policies: PolicySelectionItem[];
+  message: string;
+  run_id: string | null;
+}
+
+/** Job J5 on demand (Manager, Admin). Synchronous: the J5 row is still written to /batch-runs (run_id). */
+export const postRefitPolicies = async (body: RefitPoliciesRequest) =>
+  (await apiClient.post<RefitPoliciesResponse>('/optimization/refit-policies', body, { timeout: 600000 })).data;
+
 export const postWhatIf = async (body: WhatIfRequest) =>
   (await apiClient.post<WhatIfResponse>('/simulation/what-if', body, { timeout: 300000, notifyForbidden: true })).data;
 
