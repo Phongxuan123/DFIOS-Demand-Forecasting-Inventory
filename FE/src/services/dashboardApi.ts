@@ -113,5 +113,8 @@ export const getAlerts = (storeId: string, severity: string | undefined, limit: 
 export const getCalibrationHistory = (storeId: string, signal?: AbortSignal) =>
   getJson<CalibrationState[]>('/calibration/history', { params: { store_id: storeId, limit: 500 }, signal });
 
-export const getDemandTrend = (storeId: string, days: number, signal?: AbortSignal) =>
-  getJson<{ data: DemandTrendPoint[] }>('/dashboard/demand-trend', { params: { store_id: storeId, days }, signal });
+export const getDemandTrend = (storeId: string, days: number, signal?: AbortSignal, category?: string) =>
+  getJson<{ data: DemandTrendPoint[]; as_of?: string | null; forecast_note?: string | null }>('/dashboard/demand-trend', {
+    params: { store_id: storeId, days, category },
+    signal,
+  });
