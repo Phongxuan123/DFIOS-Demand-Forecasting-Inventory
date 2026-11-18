@@ -94,8 +94,13 @@ export const ChartTooltip: React.FC<ChartTooltipProps> = ({ active, label, paylo
       )}
       {payload.map((p, i) => {
         const name = String(p.name ?? p.dataKey ?? '');
-        const raw = p.value;
-        const text = typeof raw === 'number' && Number.isFinite(raw) ? (format ? format(raw, name) : String(raw)) : '—';
+        const raw = p.value as unknown;
+        const one = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? (format ? format(v, name) : String(v)) : null);
+        const text = Array.isArray(raw)
+          ? raw.length === 2 && one(raw[0]) !== null && one(raw[1]) !== null
+            ? `${one(raw[0])} – ${one(raw[1])}`
+            : '—'
+          : (one(raw) ?? '—');
         return (
           <div className="ui-chart-tooltip__row" key={`${name}-${i}`}>
             <span className="ui-chart-tooltip__swatch" style={{ background: p.color ?? p.stroke ?? p.fill }} />

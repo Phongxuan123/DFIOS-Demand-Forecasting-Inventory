@@ -57,17 +57,11 @@ export const Products: React.FC = () => {
   return (
     <div className="ui-stack prd-container">
       <div className="prd-breadcrumb">
-        <span>{t('products.master.breadcrumb_store', { store: storeId ?? 'CA_1' })}</span>
+        <span>{t('products.master.breadcrumb_store', { store: storeId ?? '—' })}</span>
         <span>/</span>
         <span>{t('products.master.breadcrumb_catalog')}</span>
         <span>/</span>
         <span className="prd-breadcrumb-tag">{t('products.master.breadcrumb_m5')}</span>
-        <span>·</span>
-        <span className="prd-breadcrumb-tag" style={{ color: 'var(--color-success-text)' }}>
-          ● {t('products.master.sync_status')}
-        </span>
-        <span>|</span>
-        <span className="prd-breadcrumb-tag">{t('products.master.engine_ver')}</span>
       </div>
 
       <PageHeader

@@ -647,7 +647,7 @@ export const Reports: React.FC = () => {
                       <XAxis dataKey="label" {...chart.axis} tick={{ ...chart.axis.tick, fontSize: 11 }} />
                       <YAxis {...chart.axis} width={64} tickFormatter={(v: number) => fmt.compact(v)} />
                       <RTooltip content={<ChartTooltip format={(v) => fmt.currency(Number(v))} />} />
-                      <Legend verticalAlign="top" align="right" height={36} iconType="plainline" />
+                      <Legend verticalAlign="top" align="left" height={36} iconType="plainline" wrapperStyle={{ paddingLeft: 56 }} />
                       <Line
                         type="monotone"
                         dataKey="c3"

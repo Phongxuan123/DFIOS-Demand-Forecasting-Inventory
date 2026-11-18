@@ -4,7 +4,7 @@ export const products: typeof Vi = {
   title: 'Products & Data Management',
   description: 'Master data catalog, supplier directory, physical inventory adjustments, sales history, and exogenous event calendar.',
   master: {
-    breadcrumb_store: 'Store {store} (Walmart California)',
+    breadcrumb_store: 'Store {store}',
     breadcrumb_catalog: 'Master Data & Item Catalog',
     breadcrumb_m5: 'Walmart M5 data',
     sync_status: 'Catalog Sync: 100% Up to Date',
@@ -42,7 +42,7 @@ export const products: typeof Vi = {
   },
   tabs: {
     products: 'Products',
-    suppliers: 'Suppliers (12)',
+    suppliers: 'Suppliers',
     adjustments: 'Stock Adjustments (Audit)',
     sales: 'Sales History (M5)',
     events: 'Events & Calendar',

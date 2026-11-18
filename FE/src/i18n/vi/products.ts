@@ -2,7 +2,7 @@ export const products = {
   title: 'Quản lý Sản phẩm & Dữ liệu Nền tảng',
   description: 'Danh mục dữ liệu gốc, danh bạ nhà cung cấp, kiểm kê điều chỉnh kho, lịch sử bán hàng và lịch sự kiện ngoại sinh.',
   master: {
-    breadcrumb_store: 'Kho {store} (Walmart California)',
+    breadcrumb_store: 'Kho {store}',
     breadcrumb_catalog: 'Danh mục Sản phẩm & Dữ liệu Nền tảng',
     breadcrumb_m5: 'Dữ liệu Walmart M5',
     sync_status: 'Đồng bộ danh mục: 100% Khớp',
@@ -40,7 +40,7 @@ export const products = {
   },
   tabs: {
     products: 'Sản phẩm',
-    suppliers: 'Nhà cung cấp (12)',
+    suppliers: 'Nhà cung cấp',
     adjustments: 'Điều chỉnh tồn kho (Kiểm toán)',
     sales: 'Lịch sử bán hàng (M5)',
     events: 'Sự kiện & Lịch biểu',
