@@ -54,7 +54,8 @@ class KPIDashboardResponse(BaseModel):
     n_skus: Optional[int] = None
     target_availability: Optional[float] = None  # percent, from system setting default_service_level
     cost_basis: str = "A3: h=0.002*price/day on end-of-day stock, b=0.35*price/lost unit, c=2/placed order"
-    b0_definition: str = "B0 = raw quantile tau=0.95, order-up-to ceil(Q_hat_0.95), no controller; simulated in parallel on the same demand and initial stock"
+    b0_definition: str = ("B0-MA-OUT-0.95 = S = ceil(mean56*(L+R) + z0.95*sd56*sqrt(L+R)) from the 56 days of sales before the "
+                          "review, order S - IP when IP < S, no controller; simulated in parallel on the same demand and initial stock")
     cost_reason: Optional[str] = None
     availability_reason: Optional[str] = None
     b0_reason: Optional[str] = None
