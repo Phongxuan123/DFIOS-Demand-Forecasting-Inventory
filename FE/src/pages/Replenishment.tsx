@@ -38,6 +38,7 @@ import {
   type ReplenishmentItem,
 } from '../services/replenishmentApi.ts';
 import { emitAlertsSyncEvent } from '../utils/alertTracker.ts';
+import { getKpiShadowDashboard } from '../services/dashboardApi.ts';
 import {
   Alert,
   Badge,
@@ -176,7 +177,7 @@ export const Replenishment: React.FC = () => {
   const toast = useToast();
   const { user } = useAuth();
   const { storeId } = useStore();
-  const { version } = useClock();
+  const { version, clock } = useClock();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const canWrite = can(user?.role, 'replenishment:write');
 
@@ -241,6 +242,21 @@ export const Replenishment: React.FC = () => {
     [storeId, pg.offset, pg.pageSize, status, priority, search, sort, version, nonce],
     { enabled: !!storeId && tab === 'proposals' },
   );
+
+  // KPI cards: CRITICAL pending proposals of the whole store (one-row query, the total is what counts)
+  const critical = useApi(
+    (signal) => listReplenishments({ skip: 0, limit: 1, store_id: storeId as string, status: 'PENDING', priority: 'CRITICAL' }, signal),
+    [storeId, version, nonce],
+    { enabled: !!storeId && tab === 'proposals' },
+  );
+  const criticalCount = critical.data?.total ?? null;
+  // Observed availability of C3-OUT vs the target and vs the shadow B0 (simulator)
+  const serviceKpi = useApi((signal) => getKpiShadowDashboard(storeId as string, signal), [storeId, version], {
+    enabled: !!storeId && tab === 'proposals',
+  });
+  const svc = serviceKpi.data;
+  const classesBelow = (svc?.segment_availabilities ?? []).filter((sg) => sg.c3out_availability !== null && sg.c3out_availability < sg.target).length;
+  const classesObserved = (svc?.segment_availabilities ?? []).filter((sg) => sg.c3out_availability !== null).length;
 
   const history = useApi(
     (signal) =>
@@ -364,11 +380,8 @@ export const Replenishment: React.FC = () => {
   const statusLabel = (s: string) => ((STATUS_KEYS as readonly string[]).includes(s) ? t(`replenishment.status.${s as (typeof STATUS_KEYS)[number]}`) : s);
   const priorityLabel = (p: string) => ((PRIORITY_KEYS as readonly string[]).includes(p) ? t(`replenishment.priority.${p as (typeof PRIORITY_KEYS)[number]}`) : p);
 
-  const pendingItems = useMemo(() => rows.filter((r) => r.status === 'PENDING'), [rows]);
-  const pendingCount = list.data?.pending_count ?? pendingItems.length;
-  const criticalCount = rows.filter((r) => r.priority === 'CRITICAL' && r.status === 'PENDING').length;
-  const totalPendingUnits = pendingItems.reduce((acc, r) => acc + r.final_qty, 0);
-  const estimatedTotalMoney = totalPendingUnits * 3.5;
+  const pendingCount = list.data?.pending_count ?? null;
+  const approvedCount = list.data?.approved_count ?? null;
 
   const columns: Column<ReplenishmentItem>[] = [
     {
@@ -537,9 +550,9 @@ export const Replenishment: React.FC = () => {
               variant="primary"
               leftIcon={<Check size={15} />}
               onClick={() => void onBulkApprove()}
-              disabled={!canWrite || !storeId || pendingCount === 0}
+              disabled={!canWrite || !storeId || !pendingCount}
             >
-              {t('replenishment.batch_approve_btn', { count: pendingCount })}
+              {t('replenishment.batch_approve_btn', { count: pendingCount ?? 0 })}
             </Button>
             <Button variant="secondary" leftIcon={<Sparkles size={15} />} onClick={() => void onGenerate()} disabled={!canWrite || !storeId}>
               {t('replenishment.action.generate')}
@@ -563,11 +576,10 @@ export const Replenishment: React.FC = () => {
               </span>
             </div>
             <div className="rep-kpi-body">
-              <span className="rep-kpi-val">{t('replenishment.kpi.pending_orders', { count: pendingCount })}</span>
-              <span className="rep-kpi-subval">{t('replenishment.kpi.total_val', { val: fmt.integer(estimatedTotalMoney) })}</span>
+              <span className="rep-kpi-val">{pendingCount !== null ? t('replenishment.kpi.pending_orders', { count: fmt.integer(pendingCount) }) : '—'}</span>
             </div>
             <div className="rep-kpi-meta">
-              <span>{t('replenishment.kpi.rop_threshold_meta', { count: pendingCount })}</span>
+              <span>{approvedCount !== null ? t('replenishment.kpi.approved_meta', { count: fmt.integer(approvedCount), store: storeId ?? '—' }) : '—'}</span>
             </div>
           </div>
 
@@ -579,11 +591,10 @@ export const Replenishment: React.FC = () => {
                 </span>
                 {t('replenishment.kpi.critical_stockout')}
               </span>
-              <Badge tone="danger">{t('replenishment.kpi.urgent')}</Badge>
+              {criticalCount !== null && criticalCount > 0 && <Badge tone="danger">{t('replenishment.kpi.urgent')}</Badge>}
             </div>
             <div className="rep-kpi-body">
-              <span className="rep-kpi-val rep-kpi-val--rose">{t('replenishment.kpi.critical_skus', { count: criticalCount })}</span>
-              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>{t('replenishment.kpi.dos_critical_sub')}</span>
+              <span className="rep-kpi-val rep-kpi-val--rose">{criticalCount !== null ? t('replenishment.kpi.critical_skus', { count: fmt.integer(criticalCount) }) : '—'}</span>
             </div>
             <div className="rep-kpi-meta">
               <span className="rep-dos-dot rep-dos-dot--rose" />
@@ -601,12 +612,14 @@ export const Replenishment: React.FC = () => {
               </span>
             </div>
             <div className="rep-kpi-body">
-              <span className="rep-kpi-val">{t('replenishment.kpi.lead_time_days', { days: '3.0' })}</span>
-              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>{t('replenishment.kpi.lead_time_range')}</span>
+              <span className="rep-kpi-val">{clock?.lead_time_days != null ? t('replenishment.kpi.lead_time_days', { days: clock.lead_time_days }) : '—'}</span>
+              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>
+                {clock?.review_period_days != null ? t('replenishment.kpi.review_every', { days: clock.review_period_days }) : ''}
+              </span>
             </div>
             <div className="rep-kpi-meta">
               <CheckCircle2 size={12} color="#059669" />
-              <span>{t('replenishment.kpi.sla_compliance', { pct: '98.2' })}</span>
+              <span>{clock?.next_review_date ? t('replenishment.kpi.next_review', { date: fmt.date(clock.next_review_date) }) : '—'}</span>
             </div>
           </div>
 
@@ -620,12 +633,23 @@ export const Replenishment: React.FC = () => {
               </span>
             </div>
             <div className="rep-kpi-body">
-              <span className="rep-kpi-val rep-kpi-val--emerald">96.4%</span>
-              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>{t('replenishment.kpi.compliance_target', { pct: '96.0' })}</span>
+              <span className={`rep-kpi-val ${classesBelow > 0 ? 'rep-kpi-val--rose' : 'rep-kpi-val--emerald'}`}>
+                {svc?.c3out_overall_availability != null ? fmt.percent(svc.c3out_overall_availability, { scale: 'percent', digits: 1 }) : '—'}
+              </span>
+              <span className="rep-num-sub" style={{ alignSelf: 'center' }}>
+                {svc?.target_availability != null ? t('replenishment.kpi.compliance_target', { pct: fmt.number(svc.target_availability, { digits: 1 }) }) : ''}
+              </span>
             </div>
             <div className="rep-kpi-meta">
-              <span style={{ color: '#059669', fontWeight: 600 }}>+0.4%</span>
-              <span>{t('replenishment.kpi.compliance_meta', { pct: '0.4' })}</span>
+              <span>
+                {svc
+                  ? t('replenishment.kpi.compliance_meta', {
+                      below: classesBelow,
+                      n: classesObserved,
+                      b0: svc.b0_overall_availability != null ? fmt.percent(svc.b0_overall_availability, { scale: 'percent', digits: 1 }) : '—',
+                    })
+                  : '—'}
+              </span>
             </div>
           </div>
         </div>
@@ -872,11 +896,11 @@ const PolicyDrawer: React.FC<{
     !!rec && !!p && ((p.s != null && rec.reorder_point_s != null && Math.round(p.s) !== Math.round(rec.reorder_point_s)) || (p.S != null && rec.order_up_to_S != null && Math.round(p.S) !== Math.round(rec.order_up_to_S)));
   const thetas = calib.data?.thetas ?? {};
 
-  const thetaVal = rec?.theta != null ? `${rec.theta >= 0 ? '+' : ''}${rec.theta.toFixed(2)}` : '+0.12';
-  const p50Val = rec?.q_hat != null ? (rec.q_hat / 10).toFixed(1) : '16.4';
-  const histMean = p?.annual_demand ? (p.annual_demand / 365).toFixed(1) : '15.8';
-  const holdingRate = p?.holding_cost ? `$${p.holding_cost.toFixed(2)}` : '$0.15';
-  const orderSetupCost = p?.order_cost ? `$${p.order_cost.toFixed(2)}` : '$2.00';
+  const thetaVal = rec?.theta != null ? `${rec.theta >= 0 ? '+' : ''}${rec.theta.toFixed(2)}` : '—';
+  const p50Val = rec?.q_hat != null ? (rec.q_hat / 10).toFixed(1) : '—';
+  const histMean = p?.annual_demand ? (p.annual_demand / 365).toFixed(1) : '—';
+  const holdingRate = p?.holding_cost ? fmt.currency(p.holding_cost) : '—';
+  const orderSetupCost = p?.order_cost ? fmt.currency(p.order_cost) : '—';
 
   return (
     <Drawer
@@ -905,13 +929,15 @@ const PolicyDrawer: React.FC<{
             })}
           </div>
 
-          <DepletionChart
-            onHand={rec.on_hand}
-            qty={rec.final_qty}
-            rop={rec.rop || rec.reorder_point_s || 30}
-            ss={rec.safety_stock || 15}
-            leadTime={rec.lead_time_days || 3}
-          />
+          {(rec.reorder_point_s ?? rec.rop) != null && rec.safety_stock != null && rec.lead_time_days != null && (
+            <DepletionChart
+              onHand={rec.on_hand}
+              qty={rec.final_qty}
+              rop={(rec.reorder_point_s ?? rec.rop) as number}
+              ss={rec.safety_stock}
+              leadTime={rec.lead_time_days}
+            />
+          )}
 
           <div>
             <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-text-secondary)', textTransform: 'uppercase', marginBottom: 'var(--space-2)' }}>
@@ -932,7 +958,7 @@ const PolicyDrawer: React.FC<{
               </div>
               <div className="rep-matrix-item">
                 <span className="rep-matrix-label">{t('replenishment.detail.lead_time_l')}</span>
-                <span className="rep-matrix-val">{t('replenishment.detail.lead_time_fixed', { days: (rec.lead_time_days || 3).toFixed(1) })}</span>
+                <span className="rep-matrix-val">{rec.lead_time_days != null ? t('replenishment.detail.lead_time_fixed', { days: rec.lead_time_days }) : '—'}</span>
               </div>
               <div className="rep-matrix-item">
                 <span className="rep-matrix-label">{t('replenishment.detail.holding_cost_h')}</span>
