@@ -3,8 +3,8 @@ import { can, normalizeRole, roleKey, type Action } from './permissions.ts';
 
 describe('can() role matrix', () => {
   const adminOnly: Action[] = ['view:models', 'clock:advance', 'models:manage', 'users:manage', 'audit:view', 'forecast_sources:view'];
-  const managerUp: Action[] = ['inventory:adjust', 'data:import', 'batch:view'];
-  const plannerUp: Action[] = ['view:replenishment', 'clock:view', 'replenishment:write', 'forecast:write'];
+  const managerUp: Action[] = ['inventory:adjust', 'data:import', 'batch:view', 'policy:manage'];
+  const plannerUp: Action[] = ['view:replenishment', 'clock:view', 'replenishment:write', 'forecast:write', 'forecast_quality:view'];
   const everyone: Action[] = ['view:dashboard', 'view:forecast', 'view:abcxyz', 'view:reports', 'view:products', 'view:settings'];
 
   it('admin can do everything', () => {

@@ -391,7 +391,7 @@ export const ForecastExplorer: React.FC = () => {
   const { confirm, dialog } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const canEdit = can(user?.role, 'replenishment:write');
+  const canEdit = can(user?.role, 'forecast:write');
   const sku = searchParams.get('sku') ?? '';
   const isGlobal = !!storeId && GLOBAL_STORE.test(storeId);
   const store = storeId && !isGlobal ? storeId : 'CA_1';

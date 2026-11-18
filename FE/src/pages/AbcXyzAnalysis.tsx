@@ -21,7 +21,7 @@ export const AbcXyzAnalysis: React.FC = () => {
   const fmt = useFormat();
   const { user } = useAuth();
   const { storeId, loading: storeLoading } = useStore();
-  const manager = can(user?.role, 'replenishment:write');
+  const manager = can(user?.role, 'policy:manage');
   const [segment, setSegment] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
   const skuSectionRef = useRef<HTMLDivElement>(null);

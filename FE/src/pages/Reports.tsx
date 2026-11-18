@@ -109,7 +109,7 @@ const PoliciesTab: React.FC = () => {
   const { storeId } = useStore();
   const { user } = useAuth();
   const { version } = useClock();
-  const isManager = can(user?.role, 'replenishment:write');
+  const isManager = can(user?.role, 'policy:manage');
   const [objective] = useState<Objective>('cost');
 
   const bench = useApi((s) => getPolicyBenchmark(s), [version]);
@@ -259,7 +259,8 @@ const AccuracyTab: React.FC = () => {
   const { user } = useAuth();
   const { version, clock } = useClock();
   const isAdmin = can(user?.role, 'view:models');
-  const isManager = can(user?.role, 'replenishment:write');
+  const canQuality = can(user?.role, 'forecast_quality:view');
+  const isManager = can(user?.role, 'policy:manage');
   const acc = useApi((s) => getForecastAccuracy(storeId ?? '', s), [storeId, version], { enabled: !!storeId });
   const reg = useApi((s) => getRegistryModels(s), [version], { enabled: isAdmin });
   const a = acc.data;
@@ -317,7 +318,7 @@ const AccuracyTab: React.FC = () => {
         )}
       </Section>
 
-      {isManager && <ForecastQualityPanel storeId={storeId === GLOBAL_STORE ? null : storeId} version={version} />}
+      {canQuality && <ForecastQualityPanel storeId={storeId === GLOBAL_STORE ? null : storeId} version={version} />}
       {isManager && <ControllerPanel storeId={storeId === GLOBAL_STORE ? null : storeId} clockDate={clock?.current_date} version={version} />}
 
       <Section title={t('reports.accuracy.registry_title')} description={t('reports.accuracy.registry_desc')}>

@@ -26,6 +26,8 @@ export type Action =
   | 'data:import'
   | 'data:quality'
   | 'forecast:write'
+  | 'forecast_quality:view'
+  | 'policy:manage'
   | 'batch:view'
   | 'forecast_sources:view';
 
@@ -53,7 +55,11 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'audit:view': ADMIN_ONLY,
   'data:import': MANAGER_UP, // POST /imports: Manager + Admin
   'data:quality': ADMIN_ONLY, // /data-quality/*: require_admin
-  'forecast:write': PLANNER_UP, // Planner can override forecasts
+  'forecast:write': PLANNER_UP, // forecast overrides + SHAP explanation: Planner, Manager, Admin
+  'forecast_quality:view': PLANNER_UP, // GET /metrics/forecast-quality
+  // Manager + Admin only on the BE: /simulation/compare-policies, /metrics/controller,
+  // /classification/recommendations|recompute, /optimization/service-level|refit-policies
+  'policy:manage': MANAGER_UP,
   'batch:view': MANAGER_UP, // /batch-runs: Manager + Admin
   'forecast_sources:view': ADMIN_ONLY, // /forecast-sources: Admin only
 };
