@@ -509,10 +509,8 @@ class SimulatorService:
             if iid in pos and d in didx:
                 D[didx[d], pos[iid]] += float(q or 0.0)
 
-        price = np.ones(n)
-        for iid, p in db.execute(select(Product.item_id, Product.price)).all():
-            if iid in pos and p is not None:
-                price[pos[iid]] = float(p)
+        # the simulator moves units only; money (holding / lost at the price of each day, G-37 price_history with the
+        # products.price fallback) is valued by the readers of inventory_daily and by J5 / the parameters
 
         job_events: List[str] = []
         reviews_executed = 0

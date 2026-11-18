@@ -14,7 +14,8 @@ What it writes (idempotent; every step can be re-run):
              window quantiles Q_{L+R}(tau) (19 levels, 0.95 = level index 10) for the window [t_k, t_k + 10), stored in
              the shape J3 reads (model_run_id = backtest-ensemble-v1, horizon_days = 10, q_levels {"0.95": ...}),
              route = 'teacher' (J5 scores its candidates on these rows, see window_quantile_service).
-  clock      sim_clock(store) start = current = TEST_START (2015-05-25), the store's simulation state is cleared
+  clock      sim_clock(store) start = current = TEST_START (2015-05-25; --clock-start-day 1395 = 2014-11-24 for the
+             teacher's continuous run, with --refit-as-of-day 1577 for selection #0), the store's simulation state is cleared
              (snapshot, shadow, service outcomes, inventory_daily, simulator orders, C3 states k >= 1, store-scoped
              J5 selections), theta_0 = 0 for the 9 classes, initial stock round(mean 28 days * (L+R)) and, unless
              --no-initial-refit, a J5 selection at the clock start (window 26 weeks before it, teacher selection #0)
@@ -291,8 +292,15 @@ def load_quantiles(db, td: Dict[str, object]) -> Dict[str, int]:
             "first_origin": origin_dates[0].isoformat(), "last_origin": origin_dates[-1].isoformat()}
 
 
-def set_clock(db, td: Dict[str, object], initial_refit: bool = True) -> Dict[str, object]:
-    """Clock at TEST_START, clean simulation state of the store, theta_0 = 0, initial stock, J5 selection #0."""
+def set_clock(db, td: Dict[str, object], initial_refit: bool = True, start_day: Optional[int] = None,
+              refit_as_of_day: Optional[int] = None) -> Dict[str, object]:
+    """Clock at ``start_day`` (default TEST_START), clean simulation state of the store, theta_0 = 0, initial stock,
+    J5 selection #0.
+
+    Continuous start (teacher E10b simulates from VAL_START = 1395): ``start_day = 1395``. J5 has no review before
+    1395 to score, so ``refit_as_of_day`` (e.g. TEST_START) computes selection #0 as of that day instead (window of the
+    26 weeks before it, i.e. the teacher's validation choice that it also applies from VAL_START); the clock is put
+    back at ``start_day`` afterwards."""
     from sqlalchemy import delete, or_
     from app.models.calibration_state import CalibrationState
     from app.models.inventory_daily import InventoryDaily
@@ -305,7 +313,7 @@ def set_clock(db, td: Dict[str, object], initial_refit: bool = True) -> Dict[str
     from app.services.simulator_service import SIM_ACTOR, ensure_tables, simulator_service
 
     store = td["store"]
-    start = day_to_date(int(td["TEST_START"]))
+    start = day_to_date(int(td["TEST_START"] if start_day is None else start_day))
     ensure_tables(db)
     out: Dict[str, object] = {"start_date": start.isoformat()}
     out["deleted_snapshot"] = db.execute(delete(SimSnapshot).where(SimSnapshot.store_id == store)).rowcount
@@ -341,7 +349,12 @@ def set_clock(db, td: Dict[str, object], initial_refit: bool = True) -> Dict[str
     if initial_refit:
         from app.services.optimization_service import optimization_service
         t0 = time.time()
+        if refit_as_of_day is not None and day_to_date(int(refit_as_of_day)) != start:
+            clock.current_date = day_to_date(int(refit_as_of_day))
+            db.commit()
+            out["initial_refit_as_of"] = clock.current_date.isoformat()
         sel = optimization_service.refit_quarterly_policies(db, store_id=store, selection_id=f"{store}_refit_0")
+        clock.current_date = start
         db.commit()
         optimization_service.recompute_parameters(db, store_id=store)
         db.commit()
@@ -351,7 +364,8 @@ def set_clock(db, td: Dict[str, object], initial_refit: bool = True) -> Dict[str
 
 
 def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", start_day: int = 1031,
-        steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print) -> Dict[str, object]:
+        steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print, clock_start_day: Optional[int] = None,
+        refit_as_of_day: Optional[int] = None) -> Dict[str, object]:
     t0 = time.time()
     td = read_teacher(teacher_dir, store, model, start_day)
     report: Dict[str, object] = {"store": store, "n_skus": int(td["y"].shape[0]),
@@ -360,7 +374,8 @@ def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", star
     fns = {"classes": load_classes, "sales": load_sales, "prices": load_prices, "quantiles": load_quantiles}
     for step in steps:
         t1 = time.time()
-        res = set_clock(db, td, initial_refit) if step == "clock" else fns[step](db, td)
+        res = (set_clock(db, td, initial_refit, clock_start_day, refit_as_of_day) if step == "clock"
+               else fns[step](db, td))
         res["seconds"] = round(time.time() - t1, 1)
         report[step] = res
         log(f"{step}: {res}")
@@ -376,6 +391,10 @@ def main(argv=None) -> int:
     ap.add_argument("--start-day", type=int, default=1031)
     ap.add_argument("--steps", nargs="+", default=list(STEPS), choices=STEPS)
     ap.add_argument("--no-initial-refit", action="store_true")
+    ap.add_argument("--clock-start-day", type=int, default=None,
+                    help="clock step: start day index (default TEST_START 1577; 1395 = continuous from VAL_START)")
+    ap.add_argument("--refit-as-of-day", type=int, default=None,
+                    help="clock step: compute J5 selection #0 as of this day (e.g. 1577 with --clock-start-day 1395)")
     ap.add_argument("--report", default=None, help="write the JSON report here")
     args = ap.parse_args(argv)
 
@@ -392,7 +411,8 @@ def main(argv=None) -> int:
     db = sessionmaker(bind=engine, autoflush=False)()
     try:
         rep = run(db, args.teacher_dir, args.store, args.model, args.start_day, args.steps,
-                  not args.no_initial_refit)
+                  not args.no_initial_refit, clock_start_day=args.clock_start_day,
+                  refit_as_of_day=args.refit_as_of_day)
     finally:
         db.close()
     if args.report:

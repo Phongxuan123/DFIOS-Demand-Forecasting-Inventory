@@ -28,6 +28,7 @@ from app.services.window_quantile_service import (
     build_actuals_matrix,
     window_quantile_service,
 )
+from app.repositories import price_history_repository
 from app.repositories.inventory_param_repository import inventory_param_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.services.audit_service import audit_service
@@ -268,6 +269,9 @@ class OptimizationService:
 
         ml_ids: List[str] = [] if force_static else sorted(self._forecast_backed_items(db, store_id, item_ids))
         ml_set = set(ml_ids)
+        # G-37: price of the review day (price_history), else the constant products.price
+        day_price = price_history_repository.price_map_on(
+            db, store_id, item_ids, origin_date, fallback={p.item_id: p.price for p in products})
 
         results: List[Dict[str, Any]] = []
         if ml_ids:
@@ -309,25 +313,30 @@ class OptimizationService:
                     prod, store_id, lt, tau_of[iid], s_val, kappa, max(0.0, float(mean_d)), std_d or 0.0,
                     source="ml", model_run_id="REFIT-RSS-EOQ-G", teacher_eoq=True,
                     extra={"segment": segment, "m_g": m_g, "kappa_g": kappa, "theta_g": theta, "q_hat": q_hat},
+                    unit_price=day_price.get(iid),
                 ))
         static_ids = [p for p in products if p.item_id not in ml_set]
         if static_ids:
             stats_map = self._demand_stats(db, store_id, [p.item_id for p in static_ids], origin_date, 90)
             for p in static_ids:
                 results.append(self._static_from_stats(
-                    p, store_id, lt_of[p.item_id], tau_of[p.item_id], stats_map.get(p.item_id)))
+                    p, store_id, lt_of[p.item_id], tau_of[p.item_id], stats_map.get(p.item_id),
+                    unit_price=day_price.get(p.item_id)))
         return results
 
     def _finish_params(
         self, prod: Product, store_id: str, lt: int, tau: float, s_val: float, kappa: float,
         mean_demand: float, std_demand: float, source: str, model_run_id: str,
-        extra: Optional[Dict[str, Any]] = None, teacher_eoq: bool = False,
+        extra: Optional[Dict[str, Any]] = None, teacher_eoq: bool = False, unit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         """EOQ, S = s + ceil(kappa * EOQ), SS, costs (A3) from s. Shared by ML and static paths.
         ``teacher_eoq`` (ML / REFIT-RSS-EOQ-G path, G-08/G-12): EOQ = sqrt(2 c mu / (h p)) with mu the 56-day mean
         of actual sales and p the SKU price, no rounding and no floor; S = s + ceil(kappa * EOQ - 1e-9).
-        The static baseline keeps its classic rounded EOQ (>= 1)."""
-        unit_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        The static baseline keeps its classic rounded EOQ (>= 1).
+        ``unit_price`` (G-37): the price of the review day (``price_history``); None -> the constant products.price."""
+        if unit_price is None or not unit_price > 0:
+            unit_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        unit_price = float(unit_price)
         h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
         if teacher_eoq:
             annual_demand = round(max(0.0, mean_demand) * 365.0, 2)
@@ -353,7 +362,8 @@ class OptimizationService:
         return out
 
     def _static_from_stats(
-        self, prod: Product, store_id: str, lt: int, tau: float, stats_pair: Optional[Tuple[float, float]]
+        self, prod: Product, store_id: str, lt: int, tau: float, stats_pair: Optional[Tuple[float, float]],
+        unit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         avg_daily, sigma_d = stats_pair if stats_pair else (0.0, 0.0)
         avg_daily = max(0.1, avg_daily)  # numerical floor only, no invented demand level
@@ -365,7 +375,7 @@ class OptimizationService:
         reorder_point = max(0.0, round(avg_daily * lt + safety_stock, 2))
         res = self._finish_params(
             prod, store_id, lt, tau, float(math.ceil(reorder_point)), 1.0, avg_daily, sigma_d,
-            source="static", model_run_id="static-moving-avg",
+            source="static", model_run_id="static-moving-avg", unit_price=unit_price,
         )
         res.update({"safety_stock": safety_stock, "reorder_point": reorder_point, "d_l": avg_daily * lt,
                     "sigma_l": sigma_l, "sigma_d": sigma_d})
@@ -389,6 +399,8 @@ class OptimizationService:
         prod = db.query(Product).filter(Product.item_id == item_id).first() or Product(item_id=item_id, price=10.0)
         origin = self._store_origin(db, store_id)
         stats_pair = self._demand_stats(db, store_id, [item_id], origin, 90).get(item_id)
+        day_price = price_history_repository.price_map_on(db, store_id, [item_id], origin,
+                                                          fallback={item_id: prod.price}).get(item_id)
         if stats_pair is None:  # sales newer than the clock (e.g. no clock yet): use the latest rows
             q = (db.query(SalesHistory.quantity)
                  .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
@@ -396,7 +408,7 @@ class OptimizationService:
             if q:
                 arr = np.array([float(r[0] or 0.0) for r in q])
                 stats_pair = (float(arr.mean()), float(arr.std()) if len(arr) > 1 else 0.0)
-        return self._static_from_stats(prod, store_id, lead_time_days, tau, stats_pair)
+        return self._static_from_stats(prod, store_id, lead_time_days, tau, stats_pair, unit_price=day_price)
 
     def recompute_parameters(
         self,
@@ -785,6 +797,7 @@ class OptimizationService:
         dem: np.ndarray, q: np.ndarray, eoq: np.ndarray, price: np.ndarray, history: Optional[np.ndarray],
         m_values: List[float], kappa_values: List[float], window_start_review: int, theta: float = 0.0,
         lead_time: int = pc.LEAD_TIME_DAYS, review_period: int = pc.REVIEW_PERIOD_DAYS,
+        daily_price: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """Teacher scoring of every (m, kappa): ONE continuous simulation from the first review (the engine
         ``policy_backtest.simulate_rss_candidates``), scored on the window that starts at review index
@@ -803,6 +816,7 @@ class OptimizationService:
             return policy_backtest.simulate_rss_candidates(
                 dem[:, :k_end * R], q[:, :k_end], eoq[:, :k_end], price, m_values, kappa_values, theta=theta,
                 lead_time=L, review_period=R, history_demand=history,
+                daily_price=None if daily_price is None else daily_price[:, :k_end * R],
             )
 
         full = run(K)
@@ -859,13 +873,18 @@ class OptimizationService:
         A = build_actuals_matrix(db, store_id, item_ids, hist_lo, end)
         off = start - hist_lo
         dem = A[:, off:]
-        prices = {p.item_id: p.price for p in db.query(Product).filter(Product.item_id.in_(item_ids)).all()}
         # an item without a real price is EXCLUDED (A3 costs are price-proportional; no invented price 10)
-        price = np.array([float(prices[i]) if prices.get(i) and float(prices[i]) > 0 else np.nan for i in item_ids])
-        ok = ~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1) & ~np.isnan(price)
+        price = price_history_repository.constant_prices(db, item_ids)
+        # G-37: price of every simulated day (price_history, else products.price); holding / lost are valued at the
+        # price of their day and the EOQ of review k at the price of the review day
+        p_day = price_history_repository.price_matrix(
+            db, store_id, item_ids, pc.day_index_to_date(start), pc.day_index_to_date(end), fallback=price)
+        ok = (~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1)
+              & ~np.isnan(p_day).any(axis=1) & ~(p_day <= 0).any(axis=1))
         if ok.sum() == 0:
             return None
-        A, dem, q, price = A[ok], dem[ok], cm["q"][ok], price[ok]
+        A, dem, q, price, p_day = A[ok], dem[ok], cm["q"][ok], price[ok], p_day[ok]
+        price = np.where(np.isnan(price), p_day[:, 0], price)
         # EOQ_k from the mean of the actual sales of the 56 days before review k (NaN days ignored, none -> 0)
         mu = np.zeros((len(price), len(reviews)))
         with np.errstate(all="ignore"), warnings.catch_warnings():
@@ -874,14 +893,14 @@ class OptimizationService:
                 a = max(hist_lo, r - pc.EOQ_MEAN_WINDOW_DAYS) - hist_lo
                 blk = A[:, a:r - hist_lo]
                 mu[:, k] = np.nan_to_num(np.nanmean(blk, axis=1), nan=0.0) if blk.shape[1] else 0.0
-        eoq = self.teacher_eoq(mu, price[:, None])
+        eoq = self.teacher_eoq(mu, p_day[:, [r - start for r in reviews]])
         history = A[:, max(0, off - pc.INIT_STOCK_WINDOW_DAYS):off] if off > 0 else None
         if history is not None and history.shape[1] == 0:
             history = None
         lo_day = max(start, end - int(window_days))
         kw = int(math.ceil((lo_day - start) / R))
         scores = self.score_window(dem, q, eoq, price, history, m_values, kappa_values, kw, theta=theta,
-                                   lead_time=L, review_period=R)
+                                   lead_time=L, review_period=R, daily_price=p_day)
         scores["window"] = (start + kw * R, end)
         scores["simulation_start"] = start
         return scores, int(ok.sum()), reviews
