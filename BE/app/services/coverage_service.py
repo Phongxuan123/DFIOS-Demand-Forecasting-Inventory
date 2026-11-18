@@ -39,6 +39,8 @@ CALIBRATION_FILE = "c3ok_forecast_calibration.csv"
 ARTIFACT_SOURCE = "artifact:c3ok"
 DB_SOURCE = "db:forecast_window_quantile"
 
+WIDE_MATRIX_MAX_CELLS = 40_000_000  # float64 cells (~320 MB) of the per-store span matrix; beyond: per-window path
+
 _lock = threading.Lock()
 _db_cache: Dict[Any, Dict[str, Any]] = {}
 
@@ -119,12 +121,30 @@ def db_causal_coverage_q95(db: Session, store_id: Optional[str] = None) -> Optio
             continue
         groups.setdefault((sid, od, int(H)), []).append((iid, float(q95)))
 
+    # Speed (values unchanged): the realised demand of a cell (item, day) does not depend on which window asks for
+    # it, so each store's matrix is built ONCE over the span of its origins and every window is sliced out of it,
+    # then ``window_sums`` runs on the very same (n_items, H) block as before. Too large a span -> old per-window path.
+    wide: Dict[str, Any] = {}
+    by_store: Dict[str, list] = {}
+    for (sid, od, H) in groups:
+        by_store.setdefault(sid, []).append((pc.date_to_day_index(od), int(H)))
+    for sid, spans in by_store.items():
+        lo = min(o for o, _ in spans)
+        hi = max(o + h for o, h in spans)
+        union = sorted({i for (s2, _, _), its in groups.items() if s2 == sid for i, _ in its})
+        if union and len(union) * (hi - lo) <= WIDE_MATRIX_MAX_CELLS:
+            wide[sid] = (lo, {i: r for r, i in enumerate(union)}, build_actuals_matrix(db, sid, union, lo, hi))
+
     covered = total = 0
     origins = set()
     for (sid, od, H), items in groups.items():
         o_idx = pc.date_to_day_index(od)
         ids = [i for i, _ in items]
-        A = build_actuals_matrix(db, sid, ids, o_idx, o_idx + H)
+        if sid in wide:
+            lo, rows_of, Aw = wide[sid]
+            A = Aw[[rows_of[i] for i in ids], o_idx - lo: o_idx - lo + H]
+        else:
+            A = build_actuals_matrix(db, sid, ids, o_idx, o_idx + H)
         act = window_sums(A, np.array([0]), H)[:, 0]
         qv = np.array([v for _, v in items])
         ok = ~np.isnan(act)
