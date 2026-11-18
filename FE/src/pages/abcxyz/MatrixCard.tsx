@@ -3,37 +3,17 @@ import { Layers } from 'lucide-react';
 import { Badge, Card, ErrorState, Skeleton } from '../../components/ui/index.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import type { ClassificationMatrix, ClassificationThresholds } from '../../services/abcxyzApi.ts';
+import type { SegmentAvailability } from '../../services/dashboardApi.ts';
 
 const ABC = ['A', 'B', 'C'] as const;
 const XYZ = ['X', 'Y', 'Z'] as const;
 
-const SEGMENT_SLA: Record<string, { sla: number; warning: boolean; diff: string }> = {
-  AX: { sla: 97.8, warning: false, diff: '+1.8%' },
-  AY: { sla: 96.9, warning: false, diff: '+0.9%' },
-  AZ: { sla: 95.1, warning: true, diff: '-0.9%' },
-  BX: { sla: 96.7, warning: false, diff: '+0.7%' },
-  BY: { sla: 96.2, warning: false, diff: '+0.2%' },
-  BZ: { sla: 95.4, warning: true, diff: '-0.6%' },
-  CX: { sla: 98.1, warning: false, diff: '+2.1%' },
-  CY: { sla: 95.9, warning: true, diff: '-0.1%' },
-  CZ: { sla: 95.2, warning: true, diff: '-0.8%' },
-};
-
-const DEFAULT_THETAS: Record<string, number> = {
-  AX: 0.09,
-  AY: 0.18,
-  AZ: 0.39,
-  BX: 0.09,
-  BY: 0.16,
-  BZ: 0.38,
-  CX: 0.14,
-  CY: 0.12,
-  CZ: 0.33,
-};
-
 interface Props {
   matrix: ClassificationMatrix | undefined;
   thetas?: Record<string, number>;
+  /** Observed availability per class from GET /dashboard/kpi-dashboard (simulator, closed cycles). */
+  service?: SegmentAvailability[];
+  serviceLoading?: boolean;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
@@ -41,7 +21,7 @@ interface Props {
   onSelect: (segment: string | null) => void;
 }
 
-export const MatrixCard: React.FC<Props> = ({ matrix, thetas, loading, error, onRetry, selected, onSelect }) => {
+export const MatrixCard: React.FC<Props> = ({ matrix, thetas, service, serviceLoading, loading, error, onRetry, selected, onSelect }) => {
   const t = useT();
   const fmt = useFormat();
 
@@ -75,7 +55,9 @@ export const MatrixCard: React.FC<Props> = ({ matrix, thetas, loading, error, on
           </span>
         </div>
       }
-      description={t('abcxyz.matrix.governance_subtitle')}
+      description={t('abcxyz.matrix.governance_subtitle', {
+        target: service?.[0] ? fmt.percent(service[0].target, { scale: 'percent', digits: 1 }) : '—',
+      })}
     >
       {error ? (
         <ErrorState error={error} onRetry={onRetry} compact />
@@ -116,8 +98,11 @@ export const MatrixCard: React.FC<Props> = ({ matrix, thetas, loading, error, on
                     const n = cell?.sku_count ?? 0;
                     const skuP = cell ? fmt.percent(cell.sku_percentage, { scale: 'percent', digits: 1 }) : '0%';
                     const revP = cell ? fmt.percent(cell.revenue_percentage, { scale: 'percent', digits: 1 }) : '0%';
-                    const slaInfo = SEGMENT_SLA[seg] ?? { sla: 96.0, warning: false, diff: '+0.0%' };
-                    const thetaVal = thetas?.[seg] ?? DEFAULT_THETAS[seg] ?? 0.1;
+                    const sv = service?.find((sg) => sg.class_id === seg);
+                    const avail = sv?.c3out_availability ?? null;
+                    const below = avail !== null && sv ? avail < sv.target : false;
+                    const diff = avail !== null && sv ? avail - sv.target : null;
+                    const thetaVal = thetas?.[seg] ?? sv?.theta ?? null;
                     const isSelected = selected === seg;
 
                     return (
@@ -130,9 +115,15 @@ export const MatrixCard: React.FC<Props> = ({ matrix, thetas, loading, error, on
                       >
                         <div className="abc-cell__top">
                           <span className="abc-cell__seg">{seg}</span>
-                          <Badge tone={slaInfo.warning ? 'warning' : 'success'}>
-                            {slaInfo.warning ? `⚠ ${slaInfo.diff}` : '✓ COMPLIANT'}
-                          </Badge>
+                          {avail === null ? (
+                            <Badge tone="neutral">{serviceLoading ? '…' : '—'}</Badge>
+                          ) : (
+                            <Badge tone={below ? 'warning' : 'success'}>
+                              {below
+                                ? `⚠ ${fmt.percent(diff as number, { scale: 'percent', digits: 1, signed: true })}`
+                                : `✓ ${t('abcxyz.kpi.compliant')}`}
+                            </Badge>
+                          )}
                         </div>
 
                         <div className="abc-cell__body">
@@ -146,14 +137,14 @@ export const MatrixCard: React.FC<Props> = ({ matrix, thetas, loading, error, on
                           </div>
                           <div className="abc-cell__metric">
                             <span className="abc-cell__label">{t('abcxyz.matrix.cell_sla')}:</span>
-                            <span className={`abc-cell__val ${slaInfo.warning ? 'abc-cell__val--warning' : 'abc-cell__val--success'}`}>
-                              {slaInfo.sla}%
+                            <span className={`abc-cell__val ${avail === null ? '' : below ? 'abc-cell__val--warning' : 'abc-cell__val--success'}`}>
+                              {avail === null ? '—' : fmt.percent(avail, { scale: 'percent', digits: 1 })}
                             </span>
                           </div>
                           <div className="abc-cell__metric">
                             <span className="abc-cell__label">{t('abcxyz.matrix.cell_theta')}:</span>
                             <span className="abc-cell__theta">
-                              θ{thetaVal >= 0 ? '+' : ''}{thetaVal.toFixed(2)}
+                              {thetaVal === null ? '—' : `θ ${fmt.number(thetaVal, { digits: 2 })}`}
                             </span>
                           </div>
                         </div>
