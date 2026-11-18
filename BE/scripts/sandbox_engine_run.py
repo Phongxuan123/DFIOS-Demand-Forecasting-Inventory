@@ -68,8 +68,14 @@ def drive(db, store: str, until: date, chunk_days: int = 84, log=print) -> list:
     return out
 
 
-def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict:
-    """Teacher-style test metrics of the engine run (only the store's classified SKUs)."""
+def score(db, store: str, teacher_dir: str, start: date, end_excl: date, source: str = "main") -> dict:
+    """Teacher-style test metrics of the engine run (only the store's classified SKUs).
+
+    ``source="main"`` scores the deployed policy (inventory_daily + the simulator's orders); ``source="b0"`` scores
+    the shadow baseline B0-MA-OUT-0.95 simulated in parallel on the same demand (sim_shadow_daily, one order line
+    per row with order_qty > 0), with exactly the same prices, cycles and CSL definition (demo.md step 8)."""
+    if source not in ("main", "b0"):
+        raise ValueError(f"unknown score source {source!r}")
     import pandas as pd
     from sqlalchemy import select
     from app.models.classification import SKUClassification
@@ -78,6 +84,7 @@ def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict
     from app.models.product import Product
     from app.models.replenishment import ReplenishmentRecommendation
     from app.models.calibration_state import CalibrationState
+    from app.models.sim_state import SimShadowDaily
 
     cls = dict(db.execute(select(SKUClassification.item_id, SKUClassification.segment)
                           .where(SKUClassification.store_id == store)).all())
@@ -90,10 +97,9 @@ def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict
     oh = np.full((n, T), np.nan)
     sales = np.zeros((n, T))
     lost = np.zeros((n, T))
-    q = db.execute(select(InventoryDaily.item_id, InventoryDaily.date, InventoryDaily.on_hand_end,
-                          InventoryDaily.sales, InventoryDaily.lost_sales)
-                   .where(InventoryDaily.store_id == store, InventoryDaily.date >= start,
-                          InventoryDaily.date < end_excl))
+    tbl = InventoryDaily if source == "main" else SimShadowDaily
+    q = db.execute(select(tbl.item_id, tbl.date, tbl.on_hand_end, tbl.sales, tbl.lost_sales)
+                   .where(tbl.store_id == store, tbl.date >= start, tbl.date < end_excl))
     for iid, d, o, s, ls in q:
         k = pos.get(iid)
         if k is not None:
@@ -101,12 +107,17 @@ def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict
             oh[k, j], sales[k, j], lost[k, j] = float(o or 0), float(s or 0), float(ls or 0)
     missing_days = int(np.isnan(oh).all(axis=0).sum())
     oh_f = np.nan_to_num(oh, nan=0.0)
-    orders_rows = db.execute(select(ReplenishmentRecommendation.item_id, ReplenishmentRecommendation.review_date,
-                                    ReplenishmentRecommendation.final_qty)
-                             .where(ReplenishmentRecommendation.store_id == store,
-                                    ReplenishmentRecommendation.decided_by == "simulator",
-                                    ReplenishmentRecommendation.review_date >= start,
-                                    ReplenishmentRecommendation.review_date < end_excl)).all()
+    if source == "main":
+        orders_rows = db.execute(select(ReplenishmentRecommendation.item_id, ReplenishmentRecommendation.review_date,
+                                        ReplenishmentRecommendation.final_qty)
+                                 .where(ReplenishmentRecommendation.store_id == store,
+                                        ReplenishmentRecommendation.decided_by == "simulator",
+                                        ReplenishmentRecommendation.review_date >= start,
+                                        ReplenishmentRecommendation.review_date < end_excl)).all()
+    else:
+        orders_rows = db.execute(select(SimShadowDaily.item_id, SimShadowDaily.date, SimShadowDaily.order_qty)
+                                 .where(SimShadowDaily.store_id == store, SimShadowDaily.order_qty > 0,
+                                        SimShadowDaily.date >= start, SimShadowDaily.date < end_excl)).all()
     n_orders = sum(1 for iid, _d, qty in orders_rows if iid in pos and float(qty or 0) > 0)
     units_ordered = sum(float(qty or 0) for iid, _d, qty in orders_rows if iid in pos)
 
@@ -151,7 +162,10 @@ def score(db, store: str, teacher_dir: str, start: date, end_excl: date) -> dict
     for st in db.query(CalibrationState).filter(CalibrationState.store_id == store).order_by(
             CalibrationState.review_index):
         theta.setdefault(st.class_id, []).append(round(float(st.theta or 0.0), 4))
+    if source == "b0":
+        sel, theta = [], {}   # B0 has no J5 selection and no controller
     return {
+        "source": source,
         "segment": [start.isoformat(), (end_excl - timedelta(days=1)).isoformat()], "n_skus": n,
         "missing_days": missing_days, "constant_price": costs(const_price[:, None]),
         "engine_daily_price": costs(engine_price),
@@ -214,7 +228,9 @@ def main(argv=None) -> int:
             rep["advances"] = drive(db, args.store, date.fromisoformat(args.until))
         rep["engine_seconds"] = round(time.time() - t0, 1)
         start = day_to_date(TEST_START)
-        rep["score"] = score(db, args.store, args.teacher_dir, start, date.fromisoformat(args.until) + timedelta(days=1))
+        end_excl = date.fromisoformat(args.until) + timedelta(days=1)
+        rep["score"] = score(db, args.store, args.teacher_dir, start, end_excl)
+        rep["score_b0"] = score(db, args.store, args.teacher_dir, start, end_excl, source="b0")
     finally:
         db.close()
     if args.out:
@@ -223,6 +239,16 @@ def main(argv=None) -> int:
     s = rep["score"]
     print(json.dumps({k: s[k] for k in ("constant_price", "engine_daily_price", "daily_teacher_price", "orders", "fill", "min_class_csl",
                                         "class_csl", "n_cycles", "missing_days", "theta_last")}, indent=1))
+    b = rep["score_b0"]
+    m_cost, b_cost = s["daily_teacher_price"]["cost"], b["daily_teacher_price"]["cost"]
+    print(json.dumps({"B0-MA-OUT-0.95": {k: b[k] for k in ("daily_teacher_price", "orders", "fill", "min_class_csl",
+                                                           "class_csl")},
+                      "dfios_vs_b0": {"cost_ratio": round(m_cost / b_cost, 4) if b_cost else None,
+                                      "cost_saving_pct": round(100 * (1 - m_cost / b_cost), 2) if b_cost else None,
+                                      "orders_ratio": round(s["orders"] / b["orders"], 4) if b["orders"] else None,
+                                      "b0_classes_below_0.95": sorted(c for c, v in b["class_csl"].items() if v < 0.95),
+                                      "dfios_classes_below_0.95": sorted(c for c, v in s["class_csl"].items()
+                                                                         if v < 0.95)}}, indent=1))
     return 0
 
 
