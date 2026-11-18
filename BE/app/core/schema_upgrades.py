@@ -102,6 +102,15 @@ def apply_schema_upgrades(engine: Engine) -> list[str]:
     applied.extend(f"create_table.{t}" for t in sorted(set(insp.get_table_names()) - before))
     applied.extend(_reconcile_columns(engine, Base))
     insp = inspect(engine)
+    if "price_history" in insp.get_table_names():
+        # G-37: daily price lookups by (store, day) and by (store, day range, items); idempotent
+        if "ix_price_history_store_date_item" not in {i["name"] for i in insp.get_indexes("price_history")}:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_price_history_store_date_item "
+                    "ON price_history (store_id, date, item_id)"
+                ))
+            applied.append("price_history.ix_price_history_store_date_item")
     if "policy_selection" in insp.get_table_names():
         if "source" not in {c["name"] for c in insp.get_columns("policy_selection")}:
             with engine.begin() as conn:

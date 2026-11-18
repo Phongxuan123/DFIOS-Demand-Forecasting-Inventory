@@ -17,6 +17,16 @@ Fixes over the previous version (PROJECT_REVIEW P-01, N-13, R-06, R-07, R-15, P-
     that covers the whole window), filtered to the Ensemble model only;
   * the empirical / Gaussian-fallback decision is persisted in ``route`` ("c" / "c_fb").
 
+Teacher alignment (P1, G-26 / G-27 / G-28; docs/teacher_map/00_INDEX.md sec. 9, 14):
+  * DEFAULT = teacher route (c): Q_hat(tau) = max(0, F_hat + empirical tau-quantile of the residuals), nothing else.
+  * ``quantile_floor`` (old DFIOS rule: Q_hat >= 1 unit when tau >= 0.90 and F_hat > 0) is OFF unless
+    ``policy_config.QUANTILE_FLOOR_ENABLED`` is set or a positive ``quantile_floor`` is passed explicitly.
+  * ``gaussian_fallback`` (old DFIOS rule: fewer than MIN_RESIDUALS residuals -> F_hat + z * sigma * sqrt(H),
+    route "c_fb") is OFF unless ``policy_config.GAUSSIAN_FALLBACK_ENABLED`` is set or ``gaussian_fallback=True`` is
+    passed. When OFF, any residual count >= 1 uses the empirical quantile and no residual gives a residual quantile
+    of 0 (Q_hat = max(0, F_hat)).
+  * ``tau_value`` linearly interpolates between stored levels when tau is off-grid (no nearest-level snapping).
+
 A single implementation (``_compute_items``) serves the per-SKU and the bulk entry points, so
 bulk == per-SKU by construction.
 """
@@ -192,20 +202,40 @@ def window_sums(A: np.ndarray, rel_starts: np.ndarray, H: int) -> np.ndarray:
 # ---------------------------------------------------------------------------------------------
 # Pure numerical core
 # ---------------------------------------------------------------------------------------------
+def resolve_quantile_floor(quantile_floor: Optional[float] = None) -> float:
+    """G-26 switch: None -> policy_config default (OFF = 0 unless QUANTILE_FLOOR_ENABLED); a number is used as is."""
+    if quantile_floor is None:
+        return float(pc.QUANTILE_FLOOR_UNITS) if pc.QUANTILE_FLOOR_ENABLED else 0.0
+    return float(quantile_floor or 0.0)
+
+
+def resolve_gaussian_fallback(gaussian_fallback: Optional[bool] = None) -> bool:
+    """G-27 switch: None -> policy_config.GAUSSIAN_FALLBACK_ENABLED (default OFF)."""
+    return bool(pc.GAUSSIAN_FALLBACK_ENABLED if gaussian_fallback is None else gaussian_fallback)
+
+
 def residual_quantiles(
     point: np.ndarray,
     residuals: np.ndarray,
     taus: Sequence[float],
-    quantile_floor: float = 1.0,
+    quantile_floor: Optional[float] = None,
 ) -> np.ndarray:
     """
     Q_hat(tau) = max(0, F_hat + nanquantile_tau(r)), shape (n_items, n_taus).
-    ``residuals`` is (n_items, n_origins) with NaN for unusable windows. Floor: tau >= 0.90 and F_hat > 0.
+    ``residuals`` is (n_items, n_origins) with NaN for unusable windows; a row without any residual uses a residual
+    quantile of 0 (teacher route (c)). Optional floor (OFF by default, G-26): tau >= 0.90 and F_hat > 0.
     """
+    quantile_floor = resolve_quantile_floor(quantile_floor)
     point = np.asarray(point, dtype=float)
+    residuals = np.asarray(residuals, dtype=float)
+    if residuals.ndim != 2 or residuals.shape[1] == 0:
+        residuals = np.full((len(point), 1), np.nan)
+    has = (~np.isnan(residuals)).any(axis=1)
     out = np.empty((len(point), len(taus)))
     for k, tau in enumerate(taus):
-        r_q = np.nanquantile(residuals, tau, axis=1)
+        r_q = np.zeros(len(point))
+        if has.any():
+            r_q[has] = np.nanquantile(residuals[has], tau, axis=1)
         q = np.maximum(0.0, point + r_q)
         if tau >= 0.90 and quantile_floor:
             q = np.where(point > 0, np.maximum(q, quantile_floor), q)
@@ -364,6 +394,49 @@ class WindowQuantileService:
             R[i, k] = act[i, k] - D[i, k]
         return reviews, D, R
 
+    # ------------------------------------------------------------------------------------
+    # P2: imported (teacher) window quantiles, route = pc.ROUTE_TEACHER
+    # ------------------------------------------------------------------------------------
+    @staticmethod
+    def teacher_review_days(db: Session, store_id: str, H: int = pc.HORIZON_DAYS) -> List[int]:
+        """Day indices of the origins that carry imported teacher quantiles for the store (empty when none)."""
+        rows = db.query(ForecastWindowQuantile.origin_date).filter(
+            ForecastWindowQuantile.store_id == store_id,
+            ForecastWindowQuantile.horizon_days == int(H),
+            ForecastWindowQuantile.route == pc.ROUTE_TEACHER,
+        ).distinct().all()
+        return sorted(pc.date_to_day_index(r[0]) for r in rows)
+
+    def teacher_quantile_matrix(
+        self, db: Session, store_id: str, item_ids: Sequence[str], review_days: Sequence[int], tau: float,
+        H: int = pc.HORIZON_DAYS,
+    ) -> np.ndarray:
+        """(items x reviews) Q_hat(tau) from imported teacher rows; NaN where no such row exists."""
+        item_ids = list(item_ids)
+        review_days = [int(x) for x in review_days]
+        out = np.full((len(item_ids), len(review_days)), np.nan)
+        if not item_ids or not review_days:
+            return out
+        pos_i = {iid: i for i, iid in enumerate(item_ids)}
+        pos_k = {pc.day_index_to_date(d): k for k, d in enumerate(review_days)}
+        for k in range(0, len(item_ids), _IN_CHUNK):
+            chunk = item_ids[k:k + _IN_CHUNK]
+            for iid, od, ql, pw in db.query(
+                ForecastWindowQuantile.item_id, ForecastWindowQuantile.origin_date,
+                ForecastWindowQuantile.q_levels, ForecastWindowQuantile.point_window,
+            ).filter(
+                ForecastWindowQuantile.store_id == store_id,
+                ForecastWindowQuantile.item_id.in_(chunk),
+                ForecastWindowQuantile.horizon_days == int(H),
+                ForecastWindowQuantile.route == pc.ROUTE_TEACHER,
+                ForecastWindowQuantile.origin_date >= min(pos_k),
+                ForecastWindowQuantile.origin_date <= max(pos_k),
+            ).all():
+                kk = pos_k.get(od)
+                if kk is not None:
+                    out[pos_i[iid], kk] = self.tau_value(ql or {}, tau, pw or 0.0)
+        return out
+
     def causal_quantile_matrix(
         self,
         db: Session,
@@ -372,15 +445,46 @@ class WindowQuantileService:
         review_days: Sequence[int],
         tau: float,
         H: int = pc.HORIZON_DAYS,
-        quantile_floor: float = 1.0,
+        quantile_floor: Optional[float] = None,
+        gaussian_fallback: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Causal Q_hat_tau for every (item, review), the input of the J5 policy backtest. Imported teacher
+        quantiles (route ``pc.ROUTE_TEACHER``) win where they exist; the rest is the route-(c) rebuild below."""
+        item_ids = list(dict.fromkeys(item_ids))
+        tq = self.teacher_quantile_matrix(db, store_id, item_ids, review_days, tau, H)
+        have = ~np.isnan(tq)
+        if have.size and have.all():
+            return {"point": tq.copy(), "q": tq, "n_res": np.zeros(tq.shape, dtype=int),
+                    "fallback": np.zeros(tq.shape, dtype=bool), "teacher": have}
+        out = self._route_c_quantile_matrix(db, store_id, item_ids, review_days, tau, H, quantile_floor,
+                                            gaussian_fallback)
+        if have.any():
+            out["q"][have] = tq[have]
+            out["point"][have] = tq[have]
+            out["fallback"][have] = False
+        out["teacher"] = have
+        return out
+
+    def _route_c_quantile_matrix(
+        self,
+        db: Session,
+        store_id: str,
+        item_ids: Sequence[str],
+        review_days: Sequence[int],
+        tau: float,
+        H: int = pc.HORIZON_DAYS,
+        quantile_floor: Optional[float] = None,
+        gaussian_fallback: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Causal Q_hat_tau for every (item, review) -- the input of the J5 policy backtest.
         For review s_k: F_hat = backtest window forecast of s_k; residuals only from reviews with
-        s_j + H <= s_k and s_j >= s_k - 364. Items/reviews with < MIN_RESIDUALS use the labelled
-        Gaussian fallback (flag ``fallback``).
+        s_j + H <= s_k and s_j >= s_k - 364. Default = teacher route (c) (no floor, no fallback). With the
+        Gaussian fallback switched on, items/reviews with < MIN_RESIDUALS use it (flag ``fallback``).
         Returns dict(point, q, n_res, fallback) each (items x reviews).
         """
+        quantile_floor = resolve_quantile_floor(quantile_floor)
+        use_fb = resolve_gaussian_fallback(gaussian_fallback)
         item_ids = list(dict.fromkeys(item_ids))
         review_days = [int(x) for x in review_days]
         scale = H / float(pc.BACKTEST_WINDOW_DAYS)
@@ -423,7 +527,7 @@ class WindowQuantileService:
             Rk = R[:, cols]
             nres = (~np.isnan(Rk)).sum(axis=1) if Rk.shape[1] else np.zeros(n, dtype=int)
             q = np.full(n, np.nan)
-            ok = nres >= pc.MIN_RESIDUALS
+            ok = nres >= pc.MIN_RESIDUALS if use_fb else np.ones(n, dtype=bool)
             if ok.any():
                 q[ok] = residual_quantiles(point[ok], Rk[ok], [tau], quantile_floor)[:, 0]
             if (~ok).any():
@@ -531,18 +635,21 @@ class WindowQuantileService:
         point_window: float,
         residuals: np.ndarray,
         tau_levels: Optional[List[float]] = None,
-        quantile_floor: float = 1.0,
+        quantile_floor: Optional[float] = None,
         sigma_hint: Optional[float] = None,
         horizon_days: int = pc.HORIZON_DAYS,
+        gaussian_fallback: Optional[bool] = None,
     ) -> Dict[str, float]:
         """
-        Q_hat(tau) for all levels. Empirical when len(residuals) >= MIN_RESIDUALS, else a Gaussian
-        fallback (the caller labels the record route='c_fb').
+        Q_hat(tau) for all levels. Default (teacher route (c)): always the empirical quantile (residual quantile 0
+        when there is no residual). With the Gaussian fallback switched on and len(residuals) < MIN_RESIDUALS, a
+        Gaussian fallback (the caller labels the record route='c_fb').
         """
+        quantile_floor = resolve_quantile_floor(quantile_floor)
         levels = tau_levels or ROUTE_C_TAU_LEVELS
         residuals = np.asarray(residuals, dtype=float)
         residuals = residuals[~np.isnan(residuals)]
-        if len(residuals) >= pc.MIN_RESIDUALS:
+        if not resolve_gaussian_fallback(gaussian_fallback) or len(residuals) >= pc.MIN_RESIDUALS:
             q = residual_quantiles(np.array([point_window]), residuals[None, :], levels, quantile_floor)[0]
         else:
             sigma_h = (sigma_hint or 0.0) * math.sqrt(horizon_days)
@@ -568,24 +675,26 @@ class WindowQuantileService:
         horizon_days: int = pc.HORIZON_DAYS,
         model_run_id: str = DEFAULT_MODEL_RUN_ID,
         model_version: Optional[str] = None,
-        quantile_floor: float = 1.0,
+        quantile_floor: Optional[float] = None,
+        gaussian_fallback: Optional[bool] = None,
     ) -> List[ForecastWindowQuantile]:
         """Compute (not persist) the window-quantile records for many items (vectorised)."""
         windows = self._compute_items(db, store_id, item_ids, origin_date, horizon_days, model_version)
         now = datetime.now(timezone.utc)
+        use_fb = resolve_gaussian_fallback(gaussian_fallback)
         recs: List[ForecastWindowQuantile] = []
         for iid, w in windows.items():
             n_res = len(w.residuals)
             q = self.calculate_quantiles_dict(
                 w.point_window, w.residuals, ROUTE_C_TAU_LEVELS, quantile_floor,
-                sigma_hint=w.sigma_hint, horizon_days=horizon_days,
+                sigma_hint=w.sigma_hint, horizon_days=horizon_days, gaussian_fallback=use_fb,
             )
             recs.append(ForecastWindowQuantile(
                 id=self._record_id(model_run_id, store_id, iid, origin_date, horizon_days),
                 model_run_id=model_run_id, store_id=store_id, item_id=iid,
                 origin_date=origin_date, horizon_days=horizon_days,
                 point_window=w.point_window, q_levels=q,
-                route=pc.ROUTE_EMPIRICAL if n_res >= pc.MIN_RESIDUALS else pc.ROUTE_FALLBACK,
+                route=pc.ROUTE_FALLBACK if (use_fb and n_res < pc.MIN_RESIDUALS) else pc.ROUTE_EMPIRICAL,
                 created_at=now,
             ))
         return recs
@@ -599,7 +708,7 @@ class WindowQuantileService:
         horizon_days: int = pc.HORIZON_DAYS,
         model_run_id: str = DEFAULT_MODEL_RUN_ID,
         persist: bool = True,
-        quantile_floor: float = 1.0,
+        quantile_floor: Optional[float] = None,
     ) -> Dict[str, ForecastWindowQuantile]:
         """Existing records are reused; missing ones are computed in ONE vectorised pass."""
         item_ids = list(dict.fromkeys(item_ids))
@@ -673,14 +782,22 @@ class WindowQuantileService:
 
     @staticmethod
     def tau_value(q_dict: Dict[str, float], tau: float, point_window: float = 0.0) -> float:
-        """Q_hat(tau) from a stored dict; nearest stored level if the exact one is absent."""
+        """Q_hat(tau) from a stored dict. Exact level if stored; otherwise LINEAR interpolation between the two
+        neighbouring stored levels (G-28, teacher); outside the stored range the nearest end level."""
         key = str(tau)
         if key in q_dict:
             return float(q_dict[key])
-        levels = [float(k) for k in q_dict.keys()]
-        if levels:
-            nearest = min(levels, key=lambda x: abs(x - tau))
-            return float(q_dict[str(nearest)])
+        pairs = []
+        for k, v in q_dict.items():
+            try:
+                pairs.append((float(k), float(v)))
+            except (TypeError, ValueError):
+                continue
+        if pairs:
+            pairs.sort()
+            xs = np.array([p[0] for p in pairs])
+            ys = np.array([p[1] for p in pairs])
+            return float(np.interp(float(tau), xs, ys))
         return float(point_window)  # no invented multiplier
 
 

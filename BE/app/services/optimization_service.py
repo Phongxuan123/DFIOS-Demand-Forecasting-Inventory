@@ -12,6 +12,7 @@ from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.forecast import Forecast
 from app.models.forecast_backtest import ForecastBacktest
+from app.models.forecast_window_quantile import ForecastWindowQuantile
 from app.models.sales_history import SalesHistory
 from app.models.inventory_param import InventoryParam
 from app.models.user import User
@@ -20,12 +21,14 @@ from app.models.classification import SKUClassification
 from app.models.sim_clock import SimClock
 from app.services import policy_config as pc
 from app.services import policy_backtest
+from app.services import e10b_replay
 from app.services.calibrator_service import calibrator_service, selection_store
 from app.services.window_quantile_service import (
     WindowQuantileService,
     build_actuals_matrix,
     window_quantile_service,
 )
+from app.repositories import price_history_repository
 from app.repositories.inventory_param_repository import inventory_param_repository
 from app.repositories.system_setting_repository import system_setting_repository
 from app.services.audit_service import audit_service
@@ -53,8 +56,8 @@ class OptimizationService:
     DEFAULT_LEAD_TIME = pc.LEAD_TIME_DAYS
     DEFAULT_REVIEW_PERIOD = pc.REVIEW_PERIOD_DAYS
 
-    # Neutral starting policy (P6 / C3-OUT: m_g = 0 so the closed-loop theta is not applied twice, N-05).
-    # val_cost / val_service are NOT invented: they stay empty until J5 measures them.
+    # Neutral starting policy before any J5 measurement (m_g = 0, kappa_g = 1). Once J5 has run, m_g comes from the
+    # full grid and the C3-OUT theta is added on top (teacher, G-16). val_cost / val_service are NOT invented.
     DEFAULT_OPTIMAL_POLICIES = {
         c: {"m_g": 0.0, "kappa_g": 1.0, "val_cost": None, "val_service": None} for c in pc.ALL_CLASSES
     }
@@ -219,6 +222,12 @@ class OptimizationService:
         found = set()
         for k in range(0, len(item_ids), 900):
             chunk = item_ids[k:k + 900]
+            found.update(  # P2: imported teacher window quantiles also back the ML path
+                r[0] for r in db.query(ForecastWindowQuantile.item_id)
+                .filter(ForecastWindowQuantile.store_id == store_id, ForecastWindowQuantile.item_id.in_(chunk),
+                        ForecastWindowQuantile.route == pc.ROUTE_TEACHER)
+                .distinct().all()
+            )
             found.update(
                 r[0] for r in db.query(Forecast.item_id)
                 .filter(Forecast.store_id == store_id, Forecast.item_id.in_(chunk),
@@ -260,6 +269,9 @@ class OptimizationService:
 
         ml_ids: List[str] = [] if force_static else sorted(self._forecast_backed_items(db, store_id, item_ids))
         ml_set = set(ml_ids)
+        # G-37: price of the review day (price_history), else the constant products.price
+        day_price = price_history_repository.price_map_on(
+            db, store_id, item_ids, origin_date, fallback={p.item_id: p.price for p in products})
 
         results: List[Dict[str, Any]] = []
         if ml_ids:
@@ -277,7 +289,7 @@ class OptimizationService:
             for H, ids in by_h.items():
                 recs.update(window_quantile_service.get_or_create_window_quantiles_bulk(
                     db, store_id, ids, origin_date, H, persist=persist_quantiles))
-            stats_map = self._demand_stats(db, store_id, ml_ids, origin_date, 56)
+            stats_map = self._demand_stats(db, store_id, ml_ids, origin_date, pc.EOQ_MEAN_WINDOW_DAYS)
             price_of = {p.item_id: p for p in products}
             for iid in ml_ids:
                 prod = price_of[iid]
@@ -293,35 +305,47 @@ class OptimizationService:
                 m_g = float(pol.m_g) if pol and pol.m_g is not None else 0.0
                 kappa = float(pol.kappa_g) if pol and pol.kappa_g is not None else 1.0
                 theta = float(thetas.get(segment, 0.0))
-                s_val = float(math.ceil(q_hat * math.exp(m_g + theta)))
-                mean_d, std_d = stats_map.get(iid, (None, None))
-                if mean_d is None or mean_d <= 0:
-                    mean_d = max(0.1, float(rec.point_window) / max(1, H))  # forecast-implied rate, not a constant
-                    std_d = std_d if std_d is not None else 0.0
+                # teacher: s = ceil(Q_hat * exp(m_g + theta_g) - 1e-9), theta ADDED on top of the J5 grid m_g
+                s_val = float(math.ceil(q_hat * math.exp(m_g + theta) - policy_backtest.CEIL_EPS))
+                # G-10: EOQ mean = mean of ACTUAL daily sales of the previous 56 days (0 without sales; no forecast)
+                mean_d, std_d = stats_map.get(iid, (0.0, 0.0))
                 results.append(self._finish_params(
-                    prod, store_id, lt, tau_of[iid], s_val, kappa, mean_d, std_d or 0.0,
-                    source="ml", model_run_id="REFIT-RSS-EOQ-G",
+                    prod, store_id, lt, tau_of[iid], s_val, kappa, max(0.0, float(mean_d)), std_d or 0.0,
+                    source="ml", model_run_id="REFIT-RSS-EOQ-G", teacher_eoq=True,
                     extra={"segment": segment, "m_g": m_g, "kappa_g": kappa, "theta_g": theta, "q_hat": q_hat},
+                    unit_price=day_price.get(iid),
                 ))
         static_ids = [p for p in products if p.item_id not in ml_set]
         if static_ids:
             stats_map = self._demand_stats(db, store_id, [p.item_id for p in static_ids], origin_date, 90)
             for p in static_ids:
                 results.append(self._static_from_stats(
-                    p, store_id, lt_of[p.item_id], tau_of[p.item_id], stats_map.get(p.item_id)))
+                    p, store_id, lt_of[p.item_id], tau_of[p.item_id], stats_map.get(p.item_id),
+                    unit_price=day_price.get(p.item_id)))
         return results
 
     def _finish_params(
         self, prod: Product, store_id: str, lt: int, tau: float, s_val: float, kappa: float,
         mean_demand: float, std_demand: float, source: str, model_run_id: str,
-        extra: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None, teacher_eoq: bool = False, unit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """EOQ, S = s + ceil(kappa * EOQ), SS, costs (A3) from s. Shared by ML and static paths."""
-        unit_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        """EOQ, S = s + ceil(kappa * EOQ), SS, costs (A3) from s. Shared by ML and static paths.
+        ``teacher_eoq`` (ML / REFIT-RSS-EOQ-G path, G-08/G-12): EOQ = sqrt(2 c mu / (h p)) with mu the 56-day mean
+        of actual sales and p the SKU price, no rounding and no floor; S = s + ceil(kappa * EOQ - 1e-9).
+        The static baseline keeps its classic rounded EOQ (>= 1).
+        ``unit_price`` (G-37): the price of the review day (``price_history``); None -> the constant products.price."""
+        if unit_price is None or not unit_price > 0:
+            unit_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        unit_price = float(unit_price)
         h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
-        annual_demand = max(1.0, round(mean_demand * 365.0, 2))
-        eoq = max(1.0, round(math.sqrt((2.0 * annual_demand * self.ORDER_COST_C) / h_cost), 1))
-        S_val = float(s_val + math.ceil(kappa * eoq))
+        if teacher_eoq:
+            annual_demand = round(max(0.0, mean_demand) * 365.0, 2)
+            eoq = float(self.teacher_eoq(np.array([mean_demand]), np.array([unit_price]))[0])
+            S_val = float(s_val + math.ceil(kappa * eoq - policy_backtest.CEIL_EPS))
+        else:
+            annual_demand = max(1.0, round(mean_demand * 365.0, 2))
+            eoq = max(1.0, round(math.sqrt((2.0 * annual_demand * self.ORDER_COST_C) / h_cost), 1))
+            S_val = float(s_val + math.ceil(kappa * eoq))
         d_l = round(mean_demand * lt, 2)
         out = {
             "item_id": prod.item_id,
@@ -338,7 +362,8 @@ class OptimizationService:
         return out
 
     def _static_from_stats(
-        self, prod: Product, store_id: str, lt: int, tau: float, stats_pair: Optional[Tuple[float, float]]
+        self, prod: Product, store_id: str, lt: int, tau: float, stats_pair: Optional[Tuple[float, float]],
+        unit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         avg_daily, sigma_d = stats_pair if stats_pair else (0.0, 0.0)
         avg_daily = max(0.1, avg_daily)  # numerical floor only, no invented demand level
@@ -350,7 +375,7 @@ class OptimizationService:
         reorder_point = max(0.0, round(avg_daily * lt + safety_stock, 2))
         res = self._finish_params(
             prod, store_id, lt, tau, float(math.ceil(reorder_point)), 1.0, avg_daily, sigma_d,
-            source="static", model_run_id="static-moving-avg",
+            source="static", model_run_id="static-moving-avg", unit_price=unit_price,
         )
         res.update({"safety_stock": safety_stock, "reorder_point": reorder_point, "d_l": avg_daily * lt,
                     "sigma_l": sigma_l, "sigma_d": sigma_d})
@@ -374,6 +399,8 @@ class OptimizationService:
         prod = db.query(Product).filter(Product.item_id == item_id).first() or Product(item_id=item_id, price=10.0)
         origin = self._store_origin(db, store_id)
         stats_pair = self._demand_stats(db, store_id, [item_id], origin, 90).get(item_id)
+        day_price = price_history_repository.price_map_on(db, store_id, [item_id], origin,
+                                                          fallback={item_id: prod.price}).get(item_id)
         if stats_pair is None:  # sales newer than the clock (e.g. no clock yet): use the latest rows
             q = (db.query(SalesHistory.quantity)
                  .filter(SalesHistory.item_id == item_id, SalesHistory.store_id == store_id)
@@ -381,7 +408,7 @@ class OptimizationService:
             if q:
                 arr = np.array([float(r[0] or 0.0) for r in q])
                 stats_pair = (float(arr.mean()), float(arr.std()) if len(arr) > 1 else 0.0)
-        return self._static_from_stats(prod, store_id, lead_time_days, tau, stats_pair)
+        return self._static_from_stats(prod, store_id, lead_time_days, tau, stats_pair, unit_price=day_price)
 
     def recompute_parameters(
         self,
@@ -714,7 +741,7 @@ class OptimizationService:
             insights=insights,
         )
 
-    # --- Job J5: Quarterly Policy Selection (Task OPT.2) ---
+    # --- Job J5: policy selection (teacher E10b REFIT-RSS-EOQ-G; docs/teacher_map/00_INDEX.md sec. 3, 9, 12) ---
 
     def _c3out_active(self, db: Session) -> bool:
         """P6 (C3-OUT) is the deployed controller unless the setting ``c3out_active`` says otherwise."""
@@ -726,53 +753,179 @@ class OptimizationService:
             v = v.get("enabled", v.get("value", True))
         return str(v).strip().lower() not in ("0", "false", "no", "off")
 
-    def _validation_reviews(
-        self, db: Session, store_id: str, item_ids: List[str], o_idx: int, n_periods: int
-    ) -> List[int]:
-        """Last ``n_periods`` consecutive (spacing R) backtest reviews whose period [s, s+R) is fully observed
-        before the origin."""
-        days = sorted({
-            r[0] for r in db.query(ForecastBacktest.review_day)
-            .filter(ForecastBacktest.store_id == store_id, ForecastBacktest.item_id.in_(item_ids[:900]))
-            .distinct().all()
-        })
-        eligible = [d for d in days if d + pc.REVIEW_PERIOD_DAYS <= o_idx]
+    def _simulation_reviews(self, db: Session, store_id: str, item_ids: List[str], o_idx: int) -> List[int]:
+        """Review days of the continuous J5 simulation: the longest chain of consecutive (spacing R) backtest reviews
+        that ends with the last review whose period [s, s + R) is fully observed before the refit day ``o_idx``.
+        Its first review is the simulation start (teacher: VAL_START, the first forecast origin)."""
+        R = pc.REVIEW_PERIOD_DAYS
+        days: set = set()
+        # P2: imported teacher quantiles define the review chain when present (teacher: from VAL_START, step R)
+        teacher_days = set(window_quantile_service.teacher_review_days(db, store_id, pc.HORIZON_DAYS))
+        if teacher_days:
+            grid_origin = min(teacher_days)
+            teacher_days = {d for d in teacher_days if (d - grid_origin) % R == 0}
+        days.update(teacher_days)
+        for k in range(0, 0 if days else len(item_ids), 900):
+            days.update(
+                int(r[0]) for r in db.query(ForecastBacktest.review_day)
+                .filter(ForecastBacktest.store_id == store_id, ForecastBacktest.item_id.in_(item_ids[k:k + 900]))
+                .distinct().all()
+            )
+        eligible = sorted(d for d in days if d + R <= o_idx)
         if not eligible:
             return []
         chain = [eligible[-1]]
         have = set(eligible)
-        while len(chain) < n_periods and chain[-1] - pc.REVIEW_PERIOD_DAYS in have:
-            chain.append(chain[-1] - pc.REVIEW_PERIOD_DAYS)
+        while chain[-1] - R in have:
+            chain.append(chain[-1] - R)
         return sorted(chain)
 
+    # kept for backward compatibility (old name)
+    def _validation_reviews(self, db: Session, store_id: str, item_ids: List[str], o_idx: int,
+                            n_periods: Optional[int] = None) -> List[int]:
+        chain = self._simulation_reviews(db, store_id, item_ids, o_idx)
+        return chain[-int(n_periods):] if n_periods else chain
+
+    @staticmethod
+    def teacher_eoq(mu_daily: np.ndarray, price: np.ndarray) -> np.ndarray:
+        """G-08/G-10/G-12: EOQ = sqrt(2 c mu / (h p)), mu = mean ACTUAL daily sales of the previous 56 days, p = the
+        SKU price; no rounding, no floor of 1 (EOQ = 0 without sales)."""
+        mu = np.maximum(np.nan_to_num(np.asarray(mu_daily, dtype=float), nan=0.0), 0.0)
+        p = np.asarray(price, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            eoq = np.sqrt(2.0 * pc.ORDER_COST_C * mu / (pc.HOLDING_RATE_DAILY * p))
+        return np.where(np.isfinite(eoq), eoq, 0.0)
+
+    @staticmethod
+    def score_window(
+        dem: np.ndarray, q: np.ndarray, eoq: np.ndarray, price: np.ndarray, history: Optional[np.ndarray],
+        m_values: List[float], kappa_values: List[float], window_start_review: int, theta: float = 0.0,
+        lead_time: int = pc.LEAD_TIME_DAYS, review_period: int = pc.REVIEW_PERIOD_DAYS,
+        daily_price: Optional[np.ndarray] = None,
+    ) -> Dict[str, Any]:
+        """Teacher scoring of every (m, kappa): ONE continuous simulation from the first review (the engine
+        ``policy_backtest.simulate_rss_candidates``), scored on the window that starts at review index
+        ``window_start_review`` and ends with the segment (only reviews in the window, only complete cycles; costs of
+        the window days and order lines of the window reviews) - exactly ``e10b_replay.window_stats``.
+
+        The engine is causal, so the window figures are differences of the full run and two prefix runs of the same
+        dynamics: [start, lo) for the costs and [start, lo + R*ceil(L/R)) for the cycles (its complete cycles are
+        exactly the reviews before lo)."""
+        L, R = int(lead_time), int(review_period)
+        n, T = dem.shape
+        K = q.shape[1]
+        kw = int(window_start_review)
+
+        def run(k_end: int) -> policy_backtest.BacktestResult:
+            return policy_backtest.simulate_rss_candidates(
+                dem[:, :k_end * R], q[:, :k_end], eoq[:, :k_end], price, m_values, kappa_values, theta=theta,
+                lead_time=L, review_period=R, history_demand=history,
+                daily_price=None if daily_price is None else daily_price[:, :k_end * R],
+            )
+
+        full = run(K)
+        C = len(full.cost)
+
+        def counts(res: policy_backtest.BacktestResult) -> np.ndarray:
+            if not res.n_cycles:
+                return np.zeros(C)
+            return np.asarray(res.availability, dtype=float) * n * res.n_cycles
+
+        cost = np.asarray(full.cost, dtype=float).copy()
+        lost = np.asarray(full.lost_units, dtype=float).copy()
+        demand = float(full.demand_units)
+        av_cnt = counts(full)
+        n_cyc = int(full.n_cycles)
+        if kw > 0:
+            pre = run(kw)
+            cost -= pre.cost
+            lost -= pre.lost_units
+            demand -= float(pre.demand_units)
+            kc = min(K, kw + int(math.ceil(L / R)))
+            pre_c = run(kc) if kc != kw else pre
+            av_cnt = av_cnt - counts(pre_c)
+            n_cyc -= int(pre_c.n_cycles)
+        avail = av_cnt / (n * n_cyc) if n_cyc > 0 and n > 0 else np.full(C, np.nan)
+        fill = 1.0 - lost / demand if demand > 0 else np.ones(C)
+        return {"m": np.asarray(full.m), "kappa": np.asarray(full.kappa), "cost": cost, "availability": avail,
+                "fill_rate": fill, "n_cycles": n_cyc, "n_items": n, "full": full}
+
     def evaluate_class_candidates(
-        self, db: Session, store_id: str, class_id: str, o_idx: int, n_periods: int, tau_q: float,
-        m_values: List[float], kappa_values: List[float], theta: float = 0.0,
-    ) -> Optional[Tuple[policy_backtest.BacktestResult, int, List[int]]]:
-        """Score every (m, kappa) of one class with the numpy (R,s,S) backtest over validation reviews."""
+        self, db: Session, store_id: str, class_id: str, o_idx: int,
+        window_days: int = pc.SELECTION_WINDOW_DAYS, tau_q: float = pc.QUANTILE_TAU,
+        m_values: Optional[List[float]] = None, kappa_values: Optional[List[float]] = None, theta: float = 0.0,
+    ) -> Optional[Tuple[Dict[str, Any], int, List[int]]]:
+        """Score every (m, kappa) of one class (teacher E10b):
+          * one continuous simulation per candidate from the simulation start (first review of the chain), initial
+            stock round(mean 28 days * (L + R)), Q_hat at tau = 0.95 (teacher route (c)), EOQ from the 56-day mean
+            of actual sales and the SKU price, batch ceil(kappa * EOQ - 1e-9);
+          * scored on the ``window_days`` (182) days ending at the refit day (complete cycles only).
+        Returns (scores, n_items, review_days) or None when the class has no usable data."""
+        m_values = list(pc.M_GRID) if m_values is None else list(m_values)
+        kappa_values = list(pc.KAPPA_GRID) if kappa_values is None else list(kappa_values)
         item_ids = [r[0] for r in db.query(SKUClassification.item_id)
                     .filter(SKUClassification.store_id == store_id, SKUClassification.segment == class_id).all()]
         if not item_ids:
             return None
-        reviews = self._validation_reviews(db, store_id, item_ids, o_idx, n_periods)
+        reviews = self._simulation_reviews(db, store_id, item_ids, o_idx)
         if len(reviews) < 2:
             return None
-        R, H = pc.REVIEW_PERIOD_DAYS, pc.HORIZON_DAYS
+        R, L, H = pc.REVIEW_PERIOD_DAYS, pc.LEAD_TIME_DAYS, pc.HORIZON_DAYS
+        start, end = reviews[0], reviews[-1] + R
         cm = window_quantile_service.causal_quantile_matrix(db, store_id, item_ids, reviews, tau_q, H)
-        A = build_actuals_matrix(db, store_id, item_ids, reviews[0], reviews[-1] + R)
-        prices = {p.item_id: p.price for p in db.query(Product).filter(Product.item_id.in_(item_ids)).all()}
-        # round 5: an item without a real price is EXCLUDED (A3 costs are price-proportional; no invented price 10)
-        price = np.array([float(prices[i]) if prices.get(i) and float(prices[i]) > 0 else np.nan for i in item_ids])
-        # keep items with complete actuals on the validation days, a quantile for every review and a price
-        days_idx = np.concatenate([np.arange(s - reviews[0], s - reviews[0] + R) for s in reviews])
-        dem = A[:, days_idx]
-        ok = ~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1) & ~np.isnan(price)
+        hist_lo = max(0, start - max(pc.EOQ_MEAN_WINDOW_DAYS, pc.INIT_STOCK_WINDOW_DAYS))
+        A = build_actuals_matrix(db, store_id, item_ids, hist_lo, end)
+        off = start - hist_lo
+        dem = A[:, off:]
+        # an item without a real price is EXCLUDED (A3 costs are price-proportional; no invented price 10)
+        price = price_history_repository.constant_prices(db, item_ids)
+        # G-37: price of every simulated day (price_history, else products.price); holding / lost are valued at the
+        # price of their day and the EOQ of review k at the price of the review day
+        p_day = price_history_repository.price_matrix(
+            db, store_id, item_ids, pc.day_index_to_date(start), pc.day_index_to_date(end), fallback=price)
+        ok = (~np.isnan(dem).any(axis=1) & ~np.isnan(cm["q"]).any(axis=1)
+              & ~np.isnan(p_day).any(axis=1) & ~(p_day <= 0).any(axis=1))
         if ok.sum() == 0:
             return None
-        dem, q, point, price = dem[ok], cm["q"][ok], cm["point"][ok], price[ok]
-        eoq = np.stack([policy_backtest.eoq_units(point[:, k] / H, price) for k in range(len(reviews))], axis=1)
-        res = policy_backtest.simulate_rss_candidates(dem, q, eoq, price, m_values, kappa_values, theta=theta)
-        return res, int(ok.sum()), reviews
+        A, dem, q, price, p_day = A[ok], dem[ok], cm["q"][ok], price[ok], p_day[ok]
+        price = np.where(np.isnan(price), p_day[:, 0], price)
+        # EOQ_k from the mean of the actual sales of the 56 days before review k (NaN days ignored, none -> 0)
+        mu = np.zeros((len(price), len(reviews)))
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for k, r in enumerate(reviews):
+                a = max(hist_lo, r - pc.EOQ_MEAN_WINDOW_DAYS) - hist_lo
+                blk = A[:, a:r - hist_lo]
+                mu[:, k] = np.nan_to_num(np.nanmean(blk, axis=1), nan=0.0) if blk.shape[1] else 0.0
+        eoq = self.teacher_eoq(mu, p_day[:, [r - start for r in reviews]])
+        history = A[:, max(0, off - pc.INIT_STOCK_WINDOW_DAYS):off] if off > 0 else None
+        if history is not None and history.shape[1] == 0:
+            history = None
+        lo_day = max(start, end - int(window_days))
+        kw = int(math.ceil((lo_day - start) / R))
+        scores = self.score_window(dem, q, eoq, price, history, m_values, kappa_values, kw, theta=theta,
+                                   lead_time=L, review_period=R, daily_price=p_day)
+        scores["window"] = (start + kw * R, end)
+        scores["simulation_start"] = start
+        return scores, int(ok.sum()), reviews
+
+    @staticmethod
+    def choose_candidate(scores: Dict[str, Any], guard: float = pc.SELECTION_GUARD_AVAILABILITY,
+                         mask: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
+        """Teacher ``choose`` (``e10b_replay.choose``): cheapest candidate with availability >= guard; else the
+        smallest shortfall, then the lowest cost. A candidate without a complete cycle is never feasible."""
+        idx = np.arange(len(scores["cost"])) if mask is None else np.flatnonzero(np.asarray(mask, dtype=bool))
+        if len(idx) == 0:
+            return None
+        av = np.asarray(scores["availability"], dtype=float)
+        av_sel = np.nan_to_num(av[idx], nan=-1.0)
+        j = int(idx[e10b_replay.choose(np.asarray(scores["cost"], dtype=float)[idx], av_sel, guard)])
+        a = float(av[j])
+        return {
+            "m": float(scores["m"][j]), "kappa": float(scores["kappa"][j]), "cost": float(scores["cost"][j]),
+            "availability": None if math.isnan(a) else a, "fill_rate": float(scores["fill_rate"][j]),
+            "is_feasible": bool(not math.isnan(a) and a >= guard - 1e-12), "index": j,
+        }
 
     @staticmethod
     def tag_selection_id(selection_id: str, store_id: str) -> str:
@@ -790,34 +943,32 @@ class OptimizationService:
         search_mode: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Job J5 - re-select (m_g, kappa_g) per ABC-XYZ class with a REAL vectorised (R,s,S) backtest over the
-        last validation reviews (research.md 7.4; R-10, N-07, R-11):
-          * the full grid m in [-0.7, 2.0] x kappa in {0.5, 1, 1.5, 2} is simulated once (daily lost-sales
-            dynamics, A3 costs h/b/c, observed availability) at the quantile level tau = target (Q-06);
-          * choose the cheapest candidate with availability >= target + guard (guard applied ONCE, here);
-            if none is feasible, return the most available one with is_feasible = False;
-          * BOTH selections are reported per class (Q-08): kappa_only_* (m_g = 0, the C3-OUT mode: the
-            closed-loop theta carries the level so e^(m_g + theta) is never applied twice, N-05) and
-            m_grid_* (full 7.4 search). search_mode picks which one is PERSISTED:
-            kappa_only | m_grid | auto (default: kappa_only while C3-OUT is active, else m_grid);
-          * the controller setpoint is A_g + guard (research.md 8.2), refreshed on every refit (Q-06);
-          * selection ids are store-scoped (Q-05).
+        Job J5 - re-select (m_g, kappa_g) per ABC-XYZ class, teacher E10b (REFIT-RSS-EOQ-G):
+          * every (m, kappa) of the grid m in [-0.7, 2.0] step 0.1 x kappa in {0, 0.5, 1, 1.5, 2} (140 candidates)
+            is simulated ONCE continuously from the simulation start and scored on the 182 days (26 weeks) ending at
+            the refit day (complete cycles only), Q_hat at tau = 0.95;
+          * per class ``choose``: cheapest candidate with availability >= guard (0.96 = 0.95 + 0.01; an explicit
+            ``target_availability`` gives target + 0.01); if none, the smallest shortfall, then the lowest cost;
+          * search_mode: ``m_grid`` (DEFAULT, also ``auto``): full grid, the C3-OUT theta is ADDED on top of m_g
+            online; ``kappa_only``: ABLATION only (m forced to 0, the old DFIOS mode). Both are reported (Q-08);
+          * the controller setpoint written with the selection is the guard (0.96 by default);
+          * selection ids are store-scoped (Q-05). The refit cadence (every 91 days) belongs to the caller.
         """
-        if target_availability is None:
-            target_availability = float(self.get_service_level_config(db).default_service_level)
+        guard = (pc.SELECTION_GUARD_AVAILABILITY if target_availability is None
+                 else min(0.999, float(target_availability) + pc.GUARD))
         if c3out_active is None:
             c3out_active = self._c3out_active(db)
         mode = (search_mode or "auto").lower()
-        if mode not in ("auto", "kappa_only", "m_grid"):
-            raise HTTPException(status_code=422, detail="search_mode must be auto | kappa_only | m_grid")
-        persist_kappa_only = (mode == "kappa_only") or (mode == "auto" and c3out_active)
+        if mode not in ("auto", pc.J5_SEARCH_MODE_ABLATION, pc.J5_SEARCH_MODE_DEFAULT):
+            raise HTTPException(status_code=422, detail="search_mode must be auto | m_grid | kappa_only (ablation)")
+        persist_kappa_only = mode == pc.J5_SEARCH_MODE_ABLATION
         origin = self._store_origin(db, store_id)
         if not selection_id:
             selection_id = f"quarter_{origin.year}_Q{(origin.month - 1) // 3 + 1}"
         selection_id = self.tag_selection_id(selection_id, store_id)
         o_idx = pc.date_to_day_index(origin)
-        tau_q = min(0.999, max(0.5, float(target_availability)))
-        setpoint = min(0.999, float(target_availability) + pc.GUARD)
+        tau_q = pc.QUANTILE_TAU
+        setpoint = guard
         now = datetime.now(timezone.utc)
         results: List[Dict[str, Any]] = []
 
@@ -833,22 +984,25 @@ class OptimizationService:
         for class_id in pc.ALL_CLASSES:
             default = self.DEFAULT_OPTIMAL_POLICIES[class_id]
             scored = self.evaluate_class_candidates(
-                db, store_id, class_id, o_idx, pc.VALIDATION_PERIODS, tau_q,
+                db, store_id, class_id, o_idx, pc.SELECTION_WINDOW_DAYS, tau_q,
                 list(pc.M_GRID), list(pc.KAPPA_GRID), theta=0.0,
             )
             k_best = m_best = None
-            if scored is None:
-                # no validation data: neutral policy, explicitly NOT feasible and without invented metrics
+            window = None
+            if scored is not None and scored[0]["n_cycles"] > 0:
+                sc, n_items, reviews = scored
+                k_best = self.choose_candidate(sc, guard, mask=np.isclose(sc["m"], 0.0))
+                m_best = self.choose_candidate(sc, guard)
+                best = k_best if persist_kappa_only else m_best
+                n_rev = int(sc["n_cycles"])
+                window = [pc.day_index_to_date(sc["window"][0]).isoformat(),
+                          pc.day_index_to_date(sc["window"][1] - 1).isoformat()]
+            else:
+                # no scorable window: neutral policy, explicitly NOT feasible and without invented metrics
                 best = {"m": default["m_g"], "kappa": default["kappa_g"], "cost": None, "availability": None,
                         "is_feasible": False}
-                n_items, n_rev = 0, 0
-            else:
-                res, n_items, reviews = scored
-                k_best = policy_backtest.select_candidate(
-                    res, target_availability, pc.GUARD, mask=np.isclose(res.m, 0.0))
-                m_best = policy_backtest.select_candidate(res, target_availability, pc.GUARD)
-                best = k_best if persist_kappa_only else m_best
-                n_rev = len(reviews)
+                n_items = scored[1] if scored is not None else 0
+                n_rev = 0
 
             existing = db.query(PolicySelection).filter(
                 PolicySelection.selection_id == selection_id, PolicySelection.class_id == class_id).first()
@@ -873,9 +1027,10 @@ class OptimizationService:
                 "selection_id": selection_id, "class_id": class_id, "policy_type": "REFIT_RSS_EOQ_G",
                 "m_g": best["m"], "kappa_g": best["kappa"], "val_cost": best["cost"],
                 "val_service": best["availability"], "is_feasible": best["is_feasible"],
-                "setpoint": setpoint, "n_items": n_items, "n_validation_reviews": n_rev,
+                "setpoint": setpoint, "guard_availability": guard, "n_items": n_items,
+                "n_validation_reviews": n_rev, "selection_window": window,
                 "c3out_active": bool(c3out_active),
-                "search_mode": "kappa_only" if persist_kappa_only else "m_grid",
+                "search_mode": pc.J5_SEARCH_MODE_ABLATION if persist_kappa_only else pc.J5_SEARCH_MODE_DEFAULT,
                 "source": "j5_backtest",
                 **_fields("kappa_only", k_best), **_fields("m_grid", m_best),
             })

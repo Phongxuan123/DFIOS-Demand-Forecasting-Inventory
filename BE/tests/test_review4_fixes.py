@@ -48,7 +48,7 @@ def _db(n_days=21, demand=2.0, on_hand=0.0, price=10.0, with_params=True):
     db.add(SimClock(store_id="CA_1", current_date=START, start_date=START))
     db.add(Product(item_id=ITEM, name="Item", cat_id="FOODS", dept_id="FOODS_1", price=price))
     db.add(Inventory(item_id=ITEM, store_id="CA_1", on_hand=on_hand, on_order=0.0))
-    for i in range(1, n_days + 1):
+    for i in range(0, n_days + 1):  # the start date is a simulated day too (P2)
         db.add(SalesHistory(id=f"s{i}", item_id=ITEM, store_id="CA_1", sale_date=START + timedelta(days=i),
                             quantity=demand))
     if with_params:
@@ -220,11 +220,11 @@ class TestClockCoupling(unittest.TestCase):
         r = forecast_service.get_historical_demand(db, ITEM, store_id="CA_1")
         self.assertTrue(r.bounded_by_clock)
         self.assertEqual(r.as_of, str(START))
-        self.assertEqual(r.count, 0)  # all sales are dated AFTER the clock (START)
+        self.assertEqual(r.count, 1)  # only the sale dated ON the clock (START); the others are after it
         pipeline_service.advance_sim_clock(db, "CA_1", days=3)
         r2 = forecast_service.get_historical_demand(db, ITEM, store_id="CA_1")
         self.assertEqual([p.date for p in r2.history][-1], str(START + timedelta(days=3)))
-        self.assertEqual(r2.count, 3)
+        self.assertEqual(r2.count, 4)
 
     def test_demand_trend_hides_forecast_from_after_the_clock(self):
         from app.services.dashboard_service import dashboard_service

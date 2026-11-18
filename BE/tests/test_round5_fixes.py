@@ -111,7 +111,9 @@ def test_what_if_is_a_real_simulation_per_class(env):
     custom = next(p for p in d["policies"] if p["policy_key"] == "custom")
     assert {x["class_id"] for x in custom["by_class"]} == {"AX", "BY"}
     ov = custom["overall"]
-    assert ov["n_items"] == 6 and ov["n_sku_periods"] == 60
+    # P1 G-01: 10 reviews -> 9 COMPLETE service cycles [t_k+L, t_k+L+R-1] inside the replay (the last one ends
+    # after the replayed days), so 6 SKUs x 9 cycles
+    assert ov["n_items"] == 6 and ov["n_sku_periods"] == 54
     assert abs(ov["total_cost"] - (ov["holding_cost"] + ov["shortage_cost"] + ov["ordering_cost"])) < 0.05
     assert ov["ordering_cost"] == pytest.approx(ov["orders"] * 2.0)
     assert 0.0 <= ov["availability"] <= 1.0
@@ -130,7 +132,8 @@ def test_what_if_matches_the_backtest_engine_and_uses_the_given_costs(env):
         res = what_if_service.run(s, base).policies[0].by_class[0]
         # same inputs straight into the engine -> identical numbers
         data, _ = what_if_service._class_inputs(s, STORE, "AX", O_IDX, 8, 0.95, 3, 7, 0.002, 2.0)
-        eng = policy_backtest.simulate_rss_candidates(data["dem"], data["q"], data["eoq"], data["price"], [0.1], [1.5])
+        eng = policy_backtest.simulate_rss_candidates(data["dem"], data["q"], data["eoq"], data["price"], [0.1], [1.5],
+                                                      initial_on_hand=data["init"])  # P1 G-03 initial stock
         assert res.total_cost == pytest.approx(round(float(eng.cost[0]), 2))
         assert res.availability == pytest.approx(round(float(eng.availability[0]), 5))
         # b does not enter s, S or EOQ: doubling it doubles the shortage cost and leaves stock / orders unchanged
@@ -717,6 +720,7 @@ def test_schema_reconcile_relaxes_only_explicitly_nullable_columns():
     assert t["sim_clock"].c.mode._user_defined_nullable is not True
 
 
-def test_replenishment_reason_says_ip_at_or_below_s():
+def test_replenishment_reason_says_ip_strictly_below_s():
+    # P1 G-02: the trigger is strictly IP < s (teacher rss.py), the reason text follows it
     src = open(os.path.join(BE_DIR, "app", "services", "replenishment_service.py"), encoding="utf-8").read()
-    assert "IP ({ip:.1f}) ≤ s" in src
+    assert "IP ({ip:.1f}) < s" in src and "IP ({ip:.1f}) ≤ s" not in src

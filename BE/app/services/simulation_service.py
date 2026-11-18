@@ -1,11 +1,14 @@
 from typing import List, Optional, Tuple
 
+import numpy as np
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.inventory import Inventory
 from app.models.product import Product
+from app.models.sim_clock import SimClock
+from app.repositories import price_history_repository
 from app.schemas.simulation import InsightDetail, PolicySimulationMetric, PolicyComparisonResponse
 from app.services import policy_config as pc
 from app.services.policy_artifact import (
@@ -14,8 +17,11 @@ from app.services.policy_artifact import (
     load_results,
 )
 
-# policy_id (API) -> artifact key. The labels follow what the artifact rows REALLY are (P-15):
-#   B0 = raw quantile tau=0.95 | B2 = raw quantile tau*=0.99 | P-CR = C3-OUT at the critical ratio |
+# policy_id (API) -> artifact key. The ids and keys are stable identifiers; the display labels follow what the
+# artifact rows REALLY are (P-15):
+#   B0 key = RAW-0.95, the team's raw quantile tau=0.95 (not the teacher's B0-MA-OUT-0.95) |
+#   B2 = raw quantile at tau*=0.99 picked on validation (= raw tau=0.99, NOT the critical ratio 0.9615) |
+#   P-CR = C3-OUT with setpoint = critical ratio b/(b+h*R) = 0.9615 (not a separately proven cost optimum) |
 #   P6 = C3-OUT tau=0.95 (service-level controller, not a cost reducer).
 POLICY_IDS = [
     ("B0_raw_quantile", "B0"),
@@ -42,8 +48,23 @@ class SimulationService:
 
     @staticmethod
     def _store_basis(db: Session, store_id: str) -> Tuple[int, Optional[float], str]:
-        """(#SKUs of the store, mean unit price, price source). Price = products.price (A3 price)."""
+        """(#SKUs of the store, mean unit price, price source). Price = products.price (A3 price); G-37: a store with
+        daily prices and a simulated clock uses the price of the clock date (price_history, else products.price)."""
         sku_count = db.query(func.count(Inventory.item_id)).filter(Inventory.store_id == store_id).scalar() or 0
+        clock_date = db.query(SimClock.current_date).filter(SimClock.store_id == store_id).scalar()
+        if sku_count and clock_date is not None and price_history_repository.has_prices(db, store_id):
+            rows = (
+                db.query(Inventory.item_id, Product.price)
+                .outerjoin(Product, Inventory.item_id == Product.item_id)
+                .filter(Inventory.store_id == store_id)
+                .order_by(Inventory.item_id)
+                .all()
+            )
+            base = np.array([float(p) if p is not None else np.nan for _, p in rows], dtype=float)
+            p_day = price_history_repository.price_on(db, store_id, [i for i, _ in rows], clock_date, fallback=base)
+            p_day = p_day[~np.isnan(p_day)]
+            avg = float(p_day.mean()) if p_day.size else None
+            return int(sku_count), (avg if avg else None), f"price_history@{clock_date.isoformat()}"
         if sku_count:
             avg_price = (
                 db.query(func.avg(Product.price))
@@ -163,7 +184,7 @@ class SimulationService:
             "availability_pcr_pct": pcr.availability, "availability_p6_pct": p6.availability,
         }))
         insights.append(
-            f"B0 (raw quantile τ=0.95) chỉ đạt availability {b0.availability:.1f}% dù đặt mục tiêu 95%; "
+            f"RAW-0.95 (raw quantile τ=0.95) chỉ đạt availability {b0.availability:.1f}% dù đặt mục tiêu 95%; "
             f"P6 điều khiển về {p6.availability:.1f}%. P6 là bộ điều khiển mức phục vụ, không phải bộ giảm chi phí."
         )
         details.append(InsightDetail(code="b0_vs_p6", params={

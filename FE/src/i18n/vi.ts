@@ -14,6 +14,8 @@ import { products } from './vi/products.ts';
 import { replenishment } from './vi/replenishment.ts';
 import { abcxyz } from './vi/abcxyz.ts';
 import { settings } from './vi/settings.ts';
+import { inventory } from './vi/inventory.ts';
+import { metrics } from './vi/metrics.ts';
 import { be } from './vi/be.ts';
 
 export const vi = {
@@ -29,6 +31,8 @@ export const vi = {
   replenishment,
   abcxyz,
   settings,
+  inventory,
+  metrics,
   be,
 };
 

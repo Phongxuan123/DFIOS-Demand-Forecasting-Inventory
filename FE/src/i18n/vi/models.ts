@@ -127,6 +127,7 @@ export const models = {
     empty_description: 'Nhấn "Huấn luyện mới" để chạy một job.',
     polling: 'Có job đang chạy, bảng tự làm mới mỗi 5 giây',
     failed_reason: 'Lỗi: {reason}',
+    rmsse_single: 'RMSSE (1 chuỗi)',
     status_pending: 'Đang chờ',
     status_running: 'Đang chạy',
     status_done: 'Hoàn tất',

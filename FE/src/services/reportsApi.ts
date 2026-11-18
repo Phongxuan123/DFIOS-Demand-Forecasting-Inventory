@@ -250,6 +250,8 @@ export interface WhatIfResponse {
   n_reviews?: number;
   period_start?: string | null;
   period_end?: string | null;
+  /** Review periods R (days) the server can replay for this store and L (also sent with a 422). */
+  r_options?: number[];
   quantile_basis?: string;
   initial_stock_basis?: string;
   policies: WhatIfPolicyResult[];
@@ -274,7 +276,7 @@ export const postComparePolicies = async (storeId: string, signal?: AbortSignal)
   (await apiClient.post<PolicyComparison>('/simulation/compare-policies', { store_id: storeId }, { signal })).data;
 
 export const getForecastAccuracy = (storeId: string, signal?: AbortSignal) =>
-  getJson<ForecastAccuracy>('/reports/forecast-accuracy', { params: { store_id: storeId }, signal });
+  getJson<ForecastAccuracy>('/reports/forecast-accuracy', { params: { store_id: storeId }, signal, timeout: 120000 }); // cold: db-causal coverage scan
 
 export const getInventoryPerformance = (storeId: string, limit: number, offset: number, signal?: AbortSignal) =>
   getJson<InventoryPerformance>('/reports/inventory-performance', { params: { store_id: storeId, limit, offset }, signal });
@@ -287,3 +289,16 @@ export const postBacktest = async (storeId: string) =>
 
 export const getRegistryModels = (signal?: AbortSignal) =>
   getJson<{ items: RegistryModel[]; total: number }>('/ml/models', { params: { limit: 100 }, signal });
+
+export interface E10bReference {
+  available: boolean;
+  message?: string;
+  matches?: boolean;
+  replay?: Record<string, number | null>;
+  teacher?: Record<string, number>;
+  delta?: Record<string, number | null>;
+  checks?: Record<string, boolean>;
+  selection_schedule?: Array<{ start: number | string | null; m: unknown; kappa: unknown }>;
+}
+
+export const getE10bReference = (signal?: AbortSignal) => getJson<E10bReference>('/reference/e10b', { signal });

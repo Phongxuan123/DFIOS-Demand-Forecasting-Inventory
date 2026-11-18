@@ -62,8 +62,14 @@ class TestRouteCResiduals(unittest.TestCase):
         res = window_quantile_service.collect_historical_residuals(
             self.db, item_id=self.item, store_id=STORE, origin_date=self.origin, horizon_days=10)
         self.assertEqual(len(res), 0)
+        # P1 (G-26/G-27): default = teacher route (c): no residual -> residual quantile 0, Q_hat = max(0, F_hat)
         rec = window_quantile_service.build_records(self.db, STORE, [self.item], self.origin, 10)[0]
-        self.assertEqual(rec.route, pc.ROUTE_FALLBACK)  # honest label: Gaussian fallback
+        self.assertEqual(rec.route, pc.ROUTE_EMPIRICAL)
+        self.assertAlmostEqual(rec.q_levels["0.95"], max(0.0, rec.point_window), places=2)
+        # the old Gaussian fallback is still available behind its switch, with its honest label
+        rec_fb = window_quantile_service.build_records(self.db, STORE, [self.item], self.origin, 10,
+                                                       gaussian_fallback=True)[0]
+        self.assertEqual(rec_fb.route, pc.ROUTE_FALLBACK)
 
     def test_only_complete_windows_are_used(self):
         # actuals only for the 3 oldest reviews' windows: just those residuals exist
@@ -230,10 +236,13 @@ class TestPolicyBacktestJ5(unittest.TestCase):
     def test_availability_definition_is_observed_not_lost_sales(self):
         """A period where stock reaches exactly 0 without lost sales is UNAVAILABLE (§8.1)."""
         R = pc.REVIEW_PERIOD_DAYS
-        dem = np.zeros((1, R))
+        # P1 G-01: the cycle of review 0 is days L .. L+R-1 and is scored only when complete, so the replay needs
+        # two reviews (2R days) to contain one complete cycle
+        dem = np.zeros((1, 2 * R))
         dem[0, 0] = 10.0  # sells exactly the initial stock on day 1
-        res = pb.simulate_rss_candidates(dem, np.array([[10.0]]), np.array([[1.0]]), np.array([1.0]),
+        res = pb.simulate_rss_candidates(dem, np.array([[10.0, 10.0]]), np.array([[1.0, 1.0]]), np.array([1.0]),
                                          [0.0], [0.0], initial_on_hand=np.array([10.0]))
+        self.assertEqual(res.n_cycles, 1)
         self.assertEqual(res.availability[0], 0.0)
         self.assertEqual(res.shortage[0], 0.0)  # no lost sales at all
 
@@ -264,15 +273,22 @@ class TestPolicyBacktestJ5(unittest.TestCase):
             self.assertIsNotNone(ax["val_cost"])
             self.assertGreater(ax["n_validation_reviews"], 5)
             self.assertIn(ax["m_g"], pc.M_GRID)
-            self.assertGreaterEqual(ax["kappa_g"], 0.5)
+            self.assertIn(ax["kappa_g"], pc.KAPPA_GRID)
             if ax["is_feasible"]:
                 self.assertGreaterEqual(ax["val_service"], 0.90 + pc.GUARD - 1e-9)
-            # P6 active: m_g held at 0 (no double application with theta); setpoint = A_g + guard (research 8.2)
+            # P1 (G-16): C3-OUT active no longer forces m_g = 0 - the default is the full grid (theta added on top);
+            # m_g = 0 survives only as the explicit kappa_only ABLATION. setpoint = guard 0.96 = 0.95 + 0.01
             res2 = optimization_service.refit_quarterly_policies(db, store_id=STORE, selection_id="p6",
                                                                  target_availability=0.95, c3out_active=True)
             ax2 = next(r for r in res2 if r["class_id"] == "AX")
-            self.assertEqual(ax2["m_g"], 0.0)
-            self.assertAlmostEqual(ax2["setpoint"], 0.96)  # Q-06: A_g + guard
+            self.assertEqual(ax2["search_mode"], pc.J5_SEARCH_MODE_DEFAULT)
+            self.assertEqual(ax2["m_g"], ax2["m_grid_m_g"])
+            self.assertAlmostEqual(ax2["setpoint"], 0.96)
+            res3 = optimization_service.refit_quarterly_policies(db, store_id=STORE, selection_id="p6abl",
+                                                                 search_mode="kappa_only")
+            ax3 = next(r for r in res3 if r["class_id"] == "AX")
+            self.assertEqual(ax3["m_g"], 0.0)
+            self.assertEqual(ax3["search_mode"], pc.J5_SEARCH_MODE_ABLATION)
         finally:
             db.close()
 

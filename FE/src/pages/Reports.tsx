@@ -26,10 +26,13 @@ import {
 import { useApi } from '../hooks/useApi.ts';
 import { useClock } from '../context/ClockContext.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
-import { useStore } from '../context/StoreContext.tsx';
+import { GLOBAL_STORE, useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { CoverageTiles } from '../components/common/CoverageTiles.tsx';
+import { ReferenceE10b } from '../components/ReferenceE10b.tsx';
 import { WhatIfPanel } from './reports/WhatIfPanel.tsx';
+import { ForecastQualityPanel } from './reports/ForecastQualityPanel.tsx';
+import { ControllerPanel } from './reports/ControllerPanel.tsx';
 import { downloadCsv } from '../utils/csv.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBe } from '../i18n/useBe.ts';
@@ -208,6 +211,7 @@ const PoliciesTab: React.FC = () => {
           <EmptyState title={t('reports.policy.missing')} description={b?.reason ?? undefined} />
         ) : (
           <>
+            <p className="ui-muted" role="note">{t('reports.policy.note')}</p>
             <div style={{ display: 'grid', gap: 'var(--space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', marginBottom: 'var(--space-4)' }}>
               <CoverageTiles
                 loading={bench.loading && !b}
@@ -231,6 +235,8 @@ const PoliciesTab: React.FC = () => {
         )}
       </Section>
 
+      <ReferenceE10b />
+
       {isManager && (
         <Section title={t('reports.sim.title')} description={t('reports.sim.description')}>
           {sim.error ? (
@@ -251,8 +257,9 @@ const AccuracyTab: React.FC = () => {
   const fmt = useFormat();
   const { storeId } = useStore();
   const { user } = useAuth();
-  const { version } = useClock();
+  const { version, clock } = useClock();
   const isAdmin = can(user?.role, 'view:models');
+  const isManager = can(user?.role, 'replenishment:write');
   const acc = useApi((s) => getForecastAccuracy(storeId ?? '', s), [storeId, version], { enabled: !!storeId });
   const reg = useApi((s) => getRegistryModels(s), [version], { enabled: isAdmin });
   const a = acc.data;
@@ -309,6 +316,9 @@ const AccuracyTab: React.FC = () => {
           </Card>
         )}
       </Section>
+
+      {isManager && <ForecastQualityPanel storeId={storeId === GLOBAL_STORE ? null : storeId} version={version} />}
+      {isManager && <ControllerPanel storeId={storeId === GLOBAL_STORE ? null : storeId} clockDate={clock?.current_date} version={version} />}
 
       <Section title={t('reports.accuracy.registry_title')} description={t('reports.accuracy.registry_desc')}>
         {!isAdmin ? (

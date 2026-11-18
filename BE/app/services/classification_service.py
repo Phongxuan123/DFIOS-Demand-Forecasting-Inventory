@@ -214,6 +214,23 @@ class ClassificationService:
             return stores[0]
         return self.DEFAULT_STORE_ID
 
+    @staticmethod
+    def threshold_segment(cum_share: float, cv: float, is_top: bool, thresholds: ClassificationThresholds) -> str:
+        """UC25 threshold class (ABC by cumulative revenue share, XYZ by CV) for one SKU."""
+        if cum_share <= thresholds.a_cutoff or is_top:
+            abc = "A"
+        elif cum_share <= thresholds.b_cutoff:
+            abc = "B"
+        else:
+            abc = "C"
+        if cv <= thresholds.cv_x:
+            xyz = "X"
+        elif cv <= thresholds.cv_y:
+            xyz = "Y"
+        else:
+            xyz = "Z"
+        return f"{abc}{xyz}"
+
     def recompute_classification(
         self,
         db: Session,
@@ -285,19 +302,7 @@ class ClassificationService:
             cum_share = min(accumulated_rev, 100.0)
 
             # Lớp theo ngưỡng UC25 – luôn tính
-            if cum_share <= thresholds.a_cutoff or idx == 0:
-                t_abc = "A"
-            elif cum_share <= thresholds.b_cutoff:
-                t_abc = "B"
-            else:
-                t_abc = "C"
-            if stat["cv"] <= thresholds.cv_x:
-                t_xyz = "X"
-            elif stat["cv"] <= thresholds.cv_y:
-                t_xyz = "Y"
-            else:
-                t_xyz = "Z"
-            threshold_segment = f"{t_abc}{t_xyz}"
+            threshold_segment = self.threshold_segment(cum_share, stat["cv"], idx == 0, thresholds)
 
             item_id = stat["item_id"]
             if item_id in c3_map:
