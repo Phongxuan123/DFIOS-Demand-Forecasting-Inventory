@@ -319,24 +319,24 @@ def forecast_quality_from_db(
 
     # levels: the teacher's 19 when every row stores them, else the levels common to all rows
     common: Optional[set] = None
-    raw: List[Dict[int, dict]] = []
-    for d in origins_sel:
-        per: Dict[int, dict] = {}
-        for k in range(0, len(items), 900):
-            chunk = items[k:k + 900]
-            for iid, ql in (base.with_entities(ForecastWindowQuantile.item_id, ForecastWindowQuantile.q_levels)
-                            .filter(ForecastWindowQuantile.origin_date == d,
+    # one query per SKU chunk for ALL selected origins (was one per origin and chunk): same rows, same parsing
+    per_origin: Dict[date, Dict[int, dict]] = {d: {} for d in origins_sel}
+    for k in range(0, len(items), 900):
+        chunk = items[k:k + 900]
+        for iid, od, ql in (base.with_entities(ForecastWindowQuantile.item_id, ForecastWindowQuantile.origin_date,
+                                               ForecastWindowQuantile.q_levels)
+                            .filter(ForecastWindowQuantile.origin_date.in_(origins_sel),
                                     ForecastWindowQuantile.item_id.in_(chunk)).all()):
-                qd = {}
-                for kk, v in (ql or {}).items():
-                    try:
-                        qd[round(float(kk), 4)] = float(v)
-                    except (TypeError, ValueError):
-                        continue
-                per[pos[iid]] = qd
-                keys = set(qd)
-                common = keys if common is None else (common & keys)
-        raw.append(per)
+            qd = {}
+            for kk, v in (ql or {}).items():
+                try:
+                    qd[round(float(kk), 4)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+            per_origin[od][pos[iid]] = qd
+            keys = set(qd)
+            common = keys if common is None else (common & keys)
+    raw: List[Dict[int, dict]] = [per_origin[d] for d in origins_sel]
     common = common or set()
     teacher = [lv for lv in TEACHER_LEVELS if lv in common]
     levels = teacher if len(teacher) == len(TEACHER_LEVELS) else sorted(common)

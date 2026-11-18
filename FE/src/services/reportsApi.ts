@@ -276,7 +276,7 @@ export const postComparePolicies = async (storeId: string, signal?: AbortSignal)
   (await apiClient.post<PolicyComparison>('/simulation/compare-policies', { store_id: storeId }, { signal })).data;
 
 export const getForecastAccuracy = (storeId: string, signal?: AbortSignal) =>
-  getJson<ForecastAccuracy>('/reports/forecast-accuracy', { params: { store_id: storeId }, signal });
+  getJson<ForecastAccuracy>('/reports/forecast-accuracy', { params: { store_id: storeId }, signal, timeout: 120000 }); // cold: db-causal coverage scan
 
 export const getInventoryPerformance = (storeId: string, limit: number, offset: number, signal?: AbortSignal) =>
   getJson<InventoryPerformance>('/reports/inventory-performance', { params: { store_id: storeId, limit, offset }, signal });

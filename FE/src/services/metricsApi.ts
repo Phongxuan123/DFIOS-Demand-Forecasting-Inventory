@@ -61,6 +61,7 @@ export const getForecastQuality = (storeId: string, params: ForecastQualityParam
   getJson<ForecastQuality>('/metrics/forecast-quality', {
     params: { store_id: storeId, horizon_days: params.horizonDays, model_run_id: params.modelRunId },
     signal,
+    timeout: 120000, // first (cold) computation scans the stored quantiles against realised demand
   });
 
 export const getControllerMetrics = (storeId: string, eventDate?: string | null, signal?: AbortSignal) =>
