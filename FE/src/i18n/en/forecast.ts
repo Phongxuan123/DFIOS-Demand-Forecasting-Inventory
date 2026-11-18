@@ -227,6 +227,17 @@ export const forecast: typeof Vi = {
     empty_description: 'Manual overrides will appear here.',
     source: '/forecasts/:sku/overrides',
   },
+  future: {
+    tab: 'Future forecast',
+    no_actuals: 'This is the production bundle\'s 28-day forecast after the last day of the M5 data, so there are no actual sales to compare with.',
+    fallback: 'This SKU is not in the production bundle; the figures below are the {model} fallback, not the Ensemble.',
+    chart_title: 'Next {n} days · {sku}',
+    col_mean: 'Forecast (mean)',
+    table_title: 'Forecast by step h',
+    table_desc: 'Total over {n} days: {total} units',
+    empty: 'No future forecast',
+    empty_desc: 'Neither the production bundle nor the sales history has data for {sku} in store {store}.',
+  },
   explorer: {
     title: 'Demand Forecast Explorer',
     badge_validated: 'Walmart M5 data',

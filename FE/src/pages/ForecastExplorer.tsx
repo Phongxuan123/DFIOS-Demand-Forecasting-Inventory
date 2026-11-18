@@ -67,9 +67,10 @@ import {
 } from '../services/forecastApi.ts';
 import { getDemandTrend } from '../services/dashboardApi.ts';
 import { getForecastAccuracy, type AccuracyMetric } from '../services/reportsApi.ts';
+import { FutureForecastPanel } from './forecast/FutureForecastPanel.tsx';
 import './ForecastExplorer.css';
 
-type MainTab = 'overview' | 'sku' | 'window' | 'schedule';
+type MainTab = 'overview' | 'sku' | 'window' | 'schedule' | 'future';
 type RowQuality = 'ok' | 'crossing' | 'missing';
 
 const DEPARTMENTS = ['FOODS_1', 'FOODS_2', 'HOBBIES_1', 'HOUSEHOLD_1', 'HOUSEHOLD_2'] as const;
@@ -204,7 +205,7 @@ export const ForecastExplorer: React.FC = () => {
 
   const [mainTab, setMainTab] = useState<MainTab>(() => {
     const p = searchParams.get('tab');
-    return p === 'sku' || p === 'window' || p === 'schedule' ? p : 'overview';
+    return p === 'sku' || p === 'window' || p === 'schedule' || p === 'future' ? p : 'overview';
   });
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   /** Overview scope: whole store or one M5 category (the filter GET /dashboard/demand-trend supports). */
@@ -743,6 +744,7 @@ export const ForecastExplorer: React.FC = () => {
               { id: 'sku', label: t('forecast.explorer.tab_sku') },
               { id: 'window', label: t('inventory.window.tab') },
               { id: 'schedule', label: t('forecast.explorer.tab_schedule'), count: overrides.data?.filter((o) => o.is_active).length },
+              { id: 'future', label: t('forecast.future.tab') },
             ]}
           />
         </div>
@@ -1084,6 +1086,12 @@ export const ForecastExplorer: React.FC = () => {
               </Card>
             </div>
           </>
+        )}
+
+        {mainTab === 'future' && (
+          <div style={{ padding: 'var(--space-4)' }}>
+            <FutureForecastPanel sku={sku} store={store} />
+          </div>
         )}
 
         {mainTab === 'window' && (

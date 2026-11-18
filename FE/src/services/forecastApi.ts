@@ -169,6 +169,23 @@ export const getUncertainty = (item: string, store: string, horizon: number, sig
 export const getExplanation = (item: string, store: string, signal?: AbortSignal) =>
   getJson<ExplanationResponse>(`/forecasts/${sku(item)}/explanation`, { params: { store_id: store }, signal });
 
+/** One day of GET /forecasts/{sku}/future: the production bundle (or its SBA fallback), after the end of M5. */
+export interface FutureForecastRow {
+  item_id: string;
+  store_id: string;
+  h: number;
+  y_pred: number;
+  p10: number | null;
+  p50: number | null;
+  p90: number | null;
+  available?: boolean;
+  model_version: string;
+  source: string;
+}
+
+export const getFutureForecast = (item: string, store: string, signal?: AbortSignal) =>
+  getJson<FutureForecastRow[]>(`/forecasts/${sku(item)}/future`, { params: { store_id: store, horizon: 28 }, signal });
+
 export const getWindowQuantiles = (item: string, store: string, signal?: AbortSignal) =>
   getJson<WindowQuantileResponse>(`/forecasts/${sku(item)}/window-quantiles`, {
     params: { store_id: store, horizon_days: 10 },

@@ -225,6 +225,17 @@ export const forecast = {
     empty_description: 'Điều chỉnh thủ công sẽ hiện ở đây.',
     source: '/forecasts/:sku/overrides',
   },
+  future: {
+    tab: 'Dự báo tương lai',
+    no_actuals: 'Đây là dự báo 28 ngày của production bundle sau ngày cuối của dữ liệu M5, nên không có doanh số thực để so sánh.',
+    fallback: 'SKU này không có trong production bundle; số dưới đây là dự phòng {model}, không phải Ensemble.',
+    chart_title: 'Dự báo {n} ngày tới · {sku}',
+    col_mean: 'Dự báo (trung bình)',
+    table_title: 'Bảng dự báo theo bước h',
+    table_desc: 'Tổng {n} ngày: {total} đơn vị',
+    empty: 'Không có dự báo tương lai',
+    empty_desc: 'Production bundle và lịch sử bán không có dữ liệu cho {sku} tại kho {store}.',
+  },
   explorer: {
     title: 'Khám phá dự báo nhu cầu',
     badge_validated: 'Dữ liệu Walmart M5',
