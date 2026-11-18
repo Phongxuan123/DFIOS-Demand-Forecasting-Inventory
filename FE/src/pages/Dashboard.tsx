@@ -46,7 +46,7 @@ import {
   type Column,
 } from '../components/ui/index.ts';
 import { useApi } from '../hooks/useApi.ts';
-import { CLOCK_ADVANCE_DAYS, useClock } from '../context/ClockContext.tsx';
+import { AsyncAdvanceError, CLOCK_ADVANCE_DAYS, useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBeCode } from '../i18n/useBe.ts';
@@ -54,7 +54,7 @@ import { prefixCode } from '../i18n/beText.ts';
 import { costVsB0, countPhrase, reviewsPhrase, reviewsSinceStart, signedCurrency } from '../utils/simText.ts';
 import { thetaDomain } from '../utils/chartScale.ts';
 import { AdvanceProgress } from '../components/common/AdvanceProgress.tsx';
-import { apiErrorMessage } from '../services/apiClient.ts';
+import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
   getAlerts,
   getCalibrationHistory,
@@ -90,23 +90,18 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
   const [stoppedReviewDate, setStoppedReviewDate] = useState<string | null>(null);
   const [last, setLast] = useState<{ from: string; to: string; reviews: number; day0: boolean; stockouts: number; recs: number } | null>(null);
 
+  const runInBackground = asyncJob && approvalMode === 'auto';
+
   const doAdvance = async (expirePending: boolean = false) => {
     try {
       const res = await advance({
         days,
         approval_mode: approvalMode,
         expire_pending: expirePending,
-        async_job: asyncJob,
+        async_job: runInBackground,
       });
-      if (res.stopped_at_review) {
-        setStoppedReviewDate(res.current_date);
-        toast.info(
-          `Đã dừng ở kỳ review ${fmt.date(res.current_date)}`,
-          'Có đề xuất đặt hàng mới đang ở trạng thái PENDING chờ Planner xử lý.',
-        );
-      } else {
-        setStoppedReviewDate(null);
-      }
+      setStoppedReviewDate(res.stopped_at_review ? res.current_date : null);
+      if (res.pending_expired) toast.info(t('dashboard.clock.pending_expired', { count: fmt.integer(res.pending_expired) }));
       setLast({
         from: res.previous_date,
         to: res.current_date,
@@ -124,23 +119,24 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
         }),
         typeof res.duration_seconds === 'number' ? t('shell.clock.advance_duration', { seconds: fmt.number(res.duration_seconds, { digits: 1 }) }) : undefined,
       );
-    } catch (err: any) {
-      const is409 =
-        err?.status === 409 ||
-        err?.response?.status === 409 ||
-        (typeof err?.message === 'string' && err.message.includes('409')) ||
-        (typeof err?.detail === 'string' && err.detail.includes('chờ duyệt'));
-      if (is409) {
-        const detailMsg = err?.response?.data?.detail || err?.detail || 'Còn đề xuất đặt hàng của kỳ review trước đang chờ duyệt.';
-        const force = await confirm({
-          title: 'Đề xuất chờ duyệt chưa xử lý',
-          description: `${detailMsg}\n\nBạn có muốn bỏ qua (expire) các đề xuất này để tiếp tục tua không?`,
-          confirmLabel: 'Bỏ qua & Tiếp tục tua',
-          cancelLabel: 'Hủy bỏ',
+    } catch (err: unknown) {
+      if (err instanceof AsyncAdvanceError) {
+        toast.error(
+          t('shell.clock.advance_failed'),
+          err.kind === 'timeout' ? t('dashboard.clock.async_timeout') : t('dashboard.clock.async_failed', { error: err.serverError ?? '—' }),
+        );
+        return;
+      }
+      const e = toApiError(err);
+      // planner-in-the-loop: proposals of the previous review are still PENDING -> offer to skip them (expire_pending)
+      if (e.status === 409 && approvalMode === 'planner' && !expirePending) {
+        const skip = await confirm({
+          title: t('dashboard.clock.pending_title'),
+          description: t('dashboard.clock.pending_body', { detail: e.detail ?? '' }),
+          confirmLabel: t('dashboard.clock.pending_confirm'),
+          tone: 'danger',
         });
-        if (force) {
-          await doAdvance(true);
-        }
+        if (skip) await doAdvance(true);
         return;
       }
       toast.error(t('shell.clock.advance_failed'), apiErrorMessage(err, t));
@@ -227,7 +223,7 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
               </div>
               <div className="dash-clock-field dash-clock-field--mode">
                 <label htmlFor="dash-clock-mode" className="dash-clock-label">
-                  Chế độ
+                  {t('dashboard.clock.mode_label')}
                 </label>
                 <Select<'auto' | 'planner'>
                   id="dash-clock-mode"
@@ -235,32 +231,33 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
                   value={approvalMode}
                   onChange={setApprovalMode}
                   options={[
-                    { value: 'auto', label: 'Tự động' },
-                    { value: 'planner', label: 'Planner duyệt' },
+                    { value: 'auto', label: t('dashboard.clock.mode_auto') },
+                    { value: 'planner', label: t('dashboard.clock.mode_planner') },
                   ]}
                   disabled={advancing}
-                  aria-label="Chế độ duyệt"
+                  aria-label={t('dashboard.clock.mode_label')}
                 />
               </div>
               <label
+                title={approvalMode === 'planner' ? t('dashboard.clock.async_planner_hint') : undefined}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 5,
                   fontSize: 'var(--text-xs)',
-                  color: 'var(--color-text-secondary)',
-                  cursor: 'pointer',
+                  color: approvalMode === 'planner' ? 'var(--color-text-muted)' : 'var(--color-text-secondary)',
+                  cursor: approvalMode === 'planner' ? 'not-allowed' : 'pointer',
                   userSelect: 'none',
                   whiteSpace: 'nowrap',
                 }}
               >
                 <input
                   type="checkbox"
-                  checked={asyncJob}
+                  checked={runInBackground}
                   onChange={(e) => setAsyncJob(e.target.checked)}
-                  disabled={advancing}
+                  disabled={advancing || approvalMode === 'planner'}
                 />
-                Chạy nền
+                {t('dashboard.clock.async_label')}
               </label>
               <Button
                 variant="primary"
@@ -281,13 +278,11 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
       </div>
       {stoppedReviewDate && (
         <div style={{ marginTop: 'var(--space-2)' }}>
-          <Alert tone="warning" title={`Đã dừng ở kỳ review ${fmt.date(stoppedReviewDate)}`}>
+          <Alert tone="warning" title={t('dashboard.clock.stopped_title', { date: fmt.date(stoppedReviewDate) })}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-              <span>
-                Đồng hồ đã dừng lại tại kỳ review theo chế độ Planner duyệt. Có các đề xuất đặt hàng mới đang ở trạng thái PENDING.
-              </span>
+              <span>{t('dashboard.clock.stopped_body')}</span>
               <Button size="sm" variant="secondary" onClick={() => navigate('/replenishment?status=PENDING')}>
-                Xem đề xuất chờ duyệt
+                {t('dashboard.clock.stopped_cta')}
               </Button>
             </div>
           </Alert>

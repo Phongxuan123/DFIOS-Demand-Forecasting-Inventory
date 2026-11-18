@@ -12,6 +12,7 @@ import { useAuth } from './AuthContext.tsx';
 import { useStore } from './StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { apiClient, getJson, toApiError } from '../services/apiClient.ts';
+import { getBatchRunDetail, type BatchRunDetail } from '../services/batchRunsApi.ts';
 
 /** R5F-11: the ONE list of clock-advance choices (days), used by the Dashboard card and the top-bar chip. */
 export const CLOCK_ADVANCE_DAYS = [1, 7, 14, 28] as const;
@@ -48,9 +49,38 @@ export interface ClockAdvanceResult {
   approval_mode?: string;
   stopped_at_review?: boolean;
   pending_expired?: number;
+  orders_received?: number;
   run_id?: string | null;
 }
 
+/** Poll cadence and give-up time of a background advance (async_job). */
+const ASYNC_POLL_INTERVAL_MS = 2000;
+const ASYNC_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** A background advance that ended badly: the job failed on the server, or it did not finish in time. */
+export class AsyncAdvanceError extends Error {
+  readonly kind: 'failed' | 'timeout';
+  readonly runId: string;
+  readonly serverError: string | null;
+  constructor(kind: 'failed' | 'timeout', runId: string, serverError: string | null) {
+    super(serverError ?? `background advance ${kind} (run ${runId})`);
+    this.name = 'AsyncAdvanceError';
+    this.kind = kind;
+    this.runId = runId;
+    this.serverError = serverError;
+  }
+}
+
+function shiftIsoDate(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Options of POST /clock/advance. `async_job` returns at once and is polled through /batch-runs; it applies to Auto
+ * advances only (with approval_mode "planner" the call stays synchronous, see `advance`).
+ */
 export interface AdvanceOptions {
   days?: number;
   reviews?: number;
@@ -155,9 +185,11 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const started = Date.now();
       setAdvanceStartedAt(started);
       try {
+        // Planner mode always runs synchronously: only a synchronous call reports the 409 and the stop at a review
         const body = {
           store_id: storeId,
           ...opts,
+          async_job: opts.async_job === true && opts.approval_mode !== 'planner',
         };
         const res = await apiClient.post<ClockAdvanceResult | { run_id: string; poll_url: string; status: string }>(
           '/clock/advance',
@@ -165,40 +197,47 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           { timeout: 600000 }, // the batch chain can take minutes
         );
 
-        // Handle async_job (HTTP 202)
-        if (opts.async_job && res.data && 'run_id' in res.data && !('current_date' in res.data)) {
+        // async_job: HTTP 202 + run_id; poll GET /batch-runs/{run_id} until the ADVANCE row is final
+        if (res.status === 202) {
           const runId = (res.data as { run_id: string }).run_id;
-          let completed = false;
-          let latestDetail: any = null;
-          while (!completed) {
-            await new Promise((r) => setTimeout(r, 2000));
-            const statusRes = await apiClient.get<any>(`/batch-runs/${encodeURIComponent(runId)}`);
-            latestDetail = statusRes.data;
-            if (latestDetail?.status === 'success') {
-              completed = true;
-            } else if (latestDetail?.status === 'failed') {
-              throw new Error(latestDetail?.error || 'Batch advance job failed');
-            }
+          const deadline = Date.now() + ASYNC_POLL_TIMEOUT_MS;
+          let run: BatchRunDetail;
+          for (;;) {
+            await new Promise((r) => setTimeout(r, ASYNC_POLL_INTERVAL_MS));
+            run = await getBatchRunDetail(runId);
+            if (run.status === 'success') break;
+            if (run.status === 'failed') throw new AsyncAdvanceError('failed', runId, run.error ?? null);
+            if (Date.now() > deadline) throw new AsyncAdvanceError('timeout', runId, null);
           }
-          const elapsed = (Date.now() - started) / 1000;
-          setLastTiming({ days, seconds: elapsed });
+          // The real numbers of this run: the ADVANCE row details + its J1 row, and the clock re-read from the server
+          const after = await getJson<SimClock>('/clock', { params: { store_id: storeId }, notifyForbidden: false });
+          const d = (run.details ?? {}) as Record<string, unknown>;
+          const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+          const j1 = run.jobs.find((j) => j.job === 'J1');
+          const stockouts = num((j1?.details as Record<string, unknown> | null | undefined)?.stockouts);
+          const daysSimulated = num(d.days_simulated);
+          const previous = shiftIsoDate(after.current_date, -daysSimulated);
+          const seconds = typeof run.duration_ms === 'number' ? run.duration_ms / 1000 : (Date.now() - started) / 1000;
+          setLastTiming({ days: daysSimulated || days, seconds });
           setVersion((v) => v + 1);
           refresh();
           return {
             success: true,
             store_id: storeId,
-            previous_date: '',
-            current_date: latestDetail?.sim_date || '',
-            days_advanced: days,
-            reviews_executed: 1,
-            stockouts_recorded: 0,
-            recommendations_generated: 0,
+            previous_date: previous,
+            current_date: after.current_date,
+            days_advanced: daysSimulated,
+            reviews_executed: num(d.reviews_executed),
+            day0_review_executed: previous === after.start_date,
+            stockouts_recorded: stockouts,
+            recommendations_generated: num(d.orders),
+            orders_received: num(d.orders_received),
             job_events: [],
-            message: 'Async batch advance completed successfully',
-            duration_seconds: elapsed,
-            approval_mode: opts.approval_mode || 'auto',
+            message: '',
+            duration_seconds: seconds,
+            approval_mode: typeof d.approval_mode === 'string' ? d.approval_mode : opts.approval_mode ?? 'auto',
             run_id: runId,
-          } as ClockAdvanceResult;
+          };
         }
 
         const syncResult = res.data as ClockAdvanceResult;
