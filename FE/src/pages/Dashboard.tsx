@@ -574,7 +574,7 @@ export const Dashboard: React.FC = () => {
       <Badge tone="success">
         {t('dashboard.charts.cost_savings', {
           saved: fmt.currency(diff, { compact: true }),
-          pct: fmt.percent(pct / 100, { scale: 'percent', digits: 1 }),
+          pct: fmt.percent(pct, { scale: 'percent', digits: 1 }),
         })}
       </Badge>
     );
@@ -738,8 +738,11 @@ export const Dashboard: React.FC = () => {
             delta={
               sh?.c3out_overall_availability != null && sh.b0_overall_availability != null
                 ? {
-                    value: (sh.c3out_overall_availability - sh.b0_overall_availability) * 100,
-                    text: `${sh.c3out_overall_availability >= sh.b0_overall_availability ? '+' : ''}${fmt.number((sh.c3out_overall_availability - sh.b0_overall_availability) * 100, { digits: 1 })}% vs B0`,
+                    // both availabilities are already in percent (96.7 vs 90.1): the gap is in percentage points
+                    value: sh.c3out_overall_availability - sh.b0_overall_availability,
+                    text: t('dashboard.kpi.availability_vs_b0', {
+                      pp: `${sh.c3out_overall_availability >= sh.b0_overall_availability ? '+' : ''}${fmt.number(sh.c3out_overall_availability - sh.b0_overall_availability, { digits: 1 })}`,
+                    }),
                     goodWhen: 'up',
                   }
                 : undefined
