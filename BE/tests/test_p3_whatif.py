@@ -1,4 +1,6 @@
-"""P3-F4: what-if R = 1 stays a structured 422 (no daily causal forecasts), R = 7 is accepted; dash_avail_b0 label."""
+"""P3-F4 / H1: without daily-origin window quantiles (only weekly forecast_backtest reviews) what-if R = 1 is a
+structured 422 whose r_options = [7]; R = 7 is accepted; dash_avail_b0 label. R = 1 WITH daily teacher rows:
+test_h1_whatif_daily.py."""
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -30,7 +32,7 @@ def test_r1_is_structured_422_with_r_options():
     d = ei.value.detail
     assert d["reason_code"] == "unsupported_review_period"
     assert d["r_options"] == [7] and d["supported_review_period_days"] == [7]
-    assert "R = 1" in d["reason"]
+    assert "R = 1" in d["reason"] and "--daily-origins" in d["reason"]
 
 
 def test_r7_passes_review_period_gate():

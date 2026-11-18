@@ -216,7 +216,7 @@ export const be: typeof ViBe = {
   code: {
     whatif_store_required: 'What-if runs for ONE store (GLOBAL is not supported).',
     whatif_no_review_forecasts: 'This store has no stored causal review forecasts (forecast_backtest): nothing to replay.',
-    whatif_unsupported_review_period: 'This review period R is not supported: the stored review forecasts are {supported_review_period_days} days apart, so only R = {supported_review_period_days} can be replayed without inventing intermediate forecasts.',
+    whatif_unsupported_review_period: 'R = {review_period_days} days cannot be replayed for this store with L = {lead_time_days}: there is no stored window quantile (H = L + R) at every review of the replay span, and intermediate forecasts are never invented. Replayable R (days): {r_options}.',
     whatif_unknown_class: 'Unknown ABC-XYZ class.',
     whatif_policy_params_missing: 'A policy is missing m_g or κ_g.',
     whatif_insufficient_data: 'No class of the store has replayable data (needs at least 2 stored review forecasts before the clock and SKUs with complete realised demand, quantiles and prices).',

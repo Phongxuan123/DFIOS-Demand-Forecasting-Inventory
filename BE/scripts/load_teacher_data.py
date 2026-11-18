@@ -20,6 +20,10 @@ What it writes (idempotent; every step can be re-run):
              are the only re-tuning). Per model the first folder among DFIOS/results/forecasts,
              c3out_experiments/results/m5/forecasts, c3out_experiments/results/revision/forecasts and
              c3out_bundle/results/m5/forecasts whose Q_H10 covers every review day is used.
+             Daily origins (``--daily-origins --horizons 4 10``): instead of the weekly reviews, Q_H at EVERY day
+             t = VAL_START .. T_END - 1 for each H (H = L + R: 4 for the what-if with R = 1, 10 for R = 7), same
+             model_run_id / route; origins that already hold teacher rows for every SKU at that H (the weekly
+             H = 10 rows) are kept, never duplicated (see ``load_daily_quantiles``).
   clock      sim_clock(store) start = current = TEST_START (2015-05-25; --clock-start-day 1395 = 2014-11-24 for the
              teacher's continuous run, with --refit-as-of-day 1577 for selection #0), the store's simulation state is cleared
              (snapshot, shadow, service outcomes, inventory_daily, simulator orders, C3 states k >= 1, store-scoped
@@ -35,6 +39,8 @@ starts with ``dfios_sandbox`` (e.g. ``dfios_sandbox``, ``dfios_sandbox_f3``). Th
     # model switch chronos_bolt -> ensemble at day 1759 (2015-11-23): quantiles + clock reset only
     python scripts/load_teacher_data.py --store CA_1 --steps quantiles clock \
         --switch-from chronos_bolt --switch-to ensemble --switch-day 1759
+    # daily-origin window quantiles for the what-if with R = 1 (H = 4) and R = 7 (H = 10)
+    python scripts/load_teacher_data.py --store CA_1 --steps quantiles --daily-origins --horizons 4 10
 """
 from __future__ import annotations
 
@@ -169,7 +175,7 @@ def read_teacher(teacher_dir: str, store: str = "CA_1", model: str = "ensemble",
         q, _ = review_quantiles(teacher_dir, model, sl, reviews, H)
     return {"meta": sub, "y": y, "price": price, "q": q, "reviews": reviews, "start_day": start_day,
             "VAL_START": val, "TEST_START": test, "T_END": T, "H": H, "store": store, "model": model,
-            "switch": switch}
+            "switch": switch, "slice": sl}
 
 
 # --------------------------------------------------------------------------- helpers
@@ -352,6 +358,88 @@ def load_quantiles(db, td: Dict[str, object]) -> Dict[str, int]:
     return out
 
 
+def _q_levels_json(row: np.ndarray, keys: Sequence[str]) -> str:
+    return "{" + ", ".join(f'"{k}": {float(v)!r}' for k, v in zip(keys, row)) + "}"
+
+
+def load_daily_quantiles(db, td: Dict[str, object], teacher_dir: str, horizons: Sequence[int],
+                         first_day: Optional[int] = None, last_day: Optional[int] = None,
+                         chunk_origins: int = 20) -> Dict[str, object]:
+    """``--daily-origins``: Q_H window quantiles (19 levels) of ``td['model']`` at EVERY day t in
+    [first_day, last_day] (default VAL_START .. T_END - 1) for each H in ``horizons`` (H = L + R: 4 for R = 1,
+    10 for R = 7), same model_run_id / route = 'teacher' / row shape as the weekly rows.
+
+    Idempotent: an origin that already carries a teacher row for every SKU of the store at that H (e.g. the weekly
+    H = 10 rows of the ``quantiles`` step) is KEPT as it is (never duplicated, a model-switch run is not
+    overwritten); every other origin of the range is replaced (its rows of that H and model run deleted, computed
+    route-(c) rows included, like ``load_quantiles``) and re-inserted with COPY on PostgreSQL."""
+    from sqlalchemy import delete, func
+    from app.models.forecast_window_quantile import ForecastWindowQuantile as FWQ
+    from app.services import policy_config as pc
+    from app.services.window_quantile_service import DEFAULT_MODEL_RUN_ID
+
+    if td.get("switch"):
+        raise ValueError("--daily-origins does not support a model switch")
+    store, meta, model = td["store"], td["meta"], str(td["model"])
+    lo = int(td["VAL_START"] if first_day is None else first_day)
+    hi = int(int(td["T_END"]) - 1 if last_day is None else last_day)
+    days = np.arange(lo, hi + 1)
+    item_ids = meta["item_id"].astype(str).tolist()
+    n = len(item_ids)
+    sl = td["slice"]
+    keys = [str(lv) for lv in QUANTILE_LEVELS]
+    i50 = QUANTILE_LEVELS.index(0.5)
+    now = datetime.now(timezone.utc)
+    out: Dict[str, object] = {"model": model, "first_origin": day_to_date(lo).isoformat(),
+                              "last_origin": day_to_date(hi).isoformat(), "items": n}
+    for H in [int(h) for h in horizons]:
+        t0 = time.time()
+        fdir = resolve_forecast_dir(teacher_dir, model, days, H)
+        origins = np.load(os.path.join(fdir, "origins.npy"))
+        qa = np.load(os.path.join(fdir, f"Q_H{H}.npy"), mmap_mode="r")
+        if qa.ndim != 3 or qa.shape[2] != len(QUANTILE_LEVELS) or qa.shape[0] != len(origins):
+            raise ValueError(f"unexpected {fdir}/Q_H{H} shape {qa.shape}")
+        oidx = np.searchsorted(origins, days)
+        # origins already complete for this H (teacher route, every SKU) are kept
+        have = {od: c for od, c in db.query(FWQ.origin_date, func.count(FWQ.id)).filter(
+            FWQ.store_id == store, FWQ.model_run_id == DEFAULT_MODEL_RUN_ID, FWQ.horizon_days == H,
+            FWQ.route == pc.ROUTE_TEACHER, FWQ.origin_date >= day_to_date(lo), FWQ.origin_date <= day_to_date(hi),
+        ).group_by(FWQ.origin_date).all()}
+        todo = [int(d) for d in days if have.get(day_to_date(int(d)), 0) < n]
+        kept = len(days) - len(todo)
+        inserted = deleted = 0
+        conn = db.connection()
+        for k in range(0, len(todo), chunk_origins):
+            part = todo[k:k + chunk_origins]
+            dates = [day_to_date(d) for d in part]
+            deleted += db.execute(delete(FWQ).where(
+                FWQ.store_id == store, FWQ.model_run_id == DEFAULT_MODEL_RUN_ID, FWQ.horizon_days == H,
+                FWQ.origin_date.in_(dates))).rowcount or 0
+            rows = []
+            for d, od in zip(part, dates):
+                qk = np.round(np.asarray(qa[int(oidx[d - lo]), sl, :], dtype=np.float64), 4)
+                if qk.shape[0] != n:
+                    raise ValueError(f"Q_H{H} origin {d}: {qk.shape[0]} rows, expected {n}")
+                ods = od.isoformat()
+                for i, iid in enumerate(item_ids):
+                    rows.append({
+                        "id": f"{DEFAULT_MODEL_RUN_ID}_{store}_{iid}_{ods}_{H}", "model_run_id": DEFAULT_MODEL_RUN_ID,
+                        "store_id": store, "item_id": iid, "origin_date": od, "horizon_days": H,
+                        "point_window": float(qk[i, i50]),
+                        "q_levels": (_q_levels_json(qk[i], keys) if _is_pg(conn)
+                                     else {kk: float(v) for kk, v in zip(keys, qk[i])}),
+                        "route": pc.ROUTE_TEACHER, "created_at": now,
+                    })
+            _bulk_insert(conn, FWQ.__table__, rows)
+            inserted += len(rows)
+            db.commit()
+            conn = db.connection()
+        out[f"H{H}"] = {"origins": len(days), "origins_kept_existing": kept, "origins_loaded": len(todo),
+                        "rows_inserted": inserted, "rows_deleted": int(deleted), "folder": fdir,
+                        "seconds": round(time.time() - t0, 1)}
+    return out
+
+
 def set_clock(db, td: Dict[str, object], initial_refit: bool = True, start_day: Optional[int] = None,
               refit_as_of_day: Optional[int] = None) -> Dict[str, object]:
     """Clock at ``start_day`` (default TEST_START), clean simulation state of the store, theta_0 = 0, initial stock,
@@ -426,7 +514,7 @@ def set_clock(db, td: Dict[str, object], initial_refit: bool = True, start_day: 
 def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", start_day: int = 1031,
         steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print, switch_from: Optional[str] = None,
         switch_to: Optional[str] = None, switch_day: Optional[int] = None, clock_start_day: Optional[int] = None,
-        refit_as_of_day: Optional[int] = None) -> Dict[str, object]:
+        refit_as_of_day: Optional[int] = None, daily_horizons: Optional[Sequence[int]] = None) -> Dict[str, object]:
     t0 = time.time()
     td = read_teacher(teacher_dir, store, model, start_day, switch_from=switch_from, switch_to=switch_to,
                       switch_day=switch_day)
@@ -434,6 +522,8 @@ def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", star
                                  "read_seconds": round(time.time() - t0, 1)}
     log(f"read teacher arrays: {report['n_skus']} SKUs ({report['read_seconds']}s)")
     fns = {"classes": load_classes, "sales": load_sales, "prices": load_prices, "quantiles": load_quantiles}
+    if daily_horizons:  # --daily-origins: the quantiles step stores daily-origin rows for each H instead
+        fns["quantiles"] = lambda db_, td_: load_daily_quantiles(db_, td_, teacher_dir, daily_horizons)
     for step in steps:
         t1 = time.time()
         res = (set_clock(db, td, initial_refit, clock_start_day, refit_as_of_day) if step == "clock"
@@ -460,6 +550,11 @@ def main(argv=None) -> int:
                     help="clock step: start day index (default TEST_START 1577; 1395 = continuous from VAL_START)")
     ap.add_argument("--refit-as-of-day", type=int, default=None,
                     help="clock step: compute J5 selection #0 as of this day (e.g. 1577 with --clock-start-day 1395)")
+    ap.add_argument("--daily-origins", action="store_true",
+                    help="quantiles step: store the window quantiles at EVERY day VAL_START..T_END-1 (needed by the "
+                         "what-if with R = 1) for each H of --horizons instead of the weekly reviews")
+    ap.add_argument("--horizons", type=int, nargs="+", default=[L_DEFAULT + 1, L_DEFAULT + R_DEFAULT],
+                    help="with --daily-origins: window lengths H = L + R to store (default 4 10)")
     ap.add_argument("--report", default=None, help="write the JSON report here")
     args = ap.parse_args(argv)
 
@@ -478,7 +573,8 @@ def main(argv=None) -> int:
         rep = run(db, args.teacher_dir, args.store, args.model, args.start_day, args.steps,
                   not args.no_initial_refit, switch_from=args.switch_from, switch_to=args.switch_to,
                   switch_day=args.switch_day, clock_start_day=args.clock_start_day,
-                  refit_as_of_day=args.refit_as_of_day)
+                  refit_as_of_day=args.refit_as_of_day,
+                  daily_horizons=args.horizons if args.daily_origins else None)
     finally:
         db.close()
     if args.report:
