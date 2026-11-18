@@ -323,7 +323,7 @@ class DataQualityService:
             db,
             action="ml.data_quality.run",
             actor_email=admin_email,
-            details=f"Kiểm tra chất lượng dữ liệu ML (UC46): Trạng thái {status_val}, Passed={passed_val}, {issue_count} vấn đề phát hiện.",
+            details=f"Kiểm tra chất lượng dữ liệu ML: Trạng thái {status_val}, Passed={passed_val}, {issue_count} vấn đề phát hiện.",
         )
         db.commit()
 

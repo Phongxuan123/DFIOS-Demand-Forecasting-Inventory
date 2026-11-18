@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowRight, AlertCircle } from 'lucide-react';
 import { useAuth, SESSION_EXPIRED_FLAG } from '../../context/AuthContext.tsx';
 import { useT } from '../../i18n/index.tsx';
 import { apiErrorMessage, toApiError } from '../../services/apiClient.ts';
@@ -21,9 +22,7 @@ function writePref(key: string, value: string | null) {
   try {
     if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 }
 
 export const Login: React.FC = () => {
@@ -39,7 +38,7 @@ export const Login: React.FC = () => {
   const [remember, setRemember] = useState(() => readPref('dfios_remember_me') !== 'false');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  // The flag is only set by a real 401 (AuthContext) and cleared by a successful login, so it can never be stale.
+  const [capsLock, setCapsLock] = useState(false);
   const [expired, setExpired] = useState(() => {
     try {
       return sessionStorage.getItem(SESSION_EXPIRED_FLAG) === '1';
@@ -91,24 +90,42 @@ export const Login: React.FC = () => {
             setExpired(false);
           }}
         />
-        <PasswordField
-          id="login-password"
-          label={t('auth.password_label')}
-          autoComplete="current-password"
-          value={password}
-          required
-          autoFocus={!!initialEmail}
-          onChange={(e) => {
-            setPassword(e.target.value);
-            setError('');
-          }}
-        />
+        <div
+          onKeyDown={(e) => setCapsLock(Boolean(e.getModifierState && e.getModifierState('CapsLock')))}
+          onKeyUp={(e) => setCapsLock(Boolean(e.getModifierState && e.getModifierState('CapsLock')))}
+        >
+          <PasswordField
+            id="login-password"
+            label={t('auth.password_label')}
+            autoComplete="current-password"
+            value={password}
+            required
+            autoFocus={!!initialEmail}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setError('');
+            }}
+          />
+          {capsLock && (
+            <span className="auth-caps-warning">
+              <AlertCircle size={13} />
+              <span>Caps Lock is ON</span>
+            </span>
+          )}
+        </div>
         <div className="auth-row">
           <Checkbox label={t('auth.login.remember')} checked={remember} onChange={setRemember} />
           <Link to="/forgot-password">{t('auth.login.forgot')}</Link>
         </div>
         <Button type="submit" variant="primary" size="lg" fullWidth loading={submitting} disabled={!email.trim() || !password}>
-          {submitting ? t('auth.login.submitting') : t('auth.login.submit')}
+          {submitting ? (
+            t('auth.login.submitting')
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+              {t('auth.login.submit')}
+              <ArrowRight size={16} />
+            </span>
+          )}
         </Button>
       </form>
       <p className="auth-links">

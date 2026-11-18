@@ -139,7 +139,7 @@ export const settings = {
     model: 'Mô hình',
     horizon: 'Số ngày dự báo (7 đến 28)',
     store: 'Kho',
-    auto_opt: 'Tự tính lại SS/ROP/EOQ và ABC-XYZ sau khi chạy (UC50)',
+    auto_opt: 'Tự tính lại SS/ROP/EOQ và ABC-XYZ sau khi chạy',
     name_required: 'Nhập tên lịch.',
     cron_invalid: 'Cron cần đúng 5 trường cách nhau bằng dấu cách.',
     horizon_invalid: 'Số ngày phải từ 7 đến 28.',
@@ -288,7 +288,7 @@ export const settings = {
     source: '/imports, /imports/template',
   },
   quality: {
-    title: 'Kiểm tra chất lượng dữ liệu (UC46)',
+    title: 'Kiểm tra chất lượng dữ liệu',
     description: 'Chạy trên máy chủ: số âm, trùng ngày, SKU không có trong danh mục, ngoại lai (Z-score), tỷ lệ thiếu ngày và rò rỉ dữ liệu sau mốc cutoff. Chỉ Quản trị viên.',
     store: 'Kho',
     cutoff: 'Mốc cutoff (tùy chọn)',

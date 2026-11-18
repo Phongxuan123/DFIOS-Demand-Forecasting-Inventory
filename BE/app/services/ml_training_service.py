@@ -184,7 +184,7 @@ class MLTrainingService:
             db,
             action="ml.train.start",
             actor_email=admin_email,
-            details=f"Khởi tạo tiến trình huấn luyện mô hình ML (UC47): Job ID {saved.id}, Models: {request.models}",
+            details=f"Khởi tạo tiến trình huấn luyện mô hình ML: Job ID {saved.id}, Models: {request.models}",
         )
         db.commit()
 

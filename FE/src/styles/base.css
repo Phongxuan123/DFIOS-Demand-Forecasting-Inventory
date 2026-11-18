@@ -63,6 +63,10 @@ textarea {
   color: inherit;
 }
 
+select {
+  color-scheme: inherit;
+}
+
 button {
   cursor: pointer;
 }

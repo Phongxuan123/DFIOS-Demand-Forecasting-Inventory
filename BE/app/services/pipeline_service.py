@@ -83,7 +83,7 @@ class PipelineService:
             db,
             key=self.SETTINGS_KEY,
             value=copy.deepcopy(self._default_schedules()),
-            description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+            description="Lịch chạy batch pipeline dự báo định kỳ",
         )
         return True
 
@@ -98,7 +98,7 @@ class PipelineService:
                 db,
                 key=self.SETTINGS_KEY,
                 value=schedules,
-                description="Lịch chạy batch pipeline dự báo định kỳ (UC49)",
+                description="Lịch chạy batch pipeline dự báo định kỳ",
             )
 
     def create_schedule(

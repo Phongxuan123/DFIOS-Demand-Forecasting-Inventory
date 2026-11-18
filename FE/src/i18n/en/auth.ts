@@ -1,7 +1,7 @@
 import type { auth as Vi } from '../vi/auth.ts';
 
 export const auth: typeof Vi = {
-  footer: 'DFIOS thesis project. Data: M5 (Walmart) dataset.',
+  footer: '© 2026 DFIOS Enterprise System. All rights reserved.',
   back_to_login: 'Back to sign in',
   go_to_login: 'Go to sign in',
   email_label: 'Email',

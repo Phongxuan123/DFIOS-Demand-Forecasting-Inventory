@@ -3,7 +3,7 @@ import { useStore } from '../../context/StoreContext.tsx';
 import { useApi } from '../../hooks/useApi.ts';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { listAdjustments, type Adjustment } from '../../services/productsApi.ts';
-import { Card, DataSourceNote, SearchInput, Table, Unavailable, usePagination, type Column } from '../../components/ui/index.ts';
+import { Card, SearchInput, Table, Unavailable, usePagination, type Column } from '../../components/ui/index.ts';
 
 export const AdjustmentsTab: React.FC = () => {
   const t = useT();
@@ -51,9 +51,6 @@ export const AdjustmentsTab: React.FC = () => {
         dense
         pagination={{ page: pg.page, pageSize: pg.pageSize, onPageChange: pg.setPage, onPageSizeChange: pg.setPageSize, total: list.data?.total ?? 0 }}
       />
-      <div className="prd-pad">
-        <DataSourceNote source={`${t('products.adjustments.source')}${storeId ? `, ${storeId}` : ''}`} />
-      </div>
     </Card>
   );
 };

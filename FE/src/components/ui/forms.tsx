@@ -1,6 +1,6 @@
 /** Field, Input, SearchInput (debounced), Select, Checkbox, Switch, Tabs. */
-import React, { useEffect, useId, useRef, useState } from 'react';
-import { ChevronDown, Search, X } from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { useT } from '../../i18n/index.tsx';
 import { cx, type ControlSize } from './primitives.tsx';
 import './ui.css';
@@ -159,12 +159,12 @@ export interface SelectProps<V extends string | number = string> {
   placeholder?: string;
   size?: ControlSize;
   disabled?: boolean;
+  direction?: 'auto' | 'up' | 'down';
   id?: string;
   className?: string;
   'aria-label'?: string;
 }
 
-/** Native <select> (accessible, mobile friendly) with the DFIOS look. */
 export function Select<V extends string | number = string>({
   value,
   onChange,
@@ -175,38 +175,145 @@ export function Select<V extends string | number = string>({
   placeholder,
   size = 'md',
   disabled,
+  direction = 'auto',
   id,
   className,
   ...rest
 }: SelectProps<V>) {
   const auto = useId();
   const selectId = id ?? auto;
+  const [open, setOpen] = useState(false);
+  const [openUp, setOpenUp] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const selectedOption = useMemo(
+    () => options.find((o) => String(o.value) === String(value)),
+    [options, value],
+  );
+
+  const toggleOpen = () => {
+    if (disabled) return;
+    if (!open) {
+      if (direction === 'up') {
+        setOpenUp(true);
+      } else if (direction === 'down') {
+        setOpenUp(false);
+      } else if (wrapRef.current) {
+        const rect = wrapRef.current.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        setOpenUp(spaceBelow < 260 && rect.top > spaceBelow);
+      }
+      setOpen(true);
+    } else {
+      setOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && listRef.current) {
+      const selectedEl = listRef.current.querySelector<HTMLElement>('[data-selected="true"]');
+      if (selectedEl) {
+        selectedEl.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }, [open]);
+
+  const displayLabel = selectedOption
+    ? selectedOption.label
+    : placeholder || (value !== '' && value !== undefined && value !== null ? String(value) : '—');
+
   return (
     <Field label={label} hint={hint} error={error} htmlFor={selectId} className={className}>
-      <div className={cx('ui-control', 'ui-select-wrap', size !== 'md' && `ui-control--${size}`, !!error && 'ui-control--error', disabled && 'ui-control--disabled')}>
-        <select
+      <div
+        ref={wrapRef}
+        className={cx(
+          'ui-control',
+          'ui-select-wrap',
+          size !== 'md' && `ui-control--${size}`,
+          !!error && 'ui-control--error',
+          disabled && 'ui-control--disabled',
+          open && 'ui-select-wrap--open',
+          openUp && 'ui-select-wrap--up',
+        )}
+      >
+        <button
+          type="button"
           id={selectId}
-          className="ui-control__input"
-          value={String(value)}
+          className="ui-select-trigger"
           disabled={disabled}
+          onClick={toggleOpen}
+          aria-haspopup="listbox"
+          aria-expanded={open}
           aria-label={rest['aria-label']}
-          onChange={(e) => {
-            const opt = options.find((o) => String(o.value) === e.target.value);
-            if (opt) onChange(opt.value);
-          }}
         >
-          {placeholder && (
-            <option value="" disabled>
-              {placeholder}
-            </option>
-          )}
-          {options.map((o) => (
-            <option key={String(o.value)} value={String(o.value)} disabled={o.disabled}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown size={14} className="ui-select-caret" aria-hidden="true" />
+          <span className="ui-select-value">{displayLabel}</span>
+          <ChevronDown
+            size={14}
+            className={cx(
+              'ui-select-caret',
+              open && 'ui-select-caret--open',
+              openUp && 'ui-select-caret--up',
+            )}
+            aria-hidden="true"
+          />
+        </button>
+
+        {open && (
+          <div
+            className={cx('ui-select-menu', openUp ? 'ui-select-menu--up' : 'ui-select-menu--down')}
+            role="listbox"
+            ref={listRef}
+          >
+            {options.length === 0 ? (
+              <div className="ui-select-empty">{placeholder || 'Không có lựa chọn'}</div>
+            ) : (
+              options.map((opt) => {
+                const isSelected = String(opt.value) === String(value);
+                return (
+                  <div
+                    key={String(opt.value)}
+                    role="option"
+                    aria-selected={isSelected}
+                    data-selected={isSelected}
+                    className={cx(
+                      'ui-select-item',
+                      isSelected && 'ui-select-item--selected',
+                      opt.disabled && 'ui-select-item--disabled',
+                    )}
+                    onClick={() => {
+                      if (!opt.disabled) {
+                        onChange(opt.value);
+                        setOpen(false);
+                      }
+                    }}
+                  >
+                    <span className="ui-select-item-text">{opt.label}</span>
+                    {isSelected && <Check size={14} className="ui-select-check" />}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
     </Field>
   );

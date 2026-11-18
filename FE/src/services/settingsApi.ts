@@ -21,7 +21,6 @@ export const updateProfile = (displayName: string) =>
 export const changePassword = (oldPassword: string, newPassword: string) =>
   apiClient.post<{ message: string }>('/auth/change-password', { old_password: oldPassword, new_password: newPassword }).then((r) => r.data);
 
-/** UC05: sends a confirmation link to the NEW address; the change happens at /confirm-email. */
 export const requestEmailChange = (newEmail: string, currentPassword: string) =>
   apiClient.post<{ message: string }>('/auth/me/email', { new_email: newEmail, current_password: currentPassword }).then((r) => r.data);
 

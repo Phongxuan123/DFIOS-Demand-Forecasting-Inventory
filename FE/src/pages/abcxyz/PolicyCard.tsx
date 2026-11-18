@@ -1,9 +1,9 @@
 import React from 'react';
-import { Alert, Badge, Card, DataSourceNote, Table, type Column } from '../../components/ui/index.ts';
+import { Alert, Badge, Card, Table, type Column } from '../../components/ui/index.ts';
 import { NoPermission } from '../../auth/RequireRole.tsx';
 import { useFormat, useT } from '../../i18n/index.tsx';
 import { useBe } from '../../i18n/useBe.ts';
-import { toApiError, apiErrorMessage } from '../../services/apiClient.ts';
+import { toApiError } from '../../services/apiClient.ts';
 import type { ClassificationMatrix, Recommendation, ServiceLevelConfig } from '../../services/abcxyzApi.ts';
 
 interface Props {
@@ -18,7 +18,7 @@ interface Props {
   selected: string | null;
 }
 
-export const PolicyCard: React.FC<Props> = ({ allowed, recs, recsLoading, recsError, onRetry, matrix, serviceLevel, serviceLevelError, selected }) => {
+export const PolicyCard: React.FC<Props> = ({ allowed, recs, recsLoading, recsError, onRetry, matrix, serviceLevel, serviceLevelError: _serviceLevelError, selected }) => {
   const t = useT();
   const fmt = useFormat();
   const be = useBe();
@@ -33,22 +33,14 @@ export const PolicyCard: React.FC<Props> = ({ allowed, recs, recsLoading, recsEr
   ];
 
   let slNote: React.ReactNode = null;
-  if (allowed) {
-    if (serviceLevel) {
-      const cats = Object.entries(serviceLevel.category_service_levels ?? {});
+  if (allowed && serviceLevel) {
+    const cats = Object.entries(serviceLevel.category_service_levels ?? {});
+    if (cats.length > 0) {
       slNote = (
         <Alert tone="info">
-          {t('abcxyz.policy.service_level_note', { v: fmt.percent(serviceLevel.default_service_level, { digits: 1 }) })}
-          {cats.length > 0 && (
-            <>
-              {' '}
-              {t('abcxyz.policy.category_levels', { list: cats.map(([k, v]) => `${k} ${fmt.percent(v, { digits: 1 })}`).join(', ') })}
-            </>
-          )}
+          {t('abcxyz.policy.category_levels', { list: cats.map(([k, v]) => `${k} ${fmt.percent(v, { digits: 1 })}`).join(', ') })}
         </Alert>
       );
-    } else if (serviceLevelError) {
-      slNote = <Alert tone="warning">{t('abcxyz.policy.service_level_unavailable', { reason: apiErrorMessage(serviceLevelError, t) })}</Alert>;
     }
   }
 
@@ -69,9 +61,6 @@ export const PolicyCard: React.FC<Props> = ({ allowed, recs, recsLoading, recsEr
             dense
             wrap
           />
-          <div style={{ padding: 'var(--space-2) var(--space-4) var(--space-3)' }}>
-            <DataSourceNote source={t('abcxyz.policy.source')} />
-          </div>
         </>
       )}
     </Card>

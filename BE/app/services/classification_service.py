@@ -395,7 +395,10 @@ class ClassificationService:
         if not is_global:
             latest_q = latest_q.filter(SKUClassification.store_id == store_id)
         latest_cls = latest_q.order_by(SKUClassification.updated_at.desc()).first()
-        last_updated = latest_cls[0] if latest_cls else datetime.now(timezone.utc)
+        if latest_cls and latest_cls[0]:
+            last_updated = latest_cls[0] if latest_cls[0].tzinfo else latest_cls[0].replace(tzinfo=timezone.utc)
+        else:
+            last_updated = datetime.now(timezone.utc)
 
         return ClassificationMatrixResponse(
             total_skus=total_skus,

@@ -2,41 +2,63 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { DfiosBrandMark } from '../../components/common/DfiosBrandMark.tsx';
 import { LanguageToggle, ThemeToggle } from '../../components/common/PreferenceToggles.tsx';
-import { useT } from '../../i18n/index.tsx';
+import { useT, useLocale } from '../../i18n/index.tsx';
 import '../../components/layout/shell.css';
 import './auth.css';
 
-/** Shared frame of all pre-login pages: brand, language + theme toggles, centered card, footer. */
 export const AuthShell: React.FC<{ title: string; subtitle?: string; children: React.ReactNode }> = ({ title, subtitle, children }) => {
   const t = useT();
+  const locale = useLocale();
+  const isVi = locale === 'vi';
+
   return (
     <div className="auth-page">
-      <div className="auth-page__bar">
-        <Link to="/login" className="auth-page__brand" style={{ textDecoration: 'none' }}>
-          <span className="auth-page__logo">
-            <DfiosBrandMark size={17} />
+      <div className="auth-backdrop-overlay" aria-hidden="true" />
+      <div className="auth-ambient-glow" aria-hidden="true" />
+      
+      <header className="auth-topbar">
+        <Link to="/login" className="auth-topbar-brand">
+          <span className="auth-topbar-logo">
+            <DfiosBrandMark size={22} />
           </span>
-          DFIOS
+          <span className="auth-topbar-name">DFIOS</span>
         </Link>
-        <div className="auth-page__tools">
+        <div className="auth-tools">
           <LanguageToggle />
           <ThemeToggle />
         </div>
-      </div>
-      <main className="auth-page__main">
+      </header>
+
+      <main className="auth-main">
         <div className="auth-card">
-          <h1 className="auth-card__title">{title}</h1>
-          {subtitle && <p className="auth-card__subtitle">{subtitle}</p>}
-          {!subtitle && <div style={{ height: 'var(--space-6)' }} />}
+          <div className="auth-card-brand">
+            <div className="auth-card-logo">
+              <DfiosBrandMark size={28} />
+            </div>
+            <div className="auth-card-brand-text">
+              <span className="auth-card-brand-title">DFIOS</span>
+              <span className="auth-card-brand-desc">
+                {isVi ? 'Dự báo Nhu cầu & Tối ưu Tồn kho' : 'Demand Forecasting & Inventory Optimization'}
+              </span>
+            </div>
+          </div>
+
+          <div className="auth-card-header">
+            <h1 className="auth-card__title">{title}</h1>
+            {subtitle && <p className="auth-card__subtitle">{subtitle}</p>}
+          </div>
+
           {children}
         </div>
       </main>
-      <footer className="auth-footer">{t('auth.footer')}</footer>
+
+      <footer className="auth-bottom-footer">
+        {t('auth.footer')}
+      </footer>
     </div>
   );
 };
 
-/** Full-screen splash while the stored session is being validated. */
 export const AuthSplash: React.FC = () => {
   const t = useT();
   return (
