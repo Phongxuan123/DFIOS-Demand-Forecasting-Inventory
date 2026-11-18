@@ -44,6 +44,7 @@ import {
   type Column,
 } from '../components/ui/index.ts';
 import { can } from '../auth/permissions.ts';
+import { ForecastWindowPanel } from '../components/inventory/ForecastWindowView.tsx';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useClock } from '../context/ClockContext.tsx';
 import { useStore } from '../context/StoreContext.tsx';
@@ -67,7 +68,7 @@ import {
 } from '../services/forecastApi.ts';
 import './ForecastExplorer.css';
 
-type MainTab = 'overview' | 'sku' | 'schedule';
+type MainTab = 'overview' | 'sku' | 'window' | 'schedule';
 type RowQuality = 'ok' | 'crossing' | 'missing';
 
 const DEPARTMENTS = ['FOODS_1', 'FOODS_2', 'HOBBIES_1', 'HOUSEHOLD_1', 'HOUSEHOLD_2'] as const;
@@ -392,7 +393,7 @@ export const ForecastExplorer: React.FC = () => {
 
   const [mainTab, setMainTab] = useState<MainTab>(() => {
     const p = searchParams.get('tab');
-    return p === 'sku' || p === 'schedule' ? p : 'overview';
+    return p === 'sku' || p === 'window' || p === 'schedule' ? p : 'overview';
   });
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const [rangeDays, setRangeDays] = useState<30 | 60 | 90>(30);
@@ -952,6 +953,7 @@ export const ForecastExplorer: React.FC = () => {
             items={[
               { id: 'overview', label: t('forecast.explorer.tab_overview') },
               { id: 'sku', label: t('forecast.explorer.tab_sku') },
+              { id: 'window', label: t('inventory.window.tab') },
               { id: 'schedule', label: t('forecast.explorer.tab_schedule'), count: overrides.data?.filter((o) => o.is_active).length },
             ]}
           />
@@ -1385,6 +1387,12 @@ export const ForecastExplorer: React.FC = () => {
               </Card>
             </div>
           </>
+        )}
+
+        {mainTab === 'window' && (
+          <div style={{ padding: 'var(--space-4)' }}>
+            <ForecastWindowPanel sku={sku} store={store} />
+          </div>
         )}
 
         {mainTab === 'schedule' && (

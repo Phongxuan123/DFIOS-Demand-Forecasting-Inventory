@@ -13,6 +13,7 @@ export type Action =
   | 'view:abcxyz'
   | 'view:reports'
   | 'view:products'
+  | 'view:inventory'
   | 'view:models'
   | 'view:settings'
   | 'clock:view'
@@ -36,6 +37,7 @@ const MATRIX: Record<Action, readonly Role[]> = {
   'view:abcxyz': ALL,
   'view:reports': ALL,
   'view:products': ALL,
+  'view:inventory': ALL,
   'view:models': ADMIN_ONLY, // /models/* is admin only
   'view:settings': ALL, // profile is for everyone, admin tabs gate themselves
   'clock:view': MANAGER_UP, // GET /clock

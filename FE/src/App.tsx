@@ -19,6 +19,7 @@ const ForecastExplorer = lazy(() => import('./pages/ForecastExplorer.tsx').then(
 const Replenishment = lazy(() => import('./pages/Replenishment.tsx').then((m) => ({ default: m.Replenishment })));
 const AbcXyzAnalysis = lazy(() => import('./pages/AbcXyzAnalysis.tsx').then((m) => ({ default: m.AbcXyzAnalysis })));
 const Reports = lazy(() => import('./pages/Reports.tsx').then((m) => ({ default: m.Reports })));
+const InventoryManagement = lazy(() => import('./pages/InventoryManagement.tsx').then((m) => ({ default: m.InventoryManagement })));
 const Products = lazy(() => import('./pages/Products.tsx').then((m) => ({ default: m.Products })));
 const ModelPerformance = lazy(() => import('./pages/ModelPerformance.tsx').then((m) => ({ default: m.ModelPerformance })));
 const Settings = lazy(() => import('./pages/Settings.tsx').then((m) => ({ default: m.Settings })));
@@ -82,6 +83,7 @@ const App: React.FC = () => (
                   <Route path="abc-xyz" element={<AbcXyzAnalysis />} />
                   <Route path="classification" element={<Navigate to="/abc-xyz" replace />} />
                   <Route path="reports" element={<Reports />} />
+                  <Route path="inventory" element={<InventoryManagement />} />
                   <Route path="products" element={<Products />} />
                   <Route
                     path="model-performance"

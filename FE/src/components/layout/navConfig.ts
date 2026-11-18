@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Boxes, Cpu, FileBarChart, LayoutDashboard, PieChart, Settings, Palette, Truck, TrendingUp } from 'lucide-react';
+import { Boxes, Warehouse, Cpu, FileBarChart, LayoutDashboard, PieChart, Settings, Palette, Truck, TrendingUp } from 'lucide-react';
 import type { Action } from '../../auth/permissions.ts';
 import type { TKey } from '../../i18n/index.tsx';
 
@@ -27,6 +27,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/', label: 'nav.dashboard', icon: LayoutDashboard, action: 'view:dashboard', end: true },
       { path: '/replenishment', label: 'nav.replenishment', icon: Truck, action: 'view:replenishment' },
+      { path: '/inventory', label: 'nav.inventory', icon: Warehouse, action: 'view:inventory' },
       { path: '/products', label: 'nav.products', icon: Boxes, action: 'view:products' },
     ],
   },
