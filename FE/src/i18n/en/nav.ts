@@ -7,6 +7,7 @@ export const nav: typeof ViNav = {
   dashboard: 'Dashboard',
   replenishment: 'Replenishment',
   products: 'Products and data',
+  inventory: 'Inventory management',
   forecast_explorer: 'Forecast explorer',
   abc_xyz: 'ABC/XYZ classes',
   reports: 'Reports',

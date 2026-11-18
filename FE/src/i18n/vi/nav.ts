@@ -6,6 +6,7 @@ export const nav = {
   dashboard: 'Tổng quan',
   replenishment: 'Đề xuất bổ sung',
   products: 'Sản phẩm và dữ liệu',
+  inventory: 'Quản lý tồn kho',
   forecast_explorer: 'Khám phá dự báo',
   abc_xyz: 'Phân lớp ABC/XYZ',
   reports: 'Báo cáo',
