@@ -14,17 +14,26 @@ What it writes (idempotent; every step can be re-run):
              window quantiles Q_{L+R}(tau) (19 levels, 0.95 = level index 10) for the window [t_k, t_k + 10), stored in
              the shape J3 reads (model_run_id = backtest-ensemble-v1, horizon_days = 10, q_levels {"0.95": ...}),
              route = 'teacher' (J5 scores its candidates on these rows, see window_quantile_service).
+             Model-switch scenario (teacher E6/E9c, ``--switch-from A --switch-to B --switch-day 1759``): reviews
+             with day < switch-day get model A's quantiles, reviews with day >= switch-day model B's, all under the
+             same model_run_id / route = 'teacher' (the engine does not know a switch happened; J5's 91-day refits
+             are the only re-tuning). Per model the first folder among DFIOS/results/forecasts,
+             c3out_experiments/results/m5/forecasts, c3out_experiments/results/revision/forecasts and
+             c3out_bundle/results/m5/forecasts whose Q_H10 covers every review day is used.
   clock      sim_clock(store) start = current = TEST_START (2015-05-25), the store's simulation state is cleared
              (snapshot, shadow, service outcomes, inventory_daily, simulator orders, C3 states k >= 1, store-scoped
              J5 selections), theta_0 = 0 for the 9 classes, initial stock round(mean 28 days * (L+R)) and, unless
              --no-initial-refit, a J5 selection at the clock start (window 26 weeks before it, teacher selection #0)
              saved as ``<store>_refit_0``.
 
-SAFETY: refuses to run unless DATABASE_URL is sqlite or a PostgreSQL URL on localhost/127.0.0.1 whose database is
-exactly ``dfios_sandbox``. The teacher folder is only read (numpy mmap / parquet).
+SAFETY: refuses to run unless DATABASE_URL is sqlite or a PostgreSQL URL on localhost/127.0.0.1 whose database name
+starts with ``dfios_sandbox`` (e.g. ``dfios_sandbox``, ``dfios_sandbox_f3``). The teacher folder is only read (numpy mmap / parquet).
 
     DATABASE_URL=postgresql+psycopg2://USER:PWD@localhost:5432/dfios_sandbox DFIOS_LOCAL_ONLY=1 \
         python scripts/load_teacher_data.py --store CA_1
+    # model switch chronos_bolt -> ensemble at day 1759 (2015-11-23): quantiles + clock reset only
+    python scripts/load_teacher_data.py --store CA_1 --steps quantiles clock \
+        --switch-from chronos_bolt --switch-to ensemble --switch-day 1759
 """
 from __future__ import annotations
 
@@ -57,7 +66,7 @@ STEPS = ("classes", "sales", "prices", "quantiles", "clock")
 
 # --------------------------------------------------------------------------- safety
 def assert_sandbox_url(url: Optional[str]) -> str:
-    """Return the URL if it is sqlite or local PostgreSQL database ``dfios_sandbox``; raise otherwise."""
+    """Return the URL if it is sqlite or a local PostgreSQL database named ``dfios_sandbox*``; raise otherwise."""
     url = (url or "").strip()
     if not url:
         raise RuntimeError("DATABASE_URL is not set; refusing to guess a database")
@@ -70,8 +79,8 @@ def assert_sandbox_url(url: Optional[str]) -> str:
     db = (p.path or "").lstrip("/")
     if host not in SANDBOX_HOSTS:
         raise RuntimeError(f"refusing: database host '{host}' is not localhost/127.0.0.1")
-    if db != SANDBOX_DB:
-        raise RuntimeError(f"refusing: database '{db}' is not '{SANDBOX_DB}'")
+    if not db.startswith(SANDBOX_DB):
+        raise RuntimeError(f"refusing: database '{db}' does not start with '{SANDBOX_DB}'")
     return url
 
 
@@ -80,11 +89,45 @@ def day_to_date(idx: int) -> date:
 
 
 # --------------------------------------------------------------------------- teacher data (read-only)
+FORECAST_SUBDIRS = (("DFIOS", "results", "forecasts"), ("c3out_experiments", "results", "m5", "forecasts"),
+                    ("c3out_experiments", "results", "revision", "forecasts"),
+                    ("c3out_bundle", "results", "m5", "forecasts"))
+
+
+def resolve_forecast_dir(teacher_dir: str, model: str, reviews: np.ndarray, H: int) -> str:
+    """First forecast folder of ``model`` whose ``Q_H{H}.npy`` + ``origins.npy`` cover every review day."""
+    tried = []
+    for sub in FORECAST_SUBDIRS:
+        d = os.path.join(teacher_dir, *sub, model)
+        if not (os.path.isfile(os.path.join(d, "origins.npy")) and os.path.isfile(os.path.join(d, f"Q_H{H}.npy"))):
+            continue
+        origins = np.load(os.path.join(d, "origins.npy"))
+        if np.isin(reviews, origins).all():
+            return d
+        tried.append(d)
+    raise FileNotFoundError(f"no Q_H{H} of model {model!r} covering the review days under {teacher_dir}"
+                            + (f" (incomplete: {tried})" if tried else ""))
+
+
+def review_quantiles(teacher_dir: str, model: str, sl: slice, reviews: np.ndarray, H: int):
+    """((K, n, 19) window quantiles of ``model`` at the review days for the store rows ``sl``, folder) (mmap)."""
+    fdir = resolve_forecast_dir(teacher_dir, model, reviews, H)
+    origins = np.load(os.path.join(fdir, "origins.npy"))
+    idx = np.searchsorted(origins, reviews)
+    qa = np.load(os.path.join(fdir, f"Q_H{H}.npy"), mmap_mode="r")
+    if qa.ndim != 3 or qa.shape[2] != len(QUANTILE_LEVELS) or qa.shape[0] != len(origins):
+        raise ValueError(f"unexpected {fdir}/Q_H{H} shape {qa.shape}")
+    return np.stack([np.asarray(qa[int(o), sl, :], dtype=np.float64) for o in idx]), fdir
+
+
 def read_teacher(teacher_dir: str, store: str = "CA_1", model: str = "ensemble", start_day: int = 1031,
-                 L: int = L_DEFAULT, R: int = R_DEFAULT) -> Dict[str, object]:
-    """Read the store's rows of y / price / meta and the (L+R)-window quantiles at the review origins (mmap)."""
+                 L: int = L_DEFAULT, R: int = R_DEFAULT, switch_from: Optional[str] = None,
+                 switch_to: Optional[str] = None, switch_day: Optional[int] = None) -> Dict[str, object]:
+    """Read the store's rows of y / price / meta and the (L+R)-window quantiles at the review origins (mmap).
+
+    With ``switch_from``/``switch_to`` the quantiles of reviews with day >= ``switch_day`` (default
+    TEST_START + 182) come from ``switch_to`` and the earlier ones from ``switch_from``; ``model`` is ignored."""
     import pandas as pd
-    from app.services.e10b_replay import _forecast_dir
 
     prep = os.path.join(teacher_dir, "c3out_experiments", "data", "m5_prepared")
     with open(os.path.join(prep, "info.json"), encoding="utf-8") as f:
@@ -101,18 +144,31 @@ def read_teacher(teacher_dir: str, store: str = "CA_1", model: str = "ensemble",
     price = np.asarray(np.load(os.path.join(prep, "price.npy"), mmap_mode="r")[sl, start_day:T], dtype=np.float64)
     sub = meta.iloc[sl].reset_index(drop=True)
 
-    fdir = _forecast_dir(teacher_dir, model)
-    origins = np.load(os.path.join(fdir, "origins.npy"))
     reviews = np.arange(val, T, R)
-    idx = np.searchsorted(origins, reviews)
-    if np.any(idx >= len(origins)) or not np.array_equal(origins[np.minimum(idx, len(origins) - 1)], reviews):
-        raise ValueError(f"{fdir}/origins.npy lacks some review origin {val}+{R}k")
-    qa = np.load(os.path.join(fdir, f"Q_H{L + R}.npy"), mmap_mode="r")
-    if qa.ndim != 3 or qa.shape[2] != len(QUANTILE_LEVELS):
-        raise ValueError(f"unexpected Q_H{L + R} shape {qa.shape}")
-    q = np.stack([np.asarray(qa[int(o), sl, :], dtype=np.float64) for o in idx])  # (K, n, 19)
+    H = L + R
+    switch = None
+    if switch_from or switch_to:
+        if not (switch_from and switch_to):
+            raise ValueError("--switch-from and --switch-to go together")
+        sday = int(switch_day if switch_day is not None else test + 182)
+        if not (val < sday < T):
+            raise ValueError(f"switch day {sday} outside ({val}, {T})")
+        qa, dir_a = review_quantiles(teacher_dir, switch_from, sl, reviews, H)
+        qb, dir_b = review_quantiles(teacher_dir, switch_to, sl, reviews, H)
+        after = reviews >= sday
+        q = np.where(after[:, None, None], qb, qa)  # (K, n, 19)
+        model = f"{switch_from}->{switch_to}"
+        switch = {"from": switch_from, "to": switch_to, "day": sday, "date": day_to_date(sday).isoformat(),
+                  "first_review_after": int(reviews[after][0]) if after.any() else None,
+                  "reviews_from": int((~after).sum()), "reviews_to": int(after.sum()),
+                  "dir_from": dir_a, "dir_to": dir_b}
+    else:
+        if switch_day is not None:
+            raise ValueError("--switch-day needs --switch-from/--switch-to")
+        q, _ = review_quantiles(teacher_dir, model, sl, reviews, H)
     return {"meta": sub, "y": y, "price": price, "q": q, "reviews": reviews, "start_day": start_day,
-            "VAL_START": val, "TEST_START": test, "T_END": T, "H": L + R, "store": store, "model": model}
+            "VAL_START": val, "TEST_START": test, "T_END": T, "H": H, "store": store, "model": model,
+            "switch": switch}
 
 
 # --------------------------------------------------------------------------- helpers
@@ -287,8 +343,12 @@ def load_quantiles(db, td: Dict[str, object]) -> Dict[str, int]:
             })
     _bulk_insert(db.connection(), ForecastWindowQuantile.__table__, rows)
     db.commit()
-    return {"rows": len(rows), "origins": len(origin_dates), "items": len(item_ids), "horizon_days": H,
-            "first_origin": origin_dates[0].isoformat(), "last_origin": origin_dates[-1].isoformat()}
+    out = {"rows": len(rows), "origins": len(origin_dates), "items": len(item_ids), "horizon_days": H,
+           "first_origin": origin_dates[0].isoformat(), "last_origin": origin_dates[-1].isoformat(),
+           "model": td.get("model")}
+    if td.get("switch"):
+        out["switch"] = td["switch"]
+    return out
 
 
 def set_clock(db, td: Dict[str, object], initial_refit: bool = True) -> Dict[str, object]:
@@ -351,9 +411,11 @@ def set_clock(db, td: Dict[str, object], initial_refit: bool = True) -> Dict[str
 
 
 def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", start_day: int = 1031,
-        steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print) -> Dict[str, object]:
+        steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print, switch_from: Optional[str] = None,
+        switch_to: Optional[str] = None, switch_day: Optional[int] = None) -> Dict[str, object]:
     t0 = time.time()
-    td = read_teacher(teacher_dir, store, model, start_day)
+    td = read_teacher(teacher_dir, store, model, start_day, switch_from=switch_from, switch_to=switch_to,
+                      switch_day=switch_day)
     report: Dict[str, object] = {"store": store, "n_skus": int(td["y"].shape[0]),
                                  "read_seconds": round(time.time() - t0, 1)}
     log(f"read teacher arrays: {report['n_skus']} SKUs ({report['read_seconds']}s)")
@@ -376,6 +438,9 @@ def main(argv=None) -> int:
     ap.add_argument("--start-day", type=int, default=1031)
     ap.add_argument("--steps", nargs="+", default=list(STEPS), choices=STEPS)
     ap.add_argument("--no-initial-refit", action="store_true")
+    ap.add_argument("--switch-from", default=None, metavar="MODEL", help="model of the reviews before --switch-day")
+    ap.add_argument("--switch-to", default=None, metavar="MODEL", help="model of the reviews from --switch-day on")
+    ap.add_argument("--switch-day", type=int, default=None, help="day index of the switch (default TEST_START+182)")
     ap.add_argument("--report", default=None, help="write the JSON report here")
     args = ap.parse_args(argv)
 
@@ -392,7 +457,8 @@ def main(argv=None) -> int:
     db = sessionmaker(bind=engine, autoflush=False)()
     try:
         rep = run(db, args.teacher_dir, args.store, args.model, args.start_day, args.steps,
-                  not args.no_initial_refit)
+                  not args.no_initial_refit, switch_from=args.switch_from, switch_to=args.switch_to,
+                  switch_day=args.switch_day)
     finally:
         db.close()
     if args.report:
