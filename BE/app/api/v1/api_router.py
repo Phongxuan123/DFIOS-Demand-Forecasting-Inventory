@@ -24,6 +24,7 @@ from app.api.v1.endpoints.pipeline import router as pipeline_router
 from app.api.v1.endpoints.imports import router as imports_router
 from app.api.v1.endpoints.simulation import router as simulation_router
 from app.api.v1.endpoints.reference import router as reference_router
+from app.api.v1.endpoints.metrics import router as metrics_router
 from app.api.v1.endpoints.dashboard import get_kpi_shadow_dashboard
 from app.api.v1.endpoints.auth import request_change_email, confirm_change_email
 
@@ -96,6 +97,7 @@ api_router.include_router(imports_router, tags=["Data Ingestion & Fast Inference
 api_router.include_router(simulation_router, prefix="/simulation", tags=["What-If Policy Simulation (Task API.5)"])
 
 api_router.include_router(reference_router, prefix="/reference", tags=["Reference match (E10b Table 17)"])
+api_router.include_router(metrics_router, prefix="/metrics", tags=["Quality metrics (G-30, G-19, G-21)"])
 
 # Stage 7 / Task API.4: KPI Dashboard Alias (/kpi/dashboard)
 api_router.add_api_route("/kpi/dashboard", get_kpi_shadow_dashboard, methods=["GET"], tags=["Dashboard & Shadow Baseline (Task API.4)"], summary="Task API.4 - KPI Dashboard với Shadow Baseline B0")
