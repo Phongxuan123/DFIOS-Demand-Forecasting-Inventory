@@ -52,6 +52,8 @@ export const replenishment = {
     APPROVED: 'Đã duyệt',
     REJECTED: 'Đã từ chối',
     CANCELLED: 'Đã hủy',
+    /** REJECTED with decided_by = "simulator": skipped by a Planner-mode advance with expire_pending */
+    SIM_EXPIRED: 'Hệ thống bỏ qua',
   },
   priority: {
     CRITICAL: 'Nghiêm trọng',

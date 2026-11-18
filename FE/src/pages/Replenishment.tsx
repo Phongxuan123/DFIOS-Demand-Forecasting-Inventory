@@ -182,7 +182,11 @@ export const Replenishment: React.FC = () => {
 
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<'proposals' | 'history'>('proposals');
-  const [status, setStatus] = useState('');
+  const statusFromUrl = () => {
+    const s = (searchParams.get('status') ?? '').toUpperCase();
+    return (STATUS_KEYS as readonly string[]).includes(s) ? s : null;
+  };
+  const [status, setStatus] = useState(() => statusFromUrl() ?? '');
   const [priority, setPriority] = useState('');
   const [department, setDepartment] = useState('');
   const [search, setSearch] = useState(() => searchParams.get('search') ?? searchParams.get('sku') ?? '');
@@ -190,6 +194,13 @@ export const Replenishment: React.FC = () => {
   useEffect(() => {
     const q = searchParams.get('search') ?? searchParams.get('sku');
     if (q !== null) setSearch(q);
+    // ?status=PENDING (Dashboard "open pending proposals" after a Planner-mode stop)
+    const s = statusFromUrl();
+    if (s !== null) {
+      setTab('proposals');
+      setStatus(s);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const [nonce, setNonce] = useState(0);
@@ -467,7 +478,7 @@ export const Replenishment: React.FC = () => {
       sortable: tab === 'proposals',
       cell: (r) => {
         const isSimulatorRejected = r.status === 'REJECTED' && r.decided_by === 'simulator';
-        const label = isSimulatorRejected ? 'Hệ thống bỏ qua' : statusLabel(r.status);
+        const label = isSimulatorRejected ? t('replenishment.status.SIM_EXPIRED') : statusLabel(r.status);
         return (
           <Badge tone={isSimulatorRejected ? 'neutral' : (STATUS_TONE[r.status] ?? 'neutral')} dot>
             {label}
@@ -962,7 +973,7 @@ const PolicyDrawer: React.FC<{
             {rec.decided_by && (
               <>
                 <dt>{t('replenishment.col.decided_by')}</dt>
-                <dd>{rec.decided_by === 'simulator' ? 'Hệ thống bỏ qua' : rec.decided_by}</dd>
+                <dd>{rec.decided_by === 'simulator' ? t('replenishment.status.SIM_EXPIRED') : rec.decided_by}</dd>
               </>
             )}
           </dl>
