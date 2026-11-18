@@ -215,3 +215,20 @@ class RefitPoliciesResponse(BaseModel):
     message: str
     run_id: Optional[str] = Field(None, description="batch_runs.run_id of this J5 run")
 
+
+
+class CurrentPolicyItem(BaseModel):
+    """Policy in force for one ABC-XYZ class of a store (GET /optimization/policies/current, demo.md 6.3)."""
+    class_id: str
+    selection_id: str
+    scope: str = Field(..., description="store: chosen for this store by J5 | global: shared selection (no store tag)")
+    policy_type: str
+    m_g: float
+    kappa_g: float
+    setpoint: Optional[float] = None
+    val_cost: Optional[float] = None
+    val_service: Optional[float] = None
+    is_feasible: Optional[bool] = None
+    source: Optional[str] = None
+    selected_at: Optional[datetime] = None
+    theta: Optional[float] = Field(None, description="Current C3-OUT theta_g of the class (0 before the first update)")
