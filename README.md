@@ -115,8 +115,28 @@ export DATABASE_URL=postgresql+psycopg2://dfios:dfios123@localhost:5432/dfios_sa
 python scripts/bootstrap.py --reset
 python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR"     # ~3 phút, 2,68 triệu dòng
 python scripts/load_teacher_prices.py --store CA_1 --teacher-dir "$TEACHER_DIR"   # giá theo ngày
-python scripts/sandbox_engine_run.py --store CA_1 --start 2015-05-25 --out engine.json  # tua + chấm điểm
+python scripts/sandbox_engine_run.py --store CA_1 --start 2015-05-25 --out engine.json  # tua + chấm DFIOS và B0
 ```
+Kết quả tham chiếu CA_1 (năm test, L=3, R=7): DFIOS lớp thấp nhất 0,963 (cả 9 nhóm ≥ 0,95), chi phí 274.145;
+B0-MA-OUT-0,95 lớp thấp nhất 0,868, chi phí 392.928 (DFIOS rẻ hơn 30,2%, ít hơn 68% số đơn).
+
+**Snapshot cho buổi demo** (bản sao DB trong Postgres, khôi phục khoảng 1 phút; mỗi bản ~2,2 GB trong đĩa ảo Docker,
+cần vài GB trống và đủ RAM, nên đóng bớt ứng dụng trước khi chạy):
+```bash
+python scripts/demo_snapshot.py save demo_start      # đồng hồ 25/05/2015, J5 #0
+python scripts/demo_snapshot.py restore demo_start   # dừng API đang dùng dfios_sandbox trước, hoặc thêm --force
+python scripts/demo_snapshot.py list
+```
+
+**Đổi mô hình (demo bước 10, E9c)**: nạp quantile của từng mô hình làm nguồn (một lần), rồi Admin kích hoạt:
+```bash
+python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR" --steps sources \
+    --source-models ensemble chronos_bolt
+# POST /api/v1/forecast-sources/activate {"store_id": "CA_1", "model": "chronos_bolt"}   (Admin)
+# rollback: cùng lệnh với "model": "ensemble";  GET /api/v1/forecast-sources: mô hình đang dùng + lịch sử
+```
+Chỉ các kỳ review mà đồng hồ chưa tới bị thay quantile (quyết định đã có không đổi). Kích hoạt ở 22/11/2015 cho kết
+quả trùng khớp từng con số với kịch bản `--switch-from ensemble --switch-to chronos_bolt --switch-day 1759`.
 
 ### 2.9. Planner duyệt đơn trong vòng lặp và batch job
 - `POST /api/v1/clock/advance` với `"approval_mode": "planner"`: lệnh tua dừng ở kỳ review kế tiếp, đơn của kỳ đó ở
