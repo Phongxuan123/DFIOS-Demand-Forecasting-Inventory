@@ -76,7 +76,7 @@ class WhatIfPolicy(BaseModel):
 class WhatIfRequest(BaseModel):
     store_id: str = Field("CA_1", description="Store to simulate")
     lead_time_days: Literal[1, 3, 7] = Field(3, description="L (days)")
-    review_period_days: Literal[1, 7] = Field(7, description="R (days); the stored causal forecasts exist at weekly reviews")
+    review_period_days: Literal[1, 7] = Field(7, description="R (days): 7 = weekly reviews; 1 = daily reviews (needs daily-origin window quantiles, else 422 with r_options)")
     holding_rate: float = Field(0.002, ge=0.0, le=1.0, description="h: holding cost per unit per day as a share of price")
     stockout_penalty_rate: float = Field(0.35, ge=0.0, le=10.0, description="b: penalty per lost unit as a share of price")
     order_cost: float = Field(2.0, ge=0.0, le=10000.0, description="c: cost per order line")
@@ -140,6 +140,9 @@ class WhatIfResponse(BaseModel):
     n_reviews: int
     period_start: Optional[str] = None
     period_end: Optional[str] = None
+    r_options: List[int] = Field(
+        default_factory=list, description="Review periods R (days) replayable for this store and L (window quantiles "
+                                          "with H = L + R at every review of the span); also in the 422 detail")
     quantile_basis: str
     initial_stock_basis: str
     policies: List[WhatIfPolicyResult]

@@ -217,7 +217,7 @@ export const be = {
   code: {
     whatif_store_required: 'What-if chạy cho MỘT kho (không hỗ trợ GLOBAL).',
     whatif_no_review_forecasts: 'Kho này chưa có dự báo review nhân quả đã lưu (forecast_backtest): không có gì để phát lại.',
-    whatif_unsupported_review_period: 'Chu kỳ R này không được hỗ trợ: dự báo review lưu trữ cách nhau {supported_review_period_days} ngày, chỉ hỗ trợ mô phỏng với R = {supported_review_period_days} ngày.',
+    whatif_unsupported_review_period: 'Không phát lại được R = {review_period_days} ngày cho cửa hàng này với L = {lead_time_days}: không có phân vị cửa sổ (H = L + R) đã lưu tại mọi kỳ review của khoảng phát lại, và hệ thống không tự bịa dự báo trung gian. R phát lại được (ngày): {r_options}.',
     whatif_unknown_class: 'Nhóm ABC-XYZ không hợp lệ.',
     whatif_policy_params_missing: 'Thiếu m_g hoặc κ_g của một chính sách.',
     whatif_insufficient_data: 'Không nhóm nào của kho có dữ liệu để phát lại (cần ≥ 2 dự báo review trước đồng hồ và SKU có đủ nhu cầu thực, quantile và giá).',

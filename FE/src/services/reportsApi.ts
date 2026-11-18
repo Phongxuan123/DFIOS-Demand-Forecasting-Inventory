@@ -250,6 +250,8 @@ export interface WhatIfResponse {
   n_reviews?: number;
   period_start?: string | null;
   period_end?: string | null;
+  /** Review periods R (days) the server can replay for this store and L (also sent with a 422). */
+  r_options?: number[];
   quantile_basis?: string;
   initial_stock_basis?: string;
   policies: WhatIfPolicyResult[];

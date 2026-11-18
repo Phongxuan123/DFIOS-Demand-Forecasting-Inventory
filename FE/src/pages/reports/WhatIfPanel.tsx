@@ -41,8 +41,10 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
   const [state, setState] = useState<RunState>({ kind: 'idle' });
   // R5F-07: a failed later run does not wipe the last successful result (it is labelled as previous)
   const [lastResult, setLastResult] = useState<WhatIfResponse | null>(null);
-  // R5F-07: R values the server said it cannot replay (from a 422 unsupported_review_period)
-  const [supportedR, setSupportedR] = useState<number[] | null>(null);
+  // H1: R values the server can replay for this store and L (`r_options` of the last answer, success or 422);
+  // unknown (null) until the first answer for the selected L, then every R is offered and the server decides
+  const [rOptions, setROptions] = useState<{ store: string; L: string; r: number[] } | null>(null);
+  const supportedR = rOptions && rOptions.store === storeId && rOptions.L === form.L ? rOptions.r : null;
   const [showClasses, setShowClasses] = useState<string | null>(null);
   const elapsed = useElapsed(state.kind === 'running');
 
@@ -60,6 +62,7 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
       if (isWhatIfResponse(res)) {
         setState({ kind: 'done', result: res });
         setLastResult(res);
+        if (Array.isArray(res.r_options)) setROptions({ store: storeId, L: form.L, r: res.r_options.map(Number) });
       } else setState({ kind: 'malformed' });
       setShowClasses(null);
     } catch (err) {
@@ -69,7 +72,7 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
         setState({ kind: 'error', error: e });
         const d = e.data as { r_options?: unknown; supported_review_period_days?: unknown } | undefined;
         const sup = d?.r_options ?? d?.supported_review_period_days;
-        if (e.code === 'unsupported_review_period' && Array.isArray(sup)) setSupportedR(sup.map(Number));
+        if (Array.isArray(sup)) setROptions({ store: storeId, L: form.L, r: sup.map(Number) });
       }
     }
   };
@@ -162,9 +165,14 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
               value={form.R}
               onChange={set('R')}
               options={REVIEW_PERIODS.map((d) => {
-                // The stored causal review forecasts are weekly: R = 1 cannot be replayed (the server refuses it)
-                const off = supportedR ? !supportedR.includes(d) : d === 1;
-                return { value: String(d), label: off ? t('reports.whatif.days_unavailable', { n: d }) : t('reports.whatif.days', { n: d }), disabled: off };
+                // H1: R = 1 is offered unless the server's r_options (for this store and L) exclude it; the selected
+                // R is never disabled, so a refused choice stays visible next to the server's message
+                const unavailable = !!supportedR && !supportedR.includes(d);
+                return {
+                  value: String(d),
+                  label: unavailable ? t('reports.whatif.days_unavailable', { n: d }) : t('reports.whatif.days', { n: d }),
+                  disabled: unavailable && String(d) !== form.R,
+                };
               })}
               disabled={state.kind === 'running'}
             />
