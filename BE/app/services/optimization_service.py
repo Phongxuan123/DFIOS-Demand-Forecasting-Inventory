@@ -760,7 +760,11 @@ class OptimizationService:
         R = pc.REVIEW_PERIOD_DAYS
         days: set = set()
         # P2: imported teacher quantiles define the review chain when present (teacher: from VAL_START, step R)
-        days.update(window_quantile_service.teacher_review_days(db, store_id, pc.HORIZON_DAYS))
+        teacher_days = set(window_quantile_service.teacher_review_days(db, store_id, pc.HORIZON_DAYS))
+        if teacher_days:
+            grid_origin = min(teacher_days)
+            teacher_days = {d for d in teacher_days if (d - grid_origin) % R == 0}
+        days.update(teacher_days)
         for k in range(0, 0 if days else len(item_ids), 900):
             days.update(
                 int(r[0]) for r in db.query(ForecastBacktest.review_day)
