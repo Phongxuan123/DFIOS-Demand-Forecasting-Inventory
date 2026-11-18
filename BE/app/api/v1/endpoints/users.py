@@ -54,7 +54,7 @@ def create_user(
 ):
     """
     **UC06 - Create User (Admin only)**:
-    Admin tạo tài khoản người dùng mới và phân quyền (Admin / Warehouse Manager / Viewer).
+    Admin tạo tài khoản người dùng mới và phân quyền (Admin / Warehouse Manager / Planner / Viewer).
     Nếu không truyền mật khẩu, tài khoản ở trạng thái chưa kích hoạt và tự động gửi email kích hoạt.
     """
     ip = get_client_ip(request)

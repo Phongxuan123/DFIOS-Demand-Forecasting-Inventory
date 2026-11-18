@@ -60,7 +60,7 @@ class StockAlertData(BaseModel):
     at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
-INVENTORY_EVENT_ROLES = ("Admin", "Warehouse Manager")
+INVENTORY_EVENT_ROLES = ("Admin", "Warehouse Manager", "Planner")
 
 
 class SystemEvent(BaseModel):

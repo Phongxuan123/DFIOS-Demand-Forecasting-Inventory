@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Literal, Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -37,6 +37,30 @@ class ClockAdvanceRequest(BaseModel):
     days: Optional[int] = Field(None, ge=1, le=365, description="Số ngày cần tua")
     reviews: Optional[int] = Field(None, ge=1, le=52, description="Số kỳ review cần tua qua")
     until: Optional[date] = Field(None, description="Tua đến ngày cụ thể (YYYY-MM-DD)")
+    approval_mode: Literal["auto", "planner"] = Field(
+        "auto",
+        description="auto: đơn của mỗi kỳ review được đặt ngay (replay). planner: dừng ở kỳ review kế tiếp, đơn ở "
+                    "trạng thái PENDING chờ Planner sửa/duyệt; số đã duyệt (final_qty) về kho sau L ngày.",
+    )
+    expire_pending: bool = Field(
+        False,
+        description="Chỉ dùng với planner: bỏ qua (REJECTED, không đặt hàng) các đề xuất mô phỏng còn chờ duyệt "
+                    "thay vì từ chối lệnh tua (409).",
+    )
+    async_job: bool = Field(
+        False,
+        description="true: chạy nền, trả 202 + run_id ngay; theo dõi bằng GET /batch-runs/{run_id}. "
+                    "false (mặc định): chạy đồng bộ như trước.",
+    )
+
+
+class BatchJobAccepted(BaseModel):
+    run_id: str
+    job: str = "ADVANCE"
+    status: str = "running"
+    store_id: Optional[str] = None
+    started_at: datetime
+    poll_url: str
 
 
 class ClockAdvanceResponse(BaseModel):
@@ -60,6 +84,12 @@ class ClockAdvanceResponse(BaseModel):
     source: str = "simulator"
     as_of: Optional[date] = None
     duration_seconds: Optional[float] = None
+    approval_mode: str = "auto"
+    stopped_at_review: bool = Field(
+        False, description="planner: the advance stopped at a review day; its proposals wait for the planner"
+    )
+    pending_expired: int = Field(0, description="planner: open simulator proposals expired by expire_pending")
+    run_id: Optional[str] = Field(None, description="batch_runs.run_id of this advance (GET /batch-runs/{run_id})")
 
 
 class ClockResetRequest(BaseModel):
