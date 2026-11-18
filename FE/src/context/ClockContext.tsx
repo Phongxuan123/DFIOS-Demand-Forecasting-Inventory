@@ -247,7 +247,10 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         const syncResult = res.data as ClockAdvanceResult;
         const server = syncResult?.duration_seconds;
-        setLastTiming({ days, seconds: typeof server === 'number' && Number.isFinite(server) ? server : (Date.now() - started) / 1000 });
+        setLastTiming({
+          days: typeof syncResult?.days_advanced === 'number' && syncResult.days_advanced > 0 ? syncResult.days_advanced : days,
+          seconds: typeof server === 'number' && Number.isFinite(server) ? server : (Date.now() - started) / 1000,
+        });
         setVersion((v) => v + 1);
         refresh();
         return syncResult;

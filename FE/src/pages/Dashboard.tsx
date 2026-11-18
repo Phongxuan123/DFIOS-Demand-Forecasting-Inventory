@@ -47,6 +47,15 @@ import {
 } from '../components/ui/index.ts';
 import { useApi } from '../hooks/useApi.ts';
 import { AsyncAdvanceError, CLOCK_ADVANCE_DAYS, useClock } from '../context/ClockContext.tsx';
+
+/** Review periods offered by the clock panel (demo step 7: +1 review twice, then 8 reviews). */
+const CLOCK_ADVANCE_REVIEWS = [1, 2, 4, 8] as const;
+
+function nextIsoDay(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 import { useStore } from '../context/StoreContext.tsx';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBeCode } from '../i18n/useBe.ts';
@@ -85,17 +94,31 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
   const { clock, status, reason, canAdvance, advancing, advance } = useClock();
   const { confirm, dialog } = useConfirm();
   const [days, setDays] = useState<number>(7);
+  /** Advance unit: a number of days, a number of review periods (R), or up to a date. */
+  const [unit, setUnit] = useState<'days' | 'reviews' | 'until'>('days');
+  const [reviews, setReviews] = useState<number>(1);
+  const [untilDate, setUntilDate] = useState<string>('');
   const [approvalMode, setApprovalMode] = useState<'auto' | 'planner'>('auto');
   const [asyncJob, setAsyncJob] = useState<boolean>(false);
   const [stoppedReviewDate, setStoppedReviewDate] = useState<string | null>(null);
   const [last, setLast] = useState<{ from: string; to: string; reviews: number; day0: boolean; stockouts: number; recs: number } | null>(null);
 
   const runInBackground = asyncJob && approvalMode === 'auto';
+  const minUntil = clock?.current_date ? nextIsoDay(clock.current_date) : '';
+  const untilValid = !!untilDate && (!minUntil || untilDate >= minUntil);
+  const actionLabel =
+    unit === 'days'
+      ? t('dashboard.clock.advance_action', { days: String(days) })
+      : unit === 'reviews'
+        ? t('dashboard.clock.advance_reviews', { n: reviews })
+        : untilValid
+          ? t('dashboard.clock.advance_until', { date: fmt.date(untilDate) })
+          : t('dashboard.clock.advance');
 
   const doAdvance = async (expirePending: boolean = false) => {
     try {
       const res = await advance({
-        days,
+        ...(unit === 'days' ? { days } : unit === 'reviews' ? { reviews } : { until: untilDate }),
         approval_mode: approvalMode,
         expire_pending: expirePending,
         async_job: runInBackground,
@@ -144,8 +167,14 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
   };
 
   const onAdvance = async () => {
+    if (unit === 'until' && !untilValid) return;
     const ok = await confirm({
-      title: t('shell.clock.advance_title', { days }),
+      title:
+        unit === 'days'
+          ? t('shell.clock.advance_title', { days })
+          : unit === 'reviews'
+            ? t('dashboard.clock.confirm_reviews', { n: reviews })
+            : t('dashboard.clock.confirm_until', { date: fmt.date(untilDate) }),
       description: t('shell.clock.advance_body', { store: storeId ?? '—' }),
       confirmLabel: t('dashboard.clock.advance'),
     });
@@ -207,20 +236,73 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
         <div className="dash-clock-right">
           {canAdvance ? (
             <div className="dash-clock-form">
-              <div className="dash-clock-field">
-                <label htmlFor="dash-clock-days" className="dash-clock-label">
-                  {t('dashboard.clock.days')}
+              <div className="dash-clock-field dash-clock-field--mode">
+                <label htmlFor="dash-clock-unit" className="dash-clock-label">
+                  {t('dashboard.clock.unit_label')}
                 </label>
-                <Select<number>
-                  id="dash-clock-days"
+                <Select<'days' | 'reviews' | 'until'>
+                  id="dash-clock-unit"
                   size="sm"
-                  value={days}
-                  onChange={setDays}
-                  options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
+                  value={unit}
+                  onChange={setUnit}
+                  options={[
+                    { value: 'days', label: t('dashboard.clock.unit_days') },
+                    { value: 'reviews', label: t('dashboard.clock.unit_reviews') },
+                    { value: 'until', label: t('dashboard.clock.unit_until') },
+                  ]}
                   disabled={advancing}
-                  aria-label={t('dashboard.clock.days')}
+                  aria-label={t('dashboard.clock.unit_label')}
                 />
               </div>
+              {unit === 'days' && (
+                <div className="dash-clock-field">
+                  <label htmlFor="dash-clock-days" className="dash-clock-label">
+                    {t('dashboard.clock.days')}
+                  </label>
+                  <Select<number>
+                    id="dash-clock-days"
+                    size="sm"
+                    value={days}
+                    onChange={setDays}
+                    options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
+                    disabled={advancing}
+                    aria-label={t('dashboard.clock.days')}
+                  />
+                </div>
+              )}
+              {unit === 'reviews' && (
+                <div className="dash-clock-field">
+                  <label htmlFor="dash-clock-reviews" className="dash-clock-label">
+                    {t('dashboard.clock.reviews')}
+                  </label>
+                  <Select<number>
+                    id="dash-clock-reviews"
+                    size="sm"
+                    value={reviews}
+                    onChange={setReviews}
+                    options={CLOCK_ADVANCE_REVIEWS.map((r) => ({ value: r, label: String(r) }))}
+                    disabled={advancing}
+                    aria-label={t('dashboard.clock.reviews')}
+                  />
+                </div>
+              )}
+              {unit === 'until' && (
+                <div className="dash-clock-field">
+                  <label htmlFor="dash-clock-until" className="dash-clock-label">
+                    {t('dashboard.clock.until')}
+                  </label>
+                  <input
+                    id="dash-clock-until"
+                    type="date"
+                    className="ui-input dash-clock-date-input"
+                    value={untilDate}
+                    min={minUntil || undefined}
+                    onChange={(e) => setUntilDate(e.target.value)}
+                    disabled={advancing}
+                    aria-invalid={!!untilDate && !untilValid}
+                  />
+                </div>
+              )}
               <div className="dash-clock-field dash-clock-field--mode">
                 <label htmlFor="dash-clock-mode" className="dash-clock-label">
                   {t('dashboard.clock.mode_label')}
@@ -263,10 +345,11 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
                 variant="primary"
                 loading={advancing}
                 onClick={onAdvance}
+                disabled={unit === 'until' && !untilValid}
                 className="dash-clock-btn"
                 leftIcon={<Play size={13} fill="currentColor" />}
               >
-                {advancing ? t('shell.clock.advancing') : t('dashboard.clock.advance_action', { days: String(days) })}
+                {advancing ? t('shell.clock.advancing') : actionLabel}
               </Button>
               <AdvanceProgress />
             </div>
