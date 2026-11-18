@@ -8,7 +8,7 @@ export const be: typeof ViBe = {
   dash_no_inventory: "No inventory_daily rows in the simulation window (clock not advanced yet): the A3 cost cannot be computed.",
   dash_no_b0cost: "The B0 shadow has no cost data yet: reset the clock and advance again.",
   dash_insight_no_clock: "No simulation clock for '{store}': there are no KPI figures.",
-  dash_avail_b0: "Observed availability (closed cycles): C³-OUT {c3}% (target {target}%), B0 raw quantile τ=0.95 {b0}%.",
+  dash_avail_b0: "Observed availability (closed cycles): C³-OUT {c3}% (target {target}%), B0-MA-OUT-0.95 (the teacher's B0) {b0}%.",
   dash_avail_nob0: "Observed availability (closed cycles): C³-OUT {c3}% (target {target}%); B0: {reason}",
   dash_no_avail: "No observed availability yet.",
   dash_savings_save: "Compared with the B0 shadow, C³-OUT saves {x} $ cumulatively under the A3 model (B0 {b0} $, C³-OUT {c3} $). C³-OUT is a service-level controller, so the cost difference can be negative.",
