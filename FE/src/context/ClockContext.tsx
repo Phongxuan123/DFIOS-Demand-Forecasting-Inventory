@@ -29,6 +29,11 @@ export interface SimClock {
   reviews_elapsed: number;
   /** Reviews run since start INCLUDING the day-0 review (same counting as ClockAdvanceResult.reviews_executed). */
   reviews_executed_total?: number | null;
+  /** Policy constants served with the clock (L and R, in days). */
+  lead_time_days?: number | null;
+  review_period_days?: number | null;
+  next_review_date?: string | null;
+  n_skus?: number | null;
 }
 
 export interface ClockAdvanceResult {

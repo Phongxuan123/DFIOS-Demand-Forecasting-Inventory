@@ -36,6 +36,13 @@ export interface CostCurvePoint {
   c3out_total_cost: number;
   b0_total_cost: number | null;
   cost_savings: number | null;
+  /** Cumulative cost components (A3 basis) of each policy at this review. */
+  c3out_holding_cost?: number | null;
+  c3out_ordering_cost?: number | null;
+  c3out_stockout_cost?: number | null;
+  b0_holding_cost?: number | null;
+  b0_ordering_cost?: number | null;
+  b0_stockout_cost?: number | null;
 }
 
 export interface KpiShadowDashboard {
@@ -54,6 +61,8 @@ export interface KpiShadowDashboard {
   as_of: string | null;
   n_skus: number | null;
   target_availability: number | null;
+  /** Cost model text from the BE, e.g. "A3: h=0.002*price/day ..., b=0.35*price/lost unit, c=2/placed order". */
+  cost_basis?: string | null;
   cost_reason: string | null;
   availability_reason: string | null;
   b0_reason: string | null;

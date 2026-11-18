@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Award, CheckCircle2, Download, Play, ShieldCheck, TrendingDown, TriangleAlert } from 'lucide-react';
+import { Award, CheckCircle2, Download, Play, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import {
   Alert,
@@ -38,6 +38,7 @@ import { useFormat, useT } from '../i18n/index.tsx';
 import { useBe } from '../i18n/useBe.ts';
 import { policyDescription, policyLabel } from '../utils/policyText.ts';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
+import { getKpiShadowDashboard } from '../services/dashboardApi.ts';
 import {
   getCostComparison,
   getForecastAccuracy,
@@ -56,14 +57,6 @@ import './Reports.css';
 
 type Objective = 'cost' | 'sla';
 type SubTabId = 'breakdown' | 'policies' | 'accuracy' | 'inventory' | 'whatif';
-
-const TRAJECTORY_DATA = [
-  { cycle: 'R=0 (Apr 25)', c3: 0, b0: 0 },
-  { cycle: 'R=1 (May 02)', c3: 11920, b0: 12450 },
-  { cycle: 'R=2 (May 09)', c3: 23150, b0: 24800 },
-  { cycle: 'R=3 (May 16)', c3: 32800, b0: 35900 },
-  { cycle: 'R=4 (May 23)', c3: 42150, b0: 46020 },
-];
 
 function pickMetric(metrics: Record<string, unknown> | null | undefined, algo: string, key: string): number | null {
   if (!metrics) return null;
@@ -392,7 +385,7 @@ export const Reports: React.FC = () => {
   const toast = useToast();
   const { storeId } = useStore();
   const { user } = useAuth();
-  const { version } = useClock();
+  const { version, clock } = useClock();
   const { confirm, dialog } = useConfirm();
   const chart = useChartTheme();
 
@@ -403,6 +396,11 @@ export const Reports: React.FC = () => {
 
   const cost = useApi((s) => getCostComparison(storeId ?? '', s), [storeId, version], { enabled: !!storeId && isAdmin });
   const c = cost.data;
+  // Simulator KPIs of C3-OUT and the shadow B0 (every role): totals, cost curve per review, availability
+  const kpi = useApi((s) => getKpiShadowDashboard(storeId ?? '', s), [storeId, version], { enabled: !!storeId });
+  const k = kpi.data;
+  const curve = useMemo(() => k?.cost_curves ?? [], [k]);
+  const lastPoint = curve.length ? curve[curve.length - 1] : null;
 
   const runBacktest = async () => {
     if (!storeId) return;
@@ -423,99 +421,118 @@ export const Reports: React.FC = () => {
     }
   };
 
+  // Totals: savings > 0 means C3-OUT is cheaper than B0 (BE convention: B0 - C3-OUT)
+  const c3Total = k?.c3out_total_cost ?? null;
+  const b0Total = k?.b0_total_cost ?? null;
+  const savings = k?.total_cost_savings ?? null;
+  const savingsPct = savings !== null && b0Total ? (savings / b0Total) * 100 : null;
+  const cheaper = savings !== null && savings >= 0;
+  const segments = (k?.segment_availabilities ?? []).filter((sg) => sg.c3out_availability !== null);
+  const belowTarget = segments.filter((sg) => (sg.c3out_availability as number) < sg.target).length;
+  const money = (v: number | null | undefined) => (v !== null && v !== undefined && Number.isFinite(v) ? fmt.currency(v) : '—');
+  const pct = (v: number | null | undefined) =>
+    v !== null && v !== undefined && Number.isFinite(v) ? fmt.percent(v, { scale: 'percent', digits: 1 }) : '—';
+  const L = clock?.lead_time_days ?? null;
+  const R = clock?.review_period_days ?? null;
+
   const exportFullCsv = () => {
-    const rows = [
-      ['Metric', 'Value'],
-      ['Store', storeId ?? 'CA_1'],
-      ['Total SKUs', '3049'],
-      ['Objective Cost Function', 'Total Cost = Holding ($0.15/wk) + Ordering ($10) + Stockout Penalty ($4.50)'],
-      ['C3-OUT Total Cost', c?.ml_policy ? String(c.ml_policy.total_cost) : '42150'],
-      ['Shadow Baseline B0 Total Cost', c?.baseline_policy ? String(c.baseline_policy.total_cost) : '46020'],
-      ['Net Cost Savings', c?.cost_savings_amount ? String(c.cost_savings_amount) : '3870'],
-      ['Savings Efficiency', c?.savings_percentage ? `${c.savings_percentage}%` : '-8.4%'],
-      ['SLA Attainment', '96.4%'],
+    const rows: Array<[string, string | number | null]> = [
+      ['Store', storeId ?? ''],
+      ['As of', k?.as_of ?? clock?.current_date ?? null],
+      ['SKUs', k?.n_skus ?? null],
+      ['Reviews elapsed', k?.reviews_elapsed ?? null],
+      ['Cost basis', k?.cost_basis ?? null],
+      ['C3-OUT total cost', c3Total],
+      ['B0 total cost', b0Total],
+      ['Savings (B0 - C3-OUT)', savings],
+      ['Savings % of B0', savingsPct !== null ? Number(savingsPct.toFixed(2)) : null],
+      ['C3-OUT holding', lastPoint?.c3out_holding_cost ?? null],
+      ['C3-OUT ordering', lastPoint?.c3out_ordering_cost ?? null],
+      ['C3-OUT lost sales', lastPoint?.c3out_stockout_cost ?? null],
+      ['B0 holding', lastPoint?.b0_holding_cost ?? null],
+      ['B0 ordering', lastPoint?.b0_ordering_cost ?? null],
+      ['B0 lost sales', lastPoint?.b0_stockout_cost ?? null],
+      ['C3-OUT availability %', k?.c3out_overall_availability ?? null],
+      ['B0 availability %', k?.b0_overall_availability ?? null],
+      ['Target availability %', k?.target_availability ?? null],
+      ['Classes below target', segments.length ? `${belowTarget}/${segments.length}` : null],
     ];
-    downloadCsv(`audit-report-${storeId ?? 'CA_1'}.csv`, ['Key', 'Value'], rows);
+    downloadCsv(`audit-report-${storeId ?? 'store'}.csv`, ['Key', 'Value'], rows);
   };
 
-  const breakdownRows = c?.baseline_policy && c.ml_policy
-    ? [
-        {
-          key: 'h',
-          label: t('reports.cost.holding'),
-          b0: c.baseline_policy.holding_cost,
-          c3: c.ml_policy.holding_cost,
-          diff: c.ml_policy.holding_cost - c.baseline_policy.holding_cost,
-        },
-        {
-          key: 'o',
-          label: t('reports.cost.order'),
-          b0: c.baseline_policy.order_cost,
-          c3: c.ml_policy.order_cost,
-          diff: c.ml_policy.order_cost - c.baseline_policy.order_cost,
-        },
-        {
-          key: 'p',
-          label: t('reports.cost.penalty'),
-          b0: c.baseline_policy.stockout_penalty_cost,
-          c3: c.ml_policy.stockout_penalty_cost,
-          diff: c.ml_policy.stockout_penalty_cost - c.baseline_policy.stockout_penalty_cost,
-        },
-        {
-          key: 't',
-          label: t('reports.cost.total'),
-          b0: c.baseline_policy.total_cost,
-          c3: c.ml_policy.total_cost,
-          diff: c.ml_policy.total_cost - c.baseline_policy.total_cost,
-        },
-      ]
-    : [
-        { key: 'h', label: t('reports.cost.holding'), b0: 27200, c3: 24150, diff: -3050 },
-        { key: 'o', label: t('reports.cost.order'), b0: 7620, c3: 6800, diff: -820 },
-        { key: 'p', label: t('reports.cost.penalty'), b0: 11200, c3: 11200, diff: 0 },
-        { key: 't', label: t('reports.cost.total'), b0: 46020, c3: 42150, diff: -3870 },
+  // Cost breakdown: the admin cost report when present, else the last point of the simulator cost curve
+  const breakdownRows = useMemo(() => {
+    const mk = (key: string, label: string, b0: number | null | undefined, c3: number | null | undefined) => ({
+      key,
+      label,
+      b0: b0 ?? null,
+      c3: c3 ?? null,
+      diff: b0 !== null && b0 !== undefined && c3 !== null && c3 !== undefined ? c3 - b0 : null,
+    });
+    if (c?.baseline_policy && c.ml_policy) {
+      return [
+        mk('h', t('reports.cost.holding'), c.baseline_policy.holding_cost, c.ml_policy.holding_cost),
+        mk('o', t('reports.cost.order'), c.baseline_policy.order_cost, c.ml_policy.order_cost),
+        mk('p', t('reports.cost.penalty'), c.baseline_policy.stockout_penalty_cost, c.ml_policy.stockout_penalty_cost),
+        mk('t', t('reports.cost.total'), c.baseline_policy.total_cost, c.ml_policy.total_cost),
       ];
+    }
+    if (!lastPoint) return [];
+    return [
+      mk('h', t('reports.cost.holding'), lastPoint.b0_holding_cost, lastPoint.c3out_holding_cost),
+      mk('o', t('reports.cost.order'), lastPoint.b0_ordering_cost, lastPoint.c3out_ordering_cost),
+      mk('p', t('reports.cost.penalty'), lastPoint.b0_stockout_cost, lastPoint.c3out_stockout_cost),
+      mk('t', t('reports.cost.total'), lastPoint.b0_total_cost, lastPoint.c3out_total_cost),
+    ];
+  }, [c, lastPoint, t]);
 
   const breakdownCols: Column<(typeof breakdownRows)[number]>[] = [
     { key: 'label', header: t('reports.cost.col_item'), value: (r) => r.label },
-    { key: 'b0', header: t('reports.cost.baseline'), align: 'right', value: (r) => r.b0, cell: (r) => fmt.currency(r.b0) },
-    { key: 'c3', header: t('reports.cost.ml'), align: 'right', value: (r) => r.c3, cell: (r) => fmt.currency(r.c3) },
+    { key: 'b0', header: t('reports.cost.baseline'), align: 'right', value: (r) => r.b0, cell: (r) => money(r.b0) },
+    { key: 'c3', header: t('reports.cost.ml'), align: 'right', value: (r) => r.c3, cell: (r) => money(r.c3) },
     {
       key: 'diff',
-      header: t('reports.cost.savings'),
+      header: t('reports.cost.diff_col'),
       align: 'right',
       value: (r) => r.diff,
-      cell: (r) => (
-        <span style={{ fontWeight: 'var(--weight-semibold)', color: r.diff <= 0 ? 'var(--color-success-text)' : 'var(--color-danger-text)' }}>
-          {r.diff > 0 ? `+${fmt.currency(r.diff)}` : fmt.currency(r.diff)}
-        </span>
-      ),
+      cell: (r) =>
+        r.diff === null ? (
+          '—'
+        ) : (
+          <span style={{ fontWeight: 'var(--weight-semibold)', color: r.diff <= 0 ? 'var(--color-success-text)' : 'var(--color-danger-text)' }}>
+            {r.diff > 0 ? `+${fmt.currency(r.diff)}` : fmt.currency(r.diff)}
+          </span>
+        ),
     },
   ];
 
-  const savingsAmount = c?.cost_savings_amount && Math.abs(c.cost_savings_amount) > 100 ? Math.abs(c.cost_savings_amount) : 3870;
-  const savingsPct = c?.savings_percentage && Math.abs(c.savings_percentage) > 1 ? c.savings_percentage : -8.4;
-  const baselineTotal = c?.baseline_policy?.total_cost && c.baseline_policy.total_cost > 1000 ? c.baseline_policy.total_cost : 46020;
-  const mlTotal = c?.ml_policy?.total_cost && c.ml_policy.total_cost > 1000 ? c.ml_policy.total_cost : 42150;
+  const chartRows = useMemo(() => curve.map((pt) => ({ label: fmt.date(pt.date), c3: pt.c3out_total_cost, b0: pt.b0_total_cost })), [curve, fmt]);
 
   return (
     <div className="rpt-container">
       <PageHeader
-        title={`${t('reports.exec.title')} · ${storeId ?? 'CA_1'}`}
+        title={`${t('reports.exec.title')} · ${storeId ?? '—'}`}
         description={t('reports.exec.subtitle')}
         meta={
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-            Store CA_1 Periodic Review (R=7d) · Horizon: Apr 25 – May 23, 2016
+            {t('reports.exec.meta', {
+              store: storeId ?? '—',
+              r: R ?? '—',
+              from: clock?.start_date ? fmt.date(clock.start_date) : '—',
+              to: k?.as_of ? fmt.date(k.as_of) : clock?.current_date ? fmt.date(clock.current_date) : '—',
+            })}
           </span>
         }
         actions={
           <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
-            <Button variant="secondary" size="sm" leftIcon={<Download size={14} />} onClick={exportFullCsv}>
+            <Button variant="secondary" size="sm" leftIcon={<Download size={14} />} onClick={exportFullCsv} disabled={!k}>
               {t('reports.exec.export_full')}
             </Button>
-            <Button variant="primary" size="sm" leftIcon={<Play size={14} />} loading={runningBt} onClick={runBacktest}>
-              {t('reports.cost.backtest_run')}
-            </Button>
+            {isAdmin && (
+              <Button variant="primary" size="sm" leftIcon={<Play size={14} />} loading={runningBt} onClick={runBacktest}>
+                {t('reports.cost.backtest_run')}
+              </Button>
+            )}
           </div>
         }
       />
@@ -528,167 +545,191 @@ export const Reports: React.FC = () => {
         <div className="rpt-formula-math">{t('reports.exec.formula_math')}</div>
         <div className="rpt-formula-meta">
           <span className="rpt-formula-tag">
-            <span style={{ color: 'var(--color-success)' }}>●</span>
-            <strong>{t('reports.exec.state_label')}</strong> {t('reports.exec.state_val')}
+            <strong>{t('reports.exec.basis_label')}</strong> {k?.cost_basis ?? '—'}
           </span>
           <span>·</span>
           <span className="rpt-formula-tag">
-            <strong>{t('reports.exec.sample_label')}</strong> {t('reports.exec.sample_val')}
+            <strong>{t('reports.exec.sample_label')}</strong> {k?.n_skus != null ? t('reports.exec.sample_val', { n: fmt.integer(k.n_skus) }) : '—'}
           </span>
           <span>·</span>
           <span className="rpt-formula-tag">
-            <strong>{t('reports.exec.interval_label')}</strong> {t('reports.exec.interval_val')}
+            <strong>{t('reports.exec.interval_label')}</strong> {t('reports.exec.interval_val', { l: L ?? '—', r: R ?? '—' })}
           </span>
         </div>
       </div>
 
-      <div className="rpt-kpi-grid">
-        <div className="rpt-kpi-card">
-          <div>
-            <div className="rpt-kpi-head">
-              <span className="rpt-kpi-title">{t('reports.exec.kpi_savings')}</span>
-              <Badge tone="success">
-                <TrendingDown size={12} style={{ marginRight: 2 }} /> {fmt.percent(savingsPct, { scale: 'percent', digits: 1 })} {t('reports.exec.kpi_savings_efficiency')}
-              </Badge>
+      {kpi.error ? (
+        <ErrorState error={kpi.error} onRetry={kpi.refetch} />
+      ) : (
+        <>
+          <div className="rpt-kpi-grid">
+            <div className="rpt-kpi-card">
+              <div>
+                <div className="rpt-kpi-head">
+                  <span className="rpt-kpi-title">{t('reports.exec.kpi_savings')}</span>
+                  {savingsPct !== null && (
+                    <Badge tone={cheaper ? 'success' : 'warning'}>
+                      {cheaper ? <TrendingDown size={12} style={{ marginRight: 2 }} /> : <TrendingUp size={12} style={{ marginRight: 2 }} />}
+                      {fmt.percent(Math.abs(savingsPct), { scale: 'percent', digits: 1 })} {t(cheaper ? 'reports.exec.cheaper' : 'reports.exec.costlier')}
+                    </Badge>
+                  )}
+                </div>
+                <div className="rpt-kpi-val">
+                  {savings !== null ? fmt.currency(Math.abs(savings)) : '—'}{' '}
+                  <span className="rpt-kpi-unit">{savings === null ? '' : t(cheaper ? 'reports.exec.kpi_saved' : 'reports.exec.kpi_extra')}</span>
+                </div>
+              </div>
+              <div className="rpt-kpi-foot">
+                <span>
+                  B0: <span className="rpt-kpi-subval">{money(b0Total)}</span>
+                </span>
+                <span>
+                  C³-OUT: <strong style={{ color: 'var(--color-accent)' }}>{money(c3Total)}</strong>
+                </span>
+              </div>
             </div>
-            <div className="rpt-kpi-val">
-              {fmt.currency(savingsAmount)} <span className="rpt-kpi-unit">{t('reports.exec.kpi_savings_saved')}</span>
-            </div>
-          </div>
-          <div className="rpt-kpi-foot">
-            <span>
-              Baseline B0: <span className="rpt-kpi-subval">{fmt.currency(baselineTotal)}</span>
-            </span>
-            <span>
-              C³-OUT: <strong style={{ color: 'var(--color-accent)' }}>{fmt.currency(mlTotal)}</strong>
-            </span>
-          </div>
-        </div>
 
-        <div className="rpt-kpi-card">
-          <div>
-            <div className="rpt-kpi-head">
-              <span className="rpt-kpi-title">{t('reports.exec.kpi_holding')}</span>
-              <Badge tone="info">11.2% {t('reports.exec.kpi_holding_buffer')}</Badge>
+            <div className="rpt-kpi-card">
+              <div>
+                <div className="rpt-kpi-head">
+                  <span className="rpt-kpi-title">{t('reports.exec.kpi_holding')}</span>
+                </div>
+                <div className="rpt-kpi-val">{money(lastPoint?.c3out_holding_cost)}</div>
+              </div>
+              <div className="rpt-kpi-foot">
+                <span>
+                  B0: <span className="rpt-kpi-subval">{money(lastPoint?.b0_holding_cost)}</span>
+                </span>
+                <span>
+                  {t('reports.exec.kpi_ordering', { c3: money(lastPoint?.c3out_ordering_cost), b0: money(lastPoint?.b0_ordering_cost) })}
+                </span>
+              </div>
             </div>
-            <div className="rpt-kpi-val">
-              $24,150 <span className="rpt-kpi-unit">down from $27,200</span>
-            </div>
-          </div>
-          <div className="rpt-kpi-foot">
-            <span>Rate: $0.15/unit/wk</span>
-            <span style={{ color: 'var(--color-success-text)', fontWeight: 'var(--weight-semibold)' }}>-$3,050 {t('reports.exec.kpi_holding_capital')}</span>
-          </div>
-        </div>
 
-        <div className="rpt-kpi-card">
-          <div>
-            <div className="rpt-kpi-head">
-              <span className="rpt-kpi-title">{t('reports.exec.kpi_stockout')}</span>
-              <Badge tone="success">✓ 49 {t('reports.exec.kpi_stockout_protected')}</Badge>
-            </div>
-            <div className="rpt-kpi-val">
-              $11,200 <span className="rpt-kpi-unit">Penalty Avoided</span>
+            <div className="rpt-kpi-card">
+              <div>
+                <div className="rpt-kpi-head">
+                  <span className="rpt-kpi-title">{t('reports.exec.kpi_stockout')}</span>
+                </div>
+                <div className="rpt-kpi-val">{money(lastPoint?.c3out_stockout_cost)}</div>
+              </div>
+              <div className="rpt-kpi-foot">
+                <span>
+                  B0: <span className="rpt-kpi-subval">{money(lastPoint?.b0_stockout_cost)}</span>
+                </span>
+                <span>{t('reports.exec.kpi_availability', { c3: pct(k?.c3out_overall_availability), b0: pct(k?.b0_overall_availability) })}</span>
+              </div>
             </div>
           </div>
-          <div className="rpt-kpi-foot">
-            <span>{t('reports.exec.kpi_stockout_rate')} 1.6% vs 3.2% (B0)</span>
-            <span className="rpt-kpi-subval">Fee: $4.50/lost unit</span>
-          </div>
-        </div>
-      </div>
 
-      <div className="rpt-main-grid">
-        <div className="rpt-chart-card">
-          <div className="rpt-chart-head">
-            <div>
-              <div className="rpt-chart-title">{t('reports.exec.chart_title')}</div>
-              <div className="rpt-chart-desc">{t('reports.exec.chart_desc')}</div>
+          <div className="rpt-main-grid">
+            <div className="rpt-chart-card">
+              <div className="rpt-chart-head">
+                <div>
+                  <div className="rpt-chart-title">{t('reports.exec.chart_title')}</div>
+                  <div className="rpt-chart-desc">{t('reports.exec.chart_desc', { n: curve.length })}</div>
+                </div>
+                {savings !== null && (
+                  <div className="rpt-delta-callout" style={cheaper ? undefined : { color: 'var(--color-warning-text)' }}>
+                    {cheaper ? <CheckCircle2 size={14} /> : <TriangleAlert size={14} />}
+                    <span>{t(cheaper ? 'reports.exec.delta_cheaper' : 'reports.exec.delta_costlier', { amount: fmt.currency(Math.abs(savings)) })}</span>
+                  </div>
+                )}
+              </div>
+              <div style={{ width: '100%', height: 320 }}>
+                {kpi.loading && !k ? null : chartRows.length === 0 ? (
+                  <EmptyState compact title={t('reports.exec.chart_empty')} description={k?.cost_reason ?? undefined} />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartRows} margin={{ top: 12, right: 24, left: 10, bottom: 8 }}>
+                      <CartesianGrid stroke={chart.grid} vertical={false} />
+                      <XAxis dataKey="label" {...chart.axis} tick={{ ...chart.axis.tick, fontSize: 11 }} />
+                      <YAxis {...chart.axis} width={64} tickFormatter={(v: number) => fmt.compact(v)} />
+                      <RTooltip content={<ChartTooltip format={(v) => fmt.currency(Number(v))} />} />
+                      <Legend verticalAlign="top" align="right" height={36} iconType="plainline" />
+                      <Line
+                        type="monotone"
+                        dataKey="c3"
+                        name={t('reports.exec.chart_c3')}
+                        stroke="#4f46e5"
+                        strokeWidth={3}
+                        dot={{ r: 4, fill: '#4f46e5', stroke: '#fff', strokeWidth: 2 }}
+                        activeDot={{ r: 6 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="b0"
+                        name={t('reports.exec.chart_b0')}
+                        stroke="#94a3b8"
+                        strokeWidth={2}
+                        strokeDasharray="5 5"
+                        dot={{ r: 3, fill: '#94a3b8' }}
+                        connectNulls={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </div>
-            <div className="rpt-delta-callout">
-              <CheckCircle2 size={14} />
-              <span>Delta: +$3,870 US$ {t('reports.exec.delta_savings')}</span>
-            </div>
-          </div>
-          <div style={{ width: '100%', height: 320 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={TRAJECTORY_DATA} margin={{ top: 12, right: 24, left: 10, bottom: 8 }}>
-                <CartesianGrid stroke={chart.grid} vertical={false} />
-                <XAxis dataKey="cycle" {...chart.axis} tick={{ ...chart.axis.tick, fontSize: 11 }} />
-                <YAxis {...chart.axis} width={64} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
-                <RTooltip content={<ChartTooltip format={(v) => fmt.currency(Number(v))} />} />
-                <Legend verticalAlign="top" align="right" height={36} iconType="plainline" />
-                <Line
-                  type="monotone"
-                  dataKey="c3"
-                  name={t('reports.exec.chart_c3')}
-                  stroke="#4f46e5"
-                  strokeWidth={3}
-                  dot={{ r: 4, fill: '#4f46e5', stroke: '#fff', strokeWidth: 2 }}
-                  activeDot={{ r: 6 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="b0"
-                  name={t('reports.exec.chart_b0')}
-                  stroke="#94a3b8"
-                  strokeWidth={2}
-                  strokeDasharray="5 5"
-                  dot={{ r: 3, fill: '#94a3b8' }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
 
-        <div className="rpt-audit-card">
-          <div>
-            <div className="rpt-audit-head">
-              <div className="rpt-audit-title">{t('reports.exec.audit_title')}</div>
-              <Badge tone="accent">
-                <ShieldCheck size={12} style={{ marginRight: 3 }} /> {t('reports.exec.audit_reproducible')}
-              </Badge>
+            <div className="rpt-audit-card">
+              <div>
+                <div className="rpt-audit-head">
+                  <div className="rpt-audit-title">{t('reports.exec.audit_title')}</div>
+                  <Badge tone="accent">
+                    <ShieldCheck size={12} style={{ marginRight: 3 }} /> {k?.source ?? '—'}
+                  </Badge>
+                </div>
+                <ul className="rpt-audit-list">
+                  <li className="rpt-audit-row">
+                    <span className="rpt-audit-label">{t('reports.exec.algo_label')}</span>
+                    <span className="rpt-audit-val">{t('reports.exec.algo_val')}</span>
+                  </li>
+                  <li className="rpt-audit-row">
+                    <span className="rpt-audit-label">{t('reports.exec.bench_label')}</span>
+                    <span className="rpt-audit-val">{t('reports.exec.bench_val')}</span>
+                  </li>
+                  <li className="rpt-audit-row">
+                    <span className="rpt-audit-label">{t('reports.exec.facility_label')}</span>
+                    <span className="rpt-audit-val">{storeId ?? '—'}</span>
+                  </li>
+                  <li className="rpt-audit-row">
+                    <span className="rpt-audit-label">{t('reports.exec.scope_label')}</span>
+                    <span className="rpt-audit-val">{k?.n_skus != null ? t('reports.exec.sample_val', { n: fmt.integer(k.n_skus) }) : '—'}</span>
+                  </li>
+                  <li className="rpt-audit-row">
+                    <span className="rpt-audit-label">{t('reports.exec.reviews_label')}</span>
+                    <span className="rpt-audit-val">{k ? fmt.integer(k.reviews_elapsed) : '—'}</span>
+                  </li>
+                  <li className="rpt-audit-row">
+                    <span className="rpt-audit-label">{t('reports.exec.basis_label')}</span>
+                    <span className="rpt-audit-val">{k?.cost_basis ?? '—'}</span>
+                  </li>
+                </ul>
+              </div>
+              <div
+                className="rpt-sla-banner"
+                style={belowTarget > 0 ? { background: 'var(--color-warning-subtle)', color: 'var(--color-warning-text)' } : undefined}
+              >
+                <Award size={18} style={{ flexShrink: 0 }} />
+                <div>
+                  <strong>
+                    {t('reports.exec.sla_box_title')} {pct(k?.c3out_overall_availability)}
+                  </strong>
+                  <div>
+                    {t('reports.exec.sla_box_desc', {
+                      target: pct(k?.target_availability),
+                      below: belowTarget,
+                      n: segments.length,
+                      b0: pct(k?.b0_overall_availability),
+                    })}
+                  </div>
+                </div>
+              </div>
             </div>
-            <ul className="rpt-audit-list">
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.algo_label')}</span>
-                <span className="rpt-audit-val">{t('reports.exec.algo_val')}</span>
-              </li>
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.bench_label')}</span>
-                <span className="rpt-audit-val">{t('reports.exec.bench_val')}</span>
-              </li>
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.facility_label')}</span>
-                <span className="rpt-audit-val">{t('reports.exec.facility_val')}</span>
-              </li>
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.scope_label')}</span>
-                <span className="rpt-audit-val">{t('reports.exec.sample_val')}</span>
-              </li>
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.holding_param_label')}</span>
-                <span className="rpt-audit-val">$0.15 / unit / week</span>
-              </li>
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.order_param_label')}</span>
-                <span className="rpt-audit-val">$10.00 / order batch</span>
-              </li>
-              <li className="rpt-audit-row">
-                <span className="rpt-audit-label">{t('reports.exec.penalty_param_label')}</span>
-                <span className="rpt-audit-val">$4.50 / stockout unit</span>
-              </li>
-            </ul>
           </div>
-          <div className="rpt-sla-banner">
-            <Award size={18} style={{ flexShrink: 0 }} />
-            <div>
-              <strong>{t('reports.exec.sla_box_title')} 96.4%</strong>
-              <div style={{ color: '#047857' }}>+2.6% {t('reports.exec.sla_box_desc')}</div>
-            </div>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       <div className="rpt-deep-dive">
         <Section title={t('reports.exec.deep_dive_title')} description={t('reports.exec.deep_dive_desc')}>
@@ -708,17 +749,17 @@ export const Reports: React.FC = () => {
             {subTab === 'breakdown' && (
               <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
                 <Card title={t('reports.cost.title')} description={t('reports.cost.description')} flush>
-                  <Table columns={breakdownCols} rows={breakdownRows} rowKey={(r) => r.key} loading={cost.loading && !c} />
+                  <Table columns={breakdownCols} rows={breakdownRows} rowKey={(r) => r.key} loading={(cost.loading && !c) || (kpi.loading && !k)} emptyTitle={t('reports.exec.chart_empty')} />
                 </Card>
                 {btResult && (
                   <Card title={t('reports.cost.backtest_title')} description={t('reports.cost.backtest_desc')}>
                     <div style={{ display: 'grid', gap: 'var(--space-3)', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
                       <KpiTile label={t('reports.cost.bt_days')} value={fmt.integer(btResult.simulated_days)} />
-                      <KpiTile label={t('reports.cost.bt_b0_stockouts')} value={btResult.baseline_stockouts != null ? fmt.integer(btResult.baseline_stockouts) : '0'} />
-                      <KpiTile label={t('reports.cost.bt_ml_stockouts')} value={btResult.ml_stockouts != null ? fmt.integer(btResult.ml_stockouts) : '0'} />
-                      <KpiTile label={t('reports.cost.bt_reduction')} value={btResult.stockout_reduction_pct != null ? fmt.percent(btResult.stockout_reduction_pct, { scale: 'percent', digits: 1, signed: true }) : '-50.0%'} />
-                      <KpiTile label={t('reports.cost.bt_holding_savings')} value={btResult.holding_cost_savings != null ? fmt.currency(btResult.holding_cost_savings) : '$3,050'} />
-                      <KpiTile label={t('reports.cost.bt_service')} value={btResult.service_level_achieved != null ? fmt.percent(btResult.service_level_achieved, { scale: 'percent', digits: 1 }) : '96.4%'} />
+                      <KpiTile label={t('reports.cost.bt_b0_stockouts')} value={btResult.baseline_stockouts != null ? fmt.integer(btResult.baseline_stockouts) : '—'} />
+                      <KpiTile label={t('reports.cost.bt_ml_stockouts')} value={btResult.ml_stockouts != null ? fmt.integer(btResult.ml_stockouts) : '—'} />
+                      <KpiTile label={t('reports.cost.bt_reduction')} value={btResult.stockout_reduction_pct != null ? fmt.percent(btResult.stockout_reduction_pct, { scale: 'percent', digits: 1, signed: true }) : '—'} />
+                      <KpiTile label={t('reports.cost.bt_holding_savings')} value={btResult.holding_cost_savings != null ? fmt.currency(btResult.holding_cost_savings) : '—'} />
+                      <KpiTile label={t('reports.cost.bt_service')} value={btResult.service_level_achieved != null ? fmt.percent(btResult.service_level_achieved, { scale: 'percent', digits: 1 }) : '—'} />
                     </div>
                   </Card>
                 )}
