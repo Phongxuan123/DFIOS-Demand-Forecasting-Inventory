@@ -425,8 +425,6 @@ const ProductDrawer: React.FC<{ product: Product | null; storeId: string | null;
     }
   };
 
-  const estCost = product?.price != null ? Math.round(product.price * 0.621 * 100) / 100 : 1.85;
-  const retailPrice = product?.price != null ? product.price : 2.98;
 
   return (
     <Drawer open={!!product} onClose={onClose} title={product ? t('products.detail.title', { sku: product.item_id }) : ''} description={product?.name}>
@@ -434,45 +432,10 @@ const ProductDrawer: React.FC<{ product: Product | null; storeId: string | null;
         <div className="ui-stack" style={{ gap: 'var(--space-4)' }}>
           <div className="prd-drawer-pricing">
             <div className="prd-drawer-pricing-item">
-              <span className="prd-drawer-pricing-lbl">{t('products.master.detail_unit_cost')}</span>
-              <span className="prd-drawer-pricing-val">{fmt.currency(estCost)}</span>
-            </div>
-            <div className="prd-drawer-pricing-item">
               <span className="prd-drawer-pricing-lbl">{t('products.master.detail_retail_price')}</span>
-              <span className="prd-drawer-pricing-val">{fmt.currency(retailPrice)}</span>
-            </div>
-            <div className="prd-drawer-pricing-item">
-              <span className="prd-drawer-pricing-lbl">{t('products.master.detail_margin')}</span>
-              <span className="prd-drawer-pricing-val" style={{ color: 'var(--color-success)' }}>
-                37.9%
-              </span>
+              <span className="prd-drawer-pricing-val">{product.price != null ? fmt.currency(product.price) : '—'}</span>
             </div>
           </div>
-
-          <Card title={t('products.master.detail_stock_breakdown')}>
-            <div className="prd-drawer-stock">
-              <div className="prd-drawer-stock-head">
-                <span>{t('products.master.detail_stock_total', { total: fmt.integer(inv.data?.on_hand ? Math.round(inv.data.on_hand * 1.16) : 72) })}</span>
-                <Badge tone={inv.data && inv.data.on_hand > (p?.s ?? 0) ? 'success' : 'danger'}>
-                  {inv.data && inv.data.on_hand > (p?.s ?? 0) ? t('products.master.stock_status_normal') : t('products.master.stock_status_below_rop')}
-                </Badge>
-              </div>
-              <div className="prd-drawer-stock-track">
-                <div className="prd-drawer-stock-avail" style={{ width: '86%' }} />
-                <div className="prd-drawer-stock-res" style={{ width: '14%' }} />
-              </div>
-              <div className="prd-drawer-stock-legend">
-                <span className="prd-drawer-legend-item">
-                  <span className="prd-dot prd-dot--foods" />
-                  {t('products.master.detail_available')}: <strong>{fmt.integer(inv.data?.on_hand ?? 62)} u</strong>
-                </span>
-                <span className="prd-drawer-legend-item">
-                  <span className="prd-dot prd-dot--household" />
-                  {t('products.master.detail_reserved')}: <strong>{fmt.integer(inv.data?.on_hand ? Math.max(1, Math.round(inv.data.on_hand * 0.16)) : 10)} u</strong>
-                </span>
-              </div>
-            </div>
-          </Card>
 
           <Card title={t('products.detail.inventory', { store: storeId ?? '—' })}>
             {!storeId ? (
