@@ -5,11 +5,12 @@ import { useStore } from '../context/StoreContext.tsx';
 import { can } from '../auth/permissions.ts';
 import { useApi } from '../hooks/useApi.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
-import { getMatrix, getRecommendations, getServiceLevel, getSkus } from '../services/abcxyzApi.ts';
+import { getCurrentPolicies, getMatrix, getRecommendations, getServiceLevel, getSkus } from '../services/abcxyzApi.ts';
 import { getCalibrationStatus } from '../services/replenishmentApi.ts';
 import { getKpiShadowDashboard, type SegmentAvailability } from '../services/dashboardApi.ts';
 import { MatrixCard } from './abcxyz/MatrixCard.tsx';
 import { PolicyCard } from './abcxyz/PolicyCard.tsx';
+import { CurrentPolicyCard } from './abcxyz/CurrentPolicyCard.tsx';
 import { RecomputeButton } from './abcxyz/RecomputeButton.tsx';
 import { ScatterCard } from './abcxyz/ScatterCard.tsx';
 import { SkuTable } from './abcxyz/SkuTable.tsx';
@@ -67,6 +68,8 @@ export const AbcXyzAnalysis: React.FC = () => {
   const calib = useApi((s) => getCalibrationStatus(storeId as string, s), [storeId, version], { enabled });
   // Observed availability per ABC x XYZ class (simulator, closed cycles) and the commitment target
   const service = useApi((s) => getKpiShadowDashboard(storeId as string, s), [storeId, version], { enabled });
+  // (m_g, kappa_g) chosen by J5 and theta_g in force per class: the parameters J4 uses at the next review
+  const current = useApi((s) => getCurrentPolicies(storeId as string, s), [storeId, version], { enabled });
 
   if (!storeId) {
     return (
@@ -224,6 +227,16 @@ export const AbcXyzAnalysis: React.FC = () => {
             onRetry={matrix.refetch}
             selected={segment}
             onSelect={onSelectSegment}
+          />
+
+          <CurrentPolicyCard
+            policies={current.data}
+            loading={current.loading && !current.data}
+            error={current.error}
+            onRetry={current.refetch}
+            matrix={m}
+            service={segService}
+            selected={segment}
           />
 
           <PolicyCard

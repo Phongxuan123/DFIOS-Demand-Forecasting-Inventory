@@ -104,6 +104,26 @@ export const getMatrix = (storeId: string, signal?: AbortSignal) =>
 export const getSkus = (q: SkuQuery, signal?: AbortSignal) =>
   getJson<SkuListResponse>('/classification/skus', { params: q, signal });
 
+/** Policy in force for one ABC x XYZ class (GET /optimization/policies/current). */
+export interface CurrentPolicy {
+  class_id: string;
+  selection_id: string;
+  scope: 'store' | 'global' | string;
+  policy_type: string;
+  m_g: number;
+  kappa_g: number;
+  setpoint: number | null;
+  val_cost: number | null;
+  val_service: number | null;
+  is_feasible: boolean | null;
+  source: string | null;
+  selected_at: string | null;
+  theta: number | null;
+}
+
+export const getCurrentPolicies = (storeId: string, signal?: AbortSignal) =>
+  getJson<CurrentPolicy[]>('/optimization/policies/current', { params: { store_id: storeId }, signal });
+
 export const getRecommendations = (signal?: AbortSignal) =>
   getJson<Recommendation[]>('/classification/recommendations', { signal });
 
