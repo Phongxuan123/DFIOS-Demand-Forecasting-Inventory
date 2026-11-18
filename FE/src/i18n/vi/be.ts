@@ -6,7 +6,7 @@ export const be = {
   dash_no_inventory: "Chưa có inventory_daily trong cửa sổ mô phỏng (đồng hồ chưa tua): chưa tính được chi phí A3.",
   dash_no_b0cost: "B0 shadow chưa có dữ liệu chi phí: reset đồng hồ và tua lại.",
   dash_insight_no_clock: "Chưa có đồng hồ mô phỏng cho '{store}': không có số liệu KPI.",
-  dash_avail_b0: "Availability quan sát (các chu kỳ đã đóng): C³-OUT {c3}% (mục tiêu {target}%), B0 raw quantile τ=0.95 {b0}%.",
+  dash_avail_b0: "Availability quan sát (các chu kỳ đã đóng): C³-OUT {c3}% (mục tiêu {target}%), B0-MA-OUT-0.95 (đúng B0 của thầy) {b0}%.",
   dash_avail_nob0: "Availability quan sát (các chu kỳ đã đóng): C³-OUT {c3}% (mục tiêu {target}%); B0: {reason}",
   dash_no_avail: "Chưa có availability quan sát.",
   dash_savings_save: "So với B0 shadow, C³-OUT tiết kiệm {x} $ lũy kế theo mô hình A3 (B0 {b0} $, C³-OUT {c3} $). C³-OUT là bộ điều khiển mức phục vụ, chênh lệch chi phí có thể âm.",

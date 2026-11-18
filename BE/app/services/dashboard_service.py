@@ -592,7 +592,7 @@ class DashboardService:
         details: List[InsightDetail] = []  # same order as ``insights`` (stable codes for client-side i18n)
         if overall_c3 is not None:
             line = f"Availability quan sát (các chu kỳ đã đóng): C³-OUT {overall_c3}% (mục tiêu {target_pct}%)"
-            line += f", B0-MA-OUT-0.95 (shadow) {overall_b0}%." if overall_b0 is not None else f"; B0: {b0_reason}"
+            line += f", B0-MA-OUT-0.95 (đúng B0 của thầy) {overall_b0}%." if overall_b0 is not None else f"; B0: {b0_reason}"
             insights.append(line)
             details.append(InsightDetail(code="availability_observed", params={
                 "c3out_pct": overall_c3, "target_pct": target_pct, "b0_pct": overall_b0,

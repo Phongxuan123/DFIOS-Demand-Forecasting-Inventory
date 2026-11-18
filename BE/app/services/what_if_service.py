@@ -18,7 +18,9 @@ replayed with the vectorised lost-sales backtest of ``policy_backtest`` (the eng
 
 Constraints (answered with 422 + reason, never approximated):
 * R must equal the spacing of the stored causal review forecasts (weekly, 7 days): R = 1 would need daily
-  review forecasts that do not exist;
+  review forecasts that do not exist. P3-F4 decision: window_quantile_service cannot build a daily causal Q (its
+  route (c) and the teacher quantiles are read ONLY at stored review_days of forecast_backtest / teacher rows, and
+  residuals need a point forecast per origin), so R = 1 stays a structured 422 with ``r_options`` = [spacing];
 * L in {1, 3, 7} (schema), H = L + R; the stored window forecasts are 10-day sums (W = 10), rescaled by H / 10;
   the residual quantile is measured on realised H-day windows, so the calibration is empirical for that H;
 * a class needs >= 2 replayable reviews and >= 1 complete item.
@@ -147,7 +149,7 @@ class WhatIfService:
                 "unsupported_review_period",
                 f"R = {R} is not supported: the stored causal review forecasts of '{store_id}' are spaced {spacing} "
                 f"days apart, so only R = {spacing} can be replayed without inventing intermediate forecasts.",
-                supported_review_period_days=[spacing], supported_lead_time_days=[1, 3, 7],
+                supported_review_period_days=[spacing], r_options=[spacing], supported_lead_time_days=[1, 3, 7],
             )
         classes = [c.strip().upper() for c in (req.classes or pc.ALL_CLASSES)]
         bad = [c for c in classes if c not in pc.ALL_CLASSES]

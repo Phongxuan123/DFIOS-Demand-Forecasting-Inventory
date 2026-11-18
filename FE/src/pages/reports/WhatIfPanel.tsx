@@ -67,7 +67,8 @@ export const WhatIfPanel: React.FC<{ storeId: string | null; isGlobal: boolean }
       if (e.status === 404 || e.status === 405) setState({ kind: 'unsupported' });
       else {
         setState({ kind: 'error', error: e });
-        const sup = (e.data as { supported_review_period_days?: unknown } | undefined)?.supported_review_period_days;
+        const d = e.data as { r_options?: unknown; supported_review_period_days?: unknown } | undefined;
+        const sup = d?.r_options ?? d?.supported_review_period_days;
         if (e.code === 'unsupported_review_period' && Array.isArray(sup)) setSupportedR(sup.map(Number));
       }
     }
