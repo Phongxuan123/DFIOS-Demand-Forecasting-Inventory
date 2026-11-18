@@ -45,6 +45,19 @@ export interface ClockAdvanceResult {
   message: string;
   /** Server processing time of the batch chain (BE field, may be absent on old backends). */
   duration_seconds?: number | null;
+  approval_mode?: string;
+  stopped_at_review?: boolean;
+  pending_expired?: number;
+  run_id?: string | null;
+}
+
+export interface AdvanceOptions {
+  days?: number;
+  reviews?: number;
+  until?: string;
+  approval_mode?: 'auto' | 'planner';
+  expire_pending?: boolean;
+  async_job?: boolean;
 }
 
 /** Measured duration of the last advance in this session: the only honest basis for a time hint. */
@@ -72,7 +85,7 @@ interface ClockContextValue {
   /** Re-read the clock from the server. */
   refresh: () => void;
   /** Throws the ApiError-able error on failure; resolves with the batch summary. */
-  advance: (days: number) => Promise<ClockAdvanceResult>;
+  advance: (arg: number | AdvanceOptions) => Promise<ClockAdvanceResult>;
 }
 
 const ClockContext = createContext<ClockContextValue | null>(null);
@@ -134,22 +147,66 @@ export const ClockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const advance = useCallback(
-    async (days: number) => {
+    async (arg: number | AdvanceOptions) => {
       if (!storeId) throw new Error('No store selected');
+      const opts: AdvanceOptions = typeof arg === 'number' ? { days: arg } : arg;
+      const days = opts.days ?? 7;
       setAdvancing(true);
       const started = Date.now();
       setAdvanceStartedAt(started);
       try {
-        const res = await apiClient.post<ClockAdvanceResult>(
+        const body = {
+          store_id: storeId,
+          ...opts,
+        };
+        const res = await apiClient.post<ClockAdvanceResult | { run_id: string; poll_url: string; status: string }>(
           '/clock/advance',
-          { store_id: storeId, days },
+          body,
           { timeout: 600000 }, // the batch chain can take minutes
         );
-        const server = res.data?.duration_seconds;
+
+        // Handle async_job (HTTP 202)
+        if (opts.async_job && res.data && 'run_id' in res.data && !('current_date' in res.data)) {
+          const runId = (res.data as { run_id: string }).run_id;
+          let completed = false;
+          let latestDetail: any = null;
+          while (!completed) {
+            await new Promise((r) => setTimeout(r, 2000));
+            const statusRes = await apiClient.get<any>(`/batch-runs/${encodeURIComponent(runId)}`);
+            latestDetail = statusRes.data;
+            if (latestDetail?.status === 'success') {
+              completed = true;
+            } else if (latestDetail?.status === 'failed') {
+              throw new Error(latestDetail?.error || 'Batch advance job failed');
+            }
+          }
+          const elapsed = (Date.now() - started) / 1000;
+          setLastTiming({ days, seconds: elapsed });
+          setVersion((v) => v + 1);
+          refresh();
+          return {
+            success: true,
+            store_id: storeId,
+            previous_date: '',
+            current_date: latestDetail?.sim_date || '',
+            days_advanced: days,
+            reviews_executed: 1,
+            stockouts_recorded: 0,
+            recommendations_generated: 0,
+            job_events: [],
+            message: 'Async batch advance completed successfully',
+            duration_seconds: elapsed,
+            approval_mode: opts.approval_mode || 'auto',
+            run_id: runId,
+          } as ClockAdvanceResult;
+        }
+
+        const syncResult = res.data as ClockAdvanceResult;
+        const server = syncResult?.duration_seconds;
         setLastTiming({ days, seconds: typeof server === 'number' && Number.isFinite(server) ? server : (Date.now() - started) / 1000 });
         setVersion((v) => v + 1);
         refresh();
-        return res.data;
+        return syncResult;
       } finally {
         setAdvancing(false);
         setAdvanceStartedAt(null);

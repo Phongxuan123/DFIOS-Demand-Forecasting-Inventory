@@ -86,6 +86,7 @@ export const common = {
   roles: {
     admin: 'Quản trị viên',
     manager: 'Quản lý kho',
+    planner: 'Người lập kế hoạch',
     viewer: 'Người xem',
   },
   theme: {

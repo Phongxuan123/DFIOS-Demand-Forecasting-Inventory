@@ -12,6 +12,8 @@ export const nav: typeof ViNav = {
   abc_xyz: 'ABC/XYZ classes',
   reports: 'Reports',
   model_performance: 'Model performance',
+  model_versions: 'Model versions',
+  batch_runs: 'Batch history',
   settings: 'Settings',
   design_system: 'Design system',
   main_label: 'Main navigation',

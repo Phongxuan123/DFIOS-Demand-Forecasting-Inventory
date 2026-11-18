@@ -9,7 +9,7 @@ import { apiErrorMessage } from '../../services/apiClient.ts';
 import { createUser, deleteUser, listUsers, resendActivation, revokeUserTokens, USERS_LIMIT, setUserActive, setUserRole, type CreateUserBody, type UserRecord } from '../../services/settingsApi.ts';
 
 type ApiRole = CreateUserBody['role'];
-const ROLES: ApiRole[] = ['Admin', 'Warehouse Manager', 'Viewer'];
+const ROLES: ApiRole[] = ['Admin', 'Warehouse Manager', 'Planner', 'Viewer'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const CreateModal: React.FC<{ open: boolean; onClose: () => void; onCreated: () => void }> = ({ open, onClose, onCreated }) => {

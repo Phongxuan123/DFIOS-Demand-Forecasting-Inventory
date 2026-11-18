@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Boxes, Warehouse, Cpu, FileBarChart, LayoutDashboard, PieChart, Settings, Palette, Truck, TrendingUp } from 'lucide-react';
+import { Boxes, Warehouse, Cpu, FileBarChart, LayoutDashboard, PieChart, Settings, Palette, Truck, TrendingUp, Clock, GitBranch } from 'lucide-react';
 import type { Action } from '../../auth/permissions.ts';
 import type { TKey } from '../../i18n/index.tsx';
 
@@ -29,6 +29,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/replenishment', label: 'nav.replenishment', icon: Truck, action: 'view:replenishment' },
       { path: '/inventory', label: 'nav.inventory', icon: Warehouse, action: 'view:inventory' },
       { path: '/products', label: 'nav.products', icon: Boxes, action: 'view:products' },
+      { path: '/batch-runs', label: 'nav.batch_runs', icon: Clock, action: 'batch:view' },
     ],
   },
   {
@@ -39,6 +40,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/abc-xyz', label: 'nav.abc_xyz', icon: PieChart, action: 'view:abcxyz' },
       { path: '/reports', label: 'nav.reports', icon: FileBarChart, action: 'view:reports' },
       { path: '/model-performance', label: 'nav.model_performance', icon: Cpu, action: 'view:models' },
+      { path: '/model-versions', label: 'nav.model_versions', icon: GitBranch, action: 'forecast_sources:view' },
     ],
   },
   {

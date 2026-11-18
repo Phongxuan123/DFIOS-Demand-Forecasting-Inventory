@@ -259,6 +259,7 @@ export const forecast = {
     chart_range_60d: '60 ngày',
     chart_range_90d: '90 ngày',
     chart_show_band: 'Hiển thị dải P10/P90',
+    no_band_for_sku: 'Không có khoảng tin cậy cho SKU này',
     chart_show_events: 'Dấu mốc sự kiện & Ngày lễ',
     legend_actual: 'Doanh số thực tế (23/04 – 22/05)',
     legend_forecast: 'Dự báo trung vị P50 (23/05 – 19/06)',

@@ -72,7 +72,7 @@ export const revokeUserTokens = (id: string) => apiClient.post<{ message?: strin
 
 export interface CreateUserBody {
   email: string;
-  role: 'Admin' | 'Warehouse Manager' | 'Viewer';
+  role: 'Admin' | 'Warehouse Manager' | 'Planner' | 'Viewer';
   display_name?: string;
   password?: string;
 }

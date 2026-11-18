@@ -465,7 +465,15 @@ export const Replenishment: React.FC = () => {
       key: 'status',
       header: t('replenishment.col.status'),
       sortable: tab === 'proposals',
-      cell: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'} dot>{statusLabel(r.status)}</Badge>,
+      cell: (r) => {
+        const isSimulatorRejected = r.status === 'REJECTED' && r.decided_by === 'simulator';
+        const label = isSimulatorRejected ? 'Hệ thống bỏ qua' : statusLabel(r.status);
+        return (
+          <Badge tone={isSimulatorRejected ? 'neutral' : (STATUS_TONE[r.status] ?? 'neutral')} dot>
+            {label}
+          </Badge>
+        );
+      },
     },
     {
       key: 'actions',
@@ -951,6 +959,12 @@ const PolicyDrawer: React.FC<{
             <dd className="ui-num">{rec.lead_time_days != null ? t('replenishment.days', { n: fmt.integer(rec.lead_time_days) }) : <Unavailable />}</dd>
             <dt>{t('replenishment.drawer.supplier')}</dt>
             <dd>{rec.supplier_name ?? <Unavailable />}</dd>
+            {rec.decided_by && (
+              <>
+                <dt>{t('replenishment.col.decided_by')}</dt>
+                <dd>{rec.decided_by === 'simulator' ? 'Hệ thống bỏ qua' : rec.decided_by}</dd>
+              </>
+            )}
           </dl>
 
           <Card title={t('replenishment.drawer.lead_time')} className="rep-card">

@@ -299,7 +299,7 @@ const ForecastTooltip: React.FC<{ active?: boolean; payload?: ReadonlyArray<{ pa
   const line = (label: string, v: number | null | undefined) => (
     <div className="ui-chart-tooltip__row" key={label}>
       <span>{label}</span>
-      <span className="ui-chart-tooltip__value">{fmt.number(v, { digits: 0 })}</span>
+      <span className="ui-chart-tooltip__value">{v !== null && v !== undefined && Number.isFinite(v) ? fmt.number(v, { digits: 0 }) : '—'}</span>
     </div>
   );
   const eventInfo =
@@ -316,12 +316,17 @@ const ForecastTooltip: React.FC<{ active?: boolean; payload?: ReadonlyArray<{ pa
       <div className="ui-chart-tooltip__title">{fmt.date(p.date, 'medium')}</div>
       {p.actual !== null && line(t('forecast.chart.actual'), p.actual)}
       {p.forecast !== null && line(t('forecast.chart.forecast'), p.forecast)}
-      {p.band && (
+      {p.band ? (
         <>
           {line(t('forecast.chart.tooltip_p10'), p.band[0])}
           {line(t('forecast.chart.tooltip_p90'), p.band[1])}
         </>
-      )}
+      ) : p.forecast !== null ? (
+        <>
+          {line(t('forecast.chart.tooltip_p10'), null)}
+          {line(t('forecast.chart.tooltip_p90'), null)}
+        </>
+      ) : null}
       {p.adjusted !== null && line(t('forecast.chart.adjusted'), p.adjusted)}
       {r && line(t('forecast.chart.tooltip_step'), r.h)}
       {eventInfo && (
@@ -508,6 +513,8 @@ export const ForecastExplorer: React.FC = () => {
   const afterClockStart = clockDate ? activeChartData.find((p) => p.date > clockDate)?.date ?? null : null;
   const afterClockEnd = activeChartData.length ? activeChartData[activeChartData.length - 1].date : null;
   const clockInRange = clockDate && activeChartData.length > 0 && activeChartData[0].date <= clockDate && afterClockStart !== null;
+
+  const hasAnyBand = useMemo(() => rows.some((r) => r.p10 !== null && r.p90 !== null), [rows]);
 
   const totalDemand = rows.length ? rows.reduce((s, r) => s + r.y_pred, 0) : null;
   const isStatsModel = (v: string | undefined) => !!v && /sba/i.test(v);
@@ -1021,6 +1028,11 @@ export const ForecastExplorer: React.FC = () => {
                       <span>{t('forecast.explorer.legend_band')}</span>
                     </div>
                   )}
+                  {!hasAnyBand && rows.length > 0 && (
+                    <div className="fe-legend-item" style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
+                      <span>({t('forecast.explorer.no_band_for_sku')})</span>
+                    </div>
+                  )}
                   {showEvents && (
                     <div className="fe-legend-item">
                       <span style={{ width: 14, height: 0, borderTop: '2px dashed #f59e0b' }} />
@@ -1253,6 +1265,11 @@ export const ForecastExplorer: React.FC = () => {
                     <div className="fe-legend-item">
                       <span className="fe-legend-dot fe-legend-dot--band" />
                       <span>{t('forecast.explorer.legend_band')}</span>
+                    </div>
+                  )}
+                  {!hasAnyBand && rows.length > 0 && (
+                    <div className="fe-legend-item" style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
+                      <span>({t('forecast.explorer.no_band_for_sku')})</span>
                     </div>
                   )}
                 </div>

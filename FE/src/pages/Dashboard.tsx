@@ -80,21 +80,33 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
   const t = useT();
   const fmt = useFormat();
   const toast = useToast();
+  const navigate = useNavigate();
   const { concreteStoreId: storeId } = useStore();
   const { clock, status, reason, canAdvance, advancing, advance } = useClock();
   const { confirm, dialog } = useConfirm();
   const [days, setDays] = useState<number>(7);
+  const [approvalMode, setApprovalMode] = useState<'auto' | 'planner'>('auto');
+  const [asyncJob, setAsyncJob] = useState<boolean>(false);
+  const [stoppedReviewDate, setStoppedReviewDate] = useState<string | null>(null);
   const [last, setLast] = useState<{ from: string; to: string; reviews: number; day0: boolean; stockouts: number; recs: number } | null>(null);
 
-  const onAdvance = async () => {
-    const ok = await confirm({
-      title: t('shell.clock.advance_title', { days }),
-      description: t('shell.clock.advance_body', { store: storeId ?? '—' }),
-      confirmLabel: t('dashboard.clock.advance'),
-    });
-    if (!ok) return;
+  const doAdvance = async (expirePending: boolean = false) => {
     try {
-      const res = await advance(days);
+      const res = await advance({
+        days,
+        approval_mode: approvalMode,
+        expire_pending: expirePending,
+        async_job: asyncJob,
+      });
+      if (res.stopped_at_review) {
+        setStoppedReviewDate(res.current_date);
+        toast.info(
+          `Đã dừng ở kỳ review ${fmt.date(res.current_date)}`,
+          'Có đề xuất đặt hàng mới đang ở trạng thái PENDING chờ Planner xử lý.',
+        );
+      } else {
+        setStoppedReviewDate(null);
+      }
       setLast({
         from: res.previous_date,
         to: res.current_date,
@@ -112,9 +124,37 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
         }),
         typeof res.duration_seconds === 'number' ? t('shell.clock.advance_duration', { seconds: fmt.number(res.duration_seconds, { digits: 1 }) }) : undefined,
       );
-    } catch (err) {
+    } catch (err: any) {
+      const is409 =
+        err?.status === 409 ||
+        err?.response?.status === 409 ||
+        (typeof err?.message === 'string' && err.message.includes('409')) ||
+        (typeof err?.detail === 'string' && err.detail.includes('chờ duyệt'));
+      if (is409) {
+        const detailMsg = err?.response?.data?.detail || err?.detail || 'Còn đề xuất đặt hàng của kỳ review trước đang chờ duyệt.';
+        const force = await confirm({
+          title: 'Đề xuất chờ duyệt chưa xử lý',
+          description: `${detailMsg}\n\nBạn có muốn bỏ qua (expire) các đề xuất này để tiếp tục tua không?`,
+          confirmLabel: 'Bỏ qua & Tiếp tục tua',
+          cancelLabel: 'Hủy bỏ',
+        });
+        if (force) {
+          await doAdvance(true);
+        }
+        return;
+      }
       toast.error(t('shell.clock.advance_failed'), apiErrorMessage(err, t));
     }
+  };
+
+  const onAdvance = async () => {
+    const ok = await confirm({
+      title: t('shell.clock.advance_title', { days }),
+      description: t('shell.clock.advance_body', { store: storeId ?? '—' }),
+      confirmLabel: t('dashboard.clock.advance'),
+    });
+    if (!ok) return;
+    await doAdvance(false);
   };
 
   if (status === 'loading') {
@@ -137,70 +177,123 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
   }
 
   return (
-    <div className="dash-clock-bar">
-      <div className="dash-clock-left">
-        <div className="dash-clock-badge">
-          <span className="dash-clock-pulse" aria-hidden="true" />
-          <span>{t('dashboard.clock.title')}</span>
+    <>
+      <div className="dash-clock-bar">
+        <div className="dash-clock-left">
+          <div className="dash-clock-badge">
+            <span className="dash-clock-pulse" aria-hidden="true" />
+            <span>{t('dashboard.clock.title')}</span>
+          </div>
+          <div className="dash-clock-date">
+            {fmt.date(clock.current_date, 'long')}
+          </div>
+          <div className="dash-clock-meta">
+            <span>{t('dashboard.clock.start')}: <strong>{fmt.date(clock.start_date)}</strong></span>
+            <span className="dash-clock-dot">·</span>
+            <span>{t('dashboard.clock.elapsed', { days: countPhrase(t, fmt, 'days', clock.days_elapsed), reviews: reviewsPhrase(t, fmt, reviewsSinceStart(clock), true) })}</span>
+            {last && (
+              <>
+                <span className="dash-clock-dot">·</span>
+                <span>
+                  {t('dashboard.clock.last_advance')}: {t('dashboard.clock.last_advance_value', {
+                    from: fmt.date(last.from),
+                    to: fmt.date(last.to),
+                    reviews: reviewsPhrase(t, fmt, last.reviews, last.day0),
+                    stockouts: countPhrase(t, fmt, 'stockouts', last.stockouts),
+                    recs: countPhrase(t, fmt, 'recs', last.recs),
+                  })}
+                </span>
+              </>
+            )}
+          </div>
         </div>
-        <div className="dash-clock-date">
-          {fmt.date(clock.current_date, 'long')}
-        </div>
-        <div className="dash-clock-meta">
-          <span>{t('dashboard.clock.start')}: <strong>{fmt.date(clock.start_date)}</strong></span>
-          <span className="dash-clock-dot">·</span>
-          <span>{t('dashboard.clock.elapsed', { days: countPhrase(t, fmt, 'days', clock.days_elapsed), reviews: reviewsPhrase(t, fmt, reviewsSinceStart(clock), true) })}</span>
-          {last && (
-            <>
-              <span className="dash-clock-dot">·</span>
-              <span>
-                {t('dashboard.clock.last_advance')}: {t('dashboard.clock.last_advance_value', {
-                  from: fmt.date(last.from),
-                  to: fmt.date(last.to),
-                  reviews: reviewsPhrase(t, fmt, last.reviews, last.day0),
-                  stockouts: countPhrase(t, fmt, 'stockouts', last.stockouts),
-                  recs: countPhrase(t, fmt, 'recs', last.recs),
-                })}
-              </span>
-            </>
+
+        <div className="dash-clock-right">
+          {canAdvance ? (
+            <div className="dash-clock-form">
+              <div className="dash-clock-field">
+                <label htmlFor="dash-clock-days" className="dash-clock-label">
+                  {t('dashboard.clock.days')}
+                </label>
+                <Select<number>
+                  id="dash-clock-days"
+                  size="sm"
+                  value={days}
+                  onChange={setDays}
+                  options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
+                  disabled={advancing}
+                  aria-label={t('dashboard.clock.days')}
+                />
+              </div>
+              <div className="dash-clock-field dash-clock-field--mode">
+                <label htmlFor="dash-clock-mode" className="dash-clock-label">
+                  Chế độ
+                </label>
+                <Select<'auto' | 'planner'>
+                  id="dash-clock-mode"
+                  size="sm"
+                  value={approvalMode}
+                  onChange={setApprovalMode}
+                  options={[
+                    { value: 'auto', label: 'Tự động' },
+                    { value: 'planner', label: 'Planner duyệt' },
+                  ]}
+                  disabled={advancing}
+                  aria-label="Chế độ duyệt"
+                />
+              </div>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--color-text-secondary)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={asyncJob}
+                  onChange={(e) => setAsyncJob(e.target.checked)}
+                  disabled={advancing}
+                />
+                Chạy nền
+              </label>
+              <Button
+                variant="primary"
+                loading={advancing}
+                onClick={onAdvance}
+                className="dash-clock-btn"
+                leftIcon={<Play size={13} fill="currentColor" />}
+              >
+                {advancing ? t('shell.clock.advancing') : t('dashboard.clock.advance_action', { days: String(days) })}
+              </Button>
+              <AdvanceProgress />
+            </div>
+          ) : (
+            <span className="ui-muted">{t('dashboard.clock.admin_only')}</span>
           )}
         </div>
+        {dialog}
       </div>
-
-      <div className="dash-clock-right">
-        {canAdvance ? (
-          <div className="dash-clock-form">
-            <div className="dash-clock-field">
-              <label htmlFor="dash-clock-days" className="dash-clock-label">
-                {t('dashboard.clock.days')}
-              </label>
-              <Select<number>
-                id="dash-clock-days"
-                size="sm"
-                value={days}
-                onChange={setDays}
-                options={CLOCK_ADVANCE_DAYS.map((d) => ({ value: d, label: String(d) }))}
-                disabled={advancing}
-                aria-label={t('dashboard.clock.days')}
-              />
+      {stoppedReviewDate && (
+        <div style={{ marginTop: 'var(--space-2)' }}>
+          <Alert tone="warning" title={`Đã dừng ở kỳ review ${fmt.date(stoppedReviewDate)}`}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+              <span>
+                Đồng hồ đã dừng lại tại kỳ review theo chế độ Planner duyệt. Có các đề xuất đặt hàng mới đang ở trạng thái PENDING.
+              </span>
+              <Button size="sm" variant="secondary" onClick={() => navigate('/replenishment?status=PENDING')}>
+                Xem đề xuất chờ duyệt
+              </Button>
             </div>
-            <Button
-              variant="primary"
-              loading={advancing}
-              onClick={onAdvance}
-              className="dash-clock-btn"
-              leftIcon={<Play size={13} fill="currentColor" />}
-            >
-              {advancing ? t('shell.clock.advancing') : t('dashboard.clock.advance_action', { days: String(days) })}
-            </Button>
-            <AdvanceProgress />
-          </div>
-        ) : (
-          <span className="ui-muted">{t('dashboard.clock.admin_only')}</span>
-        )}
-      </div>
-      {dialog}
-    </div>
+          </Alert>
+        </div>
+      )}
+    </>
   );
 };
 

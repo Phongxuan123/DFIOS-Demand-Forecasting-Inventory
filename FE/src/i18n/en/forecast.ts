@@ -261,6 +261,7 @@ export const forecast: typeof Vi = {
     chart_range_60d: '60d',
     chart_range_90d: '90d',
     chart_show_band: 'Show P10/P90 interval',
+    no_band_for_sku: 'No confidence interval for this SKU',
     chart_show_events: 'Event & Holiday Markers',
     legend_actual: 'Actual Sales (Apr 23 – May 22)',
     legend_forecast: 'Forecast Median P50 (May 23 – Jun 19)',

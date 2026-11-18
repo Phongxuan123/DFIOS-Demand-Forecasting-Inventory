@@ -116,12 +116,21 @@
   margin: 0;
 }
 
+.dash-clock-field--mode .ui-field {
+  width: 140px;
+  flex: 0 0 140px;
+}
+
 .dash-clock-field .ui-select-wrap {
   width: 68px;
   height: 36px;
   min-height: 36px;
   max-height: 36px;
   border-radius: var(--radius-md);
+}
+
+.dash-clock-field--mode .ui-select-wrap {
+  width: 140px;
 }
 
 .dash-clock-btn {
