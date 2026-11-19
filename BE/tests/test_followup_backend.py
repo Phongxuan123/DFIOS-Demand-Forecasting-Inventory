@@ -331,3 +331,31 @@ def test_calibration_history_tolerates_null_error_rate(env):
     r = env["client"].get("/api/v1/calibration/history?store_id=CA_1", headers=env["viewer"])
     assert r.status_code == 200
     assert r.json()[0]["error_rate"] is None
+
+
+def test_recommendation_q_hat_and_theta_are_those_of_its_review_date(env):
+    """The replay DB holds the window quantiles of every origin of the year: a proposal shows the Q_hat and theta of
+    ITS review date (s = ceil(Q_hat * exp(m + theta)) checks on screen), not the newest origin's."""
+    c = env["client"]
+    later = ORIGIN + timedelta(days=364)
+    with env["Session"]() as s:
+        s.add(Product(item_id="I1", name="I1", cat_id="FOODS", dept_id="FOODS_1", price=3.0))
+        s.add(Inventory(item_id="I1", store_id="CA_1", on_hand=1.0, on_order=0.0))
+        s.add(InventoryParam(id="pI1", item_id="I1", store_id="CA_1", service_level=0.95, lead_time_days=3,
+                             safety_stock=1, reorder_point=5, eoq=10, annual_demand=100))
+        s.add(SKUClassification(id="cI1", item_id="I1", store_id="CA_1", abc_class="A", xyz_class="X", segment="AX"))
+        s.add(ReplenishmentRecommendation(id="rI1", item_id="I1", store_id="CA_1", recommended_qty=4, final_qty=4,
+                                          priority="HIGH", status="PENDING", review_date=ORIGIN,
+                                          reorder_point_s=5, order_up_to_S=9))
+        s.add(CalibrationState(id="cs0", calibrator_id="k", store_id="CA_1", class_id="AX", review_index=0,
+                               review_date=ORIGIN, theta=0.1))
+        s.add(CalibrationState(id="cs1", calibrator_id="k", store_id="CA_1", class_id="AX", review_index=52,
+                               review_date=later, theta=0.9))
+        s.add(PolicySelection(selection_id="sel", class_id="AX", m_g=-0.3, kappa_g=1.0))
+        s.add(ForecastWindowQuantile(id="w0", model_run_id="r", store_id="CA_1", item_id="I1", origin_date=ORIGIN,
+                                     horizon_days=10, point_window=4.0, q_levels={"0.95": 6.0}))
+        s.add(ForecastWindowQuantile(id="w1", model_run_id="r", store_id="CA_1", item_id="I1", origin_date=later,
+                                     horizon_days=10, point_window=9.0, q_levels={"0.95": 15.8}))
+        s.commit()
+    it = c.get("/api/v1/replenishments", headers=env["manager"]).json()["items"][0]
+    assert it["q_hat"] == 6.0 and it["theta"] == pytest.approx(0.1)

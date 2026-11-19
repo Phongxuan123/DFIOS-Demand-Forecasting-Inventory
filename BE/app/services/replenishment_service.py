@@ -268,7 +268,7 @@ class ReplenishmentService:
         param_map: Dict[Tuple[str, str], Any],
         extra_map: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
     ) -> ReplenishmentItemResponse:
-        ex = (extra_map or {}).get((rec.item_id, rec.store_id), {})
+        ex = (extra_map or {}).get((rec.item_id, rec.store_id, rec.review_date), {})
         prod = product_map.get(rec.item_id)
         supp = supplier_map.get(rec.supplier_id) if rec.supplier_id else None
         inv = inv_map.get((rec.item_id, rec.store_id))
@@ -324,34 +324,46 @@ class ReplenishmentService:
     def _policy_context(
         self, db: Session, recs: List[ReplenishmentRecommendation],
         param_map: Dict[Tuple[str, str], Any],
-    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
-        # class / theta / (m_g, kappa_g) / Q_hat of a page of recommendations: one query per source, no N+1
-        out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    ) -> Dict[Tuple[str, str, Any], Dict[str, Any]]:
+        """class / theta / (m_g, kappa_g) / Q_hat of a page of recommendations, keyed (item, store, review_date):
+        Q_hat and theta are those of the recommendation's REVIEW DATE (the window quantile of that origin, else the
+        latest origin before it; theta as of that day), so s = ceil(Q_hat * exp(m_g + theta)) can be checked on screen.
+        The replay database holds the quantiles of every origin of the year: the newest one is not the review's.
+        One query per source, no N+1."""
+        out: Dict[Tuple[str, str, Any], Dict[str, Any]] = {}
         for store in {r.store_id for r in recs}:
-            ids = list({r.item_id for r in recs if r.store_id == store})
+            store_recs = [r for r in recs if r.store_id == store]
+            ids = list({r.item_id for r in store_recs})
             segs = {
                 i: sg for i, sg in db.query(SKUClassification.item_id, SKUClassification.segment)
                 .filter(SKUClassification.store_id == store, SKUClassification.item_id.in_(ids)).all()
             }
-            thetas = calibrator_service.get_current_thetas(db, store)
             policies = calibrator_service.resolve_policies(db, store)
-            latest: Dict[str, ForecastWindowQuantile] = {}
-            for fq in (
-                db.query(ForecastWindowQuantile)
-                .filter(ForecastWindowQuantile.store_id == store, ForecastWindowQuantile.item_id.in_(ids))
-                .order_by(ForecastWindowQuantile.origin_date.desc()).all()
-            ):
-                latest.setdefault(fq.item_id, fq)
-            for iid in ids:
+            days = {r.review_date for r in store_recs}
+            thetas_on = {d: calibrator_service.get_current_thetas(db, store, as_of=d) for d in days}
+            fq_q = db.query(ForecastWindowQuantile).filter(
+                ForecastWindowQuantile.store_id == store, ForecastWindowQuantile.item_id.in_(ids))
+            known = [d for d in days if d is not None]
+            if known and None not in days:
+                fq_q = fq_q.filter(ForecastWindowQuantile.origin_date <= max(known))
+            by_item: Dict[str, List[ForecastWindowQuantile]] = {}
+            for fq in fq_q.order_by(ForecastWindowQuantile.origin_date.desc()).all():
+                by_item.setdefault(fq.item_id, []).append(fq)  # newest origin first
+            for r in store_recs:
+                iid, day = r.item_id, r.review_date
+                if (iid, store, day) in out:
+                    continue
                 seg = segs.get(iid)
                 pol = policies.get(seg) if seg else None
                 param = param_map.get((iid, store))
-                fq = latest.get(iid)
+                rows = by_item.get(iid, [])
+                fq = next((f for f in rows if day is None or f.origin_date <= day), None)
                 q_hat = None
                 if fq is not None:
                     tau = float(param.service_level) if param and param.service_level else 0.95
                     q_hat = WindowQuantileService.tau_value(fq.q_levels or {}, tau, fq.point_window)
-                out[(iid, store)] = {
+                thetas = thetas_on.get(day, {})
+                out[(iid, store, day)] = {
                     "abc_xyz_class": seg,
                     "theta": float(thetas.get(seg, 0.0)) if seg else None,
                     "m_g": float(pol.m_g) if pol and pol.m_g is not None else None,
