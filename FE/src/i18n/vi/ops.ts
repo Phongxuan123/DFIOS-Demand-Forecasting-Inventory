@@ -47,6 +47,7 @@ export const ops = {
     refresh: 'Làm mới',
     active_title: 'Mô hình đang dùng',
     active_hint: 'Mô hình cấp quantile cho kỳ review kế tiếp',
+    default_model: 'ensemble (mặc định)',
     store: 'Kho',
     window: 'Cửa sổ L+R',
     window_value: '{days} ngày',

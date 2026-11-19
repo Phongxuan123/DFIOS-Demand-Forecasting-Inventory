@@ -84,6 +84,7 @@ export const dashboard = {
     wrmsse_model: 'Mô hình: {id}',
     cost: 'Chi phí lũy kế mô hình A3',
     cost_hint: 'B0: {b0} · C³-OUT − B0: {delta}',
+    cost_first_cycle: 'So sánh với B0 sau kỳ review đầu tiên ({days} ngày): trước đó đơn ngày 0 có thể còn chờ duyệt',
     cost_more: 'C³-OUT tốn hơn',
     cost_less: 'C³-OUT rẻ hơn',
     cost_equal: 'bằng nhau',

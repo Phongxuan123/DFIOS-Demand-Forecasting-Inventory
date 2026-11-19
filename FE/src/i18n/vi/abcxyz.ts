@@ -38,7 +38,7 @@ export const abcxyz = {
     no_service: 'Chưa có số',
     no_service_hint: 'Chưa có kỳ review nào đóng để đo availability.',
     cumulative_rev: 'Doanh thu tích lũy: {pct}',
-    sla_label: 'Availability quan sát: {sla} ({diff} so với mục tiêu {target})',
+    sla_label: 'Availability quan sát: {sla} ({diff} điểm % so với mục tiêu {target})',
     total_share: '{pct} tổng số',
     empty_title: 'Kho này chưa có kết quả phân loại',
     empty_description: 'Hãy chạy tính lại phân loại cho kho này (Quản lý kho hoặc Quản trị viên).',

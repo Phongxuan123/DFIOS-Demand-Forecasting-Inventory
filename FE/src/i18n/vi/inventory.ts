@@ -10,7 +10,7 @@ export const inventory = {
     below_s_hint: 'IP < s: sẽ được đề xuất đặt hàng ở kỳ review',
     above_S: 'SKU trên S',
     stock_value: 'Giá trị tồn kho',
-    stock_value_hint: 'Tồn cuối ngày × products.price ({count} SKU có giá)',
+    stock_value_hint: 'Tồn cuối ngày × giá của ngày mô phỏng ({count} SKU có giá)',
     in_transit: 'Đơn đang về',
     in_transit_hint: '{units} đơn vị đang về cho {skus} SKU',
     sku_count: 'Số SKU',

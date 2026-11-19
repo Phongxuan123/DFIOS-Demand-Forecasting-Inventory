@@ -40,7 +40,7 @@ export const abcxyz: typeof Vi = {
     no_service: 'No data yet',
     no_service_hint: 'No closed review yet to measure availability.',
     cumulative_rev: 'Cumulative Revenue: {pct}',
-    sla_label: 'Observed availability: {sla} ({diff} vs target {target})',
+    sla_label: 'Observed availability: {sla} ({diff} pp vs target {target})',
     total_share: '{pct} total',
     empty_title: 'This store has no classification yet',
     empty_description: 'Run a recompute for this store (Warehouse Manager or Admin).',

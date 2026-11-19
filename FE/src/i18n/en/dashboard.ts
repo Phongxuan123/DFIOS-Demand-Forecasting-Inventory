@@ -86,6 +86,7 @@ export const dashboard: typeof Vi = {
     wrmsse_model: 'Model: {id}',
     cost: 'Cumulative A3 Operating Cost',
     cost_hint: 'B0: {b0} · C³-OUT − B0: {delta}',
+    cost_first_cycle: 'Compared with B0 after the first review cycle ({days} days): until then day-0 orders may still be pending',
     cost_more: 'C³-OUT costs more',
     cost_less: 'C³-OUT costs less',
     cost_equal: 'same cost',

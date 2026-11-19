@@ -12,7 +12,7 @@ export const inventory: typeof ViInventory = {
     below_s_hint: 'IP < s: will be proposed for ordering at the review',
     above_S: 'SKUs above S',
     stock_value: 'Stock value',
-    stock_value_hint: 'End-of-day stock × products.price ({count} SKUs with a price)',
+    stock_value_hint: 'End-of-day stock × price of the simulated day ({count} SKUs with a price)',
     in_transit: 'Orders in transit',
     in_transit_hint: '{units} units in transit for {skus} SKUs',
     sku_count: 'SKUs',

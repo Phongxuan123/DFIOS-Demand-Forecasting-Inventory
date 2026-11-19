@@ -246,6 +246,13 @@ const PoliciesTab: React.FC = () => {
   );
 };
 
+/** The A3 cost basis of the BE ("A3: h=0.002*price/day ...") in the active language; other texts as given. */
+function costBasisText(basis: string | null | undefined, t: ReturnType<typeof useT>): string {
+  if (!basis) return '—';
+  const m = /h=([\d.]+)\*price\/day.*b=([\d.]+)\*price\/lost unit.*c=([\d.]+)\/placed order/.exec(basis);
+  return m ? t('reports.exec.basis_a3', { h: m[1].replace('.', ','), b: m[2].replace('.', ','), c: m[3] }) : basis;
+}
+
 const AccuracyTab: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
@@ -258,14 +265,25 @@ const AccuracyTab: React.FC = () => {
   const acc = useApi((s) => getForecastAccuracy(storeId ?? '', s), [storeId, version], { enabled: !!storeId });
   const reg = useApi((s) => getRegistryModels(s), [version], { enabled: isAdmin });
   const a = acc.data;
+  // registry fallback: no daily forecast overlaps real sales (the production forecasts are the 28 days AFTER the M5
+  // data), so the numbers are the registry's evaluation of the Production model, and the per-class table is empty
+  const fromRegistry = a?.source === 'model_registry';
 
   const metric = (label: string, v: number | null | undefined, digits = 4) => (
     <KpiTile
       label={label}
       loading={acc.loading && !a}
       value={v != null ? fmt.number(v, { digits }) : null}
-      unavailableReason={acc.error ? apiErrorMessage(acc.error, t) : v == null ? t('reports.reason.not_loaded') : undefined}
-      hint={a ? t('reports.accuracy.samples', { count: fmt.integer(a.overall_metrics.sample_count) }) : undefined}
+      unavailableReason={
+        acc.error ? apiErrorMessage(acc.error, t) : v == null ? (fromRegistry ? t('reports.accuracy.registry_missing') : t('reports.reason.not_loaded')) : undefined
+      }
+      hint={
+        a
+          ? fromRegistry
+            ? t('reports.accuracy.registry_hint', { model: a.model_name })
+            : t('reports.accuracy.samples', { count: fmt.integer(a.overall_metrics.sample_count) })
+          : undefined
+      }
     />
   );
 
@@ -305,7 +323,12 @@ const AccuracyTab: React.FC = () => {
           />
         </div>
         {a && <DataSourceNote source="/reports/forecast-accuracy" asOf={a.as_of ? fmt.date(a.as_of) : undefined} note={`${a.model_name}, ${a.evaluated_period}, ${a.source}`} />}
-        {abcRows.length > 0 && (
+        {fromRegistry && (
+          <div style={{ marginTop: 'var(--space-4)' }}>
+            <Alert tone="info">{t('reports.accuracy.registry_note')}</Alert>
+          </div>
+        )}
+        {abcRows.length > 0 && !fromRegistry && (
           <Card flush style={{ marginTop: 'var(--space-4)' }}>
             <Table columns={abcCols} rows={abcRows} rowKey={(r) => r.cls} dense />
           </Card>
@@ -546,7 +569,7 @@ export const Reports: React.FC = () => {
         <div className="rpt-formula-math">{t('reports.exec.formula_math')}</div>
         <div className="rpt-formula-meta">
           <span className="rpt-formula-tag">
-            <strong>{t('reports.exec.basis_label')}</strong> {k?.cost_basis ?? '—'}
+            <strong>{t('reports.exec.basis_label')}</strong> {costBasisText(k?.cost_basis, t)}
           </span>
           <span>·</span>
           <span className="rpt-formula-tag">
@@ -700,11 +723,11 @@ export const Reports: React.FC = () => {
                   </li>
                   <li className="rpt-audit-row">
                     <span className="rpt-audit-label">{t('reports.exec.reviews_label')}</span>
-                    <span className="rpt-audit-val">{k ? fmt.integer(k.reviews_elapsed) : '—'}</span>
+                    <span className="rpt-audit-val">{k ? fmt.integer(curve.length) : '—'}</span>
                   </li>
                   <li className="rpt-audit-row">
                     <span className="rpt-audit-label">{t('reports.exec.basis_label')}</span>
-                    <span className="rpt-audit-val">{k?.cost_basis ?? '—'}</span>
+                    <span className="rpt-audit-val">{costBasisText(k?.cost_basis, t)}</span>
                   </li>
                 </ul>
               </div>

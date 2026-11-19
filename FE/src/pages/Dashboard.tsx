@@ -565,8 +565,12 @@ export const Dashboard: React.FC = () => {
     return { classes, rows: [...byReview.values()].sort((a, b) => Number(a.review_index) - Number(b.review_index)) };
   }, [theta.data, abc]);
 
+  // Before the first review cycle closes (R days) the comparison is not like for like: a planner-mode stop keeps the
+  // day-0 orders PENDING (no ordering cost yet) while the shadow B0 has already ordered. No verdict until then.
+  const reviewDays = clock.clock?.review_period_days ?? 7;
+  const costEarly = !!sh && (sh.days_elapsed ?? 0) < reviewDays;
   const costSavingsBadge = useMemo(() => {
-    if (!sh || sh.c3out_total_cost == null || sh.b0_total_cost == null) return undefined;
+    if (costEarly || !sh || sh.c3out_total_cost == null || sh.b0_total_cost == null) return undefined;
     const diff = sh.b0_total_cost - sh.c3out_total_cost;
     if (diff <= 0) return undefined;
     const pct = sh.b0_total_cost > 0 ? (diff / sh.b0_total_cost) * 100 : 0;
@@ -578,7 +582,7 @@ export const Dashboard: React.FC = () => {
         })}
       </Badge>
     );
-  }, [sh, fmt, t]);
+  }, [sh, fmt, t, costEarly]);
 
   const sevTone = (s: string): Tone => (s === 'CRITICAL' ? 'danger' : s === 'WARNING' ? 'warning' : 'success');
   const sevLabel = (s: string) =>
@@ -792,7 +796,9 @@ export const Dashboard: React.FC = () => {
             value={sh?.c3out_total_cost != null ? fmt.currency(sh.c3out_total_cost, { compact: true }) : null}
             unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? t('dashboard.reason.cost') : undefined}
             hint={
-              sh?.c3out_total_cost != null ? (
+              costEarly && sh?.c3out_total_cost != null ? (
+                t('dashboard.kpi.cost_first_cycle', { days: fmt.integer(reviewDays) })
+              ) : sh?.c3out_total_cost != null ? (
                 <>
                   {t('dashboard.kpi.cost_hint', {
                     b0: sh.b0_total_cost != null ? fmt.currency(sh.b0_total_cost, { compact: true }) : (beCode(prefixCode('kpi', sh.b0_reason_code), null, sh.b0_reason) || '—'),
