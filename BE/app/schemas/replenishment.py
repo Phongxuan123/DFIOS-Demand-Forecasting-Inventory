@@ -74,6 +74,20 @@ class ReplenishmentActionRequest(BaseModel):
     reason: Optional[str] = Field(None, description="Lý do xử lý (bắt buộc khi REJECT hoặc CANCEL)")
 
 
+class ReplenishmentBulkApproveRequest(BaseModel):
+    """demo.md 6.3 POST /replenishments/approve: approve many proposals in one transaction."""
+    store_id: str = Field(..., description="Mã cửa hàng")
+    ids: Optional[List[str]] = Field(None, description="Đề xuất cần duyệt; bỏ trống = mọi đề xuất PENDING của cửa hàng")
+    priority: Optional[str] = Field(None, description="Chỉ duyệt mức ưu tiên này khi ids bỏ trống (CRITICAL, HIGH, ...)")
+
+
+class ReplenishmentBulkApproveResponse(BaseModel):
+    approved: int
+    skipped: int = Field(0, description="ids không còn ở trạng thái chờ duyệt hoặc thuộc cửa hàng khác")
+    total_qty: float
+    store_id: str
+
+
 # --- Generate Recommendations Response ---
 
 class ReplenishmentGenerateResponse(BaseModel):

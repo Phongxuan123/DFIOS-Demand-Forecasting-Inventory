@@ -16,6 +16,8 @@ from app.schemas.replenishment import (
     ReplenishmentAdjustRequest,
     ReplenishmentActionRequest,
     ReplenishmentGenerateResponse,
+    ReplenishmentBulkApproveRequest,
+    ReplenishmentBulkApproveResponse,
 )
 from app.services.replenishment_service import replenishment_service
 
@@ -202,6 +204,25 @@ def adjust_replenishment_quantity(
 
 
 # --- UC35: Approve Replenishment ---
+
+@router.post(
+    "/approve",
+    response_model=ReplenishmentBulkApproveResponse,
+    summary="Duyệt hàng loạt đề xuất đặt hàng trong một giao dịch (Planner, Warehouse Manager, Admin)",
+)
+def approve_replenishments_bulk(
+    body: ReplenishmentBulkApproveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_planner_or_above),
+):
+    """demo.md 6.3 / step 6: approve the given ids, or every open proposal of the store (optionally one priority).
+    Each row gets the same effect as the single approve (APPROVED + on_order += final_qty)."""
+    return replenishment_service.approve_bulk(
+        db, store_id=body.store_id, user_email=current_user.email, ids=body.ids, priority=body.priority,
+        ip_address=get_client_ip(request),
+    )
+
 
 @router.post(
     "/{rec_id}/approve",
