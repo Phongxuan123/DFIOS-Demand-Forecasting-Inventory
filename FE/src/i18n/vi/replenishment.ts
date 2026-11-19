@@ -139,7 +139,7 @@ export const replenishment = {
     approve_title: 'Duyệt đề xuất {sku}?',
     approve_desc: 'Số lượng chốt {qty} sẽ được cộng vào hàng đang về của kho {store}.',
     bulk_title: 'Duyệt {count} đề xuất?',
-    bulk_desc: 'Mỗi đề xuất được duyệt riêng; đề xuất lỗi sẽ được báo lại và không làm dừng các đề xuất còn lại.',
+    bulk_desc: 'Duyệt trong một giao dịch: mỗi đề xuất chuyển sang Đã duyệt và số lượng được cộng vào hàng đang về (về kho sau L ngày mô phỏng).',
     generate_title: 'Quét và sinh đề xuất cho kho {store}?',
     generate_desc: 'Hệ thống tính lại IP so với s và tạo đề xuất mới cho SKU cần đặt hàng. Đề xuất đang chờ không bị sinh trùng.',
   },

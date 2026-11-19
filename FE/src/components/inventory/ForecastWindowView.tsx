@@ -69,6 +69,19 @@ export const WindowBox: React.FC<{ data: ForecastWindowResponse }> = ({ data }) 
 
 export const ForecastWindowView: React.FC<{ data: ForecastWindowResponse }> = ({ data }) => {
   const t = useT();
+  /** BE notes are English sentences; the known ones are shown in the active language, others as sent. */
+  const noteText = (n: string): string =>
+    n.startsWith('Daily quantiles are not added up')
+      ? t('inventory.window.note_daily')
+      : n.startsWith('Holt-Winters and single LightGBM')
+        ? t('inventory.window.note_baselines')
+        : n.startsWith('SKU has no ABC-XYZ class')
+          ? t('inventory.window.note_no_class')
+          : n.startsWith('No policy_selection row')
+            ? t('inventory.window.note_no_policy')
+            : n.startsWith('No sales in the 56 days')
+              ? t('inventory.window.note_no_sales')
+              : n;
   const fmt = useFormat();
   const d = data.distribution;
   const st = data.error_stats;
@@ -138,7 +151,7 @@ export const ForecastWindowView: React.FC<{ data: ForecastWindowResponse }> = ({
         {data.notes.length > 0 && (
           <ul className="inv-notes">
             {data.notes.map((n) => (
-              <li key={n}>{n}</li>
+              <li key={n}>{noteText(n)}</li>
             ))}
           </ul>
         )}

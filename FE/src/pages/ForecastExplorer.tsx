@@ -235,12 +235,10 @@ export const ForecastExplorer: React.FC = () => {
   }, [products.data, selectedDept]);
 
   useEffect(() => {
-    if (filteredProducts.length > 0) {
-      const exists = filteredProducts.some((p) => p.item_id === sku);
-      if (!exists) {
-        setSku(filteredProducts[0].item_id);
-      }
-    }
+    // Only an empty selection defaults to the first product: a SKU from the URL (?sku=, links from other screens,
+    // the demo script) is kept even when it is not among the first 100 products of the picker.
+    if (!sku && filteredProducts.length > 0) setSku(filteredProducts[0].item_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sku, filteredProducts]);
 
   const selectedProduct: ProductRow | undefined = (products.data?.items ?? []).find((p) => p.item_id === sku);
@@ -340,7 +338,7 @@ export const ForecastExplorer: React.FC = () => {
   const relativeBand = useMemo(() => {
     const ok = rows.filter((r) => r.quality === 'ok');
     const sumP50 = ok.reduce((s, r) => s + (r.p50 as number), 0);
-    if (!ok.length || !(sumP50 > 0)) return null;
+    if (!ok.length || !(sumP50 >= 1)) return null;
     const halfWidth = ok.reduce((s, r) => s + ((r.p90 as number) - (r.p10 as number)) / 2, 0);
     return { mean: halfWidth / sumP50, n: ok.length };
   }, [rows]);
@@ -886,10 +884,13 @@ export const ForecastExplorer: React.FC = () => {
                   aria-label={t('forecast.explorer.sku_select_label')}
                   value={sku}
                   onChange={(v) => setSku(v)}
-                  options={filteredProducts.map((p) => ({
-                    value: p.item_id,
-                    label: p.name && p.name !== p.item_id ? `${p.item_id} — ${p.name.slice(0, 26)}` : p.item_id,
-                  }))}
+                  options={[
+                    ...(sku && !filteredProducts.some((p) => p.item_id === sku) ? [{ value: sku, label: sku }] : []),
+                    ...filteredProducts.map((p) => ({
+                      value: p.item_id,
+                      label: p.name && p.name !== p.item_id ? `${p.item_id} — ${p.name.slice(0, 26)}` : p.item_id,
+                    })),
+                  ]}
                 />
               </div>
 

@@ -151,8 +151,8 @@ const ClockPanel: React.FC<{ onAdvanceRequested?: () => void }> = () => {
         return;
       }
       const e = toApiError(err);
-      // planner-in-the-loop: proposals of the previous review are still PENDING -> offer to skip them (expire_pending)
-      if (e.status === 409 && approvalMode === 'planner' && !expirePending) {
+      // proposals of a previous review are still PENDING (any mode) -> offer to skip them (expire_pending)
+      if (e.status === 409 && !expirePending) {
         const skip = await confirm({
           title: t('dashboard.clock.pending_title'),
           description: t('dashboard.clock.pending_body', { detail: e.detail ?? '' }),

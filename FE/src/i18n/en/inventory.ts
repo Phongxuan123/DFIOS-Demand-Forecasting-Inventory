@@ -74,6 +74,11 @@ export const inventory: typeof ViInventory = {
     computed: 'Computed on the fly (not stored)',
     route: 'Route {route}',
     residuals: '{n} window errors',
+    note_daily: 'Daily quantiles are not added up: the window quantile comes from the empirical distribution of H-day window errors (route c), because the sum of daily Q(0.95) overstates the 0.95 quantile of the sum.',
+    note_baselines: 'Holt-Winters and single LightGBM baselines of the research table are not stored in the app; the baselines here are computed from sales history (SNaive, Naive, MA28).',
+    note_no_class: 'The SKU has no ABC-XYZ class in this store: class AX parameters are used, as J4 does.',
+    note_no_policy: 'No parameter selection yet (J5 not run): neutral m_g = 0, κ_g = 1.',
+    note_no_sales: 'No sales in the 56 days before the review date: EOQ = 0.',
     why_title: 'Why not add up daily quantiles?',
     why_body:
       'Adding the daily Q(0.95) overstates the 0.95 quantile of the total, because days are not all high at once. The window quantile comes directly from the error distribution of the {h}-day total.',

@@ -27,6 +27,7 @@ import { apiErrorMessage } from '../services/apiClient.ts';
 import {
   adjustReplenishment,
   approveReplenishment,
+  approveReplenishmentsBulk,
   cancelReplenishment,
   exportReplenishmentsCsv,
   generateReplenishments,
@@ -320,33 +321,27 @@ export const Replenishment: React.FC = () => {
     await mutate(rec, { status: 'APPROVED' }, () => approveReplenishment(rec.id), t('replenishment.toast.approved', { sku: rec.item_id }));
   };
 
+  // One request for the whole batch (POST /replenishments/approve): the selected rows, or every PENDING proposal of
+  // the store (the count on the button), optionally limited to the priority filter. A review can hold thousands.
   const onBulkApprove = async () => {
-    const ids = sel.selected.size > 0
-      ? [...sel.selected].map(String)
-      : rows.filter((r) => r.status === 'PENDING').map((r) => r.id);
-
-    if (ids.length === 0) return;
+    if (!storeId) return;
+    const ids = sel.selected.size > 0 ? [...sel.selected].map(String) : undefined;
+    const count = ids ? ids.length : pendingCount ?? 0;
+    if (count === 0) return;
     const ok = await confirm({
-      title: t('replenishment.confirm.bulk_title', { count: ids.length }),
+      title: t('replenishment.confirm.bulk_title', { count: fmt.integer(count) }),
       description: t('replenishment.confirm.bulk_desc'),
       confirmLabel: t('replenishment.action.approve'),
     });
     if (!ok) return;
-    setOverrides((o) => ({ ...o, ...Object.fromEntries(ids.map((id) => [id, { status: 'APPROVED' } as Partial<ReplenishmentItem>])) }));
-    let done = 0;
-    const failedIds: string[] = [];
-    for (const id of ids) {
-      try {
-        await approveReplenishment(id);
-        done += 1;
-      } catch {
-        failedIds.push(id);
-      }
+    try {
+      const res = await approveReplenishmentsBulk({ store_id: storeId, ids, priority: ids ? undefined : priority || undefined });
+      sel.set(new Set());
+      if (res.skipped === 0) toast.success(t('replenishment.toast.bulk_done', { ok: fmt.integer(res.approved) }));
+      else toast.warning(t('replenishment.toast.bulk_partial', { ok: fmt.integer(res.approved), total: fmt.integer(count), failed: fmt.integer(res.skipped) }));
+    } catch (err) {
+      toast.error(t('replenishment.toast.failed', { message: apiErrorMessage(err, t) }));
     }
-    setOverrides({});
-    sel.set(new Set(failedIds));
-    if (failedIds.length === 0) toast.success(t('replenishment.toast.bulk_done', { ok: done }));
-    else toast.warning(t('replenishment.toast.bulk_partial', { ok: done, total: ids.length, failed: failedIds.length }));
     afterMutation();
   };
 
