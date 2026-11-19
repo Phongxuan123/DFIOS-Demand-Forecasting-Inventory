@@ -1003,7 +1003,13 @@ const PolicyDrawer: React.FC<{
             {rec.decided_by && (
               <>
                 <dt>{t('replenishment.col.decided_by')}</dt>
-                <dd>{rec.decided_by === 'simulator' ? t('replenishment.status.SIM_EXPIRED') : rec.decided_by}</dd>
+                <dd>
+                  {rec.decided_by === 'simulator'
+                    ? rec.status === 'REJECTED'
+                      ? t('replenishment.status.SIM_EXPIRED')
+                      : t('replenishment.status.SIM_AUTO')
+                    : rec.decided_by}
+                </dd>
               </>
             )}
           </dl>

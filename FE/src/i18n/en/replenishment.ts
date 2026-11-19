@@ -49,6 +49,7 @@ export const replenishment: typeof Vi = {
     REJECTED: 'Rejected',
     CANCELLED: 'Cancelled',
     SIM_EXPIRED: 'Skipped by the system',
+    SIM_AUTO: 'System (auto mode)',
   },
   priority: {
     CRITICAL: 'Critical',
