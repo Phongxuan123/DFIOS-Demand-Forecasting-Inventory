@@ -136,7 +136,7 @@ export const replenishment: typeof Vi = {
     approve_title: 'Approve proposal {sku}?',
     approve_desc: 'The final quantity {qty} will be added to the on-order stock of store {store}.',
     bulk_title: 'Approve {count} proposals?',
-    bulk_desc: 'Each proposal is approved separately; failures are reported and do not stop the rest.',
+    bulk_desc: 'Approved in one transaction: every proposal becomes Approved and its quantity is added to the on-order stock (it arrives after L simulated days).',
     generate_title: 'Scan and generate proposals for store {store}?',
     generate_desc: 'The system compares IP with s and creates proposals for SKUs that need ordering. Pending proposals are not duplicated.',
   },

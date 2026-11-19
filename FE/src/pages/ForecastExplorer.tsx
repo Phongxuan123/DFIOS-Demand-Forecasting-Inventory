@@ -338,7 +338,7 @@ export const ForecastExplorer: React.FC = () => {
   const relativeBand = useMemo(() => {
     const ok = rows.filter((r) => r.quality === 'ok');
     const sumP50 = ok.reduce((s, r) => s + (r.p50 as number), 0);
-    if (!ok.length || !(sumP50 > 0)) return null;
+    if (!ok.length || !(sumP50 >= 1)) return null;
     const halfWidth = ok.reduce((s, r) => s + ((r.p90 as number) - (r.p10 as number)) / 2, 0);
     return { mean: halfWidth / sumP50, n: ok.length };
   }, [rows]);

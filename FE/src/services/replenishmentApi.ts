@@ -69,6 +69,11 @@ export const listReplenishmentHistory = (
   signal?: AbortSignal,
 ) => getJson<ReplenishmentList>('/replenishments/history', { params: p, signal });
 
+/** POST /replenishments/approve: approve many proposals in one transaction (ids, or every PENDING of the store). */
+export const approveReplenishmentsBulk = (body: { store_id: string; ids?: string[]; priority?: string }) =>
+  apiClient
+    .post<{ approved: number; skipped: number; total_qty: number; store_id: string }>('/replenishments/approve', body, { timeout: 300000 })
+    .then((r) => r.data);
 export const approveReplenishment = (id: string) =>
   apiClient.post<ReplenishmentItem>(`/replenishments/${id}/approve`).then((r) => r.data);
 export const rejectReplenishment = (id: string, reason: string) =>
