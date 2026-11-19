@@ -336,7 +336,7 @@ const AccuracyTab: React.FC = () => {
       </Section>
 
       {canQuality && <ForecastQualityPanel storeId={storeId === GLOBAL_STORE ? null : storeId} version={version} />}
-      {isManager && <ControllerPanel storeId={storeId === GLOBAL_STORE ? null : storeId} clockDate={clock?.current_date} version={version} />}
+      {isManager && <ControllerPanel storeId={storeId === GLOBAL_STORE ? null : storeId} clockDate={clock?.current_date} m5Day0={clock?.m5_day0} version={version} />}
 
       <Section title={t('reports.accuracy.registry_title')} description={t('reports.accuracy.registry_desc')}>
         {!isAdmin ? (

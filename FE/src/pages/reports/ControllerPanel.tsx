@@ -12,11 +12,16 @@ interface Row extends ControllerClass {
   cls: string;
 }
 
-export const ControllerPanel: React.FC<{ storeId: string | null; clockDate?: string | null; version?: number }> = ({ storeId, clockDate, version = 0 }) => {
+export const ControllerPanel: React.FC<{ storeId: string | null; clockDate?: string | null; m5Day0?: string | null; version?: number }> = ({
+  storeId,
+  clockDate,
+  m5Day0,
+  version = 0,
+}) => {
   const t = useT();
   const fmt = useFormat();
   const [picked, setPicked] = useState<string | null>(null);
-  const eventDate = picked ?? defaultEventDate(clockDate);
+  const eventDate = picked ?? defaultEventDate(clockDate, m5Day0);
   const m = useApi((s) => getControllerMetrics(storeId ?? '', eventDate || null, s), [storeId, eventDate, version], { enabled: !!storeId });
   const d = m.data;
   const o = d?.overall ?? null;
