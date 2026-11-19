@@ -38,7 +38,7 @@ class ReportsRepository:
     def get_forecast_accuracy_report(
         self,
         db: Session,
-        model_name: str = "lightgbm",
+        model_name: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         store_id: Optional[str] = None,
@@ -49,6 +49,7 @@ class ReportsRepository:
         R-02: scale (MASE/RMSSE) = sai phân 1 bước của naive trên LỊCH SỬ HUẤN LUYỆN (trước cửa sổ đánh giá);
         trọng số WRMSSE = doanh thu (USD) 28 ngày cuối của lịch sử huấn luyện; truy vấn có ORDER BY xác định;
         chuỗi theo (item, store). Chuỗi không có lịch sử >= 2 ngày bị loại khỏi MASE/WRMSSE (không chặn cứng).
+        ``model_name`` None = the Production model of the registry (the model of the dashboard WRMSSE card).
         """
         query = (
             db.query(
@@ -201,7 +202,7 @@ class ReportsRepository:
             return {"item_id": k[0], "store_id": k[1], "name": names.get(k[0], k[0]), "mae": round(m, 4), "accuracy_pct": f"{round(acc, 1)}%"}
 
         return {
-            "model_name": model_name,
+            "model_name": model_name or "production",
             "evaluated_period": f"{eval_start} to {eval_end}",
             "store_id": store_id or "All",
             "overall_metrics": overall,
@@ -219,15 +220,21 @@ class ReportsRepository:
         }
 
     def _accuracy_from_registry(
-        self, db: Session, model_name: str, store_id: Optional[str], start_date: Optional[date], end_date: Optional[date]
+        self, db: Session, model_name: Optional[str], store_id: Optional[str], start_date: Optional[date],
+        end_date: Optional[date],
     ) -> Dict[str, Any]:
-        """No forecast/actual overlap: report ONLY the metrics the registry really holds (others null), labelled."""
-        prod_model = (
-            db.query(ModelRegistry)
-            .filter((ModelRegistry.algorithm == model_name) | (ModelRegistry.name == model_name))
-            .order_by(ModelRegistry.is_production.desc(), ModelRegistry.created_at.desc())
-            .first()
-        )
+        """No forecast/actual overlap: report ONLY the metrics the registry really holds (others null), labelled.
+        ``model_name`` None = the Production model (the dashboard reads the same row), never a challenger."""
+        q = db.query(ModelRegistry)
+        if model_name:
+            q = q.filter((ModelRegistry.algorithm == model_name) | (ModelRegistry.name == model_name))
+            q = q.order_by(ModelRegistry.is_production.desc(), ModelRegistry.created_at.desc())
+        else:
+            q = q.filter(ModelRegistry.is_production.is_(True)).order_by(
+                ModelRegistry.promoted_at.desc(), ModelRegistry.created_at.desc())
+        prod_model = q.first()
+        if not model_name:
+            model_name = (prod_model.algorithm or prod_model.name) if prod_model else "production"
         metrics = dict(_EMPTY_METRICS)
         source, reason = "none", "Không có dự báo trùng với doanh số thực trong cửa sổ yêu cầu và không có mô hình trong registry."
         reason_code, missing = "no_overlap_no_registry", []

@@ -11,7 +11,7 @@ class DashboardKPIs(BaseModel):
     total_inventory_value: float = Field(..., description="Tổng giá trị tồn kho hiện tại (USD)")
     stockout_rate: float = Field(..., description="Tỷ lệ hết hàng (% SKU có on_hand <= 0)")
     estimated_service_level: Optional[float] = Field(None, description="Mức độ phục vụ ước tính (%) = 100 - tỷ lệ SKU on_hand<=0 tại thời điểm hiện tại; null khi chưa có tồn kho")
-    reorder_alerts_count: int = Field(..., description="Số SKU có tồn kho <= ROP (cần đặt hàng)")
+    reorder_alerts_count: int = Field(..., description="Số SKU có vị thế tồn kho IP < s (sẽ được đặt ở kỳ review, như J4)")
     pending_replenishments_count: int = Field(..., description="Số đề xuất đặt hàng đang chờ duyệt (PENDING)")
     avg_forecast_accuracy: str = Field(default="N/A", description="Chỉ số sai số / độ chính xác dự báo mô hình sản xuất (ví dụ: WRMSSE 0.4935)")
     total_suppliers: int = Field(..., description="Tổng số nhà cung cấp đang hợp tác")

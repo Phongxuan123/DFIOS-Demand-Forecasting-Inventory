@@ -1,4 +1,5 @@
-"""G-37: dashboard total_inventory_value values stock at the sim-clock-date price (price_history, else unit_price)."""
+"""G-37: dashboard total_inventory_value values stock at the sim-clock-date price (price_history, else products.price, else unit_price):
+the same valuation as the Inventory screen."""
 from datetime import date
 
 import pytest
@@ -37,8 +38,8 @@ def db():
 
 
 def test_no_price_history_keeps_constant_price_value(db):
-    # 3*2 + 2*5 + 4*0 (no param row -> price 0 as before)
-    assert dashboard_repository.get_kpis(db)["total_inventory_value"] == 16.0
+    # 3*2 + 2*5 + 4*1 (no param row: products.price, the Inventory screen's constant price)
+    assert dashboard_repository.get_kpis(db)["total_inventory_value"] == 20.0
 
 
 def test_price_history_values_stock_at_clock_date_price(db):
@@ -49,6 +50,6 @@ def test_price_history_values_stock_at_clock_date_price(db):
         PriceHistory(store_id="TX_1", item_id="HOBBIES_1_001", date=D2, price=99.0),  # other store: ignored
     ])
     db.commit()
-    # 3*3.0 + 2*5 (fallback unit_price) + 4*1.5
+    # 3*3.0 + 2*5 (fallback products.price) + 4*1.5
     assert dashboard_repository.get_kpis(db, store_id="CA_1")["total_inventory_value"] == pytest.approx(25.0)
     assert dashboard_repository.get_kpis(db)["total_inventory_value"] == pytest.approx(25.0)
