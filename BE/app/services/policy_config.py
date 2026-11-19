@@ -83,11 +83,38 @@ QUANTILE_FLOOR_UNITS: float = 1.0
 GAUSSIAN_FALLBACK_ENABLED: bool = False
 
 # --- Calendar ------------------------------------------------------------------------------
-M5_DAY0: date = date(2011, 1, 29)  # M5 d_1 == day index 0
+# M5 d_1 == day index 0. Every day index of the teacher artifacts (forecast_backtest.review_day, quantile origins,
+# J5 windows) is converted to a date from this anchor. A replay database whose dates were shifted as a whole
+# (scripts/shift_sandbox_calendar.py: whole weeks, so weekdays and results are unchanged) stores its anchor in the
+# system setting ``replay_calendar`` and the API / loader read it at start (load_calendar_setting); every other
+# database keeps the M5 calendar.
+M5_DAY0_DEFAULT: date = date(2011, 1, 29)
+M5_DAY0: date = M5_DAY0_DEFAULT
+CALENDAR_SETTING_KEY: str = "replay_calendar"
+
+
+def set_m5_day0(d: date) -> None:
+    global M5_DAY0
+    M5_DAY0 = d
+
+
+def load_calendar_setting(db) -> date:
+    """Set M5_DAY0 from the ``replay_calendar`` system setting of ``db`` ({"m5_day0": "YYYY-MM-DD", ...}); the M5
+    calendar when the setting is absent or unreadable. Returns the anchor in use."""
+    anchor = M5_DAY0_DEFAULT
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.query(SystemSetting).filter(SystemSetting.key == CALENDAR_SETTING_KEY).first()
+        if row is not None and isinstance(row.value, dict) and row.value.get("m5_day0"):
+            anchor = date.fromisoformat(str(row.value["m5_day0"])[:10])
+    except Exception:  # noqa: BLE001 - a database without the table keeps the M5 calendar
+        anchor = M5_DAY0_DEFAULT
+    set_m5_day0(anchor)
+    return anchor
 
 
 def date_to_day_index(d: date) -> int:
-    """0-based M5 day index (d_1 -> 0)."""
+    """0-based M5 day index (d_1 -> 0), on the calendar of the database (M5_DAY0)."""
     return (d - M5_DAY0).days
 
 
