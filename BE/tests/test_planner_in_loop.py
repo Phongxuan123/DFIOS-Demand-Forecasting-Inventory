@@ -171,3 +171,52 @@ def test_first_review_day_after_day0(prev_offset, expected):
     prev = START + timedelta(days=prev_offset)
     assert simulator_service._first_review_day(prev, START, 7, clean_start=False) == START + timedelta(days=expected)
     assert simulator_service._first_review_day(START, START, 7, clean_start=True) == START
+
+
+def test_auto_advance_is_also_refused_while_a_planner_stop_left_proposals_open():
+    """Found in the full-year demo: after a planner-mode stop, an AUTO advance used to run and leave the stop's
+    proposals PENDING forever (never ordered, silent stock-outs). Both modes now get the 409 / expire_pending choice."""
+    db = _db()
+    _advance(db, days=20)                                      # planner stop at the day-0 review, 1 PENDING
+    with mock.patch(GEN, side_effect=_fake_generate):
+        with pytest.raises(HTTPException) as ei:
+            simulator_service.advance(db, STORE, days=10)       # auto
+    assert ei.value.status_code == 409
+    db.expire_all()
+    assert db.query(SimClock).one().current_date == START
+    with mock.patch(GEN, side_effect=_fake_generate):
+        res = simulator_service.advance(db, STORE, days=10, expire_pending=True)
+    assert res["pending_expired"] == 1 and res["current_date"] == START + timedelta(days=10)
+    assert _recs(db)[0].status == "REJECTED"
+
+
+def test_bulk_approve_places_every_open_proposal_in_one_call():
+    from app.models.audit_log import AuditLog
+
+    db = _db()
+    _advance(db, days=20)                                      # 1 PENDING of Q units, origin simulator
+    db.add(ReplenishmentRecommendation(item_id=ITEM, store_id=STORE, recommended_qty=3, final_qty=3,
+                                       status="PENDING", review_date=START))
+    db.add(ReplenishmentRecommendation(item_id=ITEM, store_id="TX_1", recommended_qty=5, final_qty=5,
+                                       status="PENDING", review_date=START))   # other store: untouched
+    db.commit()
+    res = replenishment_service.approve_bulk(db, STORE, user_email="planner@dfios.com")
+    assert (res["approved"], res["total_qty"]) == (2, Q + 3)
+    db.expire_all()
+    assert db.query(Inventory).filter(Inventory.store_id == STORE).one().on_order == Q + 3
+    st = {(r.store_id, r.status) for r in _recs(db)}
+    assert st == {(STORE, "APPROVED"), ("TX_1", "PENDING")}
+    assert db.query(AuditLog).filter(AuditLog.action == "replenishment.approve_bulk").count() == 1
+    # the approved planner proposal then arrives after L days like a single approval
+    res2 = _advance(db, days=20)
+    assert res2["current_date"] == START + timedelta(days=7)
+    assert _on_hand_end(db, START + timedelta(days=3)) == Q + 3
+
+
+def test_bulk_approve_by_ids_skips_decided_rows():
+    db = _db()
+    _advance(db, days=20)
+    (rec,) = _recs(db)
+    replenishment_service.approve_recommendation(db, rec.id, user_email="planner@dfios.com")
+    res = replenishment_service.approve_bulk(db, STORE, user_email="planner@dfios.com", ids=[rec.id, "nope"])
+    assert (res["approved"], res["skipped"]) == (0, 2)

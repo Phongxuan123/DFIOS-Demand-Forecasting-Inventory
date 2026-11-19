@@ -79,9 +79,10 @@ SIM_ACTOR = "simulator"
 # Order approval of the simulated reviews (demo.md §4.4 / §6 step 6-7):
 #   auto    every proposal is placed at once (APPROVED, decided_by = simulator) - replay / equivalence runs
 #   planner the review leaves its proposals PENDING (origin = simulator); the advance STOPS at that review day so the
-#           planner edits / approves them (q_final = final_qty is what arrives L days later); the next advance is
-#           refused while proposals of the simulator are still open, unless expire_pending=True (they then become
-#           REJECTED "expired": not ordered)
+#           planner edits / approves them (q_final = final_qty is what arrives L days later)
+# In BOTH modes the next advance is refused (409) while proposals of the simulator are still open, unless
+# expire_pending=True (they then become REJECTED "expired": not ordered). Without this an auto advance after a planner
+# stop would silently leave them PENDING forever: those orders would never be placed.
 APPROVAL_AUTO = "auto"
 APPROVAL_PLANNER = "planner"
 APPROVAL_MODES = (APPROVAL_AUTO, APPROVAL_PLANNER)
@@ -451,26 +452,26 @@ class SimulatorService:
                 detail=f"Ngày đích ({target_date}) phải lớn hơn ngày hiện tại ({prev_date}).",
             )
 
-        # planner-in-the-loop: open proposals of the previous simulated review must be decided first
+        # open proposals of a previous simulated review (left by a planner-mode stop) must be decided first, whatever
+        # the mode of this advance: approved -> ordered, rejected / expired -> not ordered, never silently pending
         pending_expired = 0
-        if planner:
-            open_ids = [r[0] for r in db.execute(
-                select(ReplenishmentRecommendation.id).where(
-                    ReplenishmentRecommendation.store_id == store_id,
-                    ReplenishmentRecommendation.origin == SIM_ACTOR,
-                    ReplenishmentRecommendation.status.in_(OPEN_STATUSES),
-                )
-            ).all()]
-            if open_ids and not expire_pending:
-                db.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        f"Còn {len(open_ids)} đề xuất đặt hàng của kỳ review trước đang chờ duyệt. Duyệt / sửa / từ "
-                        f"chối chúng trước khi tua tiếp, hoặc gửi expire_pending=true để bỏ qua (không đặt hàng)."
-                    ),
-                )
-            pending_expired = len(open_ids)
+        open_ids = [r[0] for r in db.execute(
+            select(ReplenishmentRecommendation.id).where(
+                ReplenishmentRecommendation.store_id == store_id,
+                ReplenishmentRecommendation.origin == SIM_ACTOR,
+                ReplenishmentRecommendation.status.in_(OPEN_STATUSES),
+            )
+        ).all()]
+        if open_ids and not expire_pending:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Còn {len(open_ids)} đề xuất đặt hàng của kỳ review trước đang chờ duyệt. Duyệt / sửa / từ "
+                    f"chối chúng trước khi tua tiếp, hoặc gửi expire_pending=true để bỏ qua (không đặt hàng)."
+                ),
+            )
+        pending_expired = len(open_ids)
 
         # planner-in-the-loop: stop at the first review day of the span so the planner decides its proposals
         stopped_at_review = False
@@ -523,7 +524,7 @@ class SimulatorService:
                   "expire_pending": bool(expire_pending), "L": L, "R": R}
         try:
             with atomic(db):
-                if planner and pending_expired:
+                if pending_expired:
                     db.execute(
                         update(ReplenishmentRecommendation).execution_options(synchronize_session=False)
                         .where(
