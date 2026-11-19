@@ -74,7 +74,7 @@ import './ForecastExplorer.css';
 type MainTab = 'overview' | 'sku' | 'window' | 'schedule' | 'future';
 type RowQuality = 'ok' | 'crossing' | 'missing';
 
-const DEPARTMENTS = ['FOODS_1', 'FOODS_2', 'HOBBIES_1', 'HOUSEHOLD_1', 'HOUSEHOLD_2'] as const;
+const DEPARTMENTS = ['FOODS_1', 'FOODS_2', 'FOODS_3', 'HOBBIES_1', 'HOBBIES_2', 'HOUSEHOLD_1', 'HOUSEHOLD_2'] as const;
 const CATEGORIES = ['FOODS', 'HOBBIES', 'HOUSEHOLD'] as const;
 type OverviewScope = 'ALL' | (typeof CATEGORIES)[number];
 const ABC_CLASSES = ['A', 'B', 'C'] as const;
