@@ -104,7 +104,9 @@ def main(argv=None) -> int:
         conn.commit()
         print(f"  {t}: {', '.join(cs)} ({changed} rows)")
         cur.execute("select pg_total_relation_size(%s)", (t,))
-        if cur.fetchone()[0] >= VACUUM_MIN_BYTES:
+        size = cur.fetchone()[0]
+        conn.commit()  # autocommit (needed by VACUUM) cannot be switched on inside a transaction
+        if size >= VACUUM_MIN_BYTES:
             conn.autocommit = True
             cur.execute(f'vacuum full analyze "{t}"')
             conn.autocommit = False
