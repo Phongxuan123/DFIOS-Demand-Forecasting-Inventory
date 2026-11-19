@@ -61,6 +61,9 @@ export const inventory: typeof ViInventory = {
   cover_unknown: 'Demand unknown',
   empty: 'The store has no inventory rows.',
   notes_title: 'Data notes',
+  note_safety_stock: 'Safety stock = s − 56-day mean sales × L, from the latest parameter run.',
+  note_stock_value: 'Stock value = end-of-day stock × price of the simulated day (daily M5 price), as on the dashboard.',
+  note_in_transit: 'Orders in transit = approved proposals not yet received (received L days later); units in transit = sum of on-order stock.',
   window: {
     tab: 'L+R distribution',
     title: 'Distribution of the L+R window demand',

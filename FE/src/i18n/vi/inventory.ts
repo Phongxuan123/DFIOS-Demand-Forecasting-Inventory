@@ -59,6 +59,9 @@ export const inventory = {
   cover_unknown: 'Không biết nhu cầu',
   empty: 'Kho chưa có dòng tồn kho nào.',
   notes_title: 'Ghi chú dữ liệu',
+  note_safety_stock: 'Tồn an toàn = s − bán trung bình 56 ngày × L, theo lần tính tham số gần nhất.',
+  note_stock_value: 'Giá trị tồn kho = tồn cuối ngày × giá của ngày mô phỏng (giá theo ngày trong M5), giống thẻ ở Tổng quan.',
+  note_in_transit: 'Đơn đang về = đề xuất đã duyệt chưa tới kho (về sau L ngày thì chuyển sang Đã nhận); số đơn vị đang về = tổng hàng đang về của các SKU.',
   window: {
     tab: 'Phân phối L+R',
     title: 'Phân phối tổng nhu cầu cửa sổ L+R',
