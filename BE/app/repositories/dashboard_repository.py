@@ -229,6 +229,24 @@ class DashboardRepository:
             for r in reversed(sales_rows)
         }
 
+        # 2a. Replay of one store (demo.md §2): the forecasts of the backtest engine, causal at the clock.
+        # Past days: h = 1 forecast made the evening before; after the clock: 14 days from the latest origin
+        # <= clock + 1. The production run (origin after the last M5 day) stays on the "future forecast" tab.
+        if not is_global and db.query(SimClock.store_id).filter(SimClock.store_id == target_store).first():
+            from app.services import backtest_daily_service as bds
+            first_day = min((date.fromisoformat(d) for d in actual_map), default=clock_date)
+            bt = bds.store_daily_series(db, target_store, clock_date, first_day, category=category)
+            if bt is not None:
+                if meta is not None:
+                    meta["as_of"] = str(clock_date)
+                    meta["forecast_note"] = None
+                    meta["forecast_source"] = bt["model_run"]
+                    meta["forecast_past_horizon"] = bt["past_horizon"]
+                    meta["forecast_as_of"] = bt["future_as_of"]
+                predicted_map = bt["series"]
+                return [{"date": d, "actual": actual_map.get(d), "predicted": predicted_map.get(d)}
+                        for d in sorted(set(actual_map) | set(predicted_map))]
+
         # 2. Truy vấn dự báo nhu cầu tương lai (từ mốc clock_date)
         # R-20: Lọc theo model_version production để tránh cộng dồn nhiều mô hình làm vọt dữ liệu dự báo
         from app.models.model_registry import ModelRegistry

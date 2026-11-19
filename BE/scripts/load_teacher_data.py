@@ -27,6 +27,11 @@ What it writes (idempotent; every step can be re-run):
   sources    (optional, --steps sources --source-models ensemble chronos_bolt) every model's window quantiles at the
              review origins into window_quantile_source, the input of the Admin model switch
              (POST /forecast-sources/activate, demo.md step 10). The engine never reads this table.
+  daily      (optional, --steps daily [--daily-models ensemble] [--daily-first-origin 1486]) demo.md §4.3 step 6: the
+             teacher's daily rolling-origin point forecasts DFIOS/results/forecasts/daily_points.npz [origin, sku, h=1..14]
+             of the store, origins first..1940, into forecast_daily_backtest (one row per origin x SKU, columns
+             y_h1..y_h14, model_run backtest-<model>-v1). Read by the "actual vs forecast" charts in replay
+             (GET /dashboard/demand-trend), never by the engine.
   clock      sim_clock(store) start = current = TEST_START (2015-05-25; --clock-start-day 1395 = 2014-11-24 for the
              teacher's continuous run, with --refit-as-of-day 1577 for selection #0), the store's simulation state is cleared
              (snapshot, shadow, service outcomes, inventory_daily, simulator orders, C3 states k >= 1, store-scoped
@@ -75,7 +80,7 @@ QUANTILE_LEVELS = (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.925, 0.95,
 CLASS_SOURCE_TEACHER = "teacher_meta"
 STEPS = ("classes", "sales", "prices", "quantiles", "clock")
 # optional, never in the default run: per-model source quantiles for the in-app model switch (forecast_source_service)
-OPTIONAL_STEPS = ("sources",)
+OPTIONAL_STEPS = ("sources", "daily")
 
 
 # --------------------------------------------------------------------------- safety
@@ -400,6 +405,72 @@ def load_sources(db, td: Dict[str, object], teacher_dir: str, models: Sequence[s
     return out
 
 
+DAILY_POINTS_SUBPATH = ("DFIOS", "results", "forecasts", "daily_points.npz")
+DAILY_FIRST_ORIGIN_DEFAULT = TEST_START - 91   # the longest chart range (90 days) before the test start
+
+
+def load_daily_points(db, td: Dict[str, object], teacher_dir: str, models: Sequence[str],
+                      first_origin: Optional[int] = None, last_origin: Optional[int] = None,
+                      chunk_origins: int = 20) -> Dict[str, object]:
+    """Daily backtest point forecasts (demo.md §4.3 step 6) into forecast_daily_backtest (replace per model run).
+
+    ``daily_points.npz`` holds, per component, the rolling-origin paths [origin, sku, h] for h = 1..14 (origin o
+    forecasts days o..o+13 from data before o; E1). Only the store's rows and the origins in
+    [first_origin, last_origin] are stored, one row per (origin, SKU) with the 14 horizons as columns. The model run
+    of component ``m`` is ``backtest-<m>-v1`` (the ensemble: ``backtest-ensemble-v1``, the run J3 reads)."""
+    from sqlalchemy import delete
+    from app.models.forecast_daily_backtest import DAILY_HORIZONS, ForecastDailyBacktest as FDB
+
+    path = os.path.join(teacher_dir, *DAILY_POINTS_SUBPATH)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"daily point forecasts not found: {path}")
+    store, meta, sl = td["store"], td["meta"], td["slice"]
+    item_ids = meta["item_id"].astype(str).tolist()
+    lo = int(first_origin if first_origin is not None else DAILY_FIRST_ORIGIN_DEFAULT)
+    z = np.load(path)
+    origins = np.asarray(z["origins"], dtype=np.int64)
+    hi = int(last_origin if last_origin is not None else origins[-1])
+    keep = np.flatnonzero((origins >= lo) & (origins <= hi))
+    if not len(keep):
+        raise ValueError(f"no origins of {path} in [{lo}, {hi}] (file: {origins[0]}..{origins[-1]})")
+    now = datetime.now(timezone.utc)
+    hcols = [f"y_h{h}" for h in range(1, DAILY_HORIZONS + 1)]
+    out: Dict[str, object] = {}
+    for model in models:
+        if model not in z.files:
+            raise ValueError(f"model {model!r} not in {path} (has {z.files})")
+        arr = z[model]                                    # [origin, sku, h] float32 (decompressed once)
+        if arr.ndim != 3 or arr.shape[0] != len(origins) or arr.shape[2] != DAILY_HORIZONS:
+            raise ValueError(f"unexpected {model} shape {arr.shape} in {path}")
+        block = np.asarray(arr[keep][:, sl, :], dtype=np.float64)
+        del arr
+        if block.shape[1] != len(item_ids):
+            raise ValueError(f"{model}: {block.shape[1]} store rows, meta has {len(item_ids)}")
+        if not np.isfinite(block).all():
+            raise ValueError(f"{model}: non-finite forecasts")
+        block = np.round(np.maximum(block, 0.0), 4)
+        run_id = f"backtest-{model}-v1"
+        db.execute(delete(FDB).where(FDB.model_run == run_id, FDB.store_id == store))
+        n = 0
+        for k0 in range(0, len(keep), chunk_origins):
+            rows = []
+            for k in range(k0, min(len(keep), k0 + chunk_origins)):
+                od = day_to_date(int(origins[keep[k]]))
+                bk = block[k]
+                for i, iid in enumerate(item_ids):
+                    r = {"model_run": run_id, "store_id": store, "origin_date": od, "item_id": iid}
+                    r.update({c: float(v) for c, v in zip(hcols, bk[i])})
+                    r["created_at"] = now
+                    rows.append(r)
+            _bulk_insert(db.connection(), FDB.__table__, rows)
+            n += len(rows)
+        db.commit()
+        out[model] = {"model_run": run_id, "rows": n, "origins": len(keep),
+                      "first_origin": day_to_date(int(origins[keep[0]])).isoformat(),
+                      "last_origin": day_to_date(int(origins[keep[-1]])).isoformat()}
+    return out
+
+
 def _q_levels_json(row: np.ndarray, keys: Sequence[str]) -> str:
     return "{" + ", ".join(f'"{k}": {float(v)!r}' for k, v in zip(keys, row)) + "}"
 
@@ -557,7 +628,8 @@ def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", star
         steps: Sequence[str] = STEPS, initial_refit: bool = True, log=print, switch_from: Optional[str] = None,
         switch_to: Optional[str] = None, switch_day: Optional[int] = None, clock_start_day: Optional[int] = None,
         refit_as_of_day: Optional[int] = None, daily_horizons: Optional[Sequence[int]] = None,
-        source_models: Optional[Sequence[str]] = None) -> Dict[str, object]:
+        source_models: Optional[Sequence[str]] = None, daily_models: Optional[Sequence[str]] = None,
+        daily_first_origin: Optional[int] = None) -> Dict[str, object]:
     t0 = time.time()
     td = read_teacher(teacher_dir, store, model, start_day, switch_from=switch_from, switch_to=switch_to,
                       switch_day=switch_day)
@@ -565,7 +637,9 @@ def run(db, teacher_dir: str, store: str = "CA_1", model: str = "ensemble", star
                                  "read_seconds": round(time.time() - t0, 1)}
     log(f"read teacher arrays: {report['n_skus']} SKUs ({report['read_seconds']}s)")
     fns = {"classes": load_classes, "sales": load_sales, "prices": load_prices, "quantiles": load_quantiles,
-           "sources": lambda db_, td_: load_sources(db_, td_, teacher_dir, source_models or ["ensemble"])}
+           "sources": lambda db_, td_: load_sources(db_, td_, teacher_dir, source_models or ["ensemble"]),
+           "daily": lambda db_, td_: load_daily_points(db_, td_, teacher_dir, daily_models or ["ensemble"],
+                                                       first_origin=daily_first_origin)}
     if daily_horizons:  # --daily-origins: the quantiles step stores daily-origin rows for each H instead
         fns["quantiles"] = lambda db_, td_: load_daily_quantiles(db_, td_, teacher_dir, daily_horizons)
     for step in steps:
@@ -588,6 +662,10 @@ def main(argv=None) -> int:
     ap.add_argument("--steps", nargs="+", default=list(STEPS), choices=STEPS + OPTIONAL_STEPS)
     ap.add_argument("--source-models", nargs="+", default=["ensemble", "chronos_bolt"],
                     help="sources step: models whose window quantiles are kept for the in-app model switch")
+    ap.add_argument("--daily-models", nargs="+", default=["ensemble"],
+                    help="daily step: components of daily_points.npz to store (ensemble lgbm xgb mlp)")
+    ap.add_argument("--daily-first-origin", type=int, default=None,
+                    help=f"daily step: first origin day index (default {DAILY_FIRST_ORIGIN_DEFAULT} = TEST_START - 91)")
     ap.add_argument("--no-initial-refit", action="store_true")
     ap.add_argument("--switch-from", default=None, metavar="MODEL", help="model of the reviews before --switch-day")
     ap.add_argument("--switch-to", default=None, metavar="MODEL", help="model of the reviews from --switch-day on")
@@ -624,7 +702,8 @@ def main(argv=None) -> int:
                   switch_day=args.switch_day, clock_start_day=args.clock_start_day,
                   refit_as_of_day=args.refit_as_of_day,
                   daily_horizons=args.horizons if args.daily_origins else None,
-                  source_models=args.source_models)
+                  source_models=args.source_models, daily_models=args.daily_models,
+                  daily_first_origin=args.daily_first_origin)
     finally:
         db.close()
     if args.report:

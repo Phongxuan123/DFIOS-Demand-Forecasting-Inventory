@@ -40,6 +40,10 @@ class DemandTrendResponse(BaseModel):
     # additive (U-04): the series is bounded by the simulated clock
     as_of: Optional[str] = None
     forecast_note: Optional[str] = None
+    # additive (demo.md §4.3 step 6): in replay the forecast line is the causal backtest run
+    forecast_source: Optional[str] = None        # e.g. "backtest-ensemble-v1"; None = production / stored forecasts
+    forecast_past_horizon: Optional[int] = None  # days up to the clock: forecast made h days before (1)
+    forecast_as_of: Optional[str] = None         # days after the clock: the forecast made at the end of this day
 
 
 class InventoryAlertItem(BaseModel):

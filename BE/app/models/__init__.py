@@ -28,6 +28,7 @@ from app.models.calibration_state import CalibrationState
 from app.models.service_outcomes import ServiceOutcome
 from app.models.data_imports import DataImport
 from app.models.forecast_backtest import ForecastBacktest
+from app.models.forecast_daily_backtest import ForecastDailyBacktest
 from app.models.sim_state import SimSnapshot, SimShadowDaily
 from app.models.price_history import PriceHistory
 from app.models.batch_run import BatchRun
@@ -68,6 +69,7 @@ __all__ = [
     "ServiceOutcome",
     "DataImport",
     "ForecastBacktest",
+    "ForecastDailyBacktest",
     "PriceHistory",
     "BatchRun",
     "WindowQuantileSource",
