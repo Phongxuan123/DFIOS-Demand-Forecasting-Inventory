@@ -66,6 +66,7 @@ import {
   type ProductRow,
 } from '../services/forecastApi.ts';
 import { getDemandTrend } from '../services/dashboardApi.ts';
+import { backtestTrendNote } from '../utils/trendText.ts';
 import { getForecastAccuracy, type AccuracyMetric } from '../services/reportsApi.ts';
 import { FutureForecastPanel } from './forecast/FutureForecastPanel.tsx';
 import './ForecastExplorer.css';
@@ -793,7 +794,8 @@ export const ForecastExplorer: React.FC = () => {
                   </div>
                   <div className="fe-legend-item">
                     <span className="fe-legend-dot fe-legend-dot--forecast" />
-                    <span>{t('forecast.explorer.legend_forecast')}</span>
+                    {/* the backtest run is a point forecast, not a P50 */}
+                    <span>{trend.data?.forecast_source ? t('dashboard.charts.predicted') : t('forecast.explorer.legend_forecast')}</span>
                   </div>
                 </div>
               </div>
@@ -837,7 +839,9 @@ export const ForecastExplorer: React.FC = () => {
                 )}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)', fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                <span>{trendNote(trend.data?.forecast_note, t, fmt) || t('forecast.explorer.trend_footer')}</span>
+                <span>
+                  {backtestTrendNote(trend.data, t, fmt) || trendNote(trend.data?.forecast_note, t, fmt) || t('forecast.explorer.trend_footer')}
+                </span>
               </div>
             </div>
 

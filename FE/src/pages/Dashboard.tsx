@@ -62,6 +62,7 @@ import { useBeCode } from '../i18n/useBe.ts';
 import { prefixCode } from '../i18n/beText.ts';
 import { costVsB0, countPhrase, reviewsPhrase, reviewsSinceStart, signedCurrency } from '../utils/simText.ts';
 import { thetaDomain } from '../utils/chartScale.ts';
+import { backtestTrendNote } from '../utils/trendText.ts';
 import { AdvanceProgress } from '../components/common/AdvanceProgress.tsx';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
@@ -478,7 +479,8 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
           <ReferenceArea x1={afterStart} x2={rows[rows.length - 1].date} fill={c.reference} fillOpacity={0.12} stroke="none" label={{ value: t('dashboard.charts.after_clock'), fill: c.tick, fontSize: 11, position: 'insideTopRight' }} />
         )}
         {clockDate && rows.some((r) => r.date === clockDate) && (
-          <ReferenceLine x={clockDate} stroke={c.series[2]} label={{ value: t('dashboard.charts.clock_line', { date: fmt.date(clockDate, 'axis') }), fill: c.tick, fontSize: 11, position: 'insideTopLeft' }} />
+          // label at the bottom: the "after the clock" area label sits at the top right of the same spot
+          <ReferenceLine x={clockDate} stroke={c.series[2]} label={{ value: t('dashboard.charts.clock_line', { date: fmt.date(clockDate, 'axis') }), fill: c.tick, fontSize: 11, position: inRange ? 'insideBottomLeft' : 'insideTopLeft' }} />
         )}
         <RTooltip
           content={(props) => {
@@ -687,6 +689,7 @@ export const Dashboard: React.FC = () => {
   const trendBeyondClock = !!clockDate && trendRows.some((r) => r.actual !== null && r.date > clockDate);
   const trendNoForecast = trendHasData && !trendRows.some((r) => r.predicted !== null);
   const trendNoActual = trendHasData && !trendRows.some((r) => r.actual !== null);
+  const trendBacktest = backtestTrendNote(trend.data, t, fmt);
   const availMiss =
     sh && sh.c3out_overall_availability != null && sh.target_availability != null && sh.c3out_overall_availability < sh.target_availability;
   const segAllNull = !!sh && sh.segment_availabilities.length > 0 && sh.segment_availabilities.every((r) => r.c3out_availability == null && r.b0_availability == null);
@@ -845,6 +848,9 @@ export const Dashboard: React.FC = () => {
                     ...(trendNoForecast ? [] : [{ label: t('dashboard.charts.predicted'), color: 'var(--chart-2)', dash: '5 3' }]),
                   ]}
                 />
+                {!trendNoForecast && trendBacktest && (
+                  <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{trendBacktest}</p>
+                )}
                 {trendNoForecast && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_no_forecast')}</p>}
                 {trendNoActual && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_no_actual')}</p>}
                 {trendBeyondClock && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_beyond_clock')}</p>}

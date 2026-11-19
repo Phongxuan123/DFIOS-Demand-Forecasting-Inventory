@@ -122,8 +122,20 @@ export const getAlerts = (storeId: string, severity: string | undefined, limit: 
 export const getCalibrationHistory = (storeId: string, signal?: AbortSignal) =>
   getJson<CalibrationState[]>('/calibration/history', { params: { store_id: storeId, limit: 500 }, signal });
 
+export interface DemandTrendResponse {
+  data: DemandTrendPoint[];
+  as_of?: string | null;
+  forecast_note?: string | null;
+  /** In replay: the causal backtest run the forecast line comes from (e.g. "backtest-ensemble-v1"); null otherwise. */
+  forecast_source?: string | null;
+  /** Days up to the clock: the forecast made this many days before the day (1 = the evening before). */
+  forecast_past_horizon?: number | null;
+  /** Days after the clock: the forecast made at the end of this day (= the clock date); null = no future path. */
+  forecast_as_of?: string | null;
+}
+
 export const getDemandTrend = (storeId: string, days: number, signal?: AbortSignal, category?: string) =>
-  getJson<{ data: DemandTrendPoint[]; as_of?: string | null; forecast_note?: string | null }>('/dashboard/demand-trend', {
+  getJson<DemandTrendResponse>('/dashboard/demand-trend', {
     params: { store_id: storeId, days, category },
     signal,
   });
