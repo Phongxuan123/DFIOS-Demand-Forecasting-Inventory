@@ -28,6 +28,8 @@ class SimClockResponse(BaseModel):
     lead_time_days: int = 3
     review_period_days: int = 7
     next_review_date: Optional[date] = None  # start_date + k*R, review at START of that day (A4)
+    m5_day0: Optional[date] = Field(None, description="Date of M5 d_1 on this database's calendar (2011-01-29 unless "
+                                                      "the replay data were shifted as a whole)")
     snapshot_restored: Optional[bool] = None  # only set by POST /clock/reset
     inventory_source: Optional[str] = None  # only set by POST /clock/reset
 

@@ -26,8 +26,12 @@ async def lifespan(_app: FastAPI):
         import sys
         if "pytest" not in sys.modules:  # tests use their own databases (never write to the configured one)
             from app.core.database import SessionLocal
+            from app.services import policy_config as pc
             from app.services.pipeline_service import pipeline_service
             with SessionLocal() as db:
+                anchor = pc.load_calendar_setting(db)  # a replay DB shifted as a whole keeps its own calendar
+                if anchor != pc.M5_DAY0_DEFAULT:
+                    logger.warning("Replay calendar shifted: d_1 = %s", anchor)
                 if pipeline_service.ensure_default_schedule(db):
                     logger.warning("Default ML pipeline schedule created")
             # batch jobs left 'running' by a previous (dead) API process can never finish: mark them failed. Only

@@ -47,6 +47,7 @@ def _clock_response(db: Session, clock, **extra) -> SimClockResponse:
         lead_time_days=pc.LEAD_TIME_DAYS,
         review_period_days=pc.REVIEW_PERIOD_DAYS,
         next_review_date=clock.start_date + timedelta(days=(k + 1) * pc.REVIEW_PERIOD_DAYS),
+        m5_day0=pc.M5_DAY0,
         **extra,
     )
 

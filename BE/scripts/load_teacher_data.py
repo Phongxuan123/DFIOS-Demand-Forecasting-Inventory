@@ -63,9 +63,11 @@ if BE_DIR not in sys.path:
 
 import numpy as np  # noqa: E402
 
+from app.services import policy_config as pc  # noqa: E402
+
 SANDBOX_DB = "dfios_sandbox"
 SANDBOX_HOSTS = ("localhost", "127.0.0.1")
-DAY0 = date(2011, 1, 29)
+DAY0 = date(2011, 1, 29)  # the M5 calendar; day_to_date follows pc.M5_DAY0 (a shifted replay DB, see main)
 VAL_START, TEST_START, T_END = 1395, 1577, 1941
 L_DEFAULT, R_DEFAULT = 3, 7
 QUANTILE_LEVELS = (0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.925, 0.95, 0.96, 0.97, 0.975, 0.98, 0.985,
@@ -97,7 +99,7 @@ def assert_sandbox_url(url: Optional[str]) -> str:
 
 
 def day_to_date(idx: int) -> date:
-    return DAY0 + timedelta(days=int(idx))
+    return pc.M5_DAY0 + timedelta(days=int(idx))
 
 
 # --------------------------------------------------------------------------- teacher data (read-only)
@@ -613,6 +615,9 @@ def main(argv=None) -> int:
     Base.metadata.create_all(bind=engine, checkfirst=True)
     apply_schema_upgrades(engine)
     db = sessionmaker(bind=engine, autoflush=False)()
+    anchor = pc.load_calendar_setting(db)  # a sandbox shifted by shift_sandbox_calendar.py keeps its calendar
+    if anchor != pc.M5_DAY0_DEFAULT:
+        print(f"calendar: replay database shifted, d_1 = {anchor}")
     try:
         rep = run(db, args.teacher_dir, args.store, args.model, args.start_day, args.steps,
                   not args.no_initial_refit, switch_from=args.switch_from, switch_to=args.switch_to,
