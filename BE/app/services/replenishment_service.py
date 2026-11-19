@@ -546,6 +546,59 @@ class ReplenishmentService:
 
         return rec
 
+    def approve_bulk(
+        self,
+        db: Session,
+        store_id: str,
+        user_email: str,
+        ids: Optional[List[str]] = None,
+        priority: Optional[str] = None,
+        ip_address: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Approve many proposals in ONE transaction (demo.md 6.3 POST /replenishments/approve, step 6 "duyệt hàng loạt").
+        Same effect per row as approve_recommendation (status APPROVED, decided_by / decided_at, inventory.on_order +=
+        final_qty) with one audit entry, so a review of thousands of SKUs is approved in seconds instead of one HTTP
+        call per row. ids = None approves every open proposal of the store (optionally one priority).
+        """
+        from sqlalchemy import update as sa_update
+
+        from app.models.inventory import Inventory
+
+        q = db.query(ReplenishmentRecommendation).filter(
+            ReplenishmentRecommendation.store_id == store_id,
+            ReplenishmentRecommendation.status.in_(("PENDING", "PROPOSED")),
+        )
+        if ids:
+            q = q.filter(ReplenishmentRecommendation.id.in_(list(ids)))
+        elif priority:
+            q = q.filter(ReplenishmentRecommendation.priority == priority)
+        rows = q.with_for_update().all()
+        now = datetime.now(timezone.utc)
+        per_item: Dict[str, float] = {}
+        for rec in rows:
+            rec.status = "APPROVED"
+            rec.decided_by = user_email
+            rec.decided_at = now
+            per_item[rec.item_id] = per_item.get(rec.item_id, 0.0) + float(rec.final_qty or 0.0)
+        for item_id, qty in per_item.items():
+            db.execute(
+                sa_update(Inventory).where(Inventory.item_id == item_id, Inventory.store_id == store_id)
+                .values(on_order=Inventory.on_order + qty)
+            )
+        total = round(sum(per_item.values()), 4)
+        audit_service.log(
+            db,
+            action="replenishment.approve_bulk",
+            actor_email=user_email,
+            ip_address=ip_address,
+            details=f"Duyệt hàng loạt {len(rows)} đề xuất của {store_id} (tổng {total} đơn vị)"
+                    + (f", ưu tiên {priority}" if priority and not ids else ""),
+        )
+        db.commit()
+        skipped = (len(set(ids)) - len(rows)) if ids else 0
+        return {"approved": len(rows), "skipped": max(0, skipped), "total_qty": total, "store_id": store_id}
+
     def reject_recommendation(
         self,
         db: Session,
