@@ -26,7 +26,8 @@ router = APIRouter()
     description="Tính toán các chỉ số sai số dự báo tổng thể và bóc tách theo từng nhóm phân loại ABC.",
 )
 def get_forecast_accuracy_report(
-    model_name: str = Query("lightgbm", description="Tên mô hình dự báo"),
+    model_name: Optional[str] = Query(
+        None, description="Tên / thuật toán mô hình; bỏ trống = mô hình Production (cùng WRMSSE với dashboard)"),
     start_date: Optional[date] = Query(None, description="Ngày bắt đầu (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Ngày kết thúc (YYYY-MM-DD)"),
     store_id: Optional[str] = Query(None, description="Mã cửa hàng"),

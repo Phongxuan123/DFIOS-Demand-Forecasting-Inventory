@@ -356,3 +356,31 @@ class TestReportsEndpoints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAccuracyDefaultsToProduction(unittest.TestCase):
+    """The accuracy report without model_name reads the Production model (the dashboard WRMSSE), not a challenger."""
+
+    def test_registry_fallback_without_model_name_is_the_production_model(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        from app.models.base import Base
+        from app.models.model_registry import ModelRegistry
+        from app.repositories.reports_repository import reports_repository
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(bind=engine)
+        s = sessionmaker(bind=engine)()
+        s.add(ModelRegistry(id="m_prod", name="Production Ensemble", algorithm="Ensemble NNLS", version="1",
+                            metrics={"wrmsse": 0.4935}, is_production=True))
+        s.add(ModelRegistry(id="m_lgb", name="LightGBM Baseline", algorithm="lightgbm", version="1",
+                            metrics={"wrmsse": 0.5083}, is_production=False))
+        s.commit()
+        d = reports_repository.get_forecast_accuracy_report(s, store_id="CA_1")
+        self.assertEqual(d["overall_metrics"]["wrmsse"], 0.4935)
+        self.assertEqual(d["model_name"], "Ensemble NNLS")
+        d2 = reports_repository.get_forecast_accuracy_report(s, model_name="lightgbm", store_id="CA_1")
+        self.assertEqual(d2["overall_metrics"]["wrmsse"], 0.5083)
+        s.close()
