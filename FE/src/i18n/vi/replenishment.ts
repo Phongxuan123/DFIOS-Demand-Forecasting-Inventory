@@ -52,6 +52,7 @@ export const replenishment = {
     CANCELLED: 'Đã hủy',
     /** REJECTED with decided_by = "simulator": skipped by a Planner-mode advance with expire_pending */
     SIM_EXPIRED: 'Hệ thống bỏ qua',
+    SIM_AUTO: 'Hệ thống (chế độ tự động)',
   },
   priority: {
     CRITICAL: 'Nghiêm trọng',
@@ -204,6 +205,7 @@ export const replenishment = {
     per_unit_week: '/ đơn vị / năm',
     order_cost_k: 'Chi phí đặt hàng (c)',
     per_order: '/ đơn hàng',
+    holding_a3: '0,2% × giá / đơn vị / ngày (A3)',
     override_qty: 'Số lượng đặt can thiệp (Đơn vị):',
     optimal: 'Tối ưu',
     adjust: 'Điều chỉnh',
@@ -211,11 +213,11 @@ export const replenishment = {
     order_placed: '✓ Đã tạo đơn',
   },
   chart: {
-    title: 'Kỳ vọng suy giảm & bổ sung tồn kho 7 ngày',
+    title: 'Tồn kho dự kiến trong kỳ review (minh họa)',
     arrival: 'Hàng về: Ngày {day}',
-    today: 'T2 (Hôm nay)',
-    arrival_step: 'T4 (L={lead} Hàng về)',
-    review_end: 'CN (Review R=7)',
+    today: 'Ngày 0 (review)',
+    arrival_step: 'Ngày {lead} (hàng về, L = {lead})',
+    review_end: 'Ngày {r} (review kế tiếp)',
     with_po: 'Nếu duyệt đơn (+{qty}u)',
     stockout_risk: 'Nguy cơ đứt hàng nếu trễ',
     rop_label: 'ROP: {val}u',

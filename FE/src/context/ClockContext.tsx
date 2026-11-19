@@ -34,6 +34,8 @@ export interface SimClock {
   review_period_days?: number | null;
   next_review_date?: string | null;
   n_skus?: number | null;
+  /** Date of M5 d_1 on this database's calendar (a replay DB shifted as a whole); absent = 2011-01-29. */
+  m5_day0?: string | null;
 }
 
 export interface ClockAdvanceResult {

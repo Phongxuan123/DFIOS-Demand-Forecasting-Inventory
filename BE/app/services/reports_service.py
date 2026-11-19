@@ -31,7 +31,7 @@ class ReportsService:
     def get_forecast_accuracy(
         self,
         db: Session,
-        model_name: str = "lightgbm",
+        model_name: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         store_id: Optional[str] = None,

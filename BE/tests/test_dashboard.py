@@ -76,10 +76,11 @@ class TestDashboardEndpoints(unittest.TestCase):
             )
             session.add_all([admin, manager, viewer])
 
-            # 2. Sản phẩm
-            p1 = Product(item_id="FOODS_1_001", name="Fuji Apples", cat_id="FOODS", dept_id="FOODS_1")
-            p2 = Product(item_id="FOODS_1_002", name="Whole Milk", cat_id="FOODS", dept_id="FOODS_1")
-            p3 = Product(item_id="HOUSEHOLD_1_001", name="Cotton Towels", cat_id="HOUSEHOLD", dept_id="HOUSEHOLD_1")
+            # 2. Sản phẩm (stock is valued at products.price when no daily price row exists: one rule with the
+            #    Inventory screen and the A3 costs)
+            p1 = Product(item_id="FOODS_1_001", name="Fuji Apples", cat_id="FOODS", dept_id="FOODS_1", price=10.0)
+            p2 = Product(item_id="FOODS_1_002", name="Whole Milk", cat_id="FOODS", dept_id="FOODS_1", price=20.0)
+            p3 = Product(item_id="HOUSEHOLD_1_001", name="Cotton Towels", cat_id="HOUSEHOLD", dept_id="HOUSEHOLD_1", price=5.0)
             session.add_all([p1, p2, p3])
 
             # 3. Nhà cung cấp

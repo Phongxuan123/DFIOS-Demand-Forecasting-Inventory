@@ -66,6 +66,7 @@ import {
   type ProductRow,
 } from '../services/forecastApi.ts';
 import { getDemandTrend } from '../services/dashboardApi.ts';
+import { backtestTrendNote } from '../utils/trendText.ts';
 import { getForecastAccuracy, type AccuracyMetric } from '../services/reportsApi.ts';
 import { FutureForecastPanel } from './forecast/FutureForecastPanel.tsx';
 import './ForecastExplorer.css';
@@ -152,6 +153,13 @@ const ForecastTooltip: React.FC<{ active?: boolean; payload?: ReadonlyArray<{ pa
   );
 };
 
+/** The BE note "Forecasts start on D (origin O), after the simulated clock (C): hidden ..." in the active language. */
+function trendNote(note: string | null | undefined, t: ReturnType<typeof useT>, fmt: ReturnType<typeof useFormat>): string | null {
+  if (!note) return null;
+  const m = /start on (\d{4}-\d{2}-\d{2}).*clock \((\d{4}-\d{2}-\d{2})\)/.exec(note);
+  return m ? t('forecast.explorer.trend_hidden', { first: fmt.date(m[1]), clock: fmt.date(m[2]) }) : note;
+}
+
 const QuantileChart: React.FC<{ levels: Record<string, number>; title: string; source: string; xLabel: string; yLabel: string }> = ({ levels, title, source, xLabel, yLabel }) => {
   const c = useChartTheme();
   const fmt = useFormat();
@@ -164,7 +172,7 @@ const QuantileChart: React.FC<{ levels: Record<string, number>; title: string; s
     [levels],
   );
   const columns: Column<{ tau: number; value: number }>[] = [
-    { key: 'tau', header: xLabel, align: 'right', value: (d) => d.tau, cell: (d) => <span className="ui-num">{fmt.number(d.tau, { digits: 2 })}</span> },
+    { key: 'tau', header: xLabel, align: 'right', value: (d) => d.tau, cell: (d) => <span className="ui-num">{fmt.number(d.tau, { minDigits: 2, maxDigits: 4 })}</span> },
     { key: 'value', header: yLabel, align: 'right', value: (d) => d.value, cell: (d) => <span className="ui-num">{fmt.number(d.value, { digits: 2 })}</span> },
   ];
   return (
@@ -786,7 +794,8 @@ export const ForecastExplorer: React.FC = () => {
                   </div>
                   <div className="fe-legend-item">
                     <span className="fe-legend-dot fe-legend-dot--forecast" />
-                    <span>{t('forecast.explorer.legend_forecast')}</span>
+                    {/* the backtest run is a point forecast, not a P50 */}
+                    <span>{trend.data?.forecast_source ? t('dashboard.charts.predicted') : t('forecast.explorer.legend_forecast')}</span>
                   </div>
                 </div>
               </div>
@@ -830,7 +839,9 @@ export const ForecastExplorer: React.FC = () => {
                 )}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)', fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                <span>{trend.data?.forecast_note || t('forecast.explorer.trend_footer')}</span>
+                <span>
+                  {backtestTrendNote(trend.data, t, fmt) || trendNote(trend.data?.forecast_note, t, fmt) || t('forecast.explorer.trend_footer')}
+                </span>
               </div>
             </div>
 

@@ -62,6 +62,7 @@ import { useBeCode } from '../i18n/useBe.ts';
 import { prefixCode } from '../i18n/beText.ts';
 import { costVsB0, countPhrase, reviewsPhrase, reviewsSinceStart, signedCurrency } from '../utils/simText.ts';
 import { thetaDomain } from '../utils/chartScale.ts';
+import { backtestTrendNote } from '../utils/trendText.ts';
 import { AdvanceProgress } from '../components/common/AdvanceProgress.tsx';
 import { apiErrorMessage, toApiError } from '../services/apiClient.ts';
 import {
@@ -478,7 +479,8 @@ const TrendChart: React.FC<{ rows: Array<{ date: string; actual: number | null; 
           <ReferenceArea x1={afterStart} x2={rows[rows.length - 1].date} fill={c.reference} fillOpacity={0.12} stroke="none" label={{ value: t('dashboard.charts.after_clock'), fill: c.tick, fontSize: 11, position: 'insideTopRight' }} />
         )}
         {clockDate && rows.some((r) => r.date === clockDate) && (
-          <ReferenceLine x={clockDate} stroke={c.series[2]} label={{ value: t('dashboard.charts.clock_line', { date: fmt.date(clockDate, 'axis') }), fill: c.tick, fontSize: 11, position: 'insideTopLeft' }} />
+          // label at the bottom: the "after the clock" area label sits at the top right of the same spot
+          <ReferenceLine x={clockDate} stroke={c.series[2]} label={{ value: t('dashboard.charts.clock_line', { date: fmt.date(clockDate, 'axis') }), fill: c.tick, fontSize: 11, position: inRange ? 'insideBottomLeft' : 'insideTopLeft' }} />
         )}
         <RTooltip
           content={(props) => {
@@ -565,8 +567,12 @@ export const Dashboard: React.FC = () => {
     return { classes, rows: [...byReview.values()].sort((a, b) => Number(a.review_index) - Number(b.review_index)) };
   }, [theta.data, abc]);
 
+  // Before the first review cycle closes (R days) the comparison is not like for like: a planner-mode stop keeps the
+  // day-0 orders PENDING (no ordering cost yet) while the shadow B0 has already ordered. No verdict until then.
+  const reviewDays = clock.clock?.review_period_days ?? 7;
+  const costEarly = !!sh && (sh.days_elapsed ?? 0) < reviewDays;
   const costSavingsBadge = useMemo(() => {
-    if (!sh || sh.c3out_total_cost == null || sh.b0_total_cost == null) return undefined;
+    if (costEarly || !sh || sh.c3out_total_cost == null || sh.b0_total_cost == null) return undefined;
     const diff = sh.b0_total_cost - sh.c3out_total_cost;
     if (diff <= 0) return undefined;
     const pct = sh.b0_total_cost > 0 ? (diff / sh.b0_total_cost) * 100 : 0;
@@ -578,7 +584,7 @@ export const Dashboard: React.FC = () => {
         })}
       </Badge>
     );
-  }, [sh, fmt, t]);
+  }, [sh, fmt, t, costEarly]);
 
   const sevTone = (s: string): Tone => (s === 'CRITICAL' ? 'danger' : s === 'WARNING' ? 'warning' : 'success');
   const sevLabel = (s: string) =>
@@ -683,6 +689,7 @@ export const Dashboard: React.FC = () => {
   const trendBeyondClock = !!clockDate && trendRows.some((r) => r.actual !== null && r.date > clockDate);
   const trendNoForecast = trendHasData && !trendRows.some((r) => r.predicted !== null);
   const trendNoActual = trendHasData && !trendRows.some((r) => r.actual !== null);
+  const trendBacktest = backtestTrendNote(trend.data, t, fmt);
   const availMiss =
     sh && sh.c3out_overall_availability != null && sh.target_availability != null && sh.c3out_overall_availability < sh.target_availability;
   const segAllNull = !!sh && sh.segment_availabilities.length > 0 && sh.segment_availabilities.every((r) => r.c3out_availability == null && r.b0_availability == null);
@@ -792,7 +799,9 @@ export const Dashboard: React.FC = () => {
             value={sh?.c3out_total_cost != null ? fmt.currency(sh.c3out_total_cost, { compact: true }) : null}
             unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_total_cost == null ? t('dashboard.reason.cost') : undefined}
             hint={
-              sh?.c3out_total_cost != null ? (
+              costEarly && sh?.c3out_total_cost != null ? (
+                t('dashboard.kpi.cost_first_cycle', { days: fmt.integer(reviewDays) })
+              ) : sh?.c3out_total_cost != null ? (
                 <>
                   {t('dashboard.kpi.cost_hint', {
                     b0: sh.b0_total_cost != null ? fmt.currency(sh.b0_total_cost, { compact: true }) : (beCode(prefixCode('kpi', sh.b0_reason_code), null, sh.b0_reason) || '—'),
@@ -839,6 +848,9 @@ export const Dashboard: React.FC = () => {
                     ...(trendNoForecast ? [] : [{ label: t('dashboard.charts.predicted'), color: 'var(--chart-2)', dash: '5 3' }]),
                   ]}
                 />
+                {!trendNoForecast && trendBacktest && (
+                  <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{trendBacktest}</p>
+                )}
                 {trendNoForecast && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_no_forecast')}</p>}
                 {trendNoActual && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_no_actual')}</p>}
                 {trendBeyondClock && <p className="ui-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>{t('dashboard.charts.trend_beyond_clock')}</p>}

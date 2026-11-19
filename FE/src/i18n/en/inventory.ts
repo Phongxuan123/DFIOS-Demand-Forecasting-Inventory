@@ -12,7 +12,7 @@ export const inventory: typeof ViInventory = {
     below_s_hint: 'IP < s: will be proposed for ordering at the review',
     above_S: 'SKUs above S',
     stock_value: 'Stock value',
-    stock_value_hint: 'End-of-day stock × products.price ({count} SKUs with a price)',
+    stock_value_hint: 'End-of-day stock × price of the simulated day ({count} SKUs with a price)',
     in_transit: 'Orders in transit',
     in_transit_hint: '{units} units in transit for {skus} SKUs',
     sku_count: 'SKUs',
@@ -61,6 +61,9 @@ export const inventory: typeof ViInventory = {
   cover_unknown: 'Demand unknown',
   empty: 'The store has no inventory rows.',
   notes_title: 'Data notes',
+  note_safety_stock: 'Safety stock = s − 56-day mean sales × L, from the latest parameter run.',
+  note_stock_value: 'Stock value = end-of-day stock × price of the simulated day (daily M5 price), as on the dashboard.',
+  note_in_transit: 'Orders in transit = approved proposals not yet received (received L days later); units in transit = sum of on-order stock.',
   window: {
     tab: 'L+R distribution',
     title: 'Distribution of the L+R window demand',

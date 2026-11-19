@@ -149,7 +149,7 @@ export const ModelVersions: React.FC = () => {
                   </div>
                   <div>
                     <div style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--weight-bold)', fontFamily: 'var(--font-mono)' }}>
-                      {activeModel ?? '—'}
+                      {activeModel ?? t('ops.sources.default_model')}
                     </div>
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{t('ops.sources.active_hint')}</div>
                   </div>

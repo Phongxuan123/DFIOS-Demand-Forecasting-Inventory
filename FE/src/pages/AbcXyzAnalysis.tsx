@@ -39,7 +39,7 @@ const ClassServiceLine: React.FC<{ info: ClassService }> = ({ info }) => {
     <span style={{ color: diff < 0 ? 'var(--color-warning-text)' : undefined }}>
       {t('abcxyz.kpi.sla_label', {
         sla: fmt.percent(info.avail, { scale: 'percent', digits: 1 }),
-        diff: fmt.percent(diff, { scale: 'percent', digits: 1, signed: true }),
+        diff: fmt.number(diff, { digits: 1, signed: true }),
         target: fmt.percent(info.target, { scale: 'percent', digits: 1 }),
       })}
     </span>

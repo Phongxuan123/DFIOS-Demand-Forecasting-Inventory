@@ -101,6 +101,9 @@ describe('ControllerPanel', () => {
     expect(defaultEventDate('2015-11-23')).toBe('');
     expect(defaultEventDate('2015-11-24')).toBe(MODEL_SWITCH_DATE);
     expect(defaultEventDate(null)).toBe('');
+    // a replay database shifted by 548 weeks (d_1 = 2021-07-31): the event moves with it
+    expect(defaultEventDate('2026-05-26', '2021-07-31')).toBe('2026-05-25');
+    expect(defaultEventDate('2026-05-25', '2021-07-31')).toBe('');
   });
 
   it('sends no event date before the switch and lets the user clear it', async () => {

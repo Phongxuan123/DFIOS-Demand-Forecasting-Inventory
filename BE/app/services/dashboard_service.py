@@ -173,6 +173,9 @@ class DashboardService:
             data=points,
             as_of=meta.get("as_of"),
             forecast_note=meta.get("forecast_note"),
+            forecast_source=meta.get("forecast_source"),
+            forecast_past_horizon=meta.get("forecast_past_horizon"),
+            forecast_as_of=meta.get("forecast_as_of"),
         )
 
     def get_alerts(

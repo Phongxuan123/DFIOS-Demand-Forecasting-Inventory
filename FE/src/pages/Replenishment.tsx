@@ -112,18 +112,21 @@ const DepletionChart: React.FC<{
   const chartH = h - pad;
 
   const getY = (val: number) => pad / 2 + chartH - (Math.max(0, val) / maxVal) * chartH;
-  const getX = (dayIdx: number) => pad + (dayIdx / 6) * chartW;
+  const R = 7;
+  const getX = (dayIdx: number) => pad + (dayIdx / R) * chartW;
 
-  const dailyDemand = Math.max(1, (rop - ss) / Math.max(1, leadTime));
-  const day3X = getX(Math.min(6, leadTime));
+  // safety stock = s - mean56 * L, so (s - SS) / L is the 56-day mean daily demand
+  const dailyDemand = Math.max(0, (rop - ss) / Math.max(1, leadTime));
+  const day3X = getX(Math.min(R, leadTime));
   const startY = getY(onHand);
   const arrPreY = getY(Math.max(0, onHand - dailyDemand * leadTime));
   const arrPostY = getY(Math.max(0, onHand - dailyDemand * leadTime + qty));
-  const endSafeY = getY(Math.max(ss * 1.1, onHand - dailyDemand * leadTime + qty - dailyDemand * (6 - leadTime)));
+  const endSafeY = getY(Math.max(0, onHand - dailyDemand * leadTime + qty - dailyDemand * (R - leadTime)));
   const endStockoutY = getY(0);
 
-  const safePath = `M ${getX(0)} ${startY} L ${day3X} ${arrPreY} L ${day3X} ${arrPostY} L ${getX(6)} ${endSafeY}`;
-  const stockoutPath = `M ${day3X} ${arrPreY} L ${getX(Math.min(6, leadTime + Math.ceil((onHand - dailyDemand * leadTime) / dailyDemand)))} ${endStockoutY} L ${getX(6)} ${endStockoutY}`;
+  const safePath = `M ${getX(0)} ${startY} L ${day3X} ${arrPreY} L ${day3X} ${arrPostY} L ${getX(R)} ${endSafeY}`;
+  const zeroDay = dailyDemand > 0 ? leadTime + Math.ceil(Math.max(0, onHand - dailyDemand * leadTime) / dailyDemand) : R;
+  const stockoutPath = `M ${day3X} ${arrPreY} L ${getX(Math.min(R, zeroDay))} ${endStockoutY} L ${getX(R)} ${endStockoutY}`;
 
   const ropY = getY(rop);
   const ssY = getY(ss);
@@ -160,8 +163,8 @@ const DepletionChart: React.FC<{
         <text x={day3X} y={h + 12} fill="#4f46e5" fontSize="9" fontWeight="600" textAnchor="middle">
           {t('replenishment.chart.arrival_step', { lead: leadTime })}
         </text>
-        <text x={getX(6)} y={h + 12} fill="#64748b" fontSize="9" textAnchor="end">
-          {t('replenishment.chart.review_end')}
+        <text x={getX(R)} y={h + 12} fill="#64748b" fontSize="9" textAnchor="end">
+          {t('replenishment.chart.review_end', { r: R })}
         </text>
       </svg>
       <div className="rep-horizon-legend">
@@ -884,8 +887,11 @@ const PolicyDrawer: React.FC<{
   const be = useBe();
   const beCode = useBeCode();
   const fmt = useFormat();
-  const param = useApi((signal) => getPolicyParam(rec!.item_id, rec!.store_id, signal), [rec?.item_id, rec?.store_id], { enabled: !!rec });
-  const calib = useApi((signal) => getCalibrationStatus(rec!.store_id, signal), [rec?.store_id], { enabled: !!rec });
+  // /optimization/parameters and /calibration/status are Manager + Admin: a Planner sees what the proposal carries
+  const { user } = useAuth();
+  const manager = can(user?.role, 'policy:manage');
+  const param = useApi((signal) => getPolicyParam(rec!.item_id, rec!.store_id, signal), [rec?.item_id, rec?.store_id], { enabled: !!rec && manager });
+  const calib = useApi((signal) => getCalibrationStatus(rec!.store_id, signal), [rec?.store_id], { enabled: !!rec && manager });
   const p = param.data?.items?.[0];
   const mismatch =
     !!rec && !!p && ((p.s != null && rec.reorder_point_s != null && Math.round(p.s) !== Math.round(rec.reorder_point_s)) || (p.S != null && rec.order_up_to_S != null && Math.round(p.S) !== Math.round(rec.order_up_to_S)));
@@ -894,8 +900,9 @@ const PolicyDrawer: React.FC<{
   const thetaVal = rec?.theta != null ? `${rec.theta >= 0 ? '+' : ''}${rec.theta.toFixed(2)}` : '—';
   const p50Val = rec?.q_hat != null ? (rec.q_hat / 10).toFixed(1) : '—';
   const histMean = p?.annual_demand ? (p.annual_demand / 365).toFixed(1) : '—';
-  const holdingRate = p?.holding_cost ? fmt.currency(p.holding_cost) : '—';
-  const orderSetupCost = p?.order_cost ? fmt.currency(p.order_cost) : '—';
+  // A3 cost basis (the same for every SKU): h = 0.002 x price per unit per day, c = 2 per order
+  const holdingRate = p?.holding_cost ? `${fmt.currency(p.holding_cost)} ${t('replenishment.detail.per_unit_week')}` : t('replenishment.detail.holding_a3');
+  const orderSetupCost = p?.order_cost ? fmt.currency(p.order_cost) : fmt.currency(2);
 
   return (
     <Drawer
@@ -947,17 +954,19 @@ const PolicyDrawer: React.FC<{
                 <span className="rep-matrix-label">{t('replenishment.detail.forecast_p50')}</span>
                 <span className="rep-matrix-val">{p50Val} {t('replenishment.detail.units_per_day')}</span>
               </div>
-              <div className="rep-matrix-item">
-                <span className="rep-matrix-label">{t('replenishment.detail.historical_mean')}</span>
-                <span className="rep-matrix-val">{histMean} {t('replenishment.detail.units_per_day')}</span>
-              </div>
+              {p && (
+                <div className="rep-matrix-item">
+                  <span className="rep-matrix-label">{t('replenishment.detail.historical_mean')}</span>
+                  <span className="rep-matrix-val">{histMean} {t('replenishment.detail.units_per_day')}</span>
+                </div>
+              )}
               <div className="rep-matrix-item">
                 <span className="rep-matrix-label">{t('replenishment.detail.lead_time_l')}</span>
                 <span className="rep-matrix-val">{rec.lead_time_days != null ? t('replenishment.detail.lead_time_fixed', { days: rec.lead_time_days }) : '—'}</span>
               </div>
               <div className="rep-matrix-item">
                 <span className="rep-matrix-label">{t('replenishment.detail.holding_cost_h')}</span>
-                <span className="rep-matrix-val">{holdingRate} {t('replenishment.detail.per_unit_week')}</span>
+                <span className="rep-matrix-val">{holdingRate}</span>
               </div>
               <div className="rep-matrix-item">
                 <span className="rep-matrix-label">{t('replenishment.detail.order_cost_k')}</span>
@@ -994,11 +1003,18 @@ const PolicyDrawer: React.FC<{
             {rec.decided_by && (
               <>
                 <dt>{t('replenishment.col.decided_by')}</dt>
-                <dd>{rec.decided_by === 'simulator' ? t('replenishment.status.SIM_EXPIRED') : rec.decided_by}</dd>
+                <dd>
+                  {rec.decided_by === 'simulator'
+                    ? rec.status === 'REJECTED'
+                      ? t('replenishment.status.SIM_EXPIRED')
+                      : t('replenishment.status.SIM_AUTO')
+                    : rec.decided_by}
+                </dd>
               </>
             )}
           </dl>
 
+          {manager && (
           <Card title={t('replenishment.drawer.lead_time')} className="rep-card">
             {param.loading ? (
               <p className="rep-note">{t('common.state.loading')}</p>
@@ -1026,7 +1042,9 @@ const PolicyDrawer: React.FC<{
               <Unavailable reason={t('replenishment.drawer.unavailable_params')} />
             )}
           </Card>
+          )}
 
+          {manager && (
           <Card title={t('replenishment.drawer.theta')}>
             {calib.loading ? (
               <p className="rep-note">{t('common.state.loading')}</p>
@@ -1053,6 +1071,7 @@ const PolicyDrawer: React.FC<{
               </div>
             )}
           </Card>
+          )}
 
           {rec.reason && (
             <div>

@@ -24,7 +24,7 @@ class DashboardRepository:
     @staticmethod
     def _clock_date_prices(db: Session, rows) -> Dict[Tuple[str, str], float]:
         """{(store, item): price at the store's sim-clock date} for the stores that have daily prices and a clock;
-        items/stores not in the map are valued at their constant ``unit_price``."""
+        items/stores not in the map are valued at their constant price (``_constant_price``)."""
         import numpy as np
 
         clock_of = {c.store_id: c.current_date for c in db.query(SimClock.store_id, SimClock.current_date).all()}
@@ -34,11 +34,18 @@ class DashboardRepository:
             if vd is None or not price_history_repository.has_prices(db, st):
                 continue
             st_rows = [r for r in rows if r.store_id == st]
-            base = np.array([float(r.unit_price if r.unit_price is not None else 0.0) for r in st_rows])
+            base = np.array([DashboardRepository._constant_price(r) for r in st_rows])
             p = price_history_repository.price_on(db, st, [r.item_id for r in st_rows], vd, fallback=base)
             for r, v in zip(st_rows, p):
                 out[(st, r.item_id)] = float(v)
         return out
+
+    @staticmethod
+    def _constant_price(r) -> float:
+        """products.price when positive, else inventory_params.unit_price (the Inventory screen uses the same chain)."""
+        if r.product_price is not None and float(r.product_price) > 0:
+            return float(r.product_price)
+        return float(r.unit_price if r.unit_price is not None else 0.0)
 
     def get_kpis(self, db: Session, store_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -54,6 +61,7 @@ class DashboardRepository:
             Inventory.on_hand,
             Inventory.on_order,
             InventoryParam.unit_price,
+            Product.price.label("product_price"),
             InventoryParam.reorder_point,
             InventoryParam.safety_stock,
             InventoryParam.service_level,
@@ -61,7 +69,7 @@ class DashboardRepository:
             InventoryParam,
             (Inventory.item_id == InventoryParam.item_id)
             & (Inventory.store_id == InventoryParam.store_id),
-        )
+        ).outerjoin(Product, Product.item_id == Inventory.item_id)
 
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
         if not is_global:
@@ -76,15 +84,15 @@ class DashboardRepository:
             day_price = self._clock_date_prices(db, rows)
             total_value = sum(
                 max(0.0, float(r.on_hand or 0.0))
-                * day_price.get(
-                    (r.store_id, r.item_id), float(r.unit_price if r.unit_price is not None else 0.0))
+                * day_price.get((r.store_id, r.item_id), self._constant_price(r))
                 for r in rows
             )
             stockout_count = sum(1 for r in rows if float(r.on_hand or 0.0) <= 0.0)
             stockout_rate = round((stockout_count / total_monitored) * 100.0, 2)
-            # Theo nguyên tắc kiểm soát tồn kho (R, s, S), kiểm tra vị trí tồn kho IP = on_hand + on_order <= s (ROP)
+            # (R, s, S) trigger, the SAME rule as J4 and the Inventory screen (G-02): IP = on_hand + on_order < s
+            # (strict; reorder_point = s). An SKU with IP == s (e.g. s = 0, IP = 0) is not ordered, so not counted.
             reorder_alerts_count = sum(
-                1 for r in rows if (float(r.on_hand or 0.0) + float(r.on_order or 0.0)) <= float(r.reorder_point if r.reorder_point is not None else 0.0)
+                1 for r in rows if (float(r.on_hand or 0.0) + float(r.on_order or 0.0)) < float(r.reorder_point if r.reorder_point is not None else 0.0)
             )
             estimated_service_level = round(
                 max(0.0, min(100.0, 100.0 - stockout_rate)), 1
@@ -221,6 +229,24 @@ class DashboardRepository:
             for r in reversed(sales_rows)
         }
 
+        # 2a. Replay of one store (demo.md §2): the forecasts of the backtest engine, causal at the clock.
+        # Past days: h = 1 forecast made the evening before; after the clock: 14 days from the latest origin
+        # <= clock + 1. The production run (origin after the last M5 day) stays on the "future forecast" tab.
+        if not is_global and db.query(SimClock.store_id).filter(SimClock.store_id == target_store).first():
+            from app.services import backtest_daily_service as bds
+            first_day = min((date.fromisoformat(d) for d in actual_map), default=clock_date)
+            bt = bds.store_daily_series(db, target_store, clock_date, first_day, category=category)
+            if bt is not None:
+                if meta is not None:
+                    meta["as_of"] = str(clock_date)
+                    meta["forecast_note"] = None
+                    meta["forecast_source"] = bt["model_run"]
+                    meta["forecast_past_horizon"] = bt["past_horizon"]
+                    meta["forecast_as_of"] = bt["future_as_of"]
+                predicted_map = bt["series"]
+                return [{"date": d, "actual": actual_map.get(d), "predicted": predicted_map.get(d)}
+                        for d in sorted(set(actual_map) | set(predicted_map))]
+
         # 2. Truy vấn dự báo nhu cầu tương lai (từ mốc clock_date)
         # R-20: Lọc theo model_version production để tránh cộng dồn nhiều mô hình làm vọt dữ liệu dự báo
         from app.models.model_registry import ModelRegistry
@@ -317,8 +343,8 @@ class DashboardRepository:
         Round 5 (U-01 request 3): the severity is computed IN SQL (CASE on on_hand / IP / SS / ROP), the summary is
         ONE aggregate query (GROUP BY severity) and only the requested page is fetched (ORDER BY severity rank,
         store, item + OFFSET/LIMIT). ``limit=5`` no longer materialises every inventory row in Python.
-        Rules (B-08/B-09, unchanged): on_hand <= 0 -> CRITICAL; on_hand <= SS and IP <= ROP -> CRITICAL;
-        IP <= ROP -> WARNING; else HEALTHY (missing SS/ROP count as 0).
+        Rules (B-08/B-09): on_hand <= 0 -> CRITICAL; on_hand <= SS and IP < ROP -> CRITICAL; IP < ROP -> WARNING;
+        else HEALTHY (missing SS/ROP count as 0). IP < ROP is strict: the replenishment trigger of J4 (G-02).
         """
         oh = func.coalesce(Inventory.on_hand, 0.0)
         ip = oh + func.coalesce(Inventory.on_order, 0.0)
@@ -326,8 +352,8 @@ class DashboardRepository:
         rop = func.coalesce(InventoryParam.reorder_point, 0.0)
         sev_rank = case(
             (oh <= 0.0, 0),
-            (and_(oh <= ss, ip <= rop), 1),
-            (ip <= rop, 2),
+            (and_(oh <= ss, ip < rop), 1),
+            (ip < rop, 2),
             else_=3,
         ).label("sev_rank")  # 0/1 = CRITICAL (out of stock / below SS and ROP), 2 = WARNING, 3 = HEALTHY
 
@@ -390,10 +416,10 @@ class DashboardRepository:
                 action = f"Rủi ro đứt hàng tức thì trên kệ (On-hand: {int(on_hand)}). Cần xử lý khẩn cấp."
             elif rank == 1:
                 sev, code = "CRITICAL", "below_ss_and_rop"
-                action = f"Nguy cơ đứt hàng (On-hand <= SS: {int(ss_v)}, IP <= ROP). Cần tạo PO khẩn."
+                action = f"Nguy cơ đứt hàng (On-hand <= SS: {int(ss_v)}, IP < ROP). Cần tạo PO khẩn."
             elif rank == 2:
                 sev, code = "WARNING", "ip_below_rop"
-                action = f"Vị trí tồn kho IP ({int(ip_v)}) <= ROP ({int(rop_v)}). Đề xuất đặt hàng bổ sung."
+                action = f"Vị trí tồn kho IP ({int(ip_v)}) < ROP ({int(rop_v)}). Đề xuất đặt hàng bổ sung."
             else:
                 sev, code = "HEALTHY", "healthy"
                 action = "Tồn kho trong ngưỡng an toàn."

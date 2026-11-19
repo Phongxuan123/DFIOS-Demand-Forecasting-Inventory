@@ -53,7 +53,7 @@ export const SuppliersTab: React.FC = () => {
   };
 
   const columns: Column<Supplier>[] = [
-    { key: 'name', header: t('products.col.name'), cell: (r) => r.name },
+    { key: 'name', header: t('products.form.supplier_name'), cell: (r) => r.name },
     { key: 'lead', header: t('products.col.lead_time'), align: 'right', cell: (r) => fmt.integer(r.lead_time_days) },
     { key: 'contact', header: t('products.col.contact'), cell: (r) => r.contact_name ?? <Unavailable /> },
     { key: 'email', header: t('products.col.email'), cell: (r) => r.email ?? <Unavailable /> },

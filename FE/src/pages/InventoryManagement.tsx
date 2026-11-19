@@ -26,6 +26,14 @@ import '../components/inventory/inventory.css';
 
 const SEGMENTS = ['AX', 'AY', 'AZ', 'BX', 'BY', 'BZ', 'CX', 'CY', 'CZ'];
 
+/** The BE data notes (English, stable wording) in the active language; an unknown note is shown as given. */
+function noteText(note: string, t: ReturnType<typeof useT>): string {
+  if (note.startsWith('safety_stock')) return t('inventory.note_safety_stock');
+  if (note.startsWith('stock value')) return t('inventory.note_stock_value');
+  if (note.startsWith('orders_in_transit')) return t('inventory.note_in_transit');
+  return note;
+}
+
 export const InventoryManagement: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
@@ -217,7 +225,7 @@ export const InventoryManagement: React.FC = () => {
               {data && data.notes.length > 0 && (
                 <ul className="inv-notes" aria-label={t('inventory.notes_title')}>
                   {data.notes.map((n) => (
-                    <li key={n}>{n}</li>
+                    <li key={n}>{noteText(n, t)}</li>
                   ))}
                 </ul>
               )}

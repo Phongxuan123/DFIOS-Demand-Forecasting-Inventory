@@ -272,3 +272,45 @@ def test_forecast_explorer_window_errors(client_db):
     assert past.status_code == 200 and past.json()["review_date_source"] == "request"
     # theta of a calibration state dated after the requested review date is not used
     assert past.json()["policy"]["theta_g"] == 0.0
+
+
+def test_inventory_screen_values_stock_at_the_clock_date_price(client_db):
+    """G-37: the screen and the dashboard KPI show ONE stock value: end-of-day stock x price of the clock date
+    (price_history), else products.price."""
+    from app.models.price_history import PriceHistory
+
+    client, db = client_db
+    _inventory_panel(db)
+    db.add(PriceHistory(store_id=STORE, item_id="B_OK", date=CLOCK, price=6.0))  # 5.0 constant, 6.0 that day
+    db.add(PriceHistory(store_id=STORE, item_id="C_ABOVE", date=CLOCK - timedelta(days=1), price=9.0))  # not today
+    db.commit()
+    body = client.get("/api/v1/inventory-screen", params={"store_id": STORE}).json()
+    rows = {x["item_id"]: x for x in body["items"]}
+    assert rows["B_OK"]["price"] == 6.0 and rows["B_OK"]["stock_value"] == pytest.approx(12 * 6.0)
+    assert rows["C_ABOVE"]["price"] == 1.0
+    assert body["summary"]["total_stock_value"] == pytest.approx(3 * 2.0 + 12 * 6.0 + 30 * 1.0 + 7 * 4.0)
+    kpi = client.get("/api/v1/dashboard/kpis", params={"store_id": STORE}).json()
+    assert kpi["total_inventory_value"] == pytest.approx(body["summary"]["total_stock_value"])
+    by_value = client.get("/api/v1/inventory-screen",
+                          params={"store_id": STORE, "sort_by": "stock_value", "sort_dir": "desc"}).json()
+    assert by_value["items"][0]["item_id"] == "B_OK"
+
+
+def test_dashboard_reorder_count_is_the_j4_trigger_ip_below_s(client_db):
+    """The dashboard 'SKU at the reorder point' count is IP < s (strict, the J4 trigger), the same number as the
+    Inventory screen 'below s': an SKU with IP == s is not ordered."""
+    client, db = client_db
+    _inventory_panel(db)
+    db.add(Product(item_id="E_EQUAL", name="E", cat_id="FOODS", dept_id="FOODS_1", price=1.0))
+    db.add(Inventory(item_id="E_EQUAL", store_id=STORE, on_hand=10.0, on_order=0.0))
+    db.add(InventoryParam(id=f"{STORE}_E_EQUAL", item_id="E_EQUAL", store_id=STORE, s=10.0, S=20.0,
+                          reorder_point=10.0, safety_stock=4.0, eoq=7.0))
+    for row in db.query(InventoryParam).filter(InventoryParam.s.is_not(None)).all():
+        row.reorder_point = row.s
+    db.commit()
+    kpi = client.get("/api/v1/dashboard/kpis", params={"store_id": STORE}).json()
+    screen = client.get("/api/v1/inventory-screen", params={"store_id": STORE}).json()
+    assert kpi["reorder_alerts_count"] == screen["summary"]["below_s_count"] == 1  # A_BELOW only
+    alerts = client.get("/api/v1/dashboard/alerts", params={"store_id": STORE, "limit": 50}).json()
+    sev = {x["item_id"]: x["severity"] for x in alerts["items"]}
+    assert sev["E_EQUAL"] == "HEALTHY" and sev["A_BELOW"] in ("CRITICAL", "WARNING")

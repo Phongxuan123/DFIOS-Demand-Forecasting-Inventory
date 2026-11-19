@@ -324,7 +324,11 @@ class ForecastExplorerService:
             warnings.simplefilter("ignore", RuntimeWarning)
             mu = float(np.nanmean(A56[0])) if A56.size else float("nan")
         mu_known = not math.isnan(mu)
-        price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        # G-37: the price of the review day (price_history, else products.price), as J4 used for the stored s / S
+        from app.repositories import price_history_repository
+        base_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
+        price = float(price_history_repository.price_map_on(
+            db, sid, [item_id], o_date, fallback={item_id: base_price}).get(item_id, base_price))
         eoq = float(opt.teacher_eoq(np.array([mu if mu_known else 0.0]), np.array([price]))[0])
         S_val = float(s_val + math.ceil(kappa * eoq - policy_backtest.CEIL_EPS))
         ip_row = (db.query(InventoryParam)

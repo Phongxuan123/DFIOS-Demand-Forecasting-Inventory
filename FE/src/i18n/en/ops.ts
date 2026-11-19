@@ -48,6 +48,7 @@ export const ops: typeof ViOps = {
     refresh: 'Refresh',
     active_title: 'Model in use',
     active_hint: 'Model supplying the quantiles of the next review',
+    default_model: 'ensemble (default)',
     store: 'Store',
     window: 'L+R window',
     window_value: '{days} days',

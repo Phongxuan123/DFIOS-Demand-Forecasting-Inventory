@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.models.classification import SKUClassification
 from app.models.inventory import Inventory
 from app.models.inventory_param import InventoryParam
+from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.models.replenishment import ReplenishmentRecommendation
 from app.models.sales_history import SalesHistory
@@ -185,11 +186,13 @@ class InventoryScreenService:
         else:  # no sales row at all in the window: demand is unknown, never 0
             mean_daily = literal(None).label("mean_daily")
             cover = literal(None).label("days_of_cover")
-        stock_value = (Inventory.on_hand * Product.price).label("stock_value")
+        # G-37: the price of the clock date (price_history), else the constant products.price: the dashboard value
+        day_price = self._day_price(as_of)
+        stock_value = (Inventory.on_hand * day_price).label("stock_value")
 
         q = (
             select(
-                Inventory.item_id, Product.name, Product.cat_id, Product.price,
+                Inventory.item_id, Product.name, Product.cat_id, day_price.label("price"),
                 SKUClassification.segment, SKUClassification.abc_class, SKUClassification.xyz_class,
                 Inventory.on_hand, Inventory.on_order, ip,
                 s_col.label("s"), S_col.label("S_up"), InventoryParam.safety_stock, InventoryParam.eoq,
@@ -199,6 +202,8 @@ class InventoryScreenService:
             )
             .select_from(Inventory)
             .outerjoin(Product, Product.item_id == Inventory.item_id)
+            .outerjoin(PriceHistory, and_(PriceHistory.item_id == Inventory.item_id,
+                                          PriceHistory.store_id == Inventory.store_id, PriceHistory.date == as_of))
             .outerjoin(InventoryParam, and_(InventoryParam.item_id == Inventory.item_id,
                                             InventoryParam.store_id == Inventory.store_id))
             .outerjoin(SKUClassification, and_(SKUClassification.item_id == Inventory.item_id,
@@ -211,9 +216,17 @@ class InventoryScreenService:
             "item_id": Inventory.item_id, "name": Product.name, "segment": SKUClassification.segment,
             "on_hand": Inventory.on_hand, "on_order": Inventory.on_order,
             "ip": Inventory.on_hand + Inventory.on_order, "s": s_col, "S": S_col, "days_of_cover": cover,
-            "status": stock_status, "stock_value": stock_value, "price": Product.price,
+            "status": stock_status, "stock_value": stock_value, "price": day_price,
         }
         return q, cols, int(n_days)
+
+    @staticmethod
+    def _day_price(as_of: date):
+        """SQL price of the clock date, the dashboard's valuation chain: the price_history row (joined on
+        date == as_of) when positive, else products.price when positive, else inventory_params.unit_price. Needs the
+        outer joins on PriceHistory and InventoryParam of the query it is used in."""
+        return case((PriceHistory.price > 0, PriceHistory.price), (Product.price > 0, Product.price),
+                    else_=InventoryParam.unit_price)
 
     @staticmethod
     def _cold_start_items(db: Session, store_id: str, item_ids: List[str]) -> set:
@@ -225,6 +238,8 @@ class InventoryScreenService:
 
     def summary(self, db: Session, store_id: str) -> InventoryScreenSummary:
         ip = Inventory.on_hand + Inventory.on_order
+        as_of, _ = self._as_of(db, store_id)
+        day_price = self._day_price(as_of)
         row = db.execute(
             select(
                 func.count(Inventory.item_id),
@@ -232,13 +247,15 @@ class InventoryScreenService:
                 func.sum(case((and_(InventoryParam.s.is_not(None), InventoryParam.S.is_not(None),
                                     ip >= InventoryParam.s, ip > InventoryParam.S), 1), else_=0)),
                 func.sum(case((InventoryParam.s.is_(None), 1), else_=0)),
-                func.coalesce(func.sum(Inventory.on_hand * Product.price), 0.0),
-                func.sum(case((Product.price.is_not(None), 1), else_=0)),
+                func.coalesce(func.sum(Inventory.on_hand * day_price), 0.0),
+                func.sum(case((day_price.is_not(None), 1), else_=0)),
                 func.coalesce(func.sum(Inventory.on_order), 0.0),
                 func.sum(case((Inventory.on_order > 0, 1), else_=0)),
             )
             .select_from(Inventory)
             .outerjoin(Product, Product.item_id == Inventory.item_id)
+            .outerjoin(PriceHistory, and_(PriceHistory.item_id == Inventory.item_id,
+                                          PriceHistory.store_id == Inventory.store_id, PriceHistory.date == as_of))
             .outerjoin(InventoryParam, and_(InventoryParam.item_id == Inventory.item_id,
                                             InventoryParam.store_id == Inventory.store_id))
             .where(Inventory.store_id == store_id)
@@ -339,7 +356,8 @@ class InventoryScreenService:
 
         notes = [
             "safety_stock = s - mean_56 * L as stored by the optimisation run (teacher shows s - D_hat_{L+R}; G-44).",
-            "stock value uses products.price (one current price per SKU; no price history table).",
+            "stock value = end-of-day stock x price of the clock date (price_history, else products.price), "
+            "the same valuation as the dashboard KPI.",
             "orders_in_transit = APPROVED replenishment rows of the store (they become COMPLETED on arrival, L days "
             "after review); units_in_transit = sum of inventory.on_order.",
         ]
