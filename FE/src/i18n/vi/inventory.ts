@@ -72,6 +72,11 @@ export const inventory = {
     computed: 'Tính tức thời (không lưu)',
     route: 'Route {route}',
     residuals: '{n} sai số cửa sổ',
+    note_daily: 'Không cộng quantile từng ngày: quantile cửa sổ lấy từ phân phối thực nghiệm của sai số tổng H ngày (route c), vì tổng các Q(0,95) theo ngày lớn hơn quantile 0,95 của tổng.',
+    note_baselines: 'Holt-Winters và LightGBM đơn lẻ trong bảng nghiên cứu không lưu trong ứng dụng; các baseline ở đây tính từ lịch sử bán (SNaive, Naive, MA28).',
+    note_no_class: 'SKU chưa có nhóm ABC-XYZ ở kho này: dùng tham số nhóm AX, giống J4.',
+    note_no_policy: 'Chưa có lần chọn tham số (J5 chưa chạy): dùng m_g = 0, κ_g = 1.',
+    note_no_sales: 'Không có doanh số trong 56 ngày trước ngày review: EOQ = 0.',
     why_title: 'Vì sao không cộng quantile ngày?',
     why_body:
       'Cộng Q(0,95) của từng ngày cho kết quả lớn hơn quantile 0,95 của tổng, vì các ngày không đồng thời cao. Quantile cửa sổ lấy trực tiếp từ phân phối sai số của tổng {h} ngày.',
