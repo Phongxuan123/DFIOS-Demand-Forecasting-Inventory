@@ -169,6 +169,7 @@ export const replenishment = {
     theta: 'θ theo lớp ABC-XYZ',
     theta_hint: 'Hiệu chỉnh vòng kín C³-OUT, kỳ review {index} ({date}).',
     theta_unavailable: 'API chưa trả lớp ABC-XYZ của SKU này nên chưa gán được θ riêng; xem θ theo lớp bên dưới.',
+    theta_own: 'SKU này thuộc lớp {cls}, nên dùng θ = {theta} của lớp đó.',
     q_hat: 'Q̂ (lượng vị phân vị dự báo)',
     q_hat_unavailable: 'Đề xuất này không có Q̂ (không do C³-OUT tạo)',
     lead_time: 'Lead time L',

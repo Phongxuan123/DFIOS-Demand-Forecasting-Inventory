@@ -166,6 +166,7 @@ export const replenishment: typeof Vi = {
     theta: 'θ per ABC-XYZ class',
     theta_hint: 'C³-OUT closed-loop calibration, review {index} ({date}).',
     theta_unavailable: 'The API does not return the ABC-XYZ class of this SKU, so its own θ cannot be assigned; see θ per class below.',
+    theta_own: 'This SKU is in class {cls}, so it uses that class’s θ = {theta}.',
     q_hat: 'Q̂ (forecast quantile level)',
     q_hat_unavailable: 'This recommendation has no Q̂ (not produced by C³-OUT)',
     lead_time: 'Lead time L',

@@ -1067,7 +1067,11 @@ const PolicyDrawer: React.FC<{
                 <p className="rep-note">
                   {t('replenishment.drawer.theta_hint', { index: calib.data?.latest_review_index ?? 0, date: fmt.date(calib.data?.latest_review_date, 'medium') })}
                 </p>
-                <p className="rep-note">{t('replenishment.drawer.theta_unavailable')}</p>
+                <p className="rep-note">
+                  {rec.abc_xyz_class && thetas[rec.abc_xyz_class] !== undefined
+                    ? t('replenishment.drawer.theta_own', { cls: rec.abc_xyz_class, theta: fmt.number(thetas[rec.abc_xyz_class], { digits: 3 }) })
+                    : t('replenishment.drawer.theta_unavailable')}
+                </p>
               </div>
             )}
           </Card>
