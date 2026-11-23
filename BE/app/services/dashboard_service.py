@@ -664,6 +664,8 @@ class DashboardService:
             .all()
         )
         b0_orders = {d: float(n) * pc.ORDER_COST_C for d, n in sh_orders_rows}
+        c3_orders_count = int(sum(n for d, n in placed if d is not None))
+        b0_orders_count = int(sum(n for _, n in sh_orders_rows)) if sh_orders_rows else None
 
         curves: List[CostCurvePoint] = []
         if not have_c3:
@@ -749,6 +751,9 @@ class DashboardService:
             classes_below_recent=below_recent,
             classes_measured_recent=measured_recent,
             recent_cycles_used=cycles_used,
+            c3out_orders_count=c3_orders_count if have_c3 else None,
+            b0_orders_count=b0_orders_count,
+            start_date=start_date,
             segment_availabilities=segs,
             cost_curves=curves,
             summary_insights=insights,

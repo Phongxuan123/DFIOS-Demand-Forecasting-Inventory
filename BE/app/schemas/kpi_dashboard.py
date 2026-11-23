@@ -53,6 +53,10 @@ class KPIDashboardResponse(BaseModel):
     classes_measured_recent: Optional[int] = None
     recent_cycles: int = 4
     recent_cycles_used: int = 0
+    # demo.md §6.2 Reports: orders placed over the simulated period (DFIOS approved/completed lines, B0 shadow orders)
+    c3out_orders_count: Optional[int] = None
+    b0_orders_count: Optional[int] = None
+    start_date: Optional[date] = None
     segment_availabilities: List[SegmentAvailability]
     cost_curves: List[CostCurvePoint]
     summary_insights: List[str]

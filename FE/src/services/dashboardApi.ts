@@ -63,6 +63,10 @@ export interface KpiShadowDashboard {
   classes_measured_recent?: number | null;
   recent_cycles?: number;
   recent_cycles_used?: number;
+  /** demo.md §6.2 period report: orders placed (DFIOS approved/completed lines, B0 shadow orders) and period start */
+  c3out_orders_count?: number | null;
+  b0_orders_count?: number | null;
+  start_date?: string | null;
   segment_availabilities: SegmentAvailability[];
   cost_curves: CostCurvePoint[];
   source: string;
