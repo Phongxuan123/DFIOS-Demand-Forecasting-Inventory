@@ -260,11 +260,13 @@ export const forecast: typeof Vi = {
     acc_unavailable: 'Accuracy figures could not be loaded',
     kpi_unc_title: 'P10–P90 band width',
     kpi_unc_sub: 'SKU {sku} · Σ(P90 − P10) / 2 / ΣP50 over {n} days',
-    kpi_unc_none: 'SKU {sku}: P50 near 0 (intermittent), no relative band width',
+    kpi_unc_none: 'SKU {sku}: slow mover (P50 under 1 unit/day), no relative band width',
     chart_title_overview: 'Actual and forecast, last {days} days',
     chart_title_sku: '{days}-day sales history and {h}-day forecast',
     chart_title_sku_replay: '{days}-day sales history and 14-day forecast at the clock date',
     legend_band_replay: 'P10 – P90 error band',
+    sku_sparse_note:
+      'Slow mover: the mean forecast is under 1 unit/day and most days sell 0, so the error band sits near 0 and the forecast line (a mean) can lie above it.',
     sku_replay_note:
       'Forecast: Ensemble backtest, causal. Up to the clock date each day shows the forecast made the evening before; after the line come the next 14 days, made at the end of {asOf}. Band: forecast plus the 10% / 90% quantiles of this SKU’s actual errors over the {days} days before the clock. The production 28-day forecast is on the Future forecast tab.',
     chart_scope_store: 'Whole store ({store})',

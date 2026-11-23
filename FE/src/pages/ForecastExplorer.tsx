@@ -365,6 +365,11 @@ export const ForecastExplorer: React.FC = () => {
   );
   const replayAfterStart = replayMode && replay.data ? replay.data.data.find((p) => p.date > replay.data!.as_of)?.date ?? null : null;
   const replayLastDate = replayMode && replay.data ? replay.data.data[replay.data.data.length - 1].date : null;
+  /** Slow mover: mean forecast under 1 unit/day; most days sell 0, so the error band sits near 0, under the mean. */
+  const replaySparse = useMemo(() => {
+    const vals = replayMode && replay.data ? replay.data.data.map((p) => p.predicted).filter((v): v is number => v !== null) : [];
+    return vals.length > 0 && vals.reduce((s, v) => s + v, 0) / vals.length < 1;
+  }, [replayMode, replay.data]);
 
   const hasAnyBand = useMemo(
     () => (replayMode ? skuChartData.some((p) => p.band !== null) : rows.some((r) => r.p10 !== null && r.p90 !== null)),
@@ -375,7 +380,8 @@ export const ForecastExplorer: React.FC = () => {
   const relativeBand = useMemo(() => {
     const ok = rows.filter((r) => r.quality === 'ok');
     const sumP50 = ok.reduce((s, r) => s + (r.p50 as number), 0);
-    if (!ok.length || !(sumP50 >= 1)) return null;
+    // slow movers (mean P50 under 1 unit/day) give meaningless relative widths (e.g. ±361 % for 0.33 unit/day)
+    if (!ok.length || !(sumP50 >= ok.length)) return null;
     const halfWidth = ok.reduce((s, r) => s + ((r.p90 as number) - (r.p10 as number)) / 2, 0);
     return { mean: halfWidth / sumP50, n: ok.length };
   }, [rows]);
@@ -1093,6 +1099,7 @@ export const ForecastExplorer: React.FC = () => {
                     asOf: fmt.date(replay.data.forecast_as_of ?? replay.data.as_of),
                     days: replay.data.band_lookback_days,
                   })}
+                  {replaySparse && <div style={{ marginTop: 4 }}>{t('forecast.explorer.sku_sparse_note')}</div>}
                 </div>
               )}
             </div>
