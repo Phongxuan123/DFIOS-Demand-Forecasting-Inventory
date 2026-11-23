@@ -118,6 +118,65 @@ class TestBacktestDailyTrend(unittest.TestCase):
         self.assertIn("hidden", out.forecast_note)
 
 
+class TestSkuReplayTrend(unittest.TestCase):
+    """demo.md §4.2 Forecast Explorer: one SKU, sales history + forecast at the clock + the SKU's error band."""
+
+    def _call(self, db, sku="FOODS_1_001", days=7):
+        from app.api.v1.endpoints.forecasts import get_sku_replay_trend
+        return get_sku_replay_trend(sku=sku, store_id="CA_1", days=days, db=db, current_user=None)
+
+    def test_past_h1_future_from_clock_plus_one_and_actual_only_up_to_the_clock(self):
+        db = _db()
+        out = self._call(db, sku="HOBBIES_1_001")
+        self.assertEqual(out["as_of"], str(CLOCK))
+        self.assertEqual(out["forecast_as_of"], str(CLOCK))
+        by_day = {p["date"]: p for p in out["data"]}
+        for k in range(7):
+            d = CLOCK - timedelta(days=k)
+            p = by_day[str(d)]
+            self.assertEqual(p["actual"], 3.0)
+            self.assertEqual(p["h"], 1)
+            self.assertAlmostEqual(p["predicted"], _value(1, d, 1), places=2)
+        origin = CLOCK + timedelta(days=1)
+        future = [p for p in out["data"] if p["date"] > str(CLOCK)]
+        self.assertEqual(len(future), 14)
+        for k, p in enumerate(future, start=1):
+            self.assertIsNone(p["actual"])
+            self.assertEqual(p["h"], k)
+            self.assertAlmostEqual(p["predicted"], _value(1, origin, k), places=2)
+
+    def test_band_is_forecast_plus_the_skus_own_h_step_error_quantiles(self):
+        import numpy as np
+
+        db = _db()
+        out = self._call(db)
+        # h = 1 residuals known at the clock: origins START-5 .. CLOCK, actual 3 - forecast
+        res = [3.0 - _value(0, START + timedelta(days=d), 1) for d in range(-5, (CLOCK - START).days + 1)]
+        p = next(p for p in out["data"] if p["date"] == str(CLOCK))
+        self.assertAlmostEqual(p["p10"], max(0.0, p["predicted"] + float(np.quantile(res, 0.1))), places=1)
+        self.assertAlmostEqual(p["p90"], max(0.0, p["predicted"] + float(np.quantile(res, 0.9))), places=1)
+
+    def test_nothing_after_the_clock_is_read(self):
+        """Changing later origins and later sales leaves the response unchanged (forecast and band)."""
+        db = _db()
+        before = self._call(db)["data"]
+        for row in db.query(FDB).filter(FDB.origin_date > CLOCK + timedelta(days=1)).all():
+            for h in range(1, 15):
+                setattr(row, f"y_h{h}", 77777.0)
+        for s in db.query(SalesHistory).filter(SalesHistory.sale_date > CLOCK).all():
+            s.quantity = 5000.0
+        db.commit()
+        self.assertEqual(before, self._call(db)["data"])
+
+    def test_404_without_backtest_rows_so_the_fe_keeps_the_production_chart(self):
+        from fastapi import HTTPException
+
+        db = _db(with_daily=False)
+        with self.assertRaises(HTTPException) as ctx:
+            self._call(db)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
 class TestLoadDailyPoints(unittest.TestCase):
     def test_loader_stores_the_store_rows_and_origin_range(self):
         import tempfile

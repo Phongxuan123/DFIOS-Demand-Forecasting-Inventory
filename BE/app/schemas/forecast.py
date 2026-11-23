@@ -50,6 +50,28 @@ class HistoryPoint(BaseModel):
     quantity: float
 
 
+class ReplayTrendPoint(BaseModel):
+    date: str
+    actual: Optional[float] = None
+    predicted: Optional[float] = None
+    p10: Optional[float] = None
+    p90: Optional[float] = None
+    h: Optional[int] = None
+
+
+class SkuReplayTrendResponse(BaseModel):
+    """Forecast Explorer SKU chart in replay (demo.md §4.2): sales history and the causal backtest forecast at the
+    clock, with the SKU's empirical h-step error band (route c spirit)."""
+    item_id: str
+    store_id: str
+    as_of: str
+    forecast_as_of: Optional[str] = None
+    model_run: str
+    band_lookback_days: int
+    band_quantiles: List[float]
+    data: List[ReplayTrendPoint]
+
+
 class HistoricalDemandResponse(BaseModel):
     item_id: str
     store_id: Optional[str] = None

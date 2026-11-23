@@ -160,6 +160,21 @@ export const getHistory = (item: string, store: string, startDate: string | unde
     signal,
   });
 
+/** demo.md §4.2: SKU sales and the causal backtest forecast at the simulated clock, with the SKU's own error band. */
+export interface SkuReplayTrendResponse {
+  item_id: string;
+  store_id: string;
+  as_of: string;
+  forecast_as_of: string | null;
+  model_run: string;
+  band_lookback_days: number;
+  band_quantiles: number[];
+  data: { date: string; actual: number | null; predicted: number | null; p10: number | null; p90: number | null; h: number | null }[];
+}
+
+export const getSkuReplayTrend = (item: string, store: string, days: number, signal?: AbortSignal) =>
+  getJson<SkuReplayTrendResponse>(`/forecasts/${sku(item)}/replay-trend`, { params: { store_id: store, days }, signal });
+
 export const getCompare = (item: string, store: string, signal?: AbortSignal) =>
   getJson<CompareResponse>(`/forecasts/${sku(item)}/compare`, { params: { store_id: store }, signal });
 

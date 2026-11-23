@@ -263,6 +263,10 @@ export const forecast: typeof Vi = {
     kpi_unc_none: 'SKU {sku}: P50 near 0 (intermittent), no relative band width',
     chart_title_overview: 'Actual and forecast, last {days} days',
     chart_title_sku: '{days}-day sales history and {h}-day forecast',
+    chart_title_sku_replay: '{days}-day sales history and 14-day forecast at the clock date',
+    legend_band_replay: 'P10 – P90 error band',
+    sku_replay_note:
+      'Forecast: Ensemble backtest, causal. Up to the clock date each day shows the forecast made the evening before; after the line come the next 14 days, made at the end of {asOf}. Band: forecast plus the 10% / 90% quantiles of this SKU’s actual errors over the {days} days before the clock. The production 28-day forecast is on the Future forecast tab.',
     chart_scope_store: 'Whole store ({store})',
     chart_scope_cat: 'Category {cat} ({store})',
     chart_scope_sku: '{sku} · Store {store}',
