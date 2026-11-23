@@ -68,6 +68,7 @@ export const models = {
   role: {
     production: 'Production',
     challenger: 'Challenger',
+    replay: 'Replay (backtest)',
   },
   algo: {
     gbdt_lags: 'GBDT numpy (preset lags)',

@@ -177,6 +177,45 @@ class TestSkuReplayTrend(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
 
+class TestReplayModelValidation(unittest.TestCase):
+    """demo.md §7 step 3 / §4.3 step 2: the backtest run is a registered model (scope replay); its validation checks the
+    stored forecasts (no negative, no missing value) instead of a bundle artifact."""
+
+    def _register(self, db):
+        from app.models.model_registry import ModelRegistry
+        db.add(ModelRegistry(id="model-backtest-ensemble-v1", name="Backtest Ensemble (replay)", version="v1",
+                             algorithm="ensemble", scope="replay", is_production=False,
+                             parameters={"model_run": RUN}, metrics={"wrmsse": 0.769}))
+        db.commit()
+
+    def test_passes_on_the_stored_forecasts(self):
+        from app.services.model_registry_service import model_registry_service
+        db = _db()
+        # the fixture's origins before START have negative values (origin offset * 100 + h): keep START onwards
+        db.query(FDB).filter(FDB.origin_date < START).delete()
+        db.commit()
+        self._register(db)
+        out = model_registry_service.validate_model(db, "model-backtest-ensemble-v1")
+        self.assertTrue(out["validation_passed"], out["message"])
+        self.assertEqual(out["artifact_integrity"]["rows"], 2 * 30)
+        self.assertEqual(out["artifact_integrity"]["origins"], 30)
+        self.assertEqual(out["sample_skus_tested"], 2)
+
+    def test_fails_on_a_negative_value_and_without_rows(self):
+        from app.services.model_registry_service import model_registry_service
+        db = _db()
+        db.query(FDB).filter(FDB.origin_date < START).delete()
+        db.commit()
+        self._register(db)
+        row = db.query(FDB).first()
+        row.y_h3 = -1.0
+        db.commit()
+        self.assertFalse(model_registry_service.validate_model(db, "model-backtest-ensemble-v1")["validation_passed"])
+        db2 = _db(with_daily=False)
+        self._register(db2)
+        self.assertFalse(model_registry_service.validate_model(db2, "model-backtest-ensemble-v1")["validation_passed"])
+
+
 class TestLoadDailyPoints(unittest.TestCase):
     def test_loader_stores_the_store_rows_and_origin_range(self):
         import tempfile

@@ -78,6 +78,9 @@ type ValState =
 
 const JOB_ACTIVE = new Set(['pending', 'running']);
 
+/** The backtest engine of the replay (demo.md §4.1, scope "replay"): shown beside the production bundle, never promoted. */
+const isReplay = (m: { scope?: string | null }) => (m.scope ?? '').trim().toLowerCase() === 'replay';
+
 export const ModelPerformance: React.FC = () => {
   const t = useT();
   const fmt = useFormat();
@@ -236,13 +239,17 @@ export const ModelPerformance: React.FC = () => {
     {
       key: 'role',
       header: t('models.col.role'),
-      value: (m) => (m.is_production ? 0 : 1),
+      value: (m) => (m.is_production ? 0 : isReplay(m) ? 1 : 2),
       sortable: true,
-      cell: (m) => (
-        <Badge tone={m.is_production ? 'success' : 'neutral'} dot={m.is_production}>
-          {m.is_production ? t('models.role.production') : t('models.role.challenger')}
-        </Badge>
-      ),
+      cell: (m) =>
+        isReplay(m) ? (
+          // demo.md §4.1: the backtest engine feeds the replay; it is not a challenger of the production bundle
+          <Badge tone="info">{t('models.role.replay')}</Badge>
+        ) : (
+          <Badge tone={m.is_production ? 'success' : 'neutral'} dot={m.is_production}>
+            {m.is_production ? t('models.role.production') : t('models.role.challenger')}
+          </Badge>
+        ),
     },
     ...METRICS.map<Column<RegisteredModel>>((k) => ({
       key: k,
@@ -267,7 +274,7 @@ export const ModelPerformance: React.FC = () => {
               {t('models.actions.details')}
             </Button>
           )}
-          {!m.is_production && (
+          {!m.is_production && !isReplay(m) && (
             <Button size="sm" variant="primary" loading={promotingId === m.id} onClick={() => void doPromote(m)}>
               {t('models.actions.promote')}
             </Button>
