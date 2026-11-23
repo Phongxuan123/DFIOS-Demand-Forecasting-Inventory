@@ -108,7 +108,7 @@ export interface WindowDistribution {
 }
 
 export interface MethodError {
-  method: 'model' | 'snaive' | 'naive' | 'ma28';
+  method: 'model' | 'snaive' | 'naive' | 'ma28' | 'lgbm' | 'holt_winters';
   n_windows: number;
   mae?: number | null;
   mase?: number | null;

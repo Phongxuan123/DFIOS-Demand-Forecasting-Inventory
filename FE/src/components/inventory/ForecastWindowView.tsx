@@ -11,6 +11,8 @@ const METHOD_KEY: Record<MethodError['method'], TKey> = {
   snaive: 'inventory.window.method_snaive',
   naive: 'inventory.window.method_naive',
   ma28: 'inventory.window.method_ma28',
+  lgbm: 'inventory.window.method_lgbm',
+  holt_winters: 'inventory.window.method_holt_winters',
 };
 
 interface BoxMark {
@@ -73,7 +75,7 @@ export const ForecastWindowView: React.FC<{ data: ForecastWindowResponse }> = ({
   const noteText = (n: string): string =>
     n.startsWith('Daily quantiles are not added up')
       ? t('inventory.window.note_daily')
-      : n.startsWith('Holt-Winters and single LightGBM')
+      : n.startsWith('Baselines: SNaive, Naive, MA28')
         ? t('inventory.window.note_baselines')
         : n.startsWith('SKU has no ABC-XYZ class')
           ? t('inventory.window.note_no_class')
