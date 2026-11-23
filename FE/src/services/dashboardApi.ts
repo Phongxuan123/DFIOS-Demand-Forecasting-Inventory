@@ -55,6 +55,14 @@ export interface KpiShadowDashboard {
   total_cost_savings: number | null;
   c3out_overall_availability: number | null;
   b0_overall_availability: number | null;
+  /** demo.md §6.2: fill rate (sold / demanded units, percent) of DFIOS and of the shadow B0 */
+  c3out_fill_rate?: number | null;
+  b0_fill_rate?: number | null;
+  /** classes below the commitment over the last ``recent_cycles_used`` (≤ 4) closed cycles */
+  classes_below_recent?: number | null;
+  classes_measured_recent?: number | null;
+  recent_cycles?: number;
+  recent_cycles_used?: number;
   segment_availabilities: SegmentAvailability[];
   cost_curves: CostCurvePoint[];
   source: string;

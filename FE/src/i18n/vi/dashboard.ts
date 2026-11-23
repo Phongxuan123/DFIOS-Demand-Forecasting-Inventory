@@ -72,6 +72,10 @@ export const dashboard = {
     availability: 'Độ sẵn sàng (Service Level)',
     availability_vs_b0: '{pp} điểm % so với B0',
     availability_hint: 'Mục tiêu {target} (95% + 1%) · Đối chuẩn B0: {b0}',
+    fill_rate: 'Fill rate',
+    fill_rate_hint: 'Số đơn vị bán được / số đơn vị khách muốn mua · B0: {b0}',
+    classes_below: 'Nhóm dưới cam kết',
+    classes_below_hint: 'Trong {n} chu kỳ đã đóng gần nhất, so với mục tiêu {target}',
     availability_target_missing: 'chưa có',
     stockouts: 'Tỷ lệ hết hàng',
     stockouts_hint: '{rate} trên {total} SKU',
@@ -172,6 +176,7 @@ export const dashboard = {
   reason: {
     availability: 'cần tua đồng hồ (≥7 ngày)',
     cost: 'cần tua đồng hồ để tính',
+    fill_rate: 'cần tua đồng hồ để tính',
     inventory: 'không có dữ liệu tồn kho',
     no_store: 'chưa chọn kho',
   },

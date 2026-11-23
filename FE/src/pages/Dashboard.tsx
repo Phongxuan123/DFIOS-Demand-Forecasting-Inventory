@@ -9,6 +9,8 @@ import {
   ClipboardList,
   PackageX,
   Play,
+  ShieldAlert,
+  ShoppingCart,
   Target,
   TriangleAlert,
 } from 'lucide-react';
@@ -760,6 +762,42 @@ export const Dashboard: React.FC = () => {
                 ? t('dashboard.kpi.availability_hint', {
                     target: sh.target_availability != null ? fmt.percent(sh.target_availability, { scale: 'percent', digits: 1 }) : t('dashboard.kpi.availability_target_missing'),
                     b0: fmt.percent(sh.b0_overall_availability, { scale: 'percent', digits: 1 }),
+                  })
+                : undefined
+            }
+          />
+          <KpiTile
+            className="dash-kpi-tile"
+            icon={<ShoppingCart size={16} />}
+            label={t('dashboard.kpi.fill_rate')}
+            loading={shadow.loading && !sh}
+            value={sh?.c3out_fill_rate != null ? fmt.percent(sh.c3out_fill_rate, { scale: 'percent', digits: 1 }) : null}
+            delta={
+              sh?.c3out_fill_rate != null && sh.b0_fill_rate != null
+                ? {
+                    value: sh.c3out_fill_rate - sh.b0_fill_rate,
+                    text: t('dashboard.kpi.availability_vs_b0', {
+                      pp: `${sh.c3out_fill_rate >= sh.b0_fill_rate ? '+' : ''}${fmt.number(sh.c3out_fill_rate - sh.b0_fill_rate, { digits: 1 })}`,
+                    }),
+                    goodWhen: 'up',
+                  }
+                : undefined
+            }
+            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.c3out_fill_rate == null ? t('dashboard.reason.fill_rate') : undefined}
+            hint={sh?.c3out_fill_rate != null ? t('dashboard.kpi.fill_rate_hint', { b0: fmt.percent(sh.b0_fill_rate, { scale: 'percent', digits: 1 }) }) : undefined}
+          />
+          <KpiTile
+            className="dash-kpi-tile"
+            icon={<ShieldAlert size={16} />}
+            label={t('dashboard.kpi.classes_below')}
+            loading={shadow.loading && !sh}
+            value={sh?.classes_below_recent != null ? `${fmt.integer(sh.classes_below_recent)} / ${fmt.integer(sh.classes_measured_recent ?? 9)}` : null}
+            unavailableReason={shadow.error ? apiErrorMessage(shadow.error, t) : sh?.classes_below_recent == null ? t('dashboard.reason.availability') : undefined}
+            hint={
+              sh?.classes_below_recent != null
+                ? t('dashboard.kpi.classes_below_hint', {
+                    n: fmt.integer(sh.recent_cycles_used),
+                    target: sh.target_availability != null ? fmt.percent(sh.target_availability, { scale: 'percent', digits: 1 }) : '—',
                   })
                 : undefined
             }
