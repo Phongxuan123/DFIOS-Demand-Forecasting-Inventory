@@ -246,7 +246,9 @@ def test_forecast_explorer_window_endpoint(client_db):
     assert all(q is not None for q in qs) and qs == sorted(qs) and d["min_level"] == 0.05
     st = b["error_stats"]
     assert st["model_source"] == "forecast_backtest" and st["n_windows"] > 10 and st["reason_code"] is None
-    assert {m["method"] for m in st["methods"]} == {"model", "snaive", "naive", "ma28"}
+    # demo.md §6.2: + Holt-Winters (computed from sales); LightGBM only once its backtest rows are loaded
+    assert {m["method"] for m in st["methods"]} == {"model", "snaive", "naive", "ma28", "holt_winters"}
+    assert len({m["n_windows"] for m in st["methods"]}) == 1  # every method on the same windows
     assert all(m["mase"] is not None for m in st["methods"])
     p = b["policy"]
     assert p["segment"] == "CZ" and p["m_g"] == 0.2 and p["kappa_g"] == 1.5 and p["theta_g"] == 0.1
