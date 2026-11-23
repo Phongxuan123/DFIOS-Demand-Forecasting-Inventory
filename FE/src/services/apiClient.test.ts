@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { AxiosError, type AxiosAdapter, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, type AxiosAdapter, type InternalAxiosRequestConfig } from 'axios';
 import { apiClient, apiErrorMessage, toApiError } from './apiClient.ts';
 import { AUTH_FORBIDDEN_EVENT, AUTH_UNAUTHORIZED_EVENT, getToken } from './session.ts';
 
@@ -50,6 +50,42 @@ describe('apiClient session handling (R-22)', () => {
     await expect(apiClient.get('/x')).rejects.toBeTruthy();
     expect(getToken()).toBe('tok-current');
     expect(unauthorized).not.toHaveBeenCalled();
+  });
+
+  it('demo.md 6.3: a 401 with a refresh token refreshes once and replays the request', async () => {
+    localStorage.setItem('refresh_token', 'rt-1');
+    const globalAdapter = axios.defaults.adapter;
+    axios.defaults.adapter = (config: InternalAxiosRequestConfig) =>
+      Promise.resolve({ status: 200, statusText: 'OK', data: { access_token: 'tok-new', refresh_token: 'rt-2' }, headers: {}, config });
+    apiClient.defaults.adapter = (config: InternalAxiosRequestConfig) =>
+      String(config.headers?.Authorization) === 'Bearer tok-new'
+        ? Promise.resolve({ status: 200, statusText: 'OK', data: { ok: true }, headers: {}, config })
+        : failWith(401)(config);
+    try {
+      const res = await apiClient.get('/dashboard/kpis');
+      expect(res.data).toEqual({ ok: true });
+      expect(getToken()).toBe('tok-new');
+      expect(localStorage.getItem('refresh_token')).toBe('rt-2');
+      expect(unauthorized).not.toHaveBeenCalled();
+    } finally {
+      axios.defaults.adapter = globalAdapter;
+      localStorage.removeItem('refresh_token');
+    }
+  });
+
+  it('demo.md 6.3: a refused refresh signs out', async () => {
+    localStorage.setItem('refresh_token', 'rt-revoked');
+    const globalAdapter = axios.defaults.adapter;
+    axios.defaults.adapter = failWith(401);
+    apiClient.defaults.adapter = failWith(401);
+    try {
+      await expect(apiClient.get('/dashboard/kpis')).rejects.toBeTruthy();
+      expect(getToken()).toBeNull();
+      expect(localStorage.getItem('refresh_token')).toBeNull();
+      expect(unauthorized).toHaveBeenCalledTimes(1);
+    } finally {
+      axios.defaults.adapter = globalAdapter;
+    }
   });
 
   it('a late 401 that carried an OLD token does not kill the new session', async () => {

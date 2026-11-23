@@ -14,6 +14,7 @@ from app.schemas.auth import (
     ChangeEmailRequest,
     ConfirmChangeEmailRequest,
     MessageResponse,
+    RefreshRequest,
 )
 from app.schemas.user import UserResponse
 from app.services.auth_service import auth_service
@@ -33,6 +34,15 @@ def login(
     """
     client_ip = get_client_ip(request)
     return auth_service.login(db, login_data, client_ip=client_ip)
+
+
+@router.post("/refresh", response_model=LoginResponse, summary="demo.md §6.3 - Đổi refresh token lấy access token mới")
+def refresh(body: RefreshRequest, db: Session = Depends(get_db)):
+    """
+    Refresh token hợp lệ (chưa hết hạn, chưa bị thu hồi bởi đăng xuất / đổi mật khẩu) của tài khoản đang hoạt động
+    cho một access token mới và một refresh token mới.
+    """
+    return auth_service.refresh(db, body.refresh_token)
 
 
 @router.post("/logout", response_model=MessageResponse, summary="UC02 - Đăng xuất tài khoản")

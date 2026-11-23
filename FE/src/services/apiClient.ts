@@ -20,7 +20,9 @@ import {
   AUTH_UNAUTHORIZED_EVENT,
   clearClientCaches,
   clearSession,
+  getRefreshToken,
   getToken,
+  storeTokens,
   type ForbiddenEventDetail,
 } from './session.ts';
 
@@ -79,20 +81,59 @@ function extractDetail(data: unknown): string | undefined {
   return undefined;
 }
 
+/** One refresh at a time: concurrent 401s wait for the same POST /auth/refresh (demo.md §6.3). */
+let refreshing: Promise<string> | null = null;
+
+function refreshAccessToken(): Promise<string> {
+  if (!refreshing) {
+    const refreshToken = getRefreshToken();
+    refreshing = (
+      refreshToken
+        ? axios
+            .post<{ access_token: string; refresh_token?: string | null }>(
+              `${apiClient.defaults.baseURL ?? ''}/auth/refresh`,
+              { refresh_token: refreshToken },
+              { timeout: 15000 },
+            )
+            .then((r) => {
+              storeTokens(r.data.access_token, r.data.refresh_token);
+              return r.data.access_token;
+            })
+        : Promise.reject(new Error('no refresh token'))
+    ).finally(() => {
+      refreshing = null;
+    });
+  }
+  return refreshing;
+}
+
+type RetriableConfig = AxiosRequestConfig & { _retriedAfterRefresh?: boolean };
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
+  async (error: AxiosError) => {
     const status = error.response?.status;
-    const config = error.config;
+    const config = error.config as RetriableConfig | undefined;
     const url = config?.url ?? '';
     const method = (config?.method ?? 'get').toLowerCase();
 
     if (status === 401 && !PUBLIC_AUTH_PATHS.some((p) => url.includes(p))) {
-      // Only sign out if the rejected request used the token we still hold. A late 401 from
+      // Only act if the rejected request used the token we still hold. A late 401 from
       // a previous session must not kill a session the user has just started.
       const sent = String(config?.headers?.Authorization ?? '').replace(/^Bearer\s+/i, '');
       const current = getToken();
       if (current && sent === current) {
+        // demo.md §6.3: try ONE refresh, then replay the request with the new access token
+        if (config && !config._retriedAfterRefresh && getRefreshToken()) {
+          try {
+            const fresh = await refreshAccessToken();
+            config._retriedAfterRefresh = true;
+            config.headers = { ...(config.headers ?? {}), Authorization: `Bearer ${fresh}` } as typeof config.headers;
+            return apiClient(config);
+          } catch {
+            /* refresh refused (expired / revoked): sign out below */
+          }
+        }
         clearSession();
         clearClientCaches();
         window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));

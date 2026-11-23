@@ -10,6 +10,8 @@
  */
 const TOKEN_KEY = 'access_token';
 const USER_KEY = 'user';
+/** demo.md §6.3: refresh token, exchanged at POST /auth/refresh when the access token is rejected (401). */
+const REFRESH_KEY = 'refresh_token';
 
 /** Device-level preferences: not account data, survive login/logout. */
 const PRESERVED_KEYS = new Set([
@@ -47,12 +49,31 @@ export function getStoredUser<T>(): T | null {
   }
 }
 
-export function storeSession(token: string, user: unknown): void {
+export function storeSession(token: string, user: unknown, refreshToken?: string | null): void {
   try {
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
   } catch {
     /* storage blocked: session lives in memory for this tab only */
+  }
+}
+
+export function getRefreshToken(): string | null {
+  try {
+    return localStorage.getItem(REFRESH_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** New access + refresh token after POST /auth/refresh; the stored user is kept. */
+export function storeTokens(token: string, refreshToken?: string | null): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -68,6 +89,7 @@ export function clearSession(): void {
   try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(REFRESH_KEY);
   } catch {
     /* ignore */
   }

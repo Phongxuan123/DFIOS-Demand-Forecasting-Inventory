@@ -21,6 +21,7 @@ from app.core.security import (
     verify_password,
     get_password_hash,
     create_access_token,
+    create_refresh_token,
 )
 from app.services import email_service
 from app.services.email_service import (
@@ -148,6 +149,42 @@ class AuthService:
             access_token=access_token,
             token_type="bearer",
             user=UserResponse.model_validate(user),
+            refresh_token=create_refresh_token(data=self._token_claims(user)),
+        )
+
+    @staticmethod
+    def _token_claims(user: User) -> dict:
+        return {
+            "sub": str(user.id),
+            "user_id": str(user.id),
+            "email": user.email,
+            "role": user.role,
+            "token_version": getattr(user, "token_version", 1),
+        }
+
+    def refresh(self, db: Session, refresh_token: str) -> LoginResponse:
+        """demo.md §6.3 POST /auth/refresh: a valid refresh token of an active user, issued for the CURRENT
+        token_version (logout / password change revoke it), gives a new access token and a new refresh token."""
+        from app.core.security import REFRESH_TOKEN_TYPE, decode_access_token
+
+        invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="Refresh token không hợp lệ, đã hết hạn hoặc đã bị thu hồi",
+                                headers={"WWW-Authenticate": "Bearer"})
+        payload = decode_access_token(refresh_token)
+        if not payload or payload.get("type") != REFRESH_TOKEN_TYPE:
+            raise invalid
+        uid = payload.get("user_id") or payload.get("sub")
+        user = user_repository.get_by_id(db, uid) if uid else None
+        if user is None or not getattr(user, "is_active", True):
+            raise invalid
+        if payload.get("token_version") != getattr(user, "token_version", 1):
+            raise invalid
+        claims = self._token_claims(user)
+        return LoginResponse(
+            access_token=create_access_token(data=claims),
+            token_type="bearer",
+            user=UserResponse.model_validate(user),
+            refresh_token=create_refresh_token(data=claims),
         )
 
     def logout(self, db: Session, user: User) -> MessageResponse:

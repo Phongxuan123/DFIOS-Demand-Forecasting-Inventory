@@ -116,10 +116,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = useCallback(async (email: string, password: string) => {
     clearClientCaches(); // never inherit the previous account's caches
     const response = await apiClient.post('/auth/login', { email: email.trim().toLowerCase(), password });
-    const { access_token, user: userData } = response.data;
+    const { access_token, refresh_token, user: userData } = response.data;
     const normalized = normalizeUser(userData);
     clearClientCaches();
-    storeSession(access_token, normalized);
+    storeSession(access_token, normalized, refresh_token);
     try {
       sessionStorage.removeItem(SESSION_EXPIRED_FLAG);
     } catch {

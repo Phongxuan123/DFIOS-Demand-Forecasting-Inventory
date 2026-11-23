@@ -32,6 +32,16 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return encoded_jwt
 
+REFRESH_TOKEN_TYPE = "refresh"
+
+
+def create_refresh_token(data: dict) -> str:
+    """demo.md §6.3: refresh token (type "refresh"), accepted ONLY by POST /auth/refresh."""
+    to_encode = {**data, "type": REFRESH_TOKEN_TYPE,
+                 "exp": datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)}
+    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
 def decode_access_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
