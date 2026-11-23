@@ -7,7 +7,7 @@ import { useFormat, useT } from '../../i18n/index.tsx';
 import { apiErrorMessage } from '../../services/apiClient.ts';
 import { getServiceLevel, getSettings, putDefaultServiceLevel, putSetting, type AlertThresholds } from '../../services/settingsApi.ts';
 
-const HANDLED = new Set(['timezone', 'currency', 'forecast_horizons', 'default_alert_thresholds']);
+const HANDLED = new Set(['timezone', 'currency', 'forecast_horizons', 'default_alert_thresholds', 'simulation_costs']);
 
 interface Form {
   serviceLevel: string;

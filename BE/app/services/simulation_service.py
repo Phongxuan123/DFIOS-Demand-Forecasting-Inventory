@@ -42,9 +42,9 @@ class SimulationService:
     constants.
     """
 
-    HOLDING_COST_RATE_PER_DAY = pc.HOLDING_RATE_DAILY
-    ORDERING_COST_PER_ORDER = pc.ORDER_COST_C
-    STOCKOUT_PENALTY_RATE = pc.STOCKOUT_PENALTY_RATE
+    # The teacher's benchmark tables were computed with c = 2: converting their ordering cost back to a number of
+    # orders uses that fixed teacher value, not the configurable rate.
+    ORDERING_COST_PER_ORDER = pc.ORDER_COST_C_DEFAULT
 
     @staticmethod
     def _store_basis(db: Session, store_id: str) -> Tuple[int, Optional[float], str]:

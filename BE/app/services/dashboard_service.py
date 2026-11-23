@@ -556,6 +556,7 @@ class DashboardService:
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
         target_store = "GLOBAL" if is_global else store_id.strip()
         R = pc.REVIEW_PERIOD_DAYS
+        pc.sync_costs(db)  # demo.md §1.3: A3 costs valued with the configured h, b, c
 
         clocks = db.query(SimClock).all() if is_global else db.query(SimClock).filter(SimClock.store_id == target_store).all()
         if not clocks:

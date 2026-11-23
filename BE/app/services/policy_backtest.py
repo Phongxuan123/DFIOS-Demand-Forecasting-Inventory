@@ -56,9 +56,12 @@ class BacktestResult:
 
 def eoq_units(
     mu_daily: np.ndarray, price: np.ndarray,
-    holding_rate: float = pc.HOLDING_RATE_DAILY, order_cost: float = pc.ORDER_COST_C,
+    holding_rate: Optional[float] = None, order_cost: Optional[float] = None,
 ) -> np.ndarray:
-    """EOQ = sqrt(2 c D / h_annual) with D = 365 mu and h_annual = 365 * h * price  (units, >= 1)."""
+    """EOQ = sqrt(2 c D / h_annual) with D = 365 mu and h_annual = 365 * h * price  (units, >= 1).
+    None -> the configured h, c (``pc`` read at call time, demo.md §1.3)."""
+    holding_rate = pc.HOLDING_RATE_DAILY if holding_rate is None else holding_rate
+    order_cost = pc.ORDER_COST_C if order_cost is None else order_cost
     h_daily = np.maximum(float(holding_rate) * np.asarray(price, dtype=float), 1e-9)
     return np.maximum(1.0, np.sqrt(2.0 * float(order_cost) * np.maximum(mu_daily, 0.0) / h_daily))
 
@@ -93,14 +96,18 @@ def simulate_rss_candidates(
     lead_time: int = pc.LEAD_TIME_DAYS,
     review_period: int = pc.REVIEW_PERIOD_DAYS,
     initial_on_hand: Optional[np.ndarray] = None,
-    holding_rate: float = pc.HOLDING_RATE_DAILY,
-    stockout_rate: float = pc.STOCKOUT_PENALTY_RATE,
-    order_cost: float = pc.ORDER_COST_C,
+    holding_rate: Optional[float] = None,
+    stockout_rate: Optional[float] = None,
+    order_cost: Optional[float] = None,
     daily_price: Optional[np.ndarray] = None,     # (n_items, K*R) price of each day; defaults to ``price``
     history_demand: Optional[np.ndarray] = None,  # (n_items, >= 1) sales BEFORE the segment, for G-03
 ) -> BacktestResult:
-    """Simulate the Cartesian grid m x kappa. See module docstring for the dynamics. The cost rates default to A3
-    (h = 0.002, b = 0.35, c = 2); the what-if simulator (FR10) passes user-given rates."""
+    """Simulate the Cartesian grid m x kappa. See module docstring for the dynamics. The cost rates default to the
+    configured A3 rates (teacher h = 0.002, b = 0.35, c = 2 unless Settings changed them); the what-if simulator
+    (FR10) passes user-given rates."""
+    holding_rate = pc.HOLDING_RATE_DAILY if holding_rate is None else holding_rate
+    stockout_rate = pc.STOCKOUT_PENALTY_RATE if stockout_rate is None else stockout_rate
+    order_cost = pc.ORDER_COST_C if order_cost is None else order_cost
     n, T = daily_demand.shape
     K = q_hat.shape[1]
     R, L = int(review_period), int(lead_time)

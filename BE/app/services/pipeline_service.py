@@ -326,6 +326,7 @@ class PipelineService:
         Review at the START of the day (A4), orders arrive L days later, COMPLETED orders are never received twice.
         ``approval_mode="planner"`` stops at the next review and leaves its proposals PENDING for the planner.
         """
+        pc.sync_costs(db)  # demo.md §1.3: h, b, c configured on Settings (the worker process reads them here)
         return simulator_service.advance(
             db, store_id=store_id, days=days, reviews=reviews, until=until,
             lead_time_days=lead_time_days, review_period_days=review_period_days,

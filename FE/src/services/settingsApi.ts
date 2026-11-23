@@ -59,6 +59,32 @@ export const getServiceLevel = (signal?: AbortSignal) => getJson<ServiceLevelCon
 export const putDefaultServiceLevel = (value: number) =>
   apiClient.put<ServiceLevelConfig>('/optimization/service-level', { default_service_level: value }).then((r) => r.data);
 
+/* ------------------------- simulation parameters (demo.md §1.3) ------------------------- */
+export interface SimulationCosts {
+  holding_rate: number;
+  stockout_penalty_rate: number;
+  order_cost: number;
+}
+export interface SimulationParameters extends SimulationCosts {
+  lead_time_days: number;
+  review_period_days: number;
+  horizon_days: number;
+  defaults: SimulationCosts;
+  limits: Record<keyof SimulationCosts, [number, number]>;
+  target_availability: number;
+  selection_guard: number;
+  c3out: { eta: number; setpoint: number; theta_min: number; theta_max: number; variant: string };
+  /** false once a clock left its start date: one replay keeps one set of costs */
+  costs_editable: boolean;
+  costs_locked_stores: string[];
+}
+
+export const getSimulationParameters = (signal?: AbortSignal) =>
+  getJson<SimulationParameters>('/settings/simulation-parameters', { signal });
+
+export const putSimulationCosts = (body: Partial<SimulationCosts>) =>
+  apiClient.put<SimulationParameters>('/settings/simulation-parameters', body).then((r) => r.data);
+
 /* ------------------------------------ users ---------------------------------- */
 export const USERS_LIMIT = 500;
 /** `total` comes from the X-Total-Count header (the body is a plain list). */

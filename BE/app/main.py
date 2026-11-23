@@ -32,6 +32,11 @@ async def lifespan(_app: FastAPI):
                 anchor = pc.load_calendar_setting(db)  # a replay DB shifted as a whole keeps its own calendar
                 if anchor != pc.M5_DAY0_DEFAULT:
                     logger.warning("Replay calendar shifted: d_1 = %s", anchor)
+                costs = pc.sync_costs(db)  # demo.md §1.3: h, b, c from Settings
+                if costs != {"holding_rate": pc.HOLDING_RATE_DAILY_DEFAULT,
+                             "stockout_penalty_rate": pc.STOCKOUT_PENALTY_RATE_DEFAULT,
+                             "order_cost": pc.ORDER_COST_C_DEFAULT}:
+                    logger.warning("Simulation costs from Settings: %s", costs)
                 if pipeline_service.ensure_default_schedule(db):
                     logger.warning("Default ML pipeline schedule created")
             # batch jobs left 'running' by a previous (dead) API process can never finish: mark them failed. Only
