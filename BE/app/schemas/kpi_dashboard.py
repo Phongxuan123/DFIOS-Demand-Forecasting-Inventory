@@ -45,6 +45,18 @@ class KPIDashboardResponse(BaseModel):
     total_cost_savings: Optional[float] = None
     c3out_overall_availability: Optional[float] = None
     b0_overall_availability: Optional[float] = None
+    # demo.md §6.2 / FR9: fill rate = units sold / units demanded (sold + lost) over the simulated days, percent
+    c3out_fill_rate: Optional[float] = None
+    b0_fill_rate: Optional[float] = None
+    # demo.md §6.2: number of classes below the commitment over the last ``recent_cycles`` closed cycles
+    classes_below_recent: Optional[int] = None
+    classes_measured_recent: Optional[int] = None
+    recent_cycles: int = 4
+    recent_cycles_used: int = 0
+    # demo.md §6.2 Reports: orders placed over the simulated period (DFIOS approved/completed lines, B0 shadow orders)
+    c3out_orders_count: Optional[int] = None
+    b0_orders_count: Optional[int] = None
+    start_date: Optional[date] = None
     segment_availabilities: List[SegmentAvailability]
     cost_curves: List[CostCurvePoint]
     summary_insights: List[str]

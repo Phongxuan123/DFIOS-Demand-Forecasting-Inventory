@@ -47,12 +47,9 @@ from app.schemas.optimization import (
 
 class OptimizationService:
     SETTINGS_KEY = "target_service_level_config"
-    # A3 cost assumptions and timing: single source = policy_config (R-28, B-20)
-    ORDER_COST_C = pc.ORDER_COST_C
-    HOLDING_RATE_DAILY = pc.HOLDING_RATE_DAILY
-    STOCKOUT_PENALTY_RATE = pc.STOCKOUT_PENALTY_RATE
+    # A3 cost rates: read ``pc.HOLDING_RATE_DAILY`` / ``pc.STOCKOUT_PENALTY_RATE`` / ``pc.ORDER_COST_C`` at call time
+    # (configurable on Settings, demo.md §1.3); never copy them into class attributes.
     DEFAULT_HOLDING_COST = 2.5
-    DEFAULT_ORDER_COST = pc.ORDER_COST_C
     DEFAULT_LEAD_TIME = pc.LEAD_TIME_DAYS
     DEFAULT_REVIEW_PERIOD = pc.REVIEW_PERIOD_DAYS
 
@@ -337,14 +334,14 @@ class OptimizationService:
         if unit_price is None or not unit_price > 0:
             unit_price = float(prod.price) if prod.price and float(prod.price) > 0 else 10.0
         unit_price = float(unit_price)
-        h_cost = max(0.2, round(self.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
+        h_cost = max(0.2, round(pc.HOLDING_RATE_DAILY * 365.0 * unit_price, 3))
         if teacher_eoq:
             annual_demand = round(max(0.0, mean_demand) * 365.0, 2)
             eoq = float(self.teacher_eoq(np.array([mean_demand]), np.array([unit_price]))[0])
             S_val = float(s_val + math.ceil(kappa * eoq - policy_backtest.CEIL_EPS))
         else:
             annual_demand = max(1.0, round(mean_demand * 365.0, 2))
-            eoq = max(1.0, round(math.sqrt((2.0 * annual_demand * self.ORDER_COST_C) / h_cost), 1))
+            eoq = max(1.0, round(math.sqrt((2.0 * annual_demand * pc.ORDER_COST_C) / h_cost), 1))
             S_val = float(s_val + math.ceil(kappa * eoq))
         d_l = round(mean_demand * lt, 2)
         out = {
@@ -352,7 +349,7 @@ class OptimizationService:
             "safety_stock": max(0.0, round(s_val - d_l, 2)),
             "reorder_point": s_val, "eoq": eoq, "s": s_val, "S": S_val,
             "model_run_id": model_run_id, "annual_demand": annual_demand,
-            "holding_cost": h_cost, "order_cost": self.ORDER_COST_C, "unit_price": unit_price,
+            "holding_cost": h_cost, "order_cost": pc.ORDER_COST_C, "unit_price": unit_price,
             "source": source, "d_l": d_l, "lead_time_days": lt, "service_level": tau,
             "sigma_d": round(max(0.2, std_demand), 2),
             "sigma_l": round(max(0.2, std_demand) * math.sqrt(lt), 2),
@@ -556,8 +553,8 @@ class OptimizationService:
             ml_rop = float(p.reorder_point or 0.0)
             ml_eoq = float(p.eoq or 1.0)
             price = float(prod.price) if prod and prod.price and prod.price > 0 else float(p.unit_price or 10.0)
-            h_cost = float(p.holding_cost or round(self.HOLDING_RATE_DAILY * 365.0 * price, 3))
-            o_cost = float(p.order_cost or self.ORDER_COST_C)
+            h_cost = float(p.holding_cost or round(pc.HOLDING_RATE_DAILY * 365.0 * price, 3))
+            o_cost = float(p.order_cost or pc.ORDER_COST_C)
             lt_days = int(p.lead_time_days or self.DEFAULT_LEAD_TIME)
             tau = float(p.service_level or 0.95)
             tau_safe = min(max(tau, 0.50), 0.999)
@@ -954,6 +951,7 @@ class OptimizationService:
           * the controller setpoint written with the selection is the guard (0.96 by default);
           * selection ids are store-scoped (Q-05). The refit cadence (every 91 days) belongs to the caller.
         """
+        pc.sync_costs(db)  # demo.md §1.3: the configured h, b, c
         guard = (pc.SELECTION_GUARD_AVAILABILITY if target_availability is None
                  else min(0.999, float(target_availability) + pc.GUARD))
         if c3out_active is None:

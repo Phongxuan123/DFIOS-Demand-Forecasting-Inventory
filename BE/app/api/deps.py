@@ -32,6 +32,10 @@ def get_current_user(
     
     token = credentials.credentials
     payload = decode_access_token(token)
+    # Only access tokens authenticate API calls: a refresh token or a password-reset / email token (they carry a
+    # "type") must never be accepted as a session.
+    if payload and payload.get("type") not in (None, "access"):
+        payload = None
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

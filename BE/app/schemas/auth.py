@@ -20,6 +20,12 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    # demo.md §6.3: exchanged at POST /auth/refresh for a new access token (and a new refresh token)
+    refresh_token: Optional[str] = None
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=10, max_length=4096)
 
 class ChangePasswordRequest(BaseModel):
     old_password: str = Field(..., max_length=72, description="Mật khẩu hiện tại")

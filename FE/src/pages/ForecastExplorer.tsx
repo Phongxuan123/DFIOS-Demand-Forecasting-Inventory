@@ -13,6 +13,7 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -57,6 +58,7 @@ import {
   getExplanation,
   getForecasts,
   getHistory,
+  getSkuReplayTrend,
   getWindowQuantiles,
   listOverrides,
   listProducts,
@@ -340,13 +342,46 @@ export const ForecastExplorer: React.FC = () => {
   /** h = 1 of the SKU forecast shown (its first forecast date), not a fixed date. */
   const cutoverDate = firstDate ?? null;
 
-  const hasAnyBand = useMemo(() => rows.some((r) => r.p10 !== null && r.p90 !== null), [rows]);
+  // demo.md §4.2: in replay the SKU chart shows the sales history and the causal backtest forecast at the clock
+  // (changes with every advance); the production 28-day forecast stays on the "Dự báo tương lai" tab.
+  // A 404 (no clock / no backtest rows for the SKU) falls back to the production chart below.
+  const replay = useApi((signal) => getSkuReplayTrend(sku, store as string, rangeDays, signal), [sku, store, rangeDays, clock.version], {
+    enabled: ready && mainTab === 'sku' && !isGlobal,
+  });
+  const replayMode = !!replay.data && replay.data.data.length > 0;
+  const skuChartData = useMemo<ChartPoint[]>(
+    () =>
+      replayMode && replay.data
+        ? replay.data.data.map((p) => ({
+            date: p.date,
+            actual: p.actual,
+            forecast: p.predicted,
+            band: p.p10 !== null && p.p90 !== null ? ([p.p10, p.p90] as [number, number]) : null,
+            adjusted: null,
+            row: null,
+          }))
+        : chartData,
+    [replayMode, replay.data, chartData],
+  );
+  const replayAfterStart = replayMode && replay.data ? replay.data.data.find((p) => p.date > replay.data!.as_of)?.date ?? null : null;
+  const replayLastDate = replayMode && replay.data ? replay.data.data[replay.data.data.length - 1].date : null;
+  /** Slow mover: mean forecast under 1 unit/day; most days sell 0, so the error band sits near 0, under the mean. */
+  const replaySparse = useMemo(() => {
+    const vals = replayMode && replay.data ? replay.data.data.map((p) => p.predicted).filter((v): v is number => v !== null) : [];
+    return vals.length > 0 && vals.reduce((s, v) => s + v, 0) / vals.length < 1;
+  }, [replayMode, replay.data]);
+
+  const hasAnyBand = useMemo(
+    () => (replayMode ? skuChartData.some((p) => p.band !== null) : rows.some((r) => r.p10 !== null && r.p90 !== null)),
+    [replayMode, skuChartData, rows],
+  );
   /** Half-width of the P10-P90 band relative to P50 over the forecast days with a full band: Σ(P90 − P10) / 2 / ΣP50
    *  (a ratio of sums, so slow movers with a tiny P50 on some days do not blow it up). */
   const relativeBand = useMemo(() => {
     const ok = rows.filter((r) => r.quality === 'ok');
     const sumP50 = ok.reduce((s, r) => s + (r.p50 as number), 0);
-    if (!ok.length || !(sumP50 >= 1)) return null;
+    // slow movers (mean P50 under 1 unit/day) give meaningless relative widths (e.g. ±361 % for 0.33 unit/day)
+    if (!ok.length || !(sumP50 >= ok.length)) return null;
     const halfWidth = ok.reduce((s, r) => s + ((r.p90 as number) - (r.p10 as number)) / 2, 0);
     return { mean: halfWidth / sumP50, n: ok.length };
   }, [rows]);
@@ -934,7 +969,11 @@ export const ForecastExplorer: React.FC = () => {
             <div className="fe-chart-container">
               <div className="fe-chart-header">
                 <div>
-                  <div className="fe-chart-title">{t('forecast.explorer.chart_title_sku', { days: rangeDays, h: rows.length || horizon })}</div>
+                  <div className="fe-chart-title">
+                    {replayMode
+                      ? t('forecast.explorer.chart_title_sku_replay', { days: rangeDays })
+                      : t('forecast.explorer.chart_title_sku', { days: rangeDays, h: rows.length || horizon })}
+                  </div>
                   <div className="fe-chart-subtitle">
                     {t('forecast.explorer.chart_scope_sku', {
                       sku: selectedProduct?.name && selectedProduct.name !== selectedProduct.item_id ? `${selectedProduct.name} (${sku})` : sku,
@@ -949,15 +988,16 @@ export const ForecastExplorer: React.FC = () => {
                   </div>
                   <div className="fe-legend-item">
                     <span className="fe-legend-dot fe-legend-dot--forecast" />
-                    <span>{t('forecast.explorer.legend_forecast')}</span>
+                    {/* the backtest run is a point forecast, not a P50 */}
+                    <span>{replayMode ? t('dashboard.charts.predicted') : t('forecast.explorer.legend_forecast')}</span>
                   </div>
                   {showBand && (
                     <div className="fe-legend-item">
                       <span className="fe-legend-dot fe-legend-dot--band" />
-                      <span>{t('forecast.explorer.legend_band')}</span>
+                      <span>{replayMode ? t('forecast.explorer.legend_band_replay') : t('forecast.explorer.legend_band')}</span>
                     </div>
                   )}
-                  {!hasAnyBand && rows.length > 0 && (
+                  {!hasAnyBand && (replayMode || rows.length > 0) && (
                     <div className="fe-legend-item" style={{ fontStyle: 'italic', color: 'var(--color-text-muted)' }}>
                       <span>({t('forecast.explorer.no_band_for_sku')})</span>
                     </div>
@@ -967,13 +1007,37 @@ export const ForecastExplorer: React.FC = () => {
 
               <div style={{ height: 340, width: '100%' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 16, right: 16, bottom: 4, left: 0 }}>
+                  <ComposedChart data={skuChartData} margin={{ top: 16, right: 16, bottom: 4, left: 0 }}>
                     <CartesianGrid vertical={false} stroke={chart.grid} />
                     <XAxis dataKey="date" {...chart.axis} minTickGap={28} tickFormatter={(d: string) => fmt.date(d, 'axis')} />
                     <YAxis {...chart.axis} width={44} domain={[0, 'auto']} />
                     <Tooltip cursor={chart.cursor} content={<ForecastTooltip />} />
 
-                    {cutoverDate && (
+                    {replayMode && replayAfterStart && replayLastDate && (
+                      <ReferenceArea
+                        x1={replayAfterStart}
+                        x2={replayLastDate}
+                        fill="var(--color-text-muted)"
+                        fillOpacity={0.1}
+                        stroke="none"
+                        label={{ value: t('dashboard.charts.after_clock'), fill: 'var(--color-text-muted)', fontSize: 11, position: 'insideTopRight' }}
+                      />
+                    )}
+                    {replayMode && replay.data && (
+                      <ReferenceLine
+                        x={replay.data.as_of}
+                        stroke="var(--color-text)"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 4"
+                        label={{
+                          value: t('forecast.explorer.clock_label', { date: fmt.date(replay.data.as_of) }),
+                          fill: 'var(--color-text)',
+                          fontSize: 11,
+                          position: 'insideBottomLeft',
+                        }}
+                      />
+                    )}
+                    {!replayMode && cutoverDate && (
                       <ReferenceLine
                         x={cutoverDate}
                         stroke="var(--color-text)"
@@ -1029,6 +1093,15 @@ export const ForecastExplorer: React.FC = () => {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              {replayMode && replay.data && (
+                <div style={{ marginTop: 'var(--space-2)', fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                  {t('forecast.explorer.sku_replay_note', {
+                    asOf: fmt.date(replay.data.forecast_as_of ?? replay.data.as_of),
+                    days: replay.data.band_lookback_days,
+                  })}
+                  {replaySparse && <div style={{ marginTop: 4 }}>{t('forecast.explorer.sku_sparse_note')}</div>}
+                </div>
+              )}
             </div>
 
             <div className="fe-sku-two-col">

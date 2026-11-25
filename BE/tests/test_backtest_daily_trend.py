@@ -118,6 +118,104 @@ class TestBacktestDailyTrend(unittest.TestCase):
         self.assertIn("hidden", out.forecast_note)
 
 
+class TestSkuReplayTrend(unittest.TestCase):
+    """demo.md §4.2 Forecast Explorer: one SKU, sales history + forecast at the clock + the SKU's error band."""
+
+    def _call(self, db, sku="FOODS_1_001", days=7):
+        from app.api.v1.endpoints.forecasts import get_sku_replay_trend
+        return get_sku_replay_trend(sku=sku, store_id="CA_1", days=days, db=db, current_user=None)
+
+    def test_past_h1_future_from_clock_plus_one_and_actual_only_up_to_the_clock(self):
+        db = _db()
+        out = self._call(db, sku="HOBBIES_1_001")
+        self.assertEqual(out["as_of"], str(CLOCK))
+        self.assertEqual(out["forecast_as_of"], str(CLOCK))
+        by_day = {p["date"]: p for p in out["data"]}
+        for k in range(7):
+            d = CLOCK - timedelta(days=k)
+            p = by_day[str(d)]
+            self.assertEqual(p["actual"], 3.0)
+            self.assertEqual(p["h"], 1)
+            self.assertAlmostEqual(p["predicted"], _value(1, d, 1), places=2)
+        origin = CLOCK + timedelta(days=1)
+        future = [p for p in out["data"] if p["date"] > str(CLOCK)]
+        self.assertEqual(len(future), 14)
+        for k, p in enumerate(future, start=1):
+            self.assertIsNone(p["actual"])
+            self.assertEqual(p["h"], k)
+            self.assertAlmostEqual(p["predicted"], _value(1, origin, k), places=2)
+
+    def test_band_is_forecast_plus_the_skus_own_h_step_error_quantiles(self):
+        import numpy as np
+
+        db = _db()
+        out = self._call(db)
+        # h = 1 residuals known at the clock: origins START-5 .. CLOCK, actual 3 - forecast
+        res = [3.0 - _value(0, START + timedelta(days=d), 1) for d in range(-5, (CLOCK - START).days + 1)]
+        p = next(p for p in out["data"] if p["date"] == str(CLOCK))
+        self.assertAlmostEqual(p["p10"], max(0.0, p["predicted"] + float(np.quantile(res, 0.1))), places=1)
+        self.assertAlmostEqual(p["p90"], max(0.0, p["predicted"] + float(np.quantile(res, 0.9))), places=1)
+
+    def test_nothing_after_the_clock_is_read(self):
+        """Changing later origins and later sales leaves the response unchanged (forecast and band)."""
+        db = _db()
+        before = self._call(db)["data"]
+        for row in db.query(FDB).filter(FDB.origin_date > CLOCK + timedelta(days=1)).all():
+            for h in range(1, 15):
+                setattr(row, f"y_h{h}", 77777.0)
+        for s in db.query(SalesHistory).filter(SalesHistory.sale_date > CLOCK).all():
+            s.quantity = 5000.0
+        db.commit()
+        self.assertEqual(before, self._call(db)["data"])
+
+    def test_404_without_backtest_rows_so_the_fe_keeps_the_production_chart(self):
+        from fastapi import HTTPException
+
+        db = _db(with_daily=False)
+        with self.assertRaises(HTTPException) as ctx:
+            self._call(db)
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class TestReplayModelValidation(unittest.TestCase):
+    """demo.md §7 step 3 / §4.3 step 2: the backtest run is a registered model (scope replay); its validation checks the
+    stored forecasts (no negative, no missing value) instead of a bundle artifact."""
+
+    def _register(self, db):
+        from app.models.model_registry import ModelRegistry
+        db.add(ModelRegistry(id="model-backtest-ensemble-v1", name="Backtest Ensemble (replay)", version="v1",
+                             algorithm="ensemble", scope="replay", is_production=False,
+                             parameters={"model_run": RUN}, metrics={"wrmsse": 0.769}))
+        db.commit()
+
+    def test_passes_on_the_stored_forecasts(self):
+        from app.services.model_registry_service import model_registry_service
+        db = _db()
+        # the fixture's origins before START have negative values (origin offset * 100 + h): keep START onwards
+        db.query(FDB).filter(FDB.origin_date < START).delete()
+        db.commit()
+        self._register(db)
+        out = model_registry_service.validate_model(db, "model-backtest-ensemble-v1")
+        self.assertTrue(out["validation_passed"], out["message"])
+        self.assertEqual(out["artifact_integrity"]["rows"], 2 * 30)
+        self.assertEqual(out["artifact_integrity"]["origins"], 30)
+        self.assertEqual(out["sample_skus_tested"], 2)
+
+    def test_fails_on_a_negative_value_and_without_rows(self):
+        from app.services.model_registry_service import model_registry_service
+        db = _db()
+        db.query(FDB).filter(FDB.origin_date < START).delete()
+        db.commit()
+        self._register(db)
+        row = db.query(FDB).first()
+        row.y_h3 = -1.0
+        db.commit()
+        self.assertFalse(model_registry_service.validate_model(db, "model-backtest-ensemble-v1")["validation_passed"])
+        db2 = _db(with_daily=False)
+        self._register(db2)
+        self.assertFalse(model_registry_service.validate_model(db2, "model-backtest-ensemble-v1")["validation_passed"])
+
+
 class TestLoadDailyPoints(unittest.TestCase):
     def test_loader_stores_the_store_rows_and_origin_range(self):
         import tempfile

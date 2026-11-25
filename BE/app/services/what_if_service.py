@@ -245,6 +245,8 @@ class WhatIfService:
         from app.services.calibrator_service import calibrator_service
         from app.services.optimization_service import optimization_service
 
+        pc.sync_costs(db)  # demo.md §1.3: the configured h, b, c (the request's own rates still win)
+
         store_id = (req.store_id or "").strip()
         if not store_id or store_id.upper() in ("GLOBAL", "ALL"):
             raise _unprocessable("store_required", "The what-if simulation runs for ONE store (GLOBAL is not supported).")

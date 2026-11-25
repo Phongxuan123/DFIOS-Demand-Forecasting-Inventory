@@ -23,9 +23,41 @@ HORIZON_DAYS: int = LEAD_TIME_DAYS + REVIEW_PERIOD_DAYS  # H = 10
 BACKTEST_WINDOW_DAYS: int = 10
 
 # --- Costs, assumption A3 (research.md §3.2 / §7.2) ----------------------------------------
-HOLDING_RATE_DAILY: float = 0.002  # h = 0.2 % * price / unit / day
-STOCKOUT_PENALTY_RATE: float = 0.35  # b = 35 % * price / unit short
-ORDER_COST_C: float = 2.0  # c = 2 per order line
+HOLDING_RATE_DAILY_DEFAULT: float = 0.002  # h = 0.2 % * price / unit / day (teacher)
+STOCKOUT_PENALTY_RATE_DEFAULT: float = 0.35  # b = 35 % * price / unit short (teacher)
+ORDER_COST_C_DEFAULT: float = 2.0  # c = 2 per order line (teacher)
+# Current values. demo.md §1.3: h, b, c are configured on the Settings screen (system setting ``simulation_costs``);
+# the engine reads them through ``pc.<NAME>`` at call time and ``sync_costs`` refreshes them from the DB at the
+# start of every clock advance / J5 / what-if / KPI call. Never bind them at import time.
+HOLDING_RATE_DAILY: float = HOLDING_RATE_DAILY_DEFAULT
+STOCKOUT_PENALTY_RATE: float = STOCKOUT_PENALTY_RATE_DEFAULT
+ORDER_COST_C: float = ORDER_COST_C_DEFAULT
+COSTS_SETTING_KEY: str = "simulation_costs"
+COST_LIMITS = {"holding_rate": (0.0, 1.0), "stockout_penalty_rate": (0.0, 10.0), "order_cost": (0.0, 10000.0)}
+
+
+def apply_costs(holding_rate=None, stockout_penalty_rate=None, order_cost=None) -> dict:
+    """Set the current h, b, c (None -> teacher default). Returns the values in force."""
+    global HOLDING_RATE_DAILY, STOCKOUT_PENALTY_RATE, ORDER_COST_C
+    HOLDING_RATE_DAILY = float(HOLDING_RATE_DAILY_DEFAULT if holding_rate is None else holding_rate)
+    STOCKOUT_PENALTY_RATE = float(STOCKOUT_PENALTY_RATE_DEFAULT if stockout_penalty_rate is None else stockout_penalty_rate)
+    ORDER_COST_C = float(ORDER_COST_C_DEFAULT if order_cost is None else order_cost)
+    return current_costs()
+
+
+def current_costs() -> dict:
+    return {"holding_rate": HOLDING_RATE_DAILY, "stockout_penalty_rate": STOCKOUT_PENALTY_RATE, "order_cost": ORDER_COST_C}
+
+
+def sync_costs(db) -> dict:
+    """Load h, b, c from the system setting ``simulation_costs`` (absent or unreadable -> teacher defaults)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.query(SystemSetting).filter(SystemSetting.key == COSTS_SETTING_KEY).first()
+        val = row.value if row is not None and isinstance(row.value, dict) else {}
+    except Exception:  # a test DB without the table, a closed session: keep the defaults
+        val = {}
+    return apply_costs(val.get("holding_rate"), val.get("stockout_penalty_rate"), val.get("order_cost"))
 
 # --- Service targets -----------------------------------------------------------------------
 TARGET_AVAILABILITY: float = 0.95  # A_g^min, the service commitment (system setting default_service_level overrides)

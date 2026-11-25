@@ -87,3 +87,108 @@ def store_daily_series(
             if added:
                 future_as_of = str(last_origin - timedelta(days=1))
     return {"series": series, "model_run": model_run, "past_horizon": 1, "future_as_of": future_as_of}
+
+
+BAND_LOOKBACK_DAYS = 364  # same residual lookback as the window quantiles (route c)
+BAND_LOW, BAND_HIGH = 0.10, 0.90
+
+
+def sku_daily_series(
+    db: Session,
+    store_id: str,
+    item_id: str,
+    clock_date: date,
+    first_day: date,
+    future_days: int = DAILY_HORIZONS,
+    model_run: str = DAILY_BACKTEST_RUN,
+) -> Optional[Dict[str, object]]:
+    """One SKU's causal backtest forecast with an empirical error band (demo.md §4.2 Forecast Explorer:
+    "dự báo 14 ngày tại as_of hiện tại … dải sai số cửa sổ (route c)").
+
+    Same day rules as ``store_daily_series``. The band of a day forecast ``h`` days ahead is the forecast plus the
+    10% / 90% quantiles of the SKU's own h-step errors (actual - y_h) over origins of the last ``BAND_LOOKBACK_DAYS``
+    whose target day is ``<= clock_date`` (sales known at the clock), clamped at 0. Nothing after the clock is read.
+    Returns ``{"points": {iso: {"predicted", "p10", "p90", "h"}}, "model_run", "future_as_of", "band_n": {h: n}}``
+    or None when the SKU has no rows."""
+    import numpy as np
+
+    from app.models.sales_history import SalesHistory
+
+    lo_origin = min(first_day, clock_date - timedelta(days=BAND_LOOKBACK_DAYS))
+    hi_origin = clock_date + timedelta(days=1)
+    rows = (
+        db.query(FDB)
+        .filter(FDB.model_run == model_run, FDB.store_id == store_id, FDB.item_id == item_id,
+                FDB.origin_date >= lo_origin, FDB.origin_date <= hi_origin)
+        .order_by(FDB.origin_date)
+        .all()
+    )
+    if not rows:
+        return None
+    actual = {
+        d: float(q or 0.0)
+        for d, q in db.query(SalesHistory.sale_date, func.sum(SalesHistory.quantity))
+        .filter(SalesHistory.store_id == store_id, SalesHistory.item_id == item_id,
+                SalesHistory.sale_date >= lo_origin, SalesHistory.sale_date <= clock_date)
+        .group_by(SalesHistory.sale_date)
+        .all()
+    }
+
+    # h-step residuals known at the clock (target day <= clock_date, origin within the lookback)
+    band_from = clock_date - timedelta(days=BAND_LOOKBACK_DAYS)
+    resid: Dict[int, List[float]] = {h: [] for h in range(1, DAILY_HORIZONS + 1)}
+    for r in rows:
+        if r.origin_date < band_from:
+            continue
+        for h in range(1, DAILY_HORIZONS + 1):
+            day = r.origin_date + timedelta(days=h - 1)
+            if day > clock_date:
+                break
+            if day in actual:
+                resid[h].append(actual[day] - float(getattr(r, f"y_h{h}")))
+    q = {
+        h: (float(np.quantile(v, BAND_LOW)), float(np.quantile(v, BAND_HIGH))) if v else None
+        for h, v in resid.items()
+    }
+
+    def point(value: float, h: int) -> Dict[str, object]:
+        b = q.get(h)
+        return {
+            "predicted": round(value, 2),
+            "p10": round(max(0.0, value + b[0]), 2) if b else None,
+            "p90": round(max(0.0, value + b[1]), 2) if b else None,
+            "h": h,
+        }
+
+    points: Dict[str, Dict[str, object]] = {}
+    by_origin = {r.origin_date: r for r in rows}
+    d = first_day
+    while d <= clock_date:
+        r = by_origin.get(d)
+        if r is not None:
+            points[str(d)] = point(float(r.y_h1), 1)
+        d += timedelta(days=1)
+
+    future_as_of: Optional[str] = None
+    last_origin = max((o for o in by_origin if o <= hi_origin), default=None)
+    n_future = max(0, min(int(future_days), DAILY_HORIZONS))
+    if last_origin is not None and n_future:
+        r = by_origin[last_origin]
+        added = 0
+        for h in range(1, DAILY_HORIZONS + 1):
+            day = last_origin + timedelta(days=h - 1)
+            if day <= clock_date:
+                continue
+            if added >= n_future:
+                break
+            points[str(day)] = point(float(getattr(r, f"y_h{h}")), h)
+            added += 1
+        if added:
+            future_as_of = str(last_origin - timedelta(days=1))
+    return {
+        "points": points,
+        "model_run": model_run,
+        "future_as_of": future_as_of,
+        "band_n": {h: len(v) for h, v in resid.items()},
+        "actual": {str(k): v for k, v in actual.items() if k >= first_day},
+    }

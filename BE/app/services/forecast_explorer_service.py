@@ -19,7 +19,9 @@ GET /api/v1/forecast-explorer/window?store_id=&item_id=&review_date=  returns, f
     before the review date (o + H <= review_date: no future data) and every method has a value.
         MASE  = mean |F - A| / (H * mean |y_t - y_{t-7}|), scale over the 364 days before the first scored origin
         bias  = mean (F - A)  (positive = over-forecast); bias_pct = sum(F - A) / sum(A)
-    Holt-Winters / LightGBM single-model baselines (teacher table) are NOT stored in the app: not reported.
+        LightGBM  single LightGBM of the backtest engine (forecast_daily_backtest, model_run backtest-lgbm-v1)
+        HW        teacher E2b additive Holt-Winters on the SKU's sales (app/services/holt_winters.py)
+    (the two are reported when available; every reported method is scored on the same windows)
 
 (c) s / S implied by the CURRENT class parameters (teacher REFIT-RSS-EOQ-G, same formula as J4):
         s   = ceil(Q_hat(tau) * exp(m_g + theta_g) - 1e-9)
@@ -59,6 +61,7 @@ from app.services.window_quantile_service import (
 )
 
 BOX_LEVELS = (0.5, 0.8, 0.9, 0.95, 0.99)
+LGBM_RUN = "backtest-lgbm-v1"
 DEFAULT_LOOKBACK_DAYS = 182
 SCALE_HISTORY_DAYS = 364
 MA_DAYS = 28
@@ -146,10 +149,13 @@ def _q(levels: Dict[str, float], tau: float, point: float) -> Optional[float]:
 
 def window_error_stats(
     actual_daily: np.ndarray, first_day_idx: int, origins: List[int], model: Dict[int, float], H: int,
-    review_idx: int, lookback_days: int,
+    review_idx: int, lookback_days: int, extra: Optional[Dict[str, Dict[int, float]]] = None,
 ) -> ErrorStats:
-    """Pure core of (b). ``actual_daily[k]`` is the demand of M5 day ``first_day_idx + k`` (NaN = unknown)."""
+    """Pure core of (b). ``actual_daily[k]`` is the demand of M5 day ``first_day_idx + k`` (NaN = unknown).
+    ``extra``: more single-model window forecasts by name (LightGBM, Holt-Winters); a method with no value at all is
+    left out, otherwise a window is scored only when every method has a value (same windows for all)."""
     y = np.asarray(actual_daily, dtype=float)
+    extra = {k: v for k, v in (extra or {}).items() if v}
 
     def day(i: int) -> float:
         k = i - first_day_idx
@@ -168,7 +174,10 @@ def window_error_stats(
         ma_known = [v for v in ma_vals if not math.isnan(v)]
         if any(math.isnan(v) for v in sn) or math.isnan(last) or not ma_known:
             continue
-        rows.append((o, sum(act), float(model[o]), sum(sn), H * last, H * float(np.mean(ma_known))))
+        if any(o not in v for v in extra.values()):
+            continue
+        rows.append((o, sum(act), float(model[o]), sum(sn), H * last, H * float(np.mean(ma_known)),
+                     *[float(v[o]) for v in extra.values()]))
 
     scale = None
     if rows:
@@ -180,7 +189,8 @@ def window_error_stats(
             scale = H * float(np.mean(diffs))
 
     methods: List[MethodError] = []
-    for name, col in (("model", 2), ("snaive", 3), ("naive", 4), ("ma28", 5)):
+    cols = [("model", 2), ("snaive", 3), ("naive", 4), ("ma28", 5)] + [(k, 6 + i) for i, k in enumerate(extra)]
+    for name, col in cols:
         if not rows:
             methods.append(MethodError(method=name, n_windows=0))
             continue
@@ -242,6 +252,46 @@ class ForecastExplorerService:
             return {pc.date_to_day_index(o): float(p) for o, p in stored}, "forecast_window_quantile"
         return {}, None
 
+    @staticmethod
+    def _lgbm_windows(db: Session, store_id: str, item_id: str, H: int, origins: List[int]) -> Dict[int, float]:
+        """Single LightGBM of the backtest engine (E1, daily_points.npz ``lgbm``, loaded with ``--daily-models lgbm``):
+        window total at origin o = y_h1 + .. + y_hH of origin o (days o .. o + H - 1). Empty when not loaded."""
+        from app.models.forecast_daily_backtest import DAILY_HORIZONS, ForecastDailyBacktest as FDB
+        if not origins or H > DAILY_HORIZONS:
+            return {}
+        dates = [pc.day_index_to_date(o) for o in origins]
+        rows = (
+            db.query(FDB)
+            .filter(FDB.model_run == LGBM_RUN, FDB.store_id == store_id, FDB.item_id == item_id,
+                    FDB.origin_date.in_(dates))
+            .all()
+        )
+        return {pc.date_to_day_index(r.origin_date): float(sum(getattr(r, f"y_h{h}") for h in range(1, H + 1)))
+                for r in rows}
+
+    @staticmethod
+    def _holt_winters_windows(db: Session, store_id: str, item_id: str, H: int, origins: List[int],
+                              review_idx: int) -> Dict[int, float]:
+        """Teacher E2b Holt-Winters on this SKU's sales (days before each origin only): window total of the path."""
+        from sqlalchemy import func
+
+        from app.models.sales_history import SalesHistory
+        from app.services.holt_winters import FIT_DAYS, FIT_END_DEFAULT, INIT_DAYS, holt_winters_paths
+        if not origins:
+            return {}
+        first_date = (db.query(func.min(SalesHistory.sale_date))
+                      .filter(SalesHistory.store_id == store_id, SalesHistory.item_id == item_id).scalar())
+        if first_date is None:
+            return {}
+        first = pc.date_to_day_index(first_date)
+        lo = min(origins)
+        if lo - first < INIT_DAYS + FIT_DAYS // 2:  # too little history before the first origin
+            return {}
+        y = np.nan_to_num(build_actuals_matrix(db, store_id, [item_id], first, min(review_idx, max(origins)))[0])
+        fit_end = min(FIT_END_DEFAULT, lo) - first
+        paths, _ = holt_winters_paths(y[None, :], fit_end, [o - first for o in origins], H)
+        return {o + first: float(p[0, :H].sum()) for o, p in paths.items()}
+
     def window(
         self,
         db: Session,
@@ -302,8 +352,12 @@ class ForecastExplorerService:
         model, model_src = self._model_windows(db, sid, item_id, H, lo, o_idx - H)
         first_day = lo - SCALE_HISTORY_DAYS - MA_DAYS
         A = build_actuals_matrix(db, sid, [item_id], max(0, first_day), o_idx)
+        extra = {
+            "lgbm": self._lgbm_windows(db, sid, item_id, H, list(model.keys())),
+            "holt_winters": self._holt_winters_windows(db, sid, item_id, H, list(model.keys()), o_idx),
+        }
         stats = window_error_stats(A[0] if A.shape[0] else np.array([]), max(0, first_day), list(model.keys()),
-                                   model, H, o_idx, lookback_days)
+                                   model, H, o_idx, lookback_days, extra=extra)
         stats.model_source = model_src
 
         # (c) s / S implied by the current class parameters
@@ -346,8 +400,9 @@ class ForecastExplorerService:
         notes = [
             "Daily quantiles are not added up: the window quantile comes from the empirical distribution of H-day "
             "window errors (route c), because the sum of daily Q(0.95) overstates the 0.95 quantile of the sum.",
-            "Holt-Winters and single LightGBM baselines of the teacher's table are not stored in the app; the "
-            "baselines here are computed from sales_history (SNaive, Naive, MA28).",
+            "Baselines: SNaive, Naive, MA28 from sales_history; Holt-Winters = teacher E2b method on this SKU's sales "
+            "(computed per request, days before each origin only); LightGBM = single model of the backtest engine "
+            "(shown when loaded with load_teacher_data.py --steps daily --daily-models lgbm).",
         ]
         if segment is None:
             notes.append("SKU has no ABC-XYZ class in this store: class AX parameters are used, as J4 does.")

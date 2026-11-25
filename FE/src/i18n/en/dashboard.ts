@@ -74,6 +74,10 @@ export const dashboard: typeof Vi = {
     availability: 'Service Level (OTIF)',
     availability_vs_b0: '{pp} pp vs B0',
     availability_hint: 'Target {target} (95% + 1%) · Baseline B0: {b0}',
+    fill_rate: 'Fill rate',
+    fill_rate_hint: 'Units sold / units demanded · B0: {b0}',
+    classes_below: 'Classes below commitment',
+    classes_below_hint: 'Over the last {n} closed cycles, against the {target} target',
     availability_target_missing: 'not set',
     stockouts: 'Stockout Risk Rate',
     stockouts_hint: '{rate} of {total} SKUs',
@@ -174,6 +178,7 @@ export const dashboard: typeof Vi = {
   reason: {
     availability: 'advance clock (≥7d) to evaluate',
     cost: 'advance clock to compute',
+    fill_rate: 'advance clock to compute',
     inventory: 'no inventory data',
     no_store: 'no store selected',
   },

@@ -87,6 +87,44 @@ models = [
         "promoted_at": None
     },
     {
+        # demo.md §4.1 / §7 step 3: the BACKTEST engine that feeds the replay (scope "replay", never production:
+        # the dashboard's production model is the bundle above). Numbers: DFIOS/reports/experiment_results.md §2,
+        # Bảng 1 (test origins 1577-1927, h = 1..14, revenue weights).
+        "id": "model-backtest-ensemble-v1",
+        "name": "Backtest Ensemble (replay)",
+        "version": "v1",
+        "algorithm": "ensemble",
+        "scope": "replay",
+        "is_production": False,
+        "parameters": {
+            "model_run": "backtest-ensemble-v1",
+            "components": ["LightGBM", "XGBoost", "MLP"],
+            "weights": {"LightGBM": 0.548, "XGBoost": 0.275, "MLP": 0.202},
+            "features": 29,
+            "cutoffs": {"model_A": "d_1031", "model_B": "d_1395"},
+            "origins": "rolling-origin d_1031 .. d_1940 (910), h = 1..14",
+            "panel": "P-Main: CA_1, TX_1, WI_1 (8,831 series)",
+            "source_file": "results/forecasts/daily_points.npz",
+        },
+        "metrics": {
+            "wrmsse": 0.769,
+            "mase": 0.920,
+            "mae": None,
+            "rmse": None,
+            "bias_pct": -0.1,
+            "metrics_source": {
+                "wrmsse": "artifact:experiment_results.md Bảng 1 WRMSSE (SKU) h=1..14",
+                "mase": "artifact:experiment_results.md Bảng 1 WMASE (SKU) h=1..14",
+                "mae": "unsourced",
+                "rmse": "unsourced",
+            },
+        },
+        "trained_by": "DFIOS ML Pipeline (E1/G1)",
+        "job_id": None,
+        "created_at": now,
+        "promoted_at": None
+    },
+    {
         "id": "model-sarima-v1",
         "name": "Seasonal ARIMA",
         "version": "v1.0",

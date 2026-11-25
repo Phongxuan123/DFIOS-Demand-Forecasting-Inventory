@@ -503,6 +503,47 @@ class DashboardService:
             out[c]["b0_stockout"] = b0[c]
         return out, None, None
 
+    @staticmethod
+    def _fill_rate(db: Session, model, stores: List[str], start: date, end: date) -> Optional[float]:
+        """Fill rate in percent: Σ sold / Σ (sold + lost) over the simulated days; None without demand."""
+        sold, lost = (
+            db.query(func.sum(model.sales), func.sum(model.lost_sales))
+            .filter(model.store_id.in_(stores), model.date >= start, model.date <= end)
+            .one()
+        )
+        demand = float(sold or 0.0) + float(lost or 0.0)
+        return round(float(sold or 0.0) / demand * 100.0, 1) if demand > 0 else None
+
+    @staticmethod
+    def _classes_below_recent(
+        db: Session, stores: List[str], start: date, end: date, target_pct: float, n_cycles: int = 4
+    ) -> Tuple[Optional[int], Optional[int], int]:
+        """Classes whose availability over the last ``n_cycles`` CLOSED cycles (per store) is below the commitment.
+        Returns (n_below, n_measured, cycles_used); (None, None, 0) before the first closed cycle."""
+        rows = (
+            db.query(ServiceOutcome.store_id, ServiceOutcome.class_id, ServiceOutcome.cycle_index,
+                     ServiceOutcome.n_sku, ServiceOutcome.n_stockout)
+            .filter(ServiceOutcome.store_id.in_(stores), ServiceOutcome.cycle_start >= start,
+                    ServiceOutcome.cycle_end <= end)
+            .all()
+        )
+        if not rows:
+            return None, None, 0
+        recent: Dict[str, set] = {}
+        for st in {r.store_id for r in rows}:
+            ks = sorted({int(r.cycle_index) for r in rows if r.store_id == st})
+            recent[st] = set(ks[-n_cycles:])
+        per: Dict[str, List[int]] = {}
+        for r in rows:
+            if int(r.cycle_index) in recent.get(r.store_id, ()):
+                acc = per.setdefault(r.class_id, [0, 0])
+                acc[0] += int(r.n_sku or 0)
+                acc[1] += int(r.n_stockout or 0)
+        measured = {c: (1.0 - so / n) * 100.0 for c, (n, so) in per.items() if n}
+        below = sum(1 for v in measured.values() if v < target_pct)
+        used = max((len(v) for v in recent.values()), default=0)
+        return below, len(measured), used
+
     def get_shadow_baseline_dashboard(
         self, db: Session, store_id: str = "CA_1"
     ) -> KPIDashboardResponse:
@@ -515,6 +556,7 @@ class DashboardService:
         is_global = not store_id or not store_id.strip() or store_id.strip().upper() in ("GLOBAL", "ALL")
         target_store = "GLOBAL" if is_global else store_id.strip()
         R = pc.REVIEW_PERIOD_DAYS
+        pc.sync_costs(db)  # demo.md §1.3: A3 costs valued with the configured h, b, c
 
         clocks = db.query(SimClock).all() if is_global else db.query(SimClock).filter(SimClock.store_id == target_store).all()
         if not clocks:
@@ -590,6 +632,10 @@ class DashboardService:
             ))
         overall_c3 = round((1.0 - c3_so / c3_n) * 100.0, 1) if c3_n else None
         overall_b0 = round((1.0 - b0_so / b0_n) * 100.0, 1) if b0_n else None
+        fill_c3 = self._fill_rate(db, InventoryDaily, stores, start_date, curr_date)
+        fill_b0 = self._fill_rate(db, SimShadowDaily, stores, start_date, curr_date)
+        below_recent, measured_recent, cycles_used = self._classes_below_recent(
+            db, stores, start_date, curr_date, target_pct)
 
         # ---- costs (A3): daily aggregates, cumulative per review cycle
         cost_reason = None
@@ -618,6 +664,8 @@ class DashboardService:
             .all()
         )
         b0_orders = {d: float(n) * pc.ORDER_COST_C for d, n in sh_orders_rows}
+        c3_orders_count = int(sum(n for d, n in placed if d is not None))
+        b0_orders_count = int(sum(n for _, n in sh_orders_rows)) if sh_orders_rows else None
 
         curves: List[CostCurvePoint] = []
         if not have_c3:
@@ -698,6 +746,14 @@ class DashboardService:
             total_cost_savings=savings,
             c3out_overall_availability=overall_c3,
             b0_overall_availability=overall_b0,
+            c3out_fill_rate=fill_c3,
+            b0_fill_rate=fill_b0,
+            classes_below_recent=below_recent,
+            classes_measured_recent=measured_recent,
+            recent_cycles_used=cycles_used,
+            c3out_orders_count=c3_orders_count if have_c3 else None,
+            b0_orders_count=b0_orders_count,
+            start_date=start_date,
             segment_availabilities=segs,
             cost_curves=curves,
             summary_insights=insights,

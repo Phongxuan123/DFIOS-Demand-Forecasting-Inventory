@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Award, CheckCircle2, Download, Play, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react';
+import { Award, CheckCircle2, Download, Play, Printer, ShieldCheck, TrendingDown, TrendingUp, TriangleAlert } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import {
   Alert,
@@ -35,6 +35,7 @@ import { RefitPanel } from './reports/RefitPanel.tsx';
 import { ForecastQualityPanel } from './reports/ForecastQualityPanel.tsx';
 import { ControllerPanel } from './reports/ControllerPanel.tsx';
 import { downloadCsv } from '../utils/csv.ts';
+import { buildPeriodReportHtml, printPeriodReport } from '../utils/periodReport.ts';
 import { useFormat, useT } from '../i18n/index.tsx';
 import { useBe } from '../i18n/useBe.ts';
 import { policyDescription, policyLabel } from '../utils/policyText.ts';
@@ -480,8 +481,76 @@ export const Reports: React.FC = () => {
       ['B0 availability %', k?.b0_overall_availability ?? null],
       ['Target availability %', k?.target_availability ?? null],
       ['Classes below target', segments.length ? `${belowTarget}/${segments.length}` : null],
+      ['C3-OUT fill rate %', k?.c3out_fill_rate ?? null],
+      ['B0 fill rate %', k?.b0_fill_rate ?? null],
+      ['C3-OUT orders', k?.c3out_orders_count ?? null],
+      ['B0 orders', k?.b0_orders_count ?? null],
+      // demo.md §6.2: service per class
+      ...(k?.segment_availabilities ?? []).flatMap((sg): Array<[string, string | number | null]> => [
+        [`${sg.class_id} availability C3-OUT %`, sg.c3out_availability],
+        [`${sg.class_id} availability B0 %`, sg.b0_availability],
+        [`${sg.class_id} theta`, sg.theta],
+      ]),
     ];
     downloadCsv(`audit-report-${storeId ?? 'store'}.csv`, ['Key', 'Value'], rows);
+  };
+
+  const exportPdf = () => {
+    if (!k) return;
+    const html = buildPeriodReportHtml({
+      title: t('reports.pdf.title'),
+      store: storeId ?? '—',
+      period: t('reports.pdf.period', {
+        from: k.start_date ? fmt.date(k.start_date) : clock?.start_date ? fmt.date(clock.start_date) : '—',
+        to: k.as_of ? fmt.date(k.as_of) : '—',
+        days: fmt.integer(k.days_elapsed),
+      }),
+      generatedAt: t('reports.pdf.generated', { at: fmt.dateTime(new Date().toISOString()) }),
+      labels: {
+        costTitle: t('reports.pdf.cost_title'),
+        serviceTitle: t('reports.pdf.service_title'),
+        ordersTitle: t('reports.pdf.orders_title'),
+        item: t('reports.cost.col_item'),
+        c3: 'DFIOS (C³-OUT)',
+        b0: 'B0',
+        diff: t('reports.cost.diff_col'),
+        cls: t('reports.pdf.cls'),
+        nSku: t('reports.pdf.n_sku'),
+        target: t('reports.pdf.target'),
+        theta: 'θ',
+        status: t('reports.pdf.status'),
+        below: t('reports.pdf.below'),
+        ok: t('reports.pdf.ok'),
+        notMeasured: t('reports.pdf.not_measured'),
+        orders: t('reports.pdf.orders'),
+        availability: t('reports.pdf.availability'),
+        fillRate: t('reports.pdf.fill_rate'),
+        basis: t('reports.pdf.basis'),
+        footer: t('reports.pdf.footer'),
+      },
+      costs: [
+        { label: t('reports.cost.holding'), c3: lastPoint?.c3out_holding_cost ?? null, b0: lastPoint?.b0_holding_cost ?? null },
+        { label: t('reports.cost.order'), c3: lastPoint?.c3out_ordering_cost ?? null, b0: lastPoint?.b0_ordering_cost ?? null },
+        { label: t('reports.cost.penalty'), c3: lastPoint?.c3out_stockout_cost ?? null, b0: lastPoint?.b0_stockout_cost ?? null },
+        { label: t('reports.cost.total'), c3: c3Total, b0: b0Total },
+      ],
+      classes: (k.segment_availabilities ?? []).map((sg) => ({
+        cls: sg.class_id,
+        nSku: sg.n_sku ?? null,
+        c3: sg.c3out_availability,
+        b0: sg.b0_availability,
+        theta: sg.theta,
+        target: sg.target,
+      })),
+      availability: { c3: k.c3out_overall_availability, b0: k.b0_overall_availability },
+      fillRate: { c3: k.c3out_fill_rate ?? null, b0: k.b0_fill_rate ?? null },
+      orders: { c3: k.c3out_orders_count ?? null, b0: k.b0_orders_count ?? null },
+      basis: costBasisText(k.cost_basis, t),
+      money: (v) => fmt.currency(v),
+      pct: (v) => fmt.percent(v, { scale: 'percent', digits: 1 }),
+      int: (v) => fmt.integer(v),
+    });
+    if (!printPeriodReport(html)) toast.error(t('reports.pdf.blocked'));
   };
 
   // Cost breakdown: the admin cost report when present, else the last point of the simulator cost curve
@@ -551,6 +620,9 @@ export const Reports: React.FC = () => {
           <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
             <Button variant="secondary" size="sm" leftIcon={<Download size={14} />} onClick={exportFullCsv} disabled={!k}>
               {t('reports.exec.export_full')}
+            </Button>
+            <Button variant="secondary" size="sm" leftIcon={<Printer size={14} />} onClick={exportPdf} disabled={!k}>
+              {t('reports.pdf.export')}
             </Button>
             {isAdmin && (
               <Button variant="primary" size="sm" leftIcon={<Play size={14} />} loading={runningBt} onClick={runBacktest}>

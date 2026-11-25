@@ -70,6 +70,7 @@ export const models: typeof Vi = {
   role: {
     production: 'Production',
     challenger: 'Challenger',
+    replay: 'Replay (backtest)',
   },
   algo: {
     gbdt_lags: 'numpy GBDT (lags preset)',

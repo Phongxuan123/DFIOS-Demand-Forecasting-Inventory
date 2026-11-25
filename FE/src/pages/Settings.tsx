@@ -13,6 +13,7 @@ import { HoldHeight } from '../components/ui/HoldHeight.tsx';
 import { ProfileTab } from './settings/ProfileTab.tsx';
 import { SchedulesTab } from './settings/SchedulesTab.tsx';
 import { SystemTab } from './settings/SystemTab.tsx';
+import { SimulationParamsCard } from './settings/SimulationParamsCard.tsx';
 import { UsersTab } from './settings/UsersTab.tsx';
 import './settings/settings.css';
 
@@ -63,7 +64,12 @@ export const Settings: React.FC = () => {
         <HoldHeight activeKey={active} role="tabpanel">
           {active === 'profile' && <ProfileTab />}
           {active === 'preferences' && <PrefsTab />}
-          {active === 'system' && <SystemTab canEdit={can(user?.role, 'users:manage')} />}
+          {active === 'system' && (
+            <div className="ui-stack">
+              <SystemTab canEdit={can(user?.role, 'users:manage')} />
+              <SimulationParamsCard canEdit={can(user?.role, 'users:manage')} />
+            </div>
+          )}
           {active === 'schedules' && <SchedulesTab />}
           {active === 'users' && <UsersTab />}
           {active === 'audit' && <AuditTab />}

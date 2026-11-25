@@ -18,6 +18,7 @@ from app.schemas.forecast import (
     ForecastOverrideRevertResponse,
     BulkOverrideRequest,
     BulkOverrideResponse,
+    SkuReplayTrendResponse,
 )
 from app.services import policy_config as pc
 from app.schemas.window_quantile import WindowQuantileResponse
@@ -110,6 +111,58 @@ def get_historical_demand(
         end_date=end_date,
         granularity=granularity,
     )
+
+
+@router.get(
+    "/{sku}/replay-trend",
+    response_model=SkuReplayTrendResponse,
+    summary="Forecast Explorer (demo.md §4.2) - Lịch sử bán và dự báo backtest nhân quả tại ngày đồng hồ",
+)
+def get_sku_replay_trend(
+    sku: str,
+    store_id: str = Query(..., description="Mã cửa hàng"),
+    days: int = Query(30, ge=7, le=365, description="Số ngày lịch sử trước ngày đồng hồ"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Ngày ≤ đồng hồ: doanh số thật và dự báo lập tối hôm trước (h = 1). Sau đồng hồ: 14 ngày tới, lập cuối ngày
+    đồng hồ. Dải = dự báo + phân vị 10% / 90% sai số h bước của chính SKU (364 ngày trước đồng hồ). Không đọc dữ liệu
+    sau đồng hồ. 404 khi cửa hàng chưa có đồng hồ hoặc SKU chưa có dự báo backtest (FE dùng biểu đồ production)."""
+    from datetime import timedelta
+
+    from app.services import backtest_daily_service as bds
+
+    clock = db.query(SimClock).filter(SimClock.store_id == store_id).first()
+    if clock is None:
+        raise HTTPException(status_code=404, detail=f"Cửa hàng '{store_id}' chưa có đồng hồ mô phỏng")
+    clock_date = clock.current_date
+    first_day = clock_date - timedelta(days=days - 1)
+    res = bds.sku_daily_series(db, store_id, sku, clock_date, first_day)
+    if res is None:
+        raise HTTPException(status_code=404, detail=f"SKU '{sku}' chưa có dự báo backtest tại '{store_id}'")
+    actual = res["actual"]
+    dates = sorted(set(actual) | set(res["points"]))
+    data = []
+    for d in dates:
+        p = res["points"].get(d, {})
+        data.append({
+            "date": d,
+            "actual": round(actual[d], 2) if d in actual else None,
+            "predicted": p.get("predicted"),
+            "p10": p.get("p10"),
+            "p90": p.get("p90"),
+            "h": p.get("h"),
+        })
+    return {
+        "item_id": sku,
+        "store_id": store_id,
+        "as_of": str(clock_date),
+        "forecast_as_of": res["future_as_of"],
+        "model_run": res["model_run"],
+        "band_lookback_days": bds.BAND_LOOKBACK_DAYS,
+        "band_quantiles": [bds.BAND_LOW, bds.BAND_HIGH],
+        "data": data,
+    }
 
 
 @router.get("/{sku}/compare", response_model=ForecastCompareResponse, summary="UC21 - So sánh doanh số thực tế vs dự báo")

@@ -132,6 +132,9 @@ class ModelRegistryService:
                 detail=f"Không tìm thấy phiên bản mô hình với ID: {model_id}",
             )
 
+        if (model_entity.scope or "").strip().lower() == "replay":
+            return self._validate_replay_run(db, model_entity)
+
         # 1. Xác định thư mục artifact
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         model_dir = os.path.join(base_dir, "MODEL")
@@ -242,6 +245,65 @@ class ModelRegistryService:
             },
             "metrics": metrics,
             "message": status_msg,
+        }
+
+    @staticmethod
+    def _validate_replay_run(db: Session, model_entity) -> Dict[str, Any]:
+        """A replay (backtest) run has no artifact file: it is the stored rolling-origin forecasts. Checks on 200 SKUs
+        (demo.md §4.3 step 2: no negative, no missing value), plus the row and origin counts of the whole run."""
+        from sqlalchemy import func, or_
+
+        from app.models.forecast_daily_backtest import DAILY_HORIZONS, ForecastDailyBacktest as FDB
+
+        params = model_entity.parameters if isinstance(model_entity.parameters, dict) else {}
+        run = str(params.get("model_run") or "backtest-ensemble-v1")
+        base = db.query(FDB).filter(FDB.model_run == run)
+        n_rows, n_origins, n_skus, first_o, last_o = base.with_entities(
+            func.count(), func.count(func.distinct(FDB.origin_date)), func.count(func.distinct(FDB.item_id)),
+            func.min(FDB.origin_date), func.max(FDB.origin_date),
+        ).one()
+        sample = [r[0] for r in base.with_entities(FDB.item_id).distinct().order_by(FDB.item_id).limit(200).all()]
+        cols = [getattr(FDB, f"y_h{h}") for h in range(1, DAILY_HORIZONS + 1)]
+        bad = 0
+        if sample:
+            bad = (
+                base.filter(FDB.item_id.in_(sample))
+                .filter(or_(*[c.is_(None) for c in cols], *[c < 0 for c in cols]))
+                .count()
+            )
+        reasons = []
+        if not n_rows:
+            reasons.append(f"Chưa nạp dự báo backtest '{run}' (load_teacher_data.py --steps daily).")
+        if bad:
+            reasons.append(f"{bad} dòng của {len(sample)} SKU mẫu có giá trị âm hoặc thiếu.")
+        passed = not reasons
+        ver = str(model_entity.version or "")
+        name = f"{model_entity.name} {ver if ver.lower().startswith('v') else 'v' + ver}"
+        return {
+            "success": True,
+            "model_id": model_entity.id,
+            "model_name": model_entity.name,
+            "version": model_entity.version,
+            "algorithm": model_entity.algorithm,
+            "sample_skus_tested": len(sample),
+            "validation_passed": passed,
+            "artifact_integrity": {
+                "artifact_file": f"forecast_daily_backtest[{run}]",
+                "file_exists": bool(n_rows),
+                "file_size_bytes": 0,
+                "sha256": None,
+                "rows": int(n_rows or 0),
+                "origins": int(n_origins or 0),
+                "skus": int(n_skus or 0),
+                "first_origin": str(first_o) if first_o else None,
+                "last_origin": str(last_o) if last_o else None,
+            },
+            "metrics": model_entity.metrics,
+            "message": (
+                f"Mô hình '{name}': {int(n_rows):,} dòng, {int(n_origins)} gốc, {int(n_skus)} SKU; "
+                f"{len(sample)} SKU mẫu không có giá trị âm hay thiếu."
+                if passed else f"Mô hình '{name}' KHÔNG đạt kiểm định: {'; '.join(reasons)}"
+            ),
         }
 
     def list_models(

@@ -258,9 +258,15 @@ export const forecast = {
     acc_unavailable: 'Chưa tải được số đánh giá',
     kpi_unc_title: 'Độ rộng dải P10–P90',
     kpi_unc_sub: 'SKU {sku} · Σ(P90 − P10) / 2 / ΣP50 trên {n} ngày',
-    kpi_unc_none: 'SKU {sku}: P50 gần 0 (bán thưa) nên không tính độ rộng tương đối',
+    kpi_unc_none: 'SKU {sku}: hàng bán thưa (P50 dưới 1 đơn vị/ngày) nên không tính độ rộng tương đối',
     chart_title_overview: 'Thực tế và dự báo {days} ngày gần nhất',
     chart_title_sku: 'Lịch sử bán {days} ngày và dự báo {h} ngày',
+    chart_title_sku_replay: 'Lịch sử bán {days} ngày và dự báo 14 ngày tại ngày đồng hồ',
+    legend_band_replay: 'Dải sai số P10 – P90',
+    sku_sparse_note:
+      'Hàng bán thưa: dự báo trung bình dưới 1 đơn vị/ngày và phần lớn các ngày bán 0, nên dải sai số nằm sát 0 và đường dự báo (mức trung bình) có thể nằm trên dải.',
+    sku_replay_note:
+      'Dự báo: Ensemble backtest, đúng nhân quả. Đến ngày đồng hồ là dự báo của từng ngày, lập từ tối hôm trước; sau vạch là 14 ngày tới, lập cuối ngày {asOf}. Dải: dự báo cộng phân vị 10% / 90% sai số thật của SKU này trong {days} ngày trước đồng hồ. Dự báo 28 ngày của production ở tab Dự báo tương lai.',
     chart_scope_store: 'Toàn kho ({store})',
     chart_scope_cat: 'Nhóm hàng {cat} ({store})',
     chart_scope_sku: '{sku} · Kho {store}',
