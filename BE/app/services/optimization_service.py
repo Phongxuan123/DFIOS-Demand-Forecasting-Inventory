@@ -306,10 +306,12 @@ class OptimizationService:
                 s_val = float(math.ceil(q_hat * math.exp(m_g + theta) - policy_backtest.CEIL_EPS))
                 # G-10: EOQ mean = mean of ACTUAL daily sales of the previous 56 days (0 without sales; no forecast)
                 mean_d, std_d = stats_map.get(iid, (0.0, 0.0))
+                eoq_mean, eoq_basis = self.eoq_demand_rate(mean_d, s_val, rec.point_window, H)
                 results.append(self._finish_params(
-                    prod, store_id, lt, tau_of[iid], s_val, kappa, max(0.0, float(mean_d)), std_d or 0.0,
+                    prod, store_id, lt, tau_of[iid], s_val, kappa, eoq_mean, std_d or 0.0,
                     source="ml", model_run_id="REFIT-RSS-EOQ-G", teacher_eoq=True,
-                    extra={"segment": segment, "m_g": m_g, "kappa_g": kappa, "theta_g": theta, "q_hat": q_hat},
+                    extra={"segment": segment, "m_g": m_g, "kappa_g": kappa, "theta_g": theta, "q_hat": q_hat,
+                           "eoq_basis": eoq_basis},
                     unit_price=day_price.get(iid),
                 ))
         static_ids = [p for p in products if p.item_id not in ml_set]
@@ -782,6 +784,22 @@ class OptimizationService:
                             n_periods: Optional[int] = None) -> List[int]:
         chain = self._simulation_reviews(db, store_id, item_ids, o_idx)
         return chain[-int(n_periods):] if n_periods else chain
+
+    @staticmethod
+    def eoq_demand_rate(mean_56: Optional[float], s_val: float, point_window: Optional[float], H: int,
+                        enabled: Optional[bool] = None) -> Tuple[float, str]:
+        """Daily demand rate behind the EOQ of one SKU and where it came from (research_v2 H9).
+
+        Teacher rule: the 56-day mean of actual sales (``sales_56d``). With ``ZERO_SALES_LOT_FROM_FORECAST`` on, a
+        SKU with no sale in those 56 days but still a reorder point (s > 0) takes its forecast rate over the
+        protection window, F_hat / H (``forecast_window``), so its lot is not 0 and S > s."""
+        mu = max(0.0, float(mean_56 or 0.0))
+        on = pc.ZERO_SALES_LOT_FROM_FORECAST if enabled is None else bool(enabled)
+        if on and mu <= 0.0 and s_val > 0 and H > 0:
+            rate = max(0.0, float(point_window or 0.0)) / float(H)
+            if rate > 0.0:
+                return rate, "forecast_window"
+        return mu, "sales_56d"
 
     @staticmethod
     def teacher_eoq(mu_daily: np.ndarray, price: np.ndarray) -> np.ndarray:

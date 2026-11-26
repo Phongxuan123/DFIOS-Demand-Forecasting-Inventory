@@ -10,10 +10,12 @@ explicitly opts in to supplier lead times via the system setting ``use_supplier_
 """
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 from typing import List
 
 import numpy as np
+from sqlalchemy.exc import SQLAlchemyError
 
 # --- Timing (research.md §3, §7.1) ---------------------------------------------------------
 LEAD_TIME_DAYS: int = 3
@@ -55,7 +57,7 @@ def sync_costs(db) -> dict:
         from app.models.system_setting import SystemSetting
         row = db.query(SystemSetting).filter(SystemSetting.key == COSTS_SETTING_KEY).first()
         val = row.value if row is not None and isinstance(row.value, dict) else {}
-    except Exception:  # a test DB without the table, a closed session: keep the defaults
+    except SQLAlchemyError:  # a test DB without the table, a closed session: keep the defaults
         val = {}
     return apply_costs(val.get("holding_rate"), val.get("stockout_penalty_rate"), val.get("order_cost"))
 
@@ -113,6 +115,15 @@ ROUTE_TEACHER: str = "teacher"
 QUANTILE_FLOOR_ENABLED: bool = False
 QUANTILE_FLOOR_UNITS: float = 1.0
 GAUSSIAN_FALLBACK_ENABLED: bool = False
+
+# --- Lot for SKUs without recent sales (research_v2 §6.3 / H9) ----------------------------
+# Teacher rule (default): EOQ uses the mean of ACTUAL sales of the 56 days before the review, so a SKU with no sale in
+# that window gets EOQ = 0 and S = s (131 of 3,049 CA_1 SKUs at the start of the test year, 38 at the end) even when
+# its forecast still asks for stock (s > 0). With the flag ON such a SKU takes the forecast rate of the protection
+# window instead, mu = F_hat / H (F_hat = point_window of its Q_H record), still causal. OFF by default: it changes
+# the engine's orders, and the E6 reproduction (719,971 USD) and the demo numbers are measured with it OFF. It only
+# applies where J4 sets the parameters; J5 keeps scoring its grid with the teacher EOQ.
+ZERO_SALES_LOT_FROM_FORECAST: bool = os.getenv("DFIOS_ZERO_SALES_LOT", "").strip().lower() in ("1", "true", "yes")
 
 # --- Calendar ------------------------------------------------------------------------------
 # M5 d_1 == day index 0. Every day index of the teacher artifacts (forecast_backtest.review_day, quantile origins,
