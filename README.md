@@ -180,8 +180,9 @@ docker compose --profile app up -d --build
 Các container: `postgres` (db), `backend` (api), `worker` (`python -m app.worker`: chạy batch job và lịch batch),
 `frontend` (web), `nginx` (một cổng duy nhất [http://localhost:8080](http://localhost:8080), `/api` → backend).
 Trong compose, API chỉ xếp job vào hàng đợi (`DFIOS_BATCH_EXECUTOR=queue`), worker nhận và chạy. Chạy trực tiếp trên
-máy (mục 2.6) thì job chạy trên một thread nền của API, không cần worker. HTTPS: gắn chứng chỉ vào
-`deploy/nginx/default.conf` (`listen 443 ssl`); cấu hình mặc định chỉ có HTTP cho máy local.
+máy (mục 2.6) thì job chạy trên một thread nền của API, không cần worker. HTTPS: đặt chứng chỉ vào
+`deploy/certs/` (`fullchain.pem`, `privkey.pem`; thử trên máy thì `sh deploy/make_dev_cert.sh`) rồi chạy thêm
+`-f docker-compose.https.yml` (xem đầu file đó); cấu hình mặc định chỉ có HTTP cho máy local.
 
 ---
 

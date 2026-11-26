@@ -1,0 +1,12 @@
+# HTTPS overlay (research_v2 H6): nginx terminates TLS, plain HTTP only redirects to https://<host>/ (port 443).
+#   production : real certificate in deploy/certs/ (fullchain.pem, privkey.pem), then
+#                NGINX_PORT=80 NGINX_HTTPS_PORT=443 docker compose -f docker-compose.yml -f docker-compose.https.yml --profile app up -d
+#   local test : sh deploy/make_dev_cert.sh  (self-signed, the browser warns), same command with the default ports,
+#                and open https://localhost:8443 directly (the HTTP redirect points at 443)
+services:
+  nginx:
+    volumes:
+      - ./deploy/nginx/https.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    ports:
+      - "${NGINX_HTTPS_PORT:-8443}:443"
