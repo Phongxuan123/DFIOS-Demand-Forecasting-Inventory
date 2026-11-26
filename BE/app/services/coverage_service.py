@@ -110,13 +110,13 @@ def db_causal_coverage_q95(db: Session, store_id: Optional[str] = None) -> Optio
     rq = db.query(
         ForecastWindowQuantile.store_id, ForecastWindowQuantile.item_id,
         ForecastWindowQuantile.origin_date, ForecastWindowQuantile.horizon_days,
-        ForecastWindowQuantile.q_levels,
+        # H5: only the 0.95 level is read, extracted by the database (the 25-level JSON of every row is not shipped)
+        ForecastWindowQuantile.q_levels["0.95"].as_float(),
     )
     if store_id:
         rq = rq.filter(ForecastWindowQuantile.store_id == store_id)
     groups: Dict[Any, list] = {}
-    for sid, iid, od, H, ql in rq.all():
-        q95 = (ql or {}).get("0.95")
+    for sid, iid, od, H, q95 in rq.all():
         if q95 is None:
             continue
         groups.setdefault((sid, od, int(H)), []).append((iid, float(q95)))

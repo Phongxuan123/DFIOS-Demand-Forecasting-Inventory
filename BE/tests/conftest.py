@@ -15,3 +15,12 @@ def _no_m5_csv():
     m5_actuals.configure("")  # empty path => CSV disabled
     yield
     m5_actuals.configure(None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_result_cache():
+    """Each test builds its own database: never serve a response cached for another one (H5 result cache)."""
+    from app.services import result_cache
+    result_cache.clear()
+    yield
+    result_cache.clear()

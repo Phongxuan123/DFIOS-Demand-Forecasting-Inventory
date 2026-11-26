@@ -26,6 +26,7 @@ from app.schemas.optimization import (
     PolicySelectionItem,
     CurrentPolicyItem,
 )
+from app.services import result_cache
 from app.services.batch_service import batch_service
 from app.services.optimization_service import optimization_service
 
@@ -165,7 +166,9 @@ def compare_ml_vs_static(
     Trả về chênh lệch Safety Stock, ROP, EOQ và ước tính chi phí lưu kho tiết kiệm được cho từng SKU.
     Role: Admin only (Manager/Viewer 403).
     """
-    return optimization_service.compare_ml_vs_static(db, store_id=store_id)
+    # H5: recomputed only when the store's parameters, quantiles, clock, settings or catalogue change
+    return result_cache.cached(db, "compare-static", store_id, (),
+                               lambda: optimization_service.compare_ml_vs_static(db, store_id=store_id))
 
 
 # --- UC32: Run Cost Sensitivity Analysis ---
