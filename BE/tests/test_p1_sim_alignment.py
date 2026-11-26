@@ -127,7 +127,7 @@ class TestBacktestMatchesTeacherReference(unittest.TestCase):
 class TestTeacherRulesUnits(unittest.TestCase):
     def test_trigger_is_strict_ip_below_s(self):
         """IP == s never orders; s = 0 with IP = 0 never orders (G-02)."""
-        R, L = 7, 3
+        R = 7
         dem = np.zeros((2, 2 * R))
         q = np.array([[10.0, 10.0], [0.0, 0.0]])
         res = pb.simulate_rss_candidates(dem, q, np.ones((2, 2)), np.ones(2), [0.0], [1.0],

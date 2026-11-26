@@ -5,7 +5,6 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_current_user
 from app.main import app
-from app.services import reference_service as rs
 
 GOOD = {
     "policy": "REFIT-RSS-EOQ-G", "cost": 719971.2, "holding": 467614.3, "lost": 67794.9, "ordering": 184562,

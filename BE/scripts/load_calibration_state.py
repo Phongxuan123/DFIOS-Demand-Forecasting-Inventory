@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(SCRIPT_DIR, ".."))
 
-import math
 import pandas as pd
 from sqlalchemy import text
 from app.core.database import engine

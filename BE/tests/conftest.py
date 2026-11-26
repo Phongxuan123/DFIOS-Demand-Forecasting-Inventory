@@ -1,5 +1,11 @@
 """Test isolation: never read the real M5 CSV (tests build their own tiny sales fixtures)."""
-import pytest
+import os
+
+# app.core.config refuses to start without a real JWT secret (H6); CI has no BE/.env, so give the suite a
+# throwaway one before anything imports the app. A secret already in the environment or BE/.env wins.
+os.environ.setdefault("JWT_SECRET_KEY", "test-only-jwt-secret-not-for-any-real-deployment-0001")
+
+import pytest  # noqa: E402
 
 from app.services.window_quantile_service import m5_actuals
 

@@ -14,7 +14,6 @@ One date convention (P-35 / N-11): policy_config.DEMO_START_DATE.
 """
 import sys
 import os
-import math
 import json
 
 # Setup BE path

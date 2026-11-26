@@ -1,0 +1,58 @@
+# research_v2 H6 / NFR5: test + lint on every push and pull request.
+# The suite needs no database, no M5 CSV and no model artifacts (tests build their own SQLite fixtures);
+# JWT_SECRET_KEY is a throwaway value, the real one never lives in the repo.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BE
+    env:
+      JWT_SECRET_KEY: ci-only-throwaway-jwt-secret-0123456789abcdef
+      DFIOS_LOCAL_ONLY: "1"
+      DFIOS_SCHEDULER: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: BE/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Tests (pytest)
+        run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: FE
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: FE/package-lock.json
+      - run: npm ci
+      - name: Lint (oxlint)
+        run: npm run lint
+      - name: Tests (vitest)
+        run: npm test
+      - name: Type check and build
+        run: npm run build
