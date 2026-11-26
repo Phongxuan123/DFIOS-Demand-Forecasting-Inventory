@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Copy, Eye, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useStore } from '../../context/StoreContext.tsx';
@@ -66,12 +66,12 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({ externalCreateTrigger,
   const [inspect, setInspect] = useState<Product | null>(null);
   const [editing, setEditing] = useState<{ mode: 'create' | 'edit'; product?: Product } | null>(null);
 
-  useEffect(() => {
-    if (externalCreateTrigger) {
-      setEditing({ mode: 'create' });
-      onCloseCreateTrigger?.();
-    }
-  }, [externalCreateTrigger, onCloseCreateTrigger]);
+  // The page's "Add product" button opens the create form; derived during render instead of copied into state by an effect.
+  const formState = editing ?? (externalCreateTrigger ? { mode: 'create' as const } : null);
+  const closeForm = () => {
+    setEditing(null);
+    if (externalCreateTrigger) onCloseCreateTrigger?.();
+  };
 
   const depts = useApi((s) => listDepartments(s), []);
   const cats = useApi((s) => listCategories(s), []);
@@ -245,12 +245,12 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({ externalCreateTrigger,
 
       <ProductDrawer key={inspect?.item_id ?? 'none'} product={inspect} storeId={storeId} onClose={() => setInspect(null)} />
       <ProductFormModal
-        state={editing}
+        state={formState}
         depts={depts.data ?? []}
         cats={cats.data ?? []}
-        onClose={() => setEditing(null)}
+        onClose={closeForm}
         onSaved={() => {
-          setEditing(null);
+          closeForm();
           setNonce((n) => n + 1);
         }}
       />
