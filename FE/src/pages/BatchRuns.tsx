@@ -33,7 +33,7 @@ const STATUS_TONES: Record<string, Tone> = {
   queued: 'neutral',
 };
 
-const JOBS = ['ADVANCE', 'J1', 'J3', 'J4', 'J5', 'J6'] as const;
+const JOBS = ['ADVANCE', 'J1', 'J2', 'J3', 'J4', 'J5', 'J6'] as const;
 /** GET /batch-runs filters on these; 'queued' only exists while the compose worker has not picked a job up. */
 const STATUS_FILTERS = ['running', 'success', 'failed'] as const;
 const STATUSES = ['queued', 'running', 'success', 'failed'] as const;

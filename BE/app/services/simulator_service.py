@@ -750,6 +750,11 @@ class SimulatorService:
                     flush_state()
                     jr["details"] = {"selection_id": sid}
                 job_events.append(f"[{t}] Job J5: tái chọn (m_g, kappa_g) cho {sid}")
+            # --- J2: the forecast published for this review (precomputed in the replay; research_v2 H7)
+            with timer.job("J2", t, review_k) as jr:
+                cov = window_quantile_service.forecast_coverage(db, store_id, t, n, horizon_days=L + R)
+                jr["n_items"] = cov["items_published"]
+                jr["details"] = cov
             # --- J3: window quantiles, ONE bulk call
             with timer.job("J3", t, review_k, n_items=n):
                 window_quantile_service.get_or_create_window_quantiles_bulk(

@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.forecast import Forecast, ForecastOverride
@@ -698,6 +699,43 @@ class WindowQuantileService:
                 created_at=now,
             ))
         return recs
+
+    @staticmethod
+    def forecast_coverage(
+        db: Session, store_id: str, origin_date: date, n_items: int, horizon_days: int = pc.HORIZON_DAYS,
+        model_run_id: str = DEFAULT_MODEL_RUN_ID,
+    ) -> Dict[str, Any]:
+        """J2 (research_v2 H7): what the nightly forecast delivered for one review, BEFORE J3 fills any gap.
+
+        In the replay the forecasts are precomputed offline (backtest engine, or the source activated by a model
+        switch) and published as window-quantile rows per origin; this counts them per route and model so each
+        review leaves a J2 row in the batch history. SKUs without a row are the ones J3 computes on the spot
+        (route (c) from the daily forecasts).
+        """
+        rows = db.query(
+            ForecastWindowQuantile.route, ForecastWindowQuantile.source_model,
+            func.count(func.distinct(ForecastWindowQuantile.item_id)),
+        ).filter(
+            ForecastWindowQuantile.store_id == store_id,
+            ForecastWindowQuantile.origin_date == origin_date,
+            ForecastWindowQuantile.horizon_days == int(horizon_days),
+            ForecastWindowQuantile.model_run_id == model_run_id,
+        ).group_by(ForecastWindowQuantile.route, ForecastWindowQuantile.source_model).all()
+        by_source = {f"{route or 'c'}:{model or 'default'}": int(cnt) for route, model, cnt in rows}
+        covered = db.query(func.count(func.distinct(ForecastWindowQuantile.item_id))).filter(
+            ForecastWindowQuantile.store_id == store_id,
+            ForecastWindowQuantile.origin_date == origin_date,
+            ForecastWindowQuantile.horizon_days == int(horizon_days),
+            ForecastWindowQuantile.model_run_id == model_run_id,
+        ).scalar() or 0
+        return {
+            "mode": "replay_precomputed",
+            "origin": str(origin_date),
+            "horizon_days": int(horizon_days),
+            "items_published": int(covered),
+            "items_missing": max(int(n_items) - int(covered), 0),
+            "by_source": by_source,
+        }
 
     def get_or_create_window_quantiles_bulk(
         self,

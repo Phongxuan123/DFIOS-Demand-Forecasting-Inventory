@@ -3,13 +3,14 @@ import type { ops as ViOps } from '../vi/ops.ts';
 export const ops: typeof ViOps = {
   batch: {
     title: 'Batch history',
-    description: 'Every clock advance or J5 re-run: status, duration of each job J1, J3–J6 and the error if any.',
+    description: 'Every clock advance or J5 re-run: status, duration of each job J1–J6 and the error if any.',
     refresh: 'Refresh',
     filter_job: 'Filter by job',
     filter_status: 'Filter by status',
     job_all: 'All jobs',
     job_ADVANCE: 'ADVANCE (clock advance)',
     job_J1: 'J1 (sales and daily stock)',
+    job_J2: 'J2 (forecast served to the review)',
     job_J3: 'J3 (route (c) window quantiles)',
     job_J4: 'J4 (C³-OUT and order proposals)',
     job_J5: 'J5 (quarterly parameter refit)',
