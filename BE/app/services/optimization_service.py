@@ -758,8 +758,12 @@ class OptimizationService:
         Its first review is the simulation start (teacher: VAL_START, the first forecast origin)."""
         R = pc.REVIEW_PERIOD_DAYS
         days: set = set()
-        # P2: imported teacher quantiles define the review chain when present (teacher: from VAL_START, step R)
-        teacher_days = set(window_quantile_service.teacher_review_days(db, store_id, pc.HORIZON_DAYS))
+        # P2: imported teacher quantiles define the review chain when present (teacher: from VAL_START, step R);
+        # H1 team mode: the origins of the team's daily backtest forecasts do
+        if pc.team_quantiles():
+            teacher_days = set(window_quantile_service.team_origin_days(db, store_id))
+        else:
+            teacher_days = set(window_quantile_service.teacher_review_days(db, store_id, pc.HORIZON_DAYS))
         if teacher_days:
             grid_origin = min(teacher_days)
             teacher_days = {d for d in teacher_days if (d - grid_origin) % R == 0}

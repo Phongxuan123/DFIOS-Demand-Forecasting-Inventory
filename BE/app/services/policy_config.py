@@ -105,6 +105,22 @@ ROUTE_FALLBACK: str = "c_fb"  # Gaussian fallback, honest label (R-06)
 # P2 sandbox: window quantiles imported from the teacher's ensemble Q_H10 (scripts/load_teacher_data.py). When rows
 # with this route exist for a store, J3 reuses them as-is and J5 scores its candidates on them (no route-(c) rebuild).
 ROUTE_TEACHER: str = "teacher"
+# research_v2 H1: where J3 / J4 / J5 take the window quantiles from.
+#   "imported" (default): the teacher's ensemble Q_H10 above where they exist, route (c) rebuilt for the rest; this is
+#              the configuration of the E6 reproduction, the demo numbers and research_v2 §9.10.
+#   "team":    the team's engine builds route (c) itself from its backtest engine's DAILY rolling-origin forecasts
+#              (forecast_daily_backtest, TEAM_DAILY_MODEL_RUN); imported rows are ignored. Env DFIOS_QUANTILE_SOURCE.
+QUANTILE_SOURCE_IMPORTED: str = "imported"
+QUANTILE_SOURCE_TEAM: str = "team"
+QUANTILE_SOURCE: str = (os.getenv("DFIOS_QUANTILE_SOURCE", QUANTILE_SOURCE_IMPORTED).strip().lower()
+                        or QUANTILE_SOURCE_IMPORTED)
+TEAM_DAILY_MODEL_RUN: str = "backtest-ensemble-v1"
+TEAM_SOURCE_MODEL: str = "team_backtest"  # forecast_window_quantile.source_model of the team's route (c) rows
+
+
+def team_quantiles() -> bool:
+    """True when the window quantiles come from the team's own engine (H1), not the imported teacher rows."""
+    return QUANTILE_SOURCE == QUANTILE_SOURCE_TEAM
 # Teacher route (c): Q_hat(tau) = max(0, F_hat + empirical tau-quantile of the window residuals), nothing else.
 # The two DFIOS extras are OFF by default (G-26 / G-27) and can be switched on (module flag or per call):
 #   QUANTILE_FLOOR_ENABLED    -> Q_hat >= QUANTILE_FLOOR_UNITS when tau >= 0.90 and F_hat > 0 (old DFIOS rule)
