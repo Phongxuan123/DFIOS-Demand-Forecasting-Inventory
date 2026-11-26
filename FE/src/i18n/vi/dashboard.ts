@@ -93,7 +93,8 @@ export const dashboard = {
     cost_less: 'C³-OUT rẻ hơn',
     cost_equal: 'bằng nhau',
     wrmsse: 'Sai số dự báo (WRMSSE)',
-    wrmsse_hint: 'Mô hình Ensemble Tier-1 (càng thấp càng tốt)',
+    wrmsse_hint: 'Mô hình production, test 28 ngày (càng thấp càng tốt)',
+    wrmsse_replay: 'Replay dùng engine backtest: WRMSSE {value}',
     wrmsse_unavailable: 'Đang đánh giá mô hình',
   },
   demo: {

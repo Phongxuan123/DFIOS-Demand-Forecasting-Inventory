@@ -137,6 +137,18 @@ class DashboardRepository:
         if prod_model and prod_model.metrics and prod_model.metrics.get("wrmsse") is not None:
             production_wrmsse = round(float(prod_model.metrics["wrmsse"]), 4)
 
+        # research_v2 §10.5: the production WRMSSE is the frozen engine's 28-day test score, NOT the forecasts the
+        # replay runs on; those come from the backtest engine (registry scope 'replay'), shown next to it.
+        replay_model = (
+            db.query(ModelRegistry)
+            .filter(func.lower(ModelRegistry.scope) == "replay")
+            .order_by(ModelRegistry.created_at.desc())
+            .first()
+        )
+        replay_wrmsse = None
+        if replay_model and replay_model.metrics and replay_model.metrics.get("wrmsse") is not None:
+            replay_wrmsse = round(float(replay_model.metrics["wrmsse"]), 4)
+
         # Orders placed = APPROVED + COMPLETED recommendations whose review date falls in the simulated-clock window
         ord_q = db.query(func.count(ReplenishmentRecommendation.id)).filter(
             ReplenishmentRecommendation.status.in_(["APPROVED", "COMPLETED"])
@@ -158,6 +170,8 @@ class DashboardRepository:
             "total_inventory_value": round(total_value, 2),
             "production_wrmsse": production_wrmsse,
             "production_model_id": prod_model.id if prod_model else None,
+            "replay_wrmsse": replay_wrmsse,
+            "replay_model_id": replay_model.id if replay_model else None,
             "orders_placed_count": orders_placed,
             "stockout_rate": stockout_rate,
             "estimated_service_level": estimated_service_level,

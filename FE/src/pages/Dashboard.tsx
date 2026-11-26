@@ -864,7 +864,17 @@ export const Dashboard: React.FC = () => {
             loading={kpis.loading && !k}
             value={wrmsse != null ? fmt.number(wrmsse, { digits: 4 }) : null}
             unavailableReason={kpis.error ? apiErrorMessage(kpis.error, t) : wrmsse == null ? t('dashboard.kpi.wrmsse_unavailable') : undefined}
-            hint={k?.production_model_id ? `${t('dashboard.kpi.wrmsse_hint')} (${k.production_model_id})` : t('dashboard.kpi.wrmsse_hint')}
+            hint={
+              <>
+                {k?.production_model_id ? `${t('dashboard.kpi.wrmsse_hint')} (${k.production_model_id})` : t('dashboard.kpi.wrmsse_hint')}
+                {k?.replay_wrmsse != null ? (
+                  <>
+                    <br />
+                    {t('dashboard.kpi.wrmsse_replay', { value: fmt.number(k.replay_wrmsse, { digits: 3 }) })}
+                  </>
+                ) : null}
+              </>
+            }
           />
         </div>
       </Section>

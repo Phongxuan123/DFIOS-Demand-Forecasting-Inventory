@@ -17,6 +17,8 @@ class DashboardKPIs(BaseModel):
     total_suppliers: int = Field(..., description="Tổng số nhà cung cấp đang hợp tác")
     production_wrmsse: Optional[float] = Field(None, description="WRMSSE numeric of the Production model (null when not in the registry)")
     production_model_id: Optional[str] = Field(None, description="Registry id of the Production model")
+    replay_wrmsse: Optional[float] = Field(None, description="WRMSSE of the backtest engine the replay runs on (registry scope 'replay'); the production WRMSSE is the frozen engine's 28-day test score")
+    replay_model_id: Optional[str] = Field(None, description="Registry id of the replay (backtest) model")
     orders_placed_count: int = Field(0, description="Orders placed = APPROVED + COMPLETED recommendations with review_date in the simulated clock window")
 
 
