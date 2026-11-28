@@ -10,6 +10,7 @@ from app.api.deps import get_db, require_manager_or_admin, require_planner_or_ab
 from app.models.user import User
 from app.services import policy_config as pc
 from app.services.quality_metrics_service import controller_metrics_from_db, forecast_quality_from_db
+from app.services.result_cache import forecast_quality_cached
 
 router = APIRouter()
 
@@ -27,8 +28,9 @@ def get_forecast_quality(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_planner_or_above),
 ) -> dict:
-    return forecast_quality_from_db(db, store_id, horizon_days, model_run_id, start_date, end_date,
-                                    max_origins, max_items, scale_end_date)
+    # H5: same data, same arguments -> the stored response (result_cache fingerprints the inputs)
+    return forecast_quality_cached(db, store_id, forecast_quality_from_db, horizon_days, model_run_id, start_date,
+                                   end_date, max_origins, max_items, scale_end_date)
 
 
 @router.get("/controller", summary="G-19 / G-21: rolling violation, recovery days and Warm-up/Active/Boundary status")

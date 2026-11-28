@@ -29,11 +29,33 @@ def _assert_local_only() -> None:
 
 _assert_local_only()
 
+# research_v2 H6 / NFR5: the JWT secret must come from the environment. A key shipped in the code (or the
+# .env.example placeholder) lets anyone who read the repo sign a valid admin token.
+JWT_SECRET_MIN_LENGTH = 32
+_JWT_PLACEHOLDERS = {
+    "dfios_default_secret_key_change_in_production",  # the old in-code default
+    "your_secret_key_here",                           # .env.example
+    "change_me", "changeme", "secret",
+}
+
+
+def resolve_jwt_secret(raw: str | None) -> str:
+    """The JWT signing key from ``JWT_SECRET_KEY``; refuses to start without a real one."""
+    key = (raw or "").strip()
+    hint = ('Set JWT_SECRET_KEY in BE/.env (generate one with: '
+            'python -c "import secrets; print(secrets.token_urlsafe(48))").')
+    if not key or key.lower() in _JWT_PLACEHOLDERS:
+        raise RuntimeError("JWT_SECRET_KEY is missing or still a placeholder. " + hint)
+    if len(key) < JWT_SECRET_MIN_LENGTH:
+        raise RuntimeError(f"JWT_SECRET_KEY must be at least {JWT_SECRET_MIN_LENGTH} characters. " + hint)
+    return key
+
+
 class Settings:
     PROJECT_NAME: str = "DFIOS - Demand Forecasting & Inventory Optimization System"
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+psycopg2://dfios:dfios123@localhost:5432/dfios")
     
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "dfios_default_secret_key_change_in_production")
+    JWT_SECRET_KEY: str = resolve_jwt_secret(os.getenv("JWT_SECRET_KEY"))
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
     # demo.md §6.3 POST /auth/refresh: long-lived refresh token, revoked with the access tokens by token_version

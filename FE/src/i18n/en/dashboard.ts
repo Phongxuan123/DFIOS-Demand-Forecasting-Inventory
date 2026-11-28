@@ -95,7 +95,8 @@ export const dashboard: typeof Vi = {
     cost_less: 'C³-OUT costs less',
     cost_equal: 'same cost',
     wrmsse: 'Forecast Error (WRMSSE)',
-    wrmsse_hint: 'Tier-1 Ensemble (lower is better)',
+    wrmsse_hint: 'Production model, 28-day test (lower is better)',
+    wrmsse_replay: 'The replay runs on the backtest engine: WRMSSE {value}',
     wrmsse_unavailable: 'Model evaluation pending',
   },
   demo: {

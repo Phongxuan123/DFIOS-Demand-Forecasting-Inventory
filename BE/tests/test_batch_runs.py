@@ -66,6 +66,50 @@ def test_sync_advance_records_advance_j1_and_review_jobs():
     assert run["status"] == "success" and run["totals_by_job"]["J3"]["count"] == 3
 
 
+def test_every_review_logs_a_j2_row_with_forecast_coverage():
+    """research_v2 H7: J2 (the forecast served to the review) has its own batch row, before J3 fills gaps."""
+    Session = _factory()
+    db = Session()
+    with mock.patch(GEN, return_value=0):
+        res = simulator_service.advance(db, STORE, days=14)
+    rows = db.query(BatchRun).filter(BatchRun.run_id == res["run_id"]).all()
+    j2 = sorted((r for r in rows if r.job == "J2"), key=lambda r: r.review_index)
+    assert [r.review_index for r in j2] == [0, 1, 2]
+    for r in j2:
+        assert r.status == "success" and r.duration_ms is not None and r.duration_ms >= 0
+        d = r.details
+        assert d["mode"] == "replay_precomputed" and d["horizon_days"] == 10
+        # nothing was published for this tiny store, so the one SKU is left for J3 to compute
+        assert d["items_published"] == r.n_items == 0 and d["items_missing"] == 1 and d["by_source"] == {}
+    # J2 runs before J3 at the same review
+    j3 = {r.review_index: r for r in rows if r.job == "J3"}
+    assert all(r.started_at <= j3[r.review_index].started_at for r in j2)
+
+
+def test_forecast_coverage_counts_published_rows_per_route_and_model():
+    from app.models.forecast_window_quantile import ForecastWindowQuantile
+    from app.services.window_quantile_service import DEFAULT_MODEL_RUN_ID, WindowQuantileService
+
+    Session = _factory()
+    db = Session()
+    o = START + timedelta(days=7)
+    for i, (item, route, model) in enumerate([("A", "teacher", None), ("B", "teacher", "chronos_bolt"),
+                                              ("C", "c", None)]):
+        db.add(ForecastWindowQuantile(id=f"w{i}", model_run_id=DEFAULT_MODEL_RUN_ID, store_id=STORE, item_id=item,
+                                      origin_date=o, horizon_days=10, point_window=5.0, q_levels={"0.95": 8.0},
+                                      route=route, source_model=model))
+    # another origin and another model run are not counted
+    db.add(ForecastWindowQuantile(id="w9", model_run_id=DEFAULT_MODEL_RUN_ID, store_id=STORE, item_id="D",
+                                  origin_date=o + timedelta(days=7), horizon_days=10, point_window=1.0,
+                                  q_levels={}, route="teacher"))
+    db.add(ForecastWindowQuantile(id="w8", model_run_id="other-run", store_id=STORE, item_id="E",
+                                  origin_date=o, horizon_days=10, point_window=1.0, q_levels={}, route="teacher"))
+    db.commit()
+    cov = WindowQuantileService.forecast_coverage(db, STORE, o, n_items=5, horizon_days=10)
+    assert cov["items_published"] == 3 and cov["items_missing"] == 2
+    assert cov["by_source"] == {"teacher:default": 1, "teacher:chronos_bolt": 1, "c:default": 1}
+
+
 def test_failed_advance_is_rolled_back_and_recorded_as_failed():
     Session = _factory()
     db = Session()

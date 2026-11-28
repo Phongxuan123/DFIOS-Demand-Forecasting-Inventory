@@ -87,6 +87,7 @@ services:
       - frontend
     volumes:
       - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/locations.inc:/etc/nginx/dfios/locations.inc:ro
     ports:
       - "${NGINX_PORT:-8080}:80"
     networks:

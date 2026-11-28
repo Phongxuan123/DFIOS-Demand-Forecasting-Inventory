@@ -186,6 +186,14 @@ def test_dashboard_kpis_numeric_wrmsse_orders_and_global_calibration(env):
         s.commit()
     k = c.get("/api/v1/dashboard/kpis?store_id=CA_1", headers=env["viewer"]).json()
     assert k["production_wrmsse"] == 0.4935 and k["production_model_id"] == "prod"
+    assert k["replay_wrmsse"] is None and k["replay_model_id"] is None  # no replay run registered yet
+    with env["Session"]() as s:
+        s.add(ModelRegistry(id="replay", name="Backtest Ensemble", version="v1", algorithm="ensemble", scope="replay",
+                            is_production=False, metrics={"wrmsse": 0.769}, created_at=datetime.now(timezone.utc)))
+        s.commit()
+    k = c.get("/api/v1/dashboard/kpis?store_id=CA_1", headers=env["viewer"]).json()
+    # research_v2 §10.5: the card shows the replay engine's score next to the production test score
+    assert k["production_wrmsse"] == 0.4935 and k["replay_wrmsse"] == 0.769 and k["replay_model_id"] == "replay"
     assert k["orders_placed_count"] == 2  # APPROVED + COMPLETED inside the clock window only
     g = c.get("/api/v1/calibration/status?store_id=GLOBAL", headers=env["manager"]).json()
     one = c.get("/api/v1/calibration/status?store_id=CA_1", headers=env["manager"]).json()

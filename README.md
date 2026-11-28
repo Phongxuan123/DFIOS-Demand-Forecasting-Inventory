@@ -1,26 +1,30 @@
 # DFIOS - Demand Forecasting & Inventory Optimization System
 > Hệ thống dự báo nhu cầu & tối ưu tồn kho thông minh bằng Machine Learning - Đồ án tốt nghiệp
 
-DFIOS giải quyết bài toán cốt lõi trong chuỗi cung ứng bán lẻ (bộ dữ liệu Walmart M5): **Dự báo nhu cầu 28 ngày ($h = 1..28$)** và **Tối ưu hóa chính sách bổ sung tồn kho đa tầng** nhằm tối thiểu hóa tổng chi phí vận hành (Holding + Ordering + Stockout Cost) trong khi đảm bảo mức phục vụ cam kết (SLA $\ge 96\%$).
+DFIOS giải quyết bài toán cốt lõi trong chuỗi cung ứng bán lẻ (bộ dữ liệu Walmart M5): **dự báo nhu cầu** và **chính sách bổ sung tồn kho theo nhóm hàng** nhằm tối thiểu tổng chi phí vận hành (giữ kho + đặt hàng + mất bán) trong khi giữ mức phục vụ cam kết **availability ≥ 95% cho mọi nhóm ABC×XYZ** (J5 chọn tham số với đệm 96%).
 
 ---
 
 ## 1. Kiến trúc Giải thuật 3 Tầng (3-Tier Framework)
 
 Hệ thống được thiết kế và cài đặt bám sát 100% đặc tả nghiên cứu lý thuyết:
-1. **Tier 1 - Ensemble Probabilistic Forecasting**: Mô hình dự báo tổ hợp (Temporal Fusion Transformer, LightGBM, SARIMA) xuất dự báo điểm và phân vị xác suất P10/P50/P90 cho 3.049 mặt hàng (SKU) tại 10 siêu thị.
-2. **Tier 2 - Offline Policy Selection (REFIT-RSS-EOQ-G)**: Định kỳ theo Quý (Job J5), quét lưới ứng viên $(m_g, \kappa_g)$ trên 9 phân khúc ABC/XYZ để tìm chính sách tối thiểu chi phí mô hình A3 ($h = 0.002 \cdot \text{price/ngày}, c = 2.0, b = 0.35 \cdot \text{price}$) thỏa mãn ràng buộc mức phục vụ.
-3. **Tier 3 - C³-OUT Online Feedback Calibration**: Bộ điều khiển tích hợp phản hồi vòng kín (Closed-Loop) hàng tuần (Job J4) với quy ước biên chống bão hòa (Anti-windup $\pm 2.0$, $L = 3, R = 7, H = 10$). Hệ số $\theta_g$ tự động bù trừ sai lệch phân phối thực tế của từng nhóm.
+1. **Tier 1 - Dự báo ML (Ensemble)**: hai engine.
+   - *Production* (`dfios_forecast v1.0`): LightGBM 0,441 + XGBoost 0,078 + TFT 0,481 (LSTM trọng số 0), 30.490 chuỗi, 53 đặc trưng, dự báo 28 ngày tương lai, WRMSSE 0,4935 (tầm 7 ngày).
+   - *Backtest* (`backtest-ensemble-v1`, dùng cho replay): LightGBM 0,548 + XGBoost 0,275 + MLP 0,202, 29 đặc trưng, huấn luyện lại theo mốc cắt d_1031 / d_1395, dự báo cuốn chiếu 1–14 ngày tại mỗi ngày gốc (chỉ dùng dữ liệu trước gốc).
+   - Cầu nối route (c): Q̂(0,95) của tổng cửa sổ H = L + R = 10 ngày = dự báo + quantile sai số thực của 364 ngày trước.
+2. **Tier 2 - REFIT-RSS-EOQ-G**: `s = ⌈Q̂·e^(m_g+θ_g)⌉`, `S = s + ⌈κ_g·EOQ⌉`, đặt `S − IP` khi `IP < s`. Mỗi 91 ngày (J5) quét lưới $(m_g, \kappa_g)$ trên 26 tuần gần nhất cho 9 nhóm ABC×XYZ, chọn cặp rẻ nhất theo chi phí A3 ($h = 0.002 \cdot \text{giá/ngày}, b = 0.35 \cdot \text{giá}, c = 2$) mà availability nhóm ≥ 96%.
+3. **Tier 3 - C³-OUT**: bộ điều khiển vòng kín **một phía**, cập nhật mỗi kỳ review (J4): $\theta_g \leftarrow \text{clip}(\theta_g + \eta(e_{g,k-d} - 0.04), 0, 2)$, $\eta = 1$, trễ $d$ kỳ. Nhóm hết hàng quá 4% thì $\theta_g$ tăng, kéo $s$ lên.
+4. Mặc định $L = 3$, $R = 7$; demo chạy trên kho CA_1 (3.049 SKU).
 
 ---
 
 ## 2. Hướng dẫn Khởi chạy Hệ thống
 
 ### 2.1. Yêu cầu Môi trường
-- **Python**: 3.12 (khuyến nghị, xem `.python-version`); 3.14 cũng cài được (wheel đã kiểm tra)
+- **Python**: 3.12 (khuyến nghị, xem `.python-version`); đã chạy với 3.13; 3.14 cũng cài được (wheel đã kiểm tra)
 - **Database**: PostgreSQL 16 (qua Docker Compose)
 - **Docker & Docker Compose**
-- **Node.js**: 20+ (cho Frontend)
+- **Node.js**: 22+ (cho Frontend; Vitest 5 cần Node ≥ 21 để in lỗi test)
 
 ### 2.2. Khởi chạy Database PostgreSQL
 ```bash
@@ -105,28 +109,47 @@ npm run dev
 ```
 Giao diện chạy tại [http://localhost:5173](http://localhost:5173). Danh sách kho cho bộ chọn kho: `GET /api/v1/inventory/stores`.
 
-### 2.8. Năm replay đầy đủ (dữ liệu nghiên cứu, chỉ DB local)
-`bootstrap.py` chỉ nạp 28 ngày demo. Để tua cả năm test (từ 25/05/2015) như demo.md, nạp dữ liệu nghiên cứu của
-CA_1 (thư mục `26FA_SET490_Inventory`, đặt `TEACHER_DIR`) vào một DB local tên bắt đầu bằng `dfios_sandbox`
-(script từ chối mọi DB khác):
+### 2.8. Năm replay đầy đủ (chỉ DB local `dfios_sandbox*`)
+`bootstrap.py` chỉ nạp 28 ngày demo. Buổi demo chạy cả năm test của CA_1 trên một DB local tên bắt đầu bằng
+`dfios_sandbox` (các script từ chối mọi DB khác, không bao giờ ghi lên Supabase). Lịch được dời đúng 548 tuần:
+ngày đầu năm test d_1577 (25/05/2015) hiện là **thứ Hai 24/11/2025**, thứ trong tuần và mọi số liệu giữ nguyên.
+
+**Cách A – nạp gói dump của nhóm (khuyến nghị, không cần dữ liệu nghiên cứu).** Chủ dự án gửi
+`dfios_demo_full.dump` (đồng hồ ở ngày đầu, đã có dự báo backtest Ensemble và LightGBM):
+```bash
+docker compose up -d postgres
+docker exec dfios-postgres createdb -U dfios -T template0 dfios_sandbox
+docker cp dfios_demo_full.dump dfios-postgres:/tmp/full.dump
+docker exec dfios-postgres pg_restore -U dfios -d dfios_sandbox --no-owner /tmp/full.dump
+docker exec dfios-postgres rm /tmp/full.dump
+# Git Bash trên Windows: chạy `export MSYS_NO_PATHCONV=1` trước, nếu không /tmp bị đổi thành đường dẫn Windows
+```
+
+**Cách B – dựng lại từ dữ liệu nghiên cứu** (thư mục `26FA_SET490_Inventory`, đặt `TEACHER_DIR`, khoảng 25 GB):
 ```bash
 # tạo DB: docker exec dfios-postgres psql -U dfios -d dfios -c "create database dfios_sandbox template template0"
 export DATABASE_URL=postgresql+psycopg2://dfios:dfios123@localhost:5432/dfios_sandbox DFIOS_LOCAL_ONLY=1
 python scripts/bootstrap.py --reset
 python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR"     # ~3 phút, 2,68 triệu dòng
 python scripts/load_teacher_prices.py --store CA_1 --teacher-dir "$TEACHER_DIR"   # giá theo ngày
-python scripts/sandbox_engine_run.py --store CA_1 --start 2015-05-25 --out engine.json  # tua + chấm DFIOS và B0
+python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR" --steps sources daily \
+    --source-models ensemble chronos_bolt                                          # nguồn đổi mô hình + dự báo backtest hằng ngày
+python scripts/load_teacher_data.py --store CA_1 --teacher-dir "$TEACHER_DIR" --steps daily \
+    --daily-models lgbm --daily-first-origin 1388                                  # LightGBM đơn lẻ cho bảng sai số
+python scripts/shift_sandbox_calendar.py --to-start 2025-11-24                     # dời lịch 548 tuần
 ```
-Kết quả tham chiếu CA_1 (năm test, L=3, R=7): DFIOS lớp thấp nhất 0,963 (cả 9 nhóm ≥ 0,95), chi phí 274.145;
-B0-MA-OUT-0,95 lớp thấp nhất 0,868, chi phí 392.928 (DFIOS rẻ hơn 30,2%, ít hơn 68% số đơn).
+Kiểm chứng phương pháp: chạy hết năm test, engine ra đúng Bảng 17 (E10b) của báo cáo, 719.971 USD và 92.281 đơn
+trên 3 kho (`tests/test_e10b_regression.py`, cần dữ liệu nghiên cứu).
 
-**Snapshot cho buổi demo** (bản sao DB trong Postgres, khôi phục khoảng 1 phút; mỗi bản ~2,2 GB trong đĩa ảo Docker,
+**Snapshot cho buổi demo** (bản sao DB trong Postgres, khôi phục khoảng 1–2 phút; mỗi bản ~2 GB trong đĩa ảo Docker,
 cần vài GB trống và đủ RAM, nên đóng bớt ứng dụng trước khi chạy):
 ```bash
-python scripts/demo_snapshot.py save demo_start      # đồng hồ 25/05/2015, J5 #0
+python scripts/demo_snapshot.py save demo_start      # lưu ngay sau khi nạp: đồng hồ 24/11/2025, chưa tua
 python scripts/demo_snapshot.py restore demo_start   # dừng API đang dùng dfios_sandbox trước, hoặc thêm --force
 python scripts/demo_snapshot.py list
 ```
+Chạy API trên DB này: `DATABASE_URL=...dfios_sandbox DFIOS_LOCAL_ONLY=1 DFIOS_SCHEDULER=0 uvicorn app.main:app --port 8000`.
+Tham số mô phỏng h, b, c sửa ở Cài đặt → Hệ thống (chỉ khi đồng hồ còn ở ngày đầu); L, R cố định 3 và 7.
 
 **Đổi mô hình (demo bước 10, E9c)**: nạp quantile của từng mô hình làm nguồn (một lần), rồi Admin kích hoạt:
 ```bash
@@ -157,8 +180,9 @@ docker compose --profile app up -d --build
 Các container: `postgres` (db), `backend` (api), `worker` (`python -m app.worker`: chạy batch job và lịch batch),
 `frontend` (web), `nginx` (một cổng duy nhất [http://localhost:8080](http://localhost:8080), `/api` → backend).
 Trong compose, API chỉ xếp job vào hàng đợi (`DFIOS_BATCH_EXECUTOR=queue`), worker nhận và chạy. Chạy trực tiếp trên
-máy (mục 2.6) thì job chạy trên một thread nền của API, không cần worker. HTTPS: gắn chứng chỉ vào
-`deploy/nginx/default.conf` (`listen 443 ssl`); cấu hình mặc định chỉ có HTTP cho máy local.
+máy (mục 2.6) thì job chạy trên một thread nền của API, không cần worker. HTTPS: đặt chứng chỉ vào
+`deploy/certs/` (`fullchain.pem`, `privkey.pem`; thử trên máy thì `sh deploy/make_dev_cert.sh`) rồi chạy thêm
+`-f docker-compose.https.yml` (xem đầu file đó); cấu hình mặc định chỉ có HTTP cho máy local.
 
 ---
 
@@ -174,7 +198,7 @@ python -m pytest -q
 ```bash
 python -m pytest -q
 ```
-Số lượng test hiện tại: xem dòng tổng kết của `pytest` (khoảng 520 test, mất vài phút).
+Số lượng test hiện tại: xem dòng tổng kết của `pytest` (khoảng 560 test, mất vài phút).
 Test cần artifact `MODEL/tft_model.pth` tự bỏ qua (skip) khi file không có trên máy.
 
 **Frontend unit test** (từ `FE/`): `npm test` (Vitest).

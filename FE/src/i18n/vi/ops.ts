@@ -2,13 +2,14 @@
 export const ops = {
   batch: {
     title: 'Lịch sử batch',
-    description: 'Mỗi lần tua đồng hồ hoặc chạy lại J5: trạng thái, thời lượng từng job J1, J3–J6 và lỗi nếu có.',
+    description: 'Mỗi lần tua đồng hồ hoặc chạy lại J5: trạng thái, thời lượng từng job J1–J6 và lỗi nếu có.',
     refresh: 'Làm mới',
     filter_job: 'Lọc theo job',
     filter_status: 'Lọc theo trạng thái',
     job_all: 'Tất cả job',
     job_ADVANCE: 'ADVANCE (tua đồng hồ)',
     job_J1: 'J1 (bán hàng và tồn kho ngày)',
+    job_J2: 'J2 (dự báo dùng cho kỳ review)',
     job_J3: 'J3 (quantile cửa sổ route c)',
     job_J4: 'J4 (C³-OUT và đề xuất đặt hàng)',
     job_J5: 'J5 (chọn lại tham số theo quý)',

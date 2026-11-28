@@ -14,6 +14,9 @@ export interface DashboardKpis {
   /** Production model WRMSSE from the registry (null when absent). */
   production_wrmsse?: number | null;
   production_model_id?: string | null;
+  /** WRMSSE of the backtest engine the replay runs on (registry scope 'replay'). */
+  replay_wrmsse?: number | null;
+  replay_model_id?: string | null;
   /** APPROVED + COMPLETED orders with review_date in (clock start, clock now]. */
   orders_placed_count?: number | null;
 }

@@ -11,7 +11,7 @@ from app.services.batch_service import batch_service
 router = APIRouter()
 
 
-@router.get("", summary="Lịch sử batch job (ADVANCE, J1, J3-J6): trạng thái, thời lượng, lỗi")
+@router.get("", summary="Lịch sử batch job (ADVANCE, J1-J6): trạng thái, thời lượng, lỗi")
 def list_batch_runs(
     store_id: Optional[str] = Query(None, description="Lọc theo cửa hàng"),
     job: Optional[str] = Query(None, pattern="^(ADVANCE|J1|J3|J4|J5|J6)$", description="Lọc theo job"),

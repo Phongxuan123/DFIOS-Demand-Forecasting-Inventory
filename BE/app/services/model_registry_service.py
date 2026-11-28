@@ -164,6 +164,8 @@ class ModelRegistryService:
             candidate = os.path.realpath(os.path.join(model_dir_real, target_filename))
             if (
                 os.path.isabs(target_filename)
+                # both separators on every OS: on Linux "..\\..\\.env" is one legal file name, on Windows a traversal
+                or "/" in target_filename or "\\" in target_filename or target_filename in (".", "..")
                 or os.path.basename(target_filename) != target_filename
                 or os.path.commonpath([model_dir_real, candidate]) != model_dir_real
             ):

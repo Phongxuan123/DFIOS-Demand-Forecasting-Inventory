@@ -1,6 +1,6 @@
 import { getJson } from './apiClient.ts';
 
-export type BatchJobType = 'ADVANCE' | 'J1' | 'J3' | 'J4' | 'J5' | 'J6' | string;
+export type BatchJobType = 'ADVANCE' | 'J1' | 'J2' | 'J3' | 'J4' | 'J5' | 'J6' | string;
 export type BatchStatus = 'queued' | 'running' | 'success' | 'failed' | string;
 
 export interface BatchRunItem {

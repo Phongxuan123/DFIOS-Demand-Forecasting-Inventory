@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.forecast import Forecast, ForecastOverride
@@ -437,6 +438,110 @@ class WindowQuantileService:
                     out[pos_i[iid], kk] = self.tau_value(ql or {}, tau, pw or 0.0)
         return out
 
+    # ------------------------------------------------------------------------------------
+    # H1: the team's own window quantiles, route (c) from the backtest engine's DAILY forecasts
+    # ------------------------------------------------------------------------------------
+    @staticmethod
+    def team_items(db: Session, store_id: str, model_run: str = pc.TEAM_DAILY_MODEL_RUN) -> set:
+        """SKUs with daily backtest forecasts of the team engine for the store."""
+        from app.models.forecast_daily_backtest import ForecastDailyBacktest as FDB
+        return {r[0] for r in db.query(FDB.item_id).filter(FDB.store_id == store_id, FDB.model_run == model_run)
+                .distinct().all()}
+
+    @staticmethod
+    def team_origin_days(db: Session, store_id: str, model_run: str = pc.TEAM_DAILY_MODEL_RUN) -> List[int]:
+        """Day indices of the origins of the team's daily backtest forecasts (the J5 review chain in team mode)."""
+        from app.models.forecast_daily_backtest import ForecastDailyBacktest as FDB
+        rows = db.query(FDB.origin_date).filter(FDB.store_id == store_id, FDB.model_run == model_run).distinct().all()
+        return sorted(pc.date_to_day_index(r[0]) for r in rows)
+
+    def team_quantile_matrix(
+        self, db: Session, store_id: str, item_ids: Sequence[str], review_days: Sequence[int],
+        taus: Sequence[float], H: int = pc.HORIZON_DAYS, model_run: str = pc.TEAM_DAILY_MODEL_RUN,
+        quantile_floor: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Route (c) built by the team's engine (research_v2 H1), causal, for many reviews at once.
+
+        F_hat(o) = sum of the daily forecasts y_h1..y_hH made at origin o (``forecast_daily_backtest``, rolling
+        origin, data before o only). Residuals of review r: actual window [s, s + H) - F_hat(s) for the origins s on
+        r's weekly grid with r - 364 <= s <= r - H (windows closed before r). Q_hat(tau) = max(0, F_hat(r) +
+        empirical tau-quantile of the residuals), residual quantile 0 without residual (teacher route (c)).
+        Returns point (items x reviews), q (items x reviews x taus) and n_res; NaN where the SKU has no forecast
+        at r (the caller falls back to the other routes).
+        """
+        from app.models.forecast_daily_backtest import ForecastDailyBacktest as FDB
+
+        item_ids = list(dict.fromkeys(item_ids))
+        review_days = [int(x) for x in review_days]
+        n, K, T = len(item_ids), len(review_days), len(taus)
+        out = {"point": np.full((n, K), np.nan), "q": np.full((n, K, T), np.nan),
+               "n_res": np.zeros((n, K), dtype=int)}
+        if not n or not K or H > 14:
+            return out
+        R = pc.REVIEW_PERIOD_DAYS
+        # every origin needed: the reviews and, on each review's weekly grid, the residual origins before it
+        need = set(review_days)
+        for r in review_days:
+            s = r - R * math.ceil(H / R)
+            while s >= r - pc.RESIDUAL_LOOKBACK_DAYS:
+                need.add(s)
+                s -= R
+        need_dates = sorted(pc.day_index_to_date(d) for d in need)
+        pos_i = {iid: i for i, iid in enumerate(item_ids)}
+        origins = sorted(need)
+        pos_o = {d: j for j, d in enumerate(origins)}
+        F = np.full((n, len(origins)), np.nan)
+        cols = [getattr(FDB, f"y_h{h}") for h in range(1, H + 1)]
+        for k in range(0, len(item_ids), _IN_CHUNK):
+            chunk = item_ids[k:k + _IN_CHUNK]
+            for row in db.query(FDB.item_id, FDB.origin_date, *cols).filter(
+                FDB.model_run == model_run, FDB.store_id == store_id, FDB.item_id.in_(chunk),
+                FDB.origin_date >= need_dates[0], FDB.origin_date <= need_dates[-1],
+            ).all():
+                j = pos_o.get(pc.date_to_day_index(row[1]))
+                if j is not None:
+                    F[pos_i[row[0]], j] = float(sum(max(0.0, float(v or 0.0)) for v in row[2:]))
+        # actual windows of the residual origins (only days before the last review: causal for every review)
+        a0, a1 = origins[0], max(review_days)
+        A = build_actuals_matrix(db, store_id, item_ids, a0, a1)
+        act = window_sums(A, np.array([d - a0 for d in origins]), H)
+        Res = act - F
+        ov = np.array(origins)
+        for k, r in enumerate(review_days):
+            jr = pos_o[r]
+            point = F[:, jr]
+            sel = (ov >= r - pc.RESIDUAL_LOOKBACK_DAYS) & (ov + H <= r) & ((r - ov) % R == 0)
+            Rk = Res[:, sel]
+            has = ~np.isnan(point)
+            if not has.any():
+                continue
+            out["point"][has, k] = point[has]
+            out["q"][has, k, :] = residual_quantiles(point[has], Rk[has], list(taus), quantile_floor)
+            out["n_res"][:, k] = (~np.isnan(Rk)).sum(axis=1) if Rk.shape[1] else 0
+        return out
+
+    def build_team_records(
+        self, db: Session, store_id: str, item_ids: Sequence[str], origin_date: date, horizon_days: int,
+        model_run_id: str = DEFAULT_MODEL_RUN_ID,
+    ) -> List[ForecastWindowQuantile]:
+        """J3 records of the team route (c) for the SKUs that have a daily forecast at ``origin_date``."""
+        o = pc.date_to_day_index(origin_date)
+        m = self.team_quantile_matrix(db, store_id, item_ids, [o], ROUTE_C_TAU_LEVELS, int(horizon_days))
+        now = datetime.now(timezone.utc)
+        recs: List[ForecastWindowQuantile] = []
+        for i, iid in enumerate(dict.fromkeys(item_ids)):
+            pt = m["point"][i, 0]
+            if np.isnan(pt):
+                continue
+            recs.append(ForecastWindowQuantile(
+                id=self._record_id(model_run_id, store_id, iid, origin_date, int(horizon_days)),
+                model_run_id=model_run_id, store_id=store_id, item_id=iid, origin_date=origin_date,
+                horizon_days=int(horizon_days), point_window=float(round(pt, 4)),
+                q_levels={str(t): round(float(v), 2) for t, v in zip(ROUTE_C_TAU_LEVELS, m["q"][i, 0, :])},
+                route=pc.ROUTE_EMPIRICAL, source_model=pc.TEAM_SOURCE_MODEL, created_at=now,
+            ))
+        return recs
+
     def causal_quantile_matrix(
         self,
         db: Session,
@@ -451,7 +556,11 @@ class WindowQuantileService:
         """Causal Q_hat_tau for every (item, review), the input of the J5 policy backtest. Imported teacher
         quantiles (route ``pc.ROUTE_TEACHER``) win where they exist; the rest is the route-(c) rebuild below."""
         item_ids = list(dict.fromkeys(item_ids))
-        tq = self.teacher_quantile_matrix(db, store_id, item_ids, review_days, tau, H)
+        if pc.team_quantiles():  # H1: the team's own route (c) from its daily backtest forecasts
+            tq = self.team_quantile_matrix(db, store_id, item_ids, review_days, [tau], H,
+                                           quantile_floor=quantile_floor)["q"][:, :, 0]
+        else:
+            tq = self.teacher_quantile_matrix(db, store_id, item_ids, review_days, tau, H)
         have = ~np.isnan(tq)
         if have.size and have.all():
             return {"point": tq.copy(), "q": tq, "n_res": np.zeros(tq.shape, dtype=int),
@@ -699,6 +808,49 @@ class WindowQuantileService:
             ))
         return recs
 
+    @staticmethod
+    def forecast_coverage(
+        db: Session, store_id: str, origin_date: date, n_items: int, horizon_days: int = pc.HORIZON_DAYS,
+        model_run_id: str = DEFAULT_MODEL_RUN_ID,
+    ) -> Dict[str, Any]:
+        """J2 (research_v2 H7): what the nightly forecast delivered for one review, BEFORE J3 fills any gap.
+
+        In the replay the forecasts are precomputed offline (backtest engine, or the source activated by a model
+        switch) and published as window-quantile rows per origin; this counts them per route and model so each
+        review leaves a J2 row in the batch history. SKUs without a row are the ones J3 computes on the spot
+        (route (c) from the daily forecasts).
+        """
+        team = pc.team_quantiles()
+        rows = db.query(
+            ForecastWindowQuantile.route, ForecastWindowQuantile.source_model,
+            func.count(func.distinct(ForecastWindowQuantile.item_id)),
+        ).filter(
+            ForecastWindowQuantile.store_id == store_id,
+            ForecastWindowQuantile.origin_date == origin_date,
+            ForecastWindowQuantile.horizon_days == int(horizon_days),
+            ForecastWindowQuantile.model_run_id == model_run_id,
+        ).group_by(ForecastWindowQuantile.route, ForecastWindowQuantile.source_model).all()
+        by_source = {f"{route or 'c'}:{model or 'default'}": int(cnt) for route, model, cnt in rows
+                     if not (team and route == pc.ROUTE_TEACHER)}
+        cq = db.query(func.count(func.distinct(ForecastWindowQuantile.item_id))).filter(
+            ForecastWindowQuantile.store_id == store_id,
+            ForecastWindowQuantile.origin_date == origin_date,
+            ForecastWindowQuantile.horizon_days == int(horizon_days),
+            ForecastWindowQuantile.model_run_id == model_run_id,
+        )
+        if team:
+            cq = cq.filter(ForecastWindowQuantile.route != pc.ROUTE_TEACHER)
+        covered = cq.scalar() or 0
+        return {
+            "mode": "team_route_c" if team else "replay_precomputed",
+            "quantile_source": pc.QUANTILE_SOURCE,
+            "origin": str(origin_date),
+            "horizon_days": int(horizon_days),
+            "items_published": int(covered),
+            "items_missing": max(int(n_items) - int(covered), 0),
+            "by_source": by_source,
+        }
+
     def get_or_create_window_quantiles_bulk(
         self,
         db: Session,
@@ -712,6 +864,7 @@ class WindowQuantileService:
     ) -> Dict[str, ForecastWindowQuantile]:
         """Existing records are reused; missing ones are computed in ONE vectorised pass."""
         item_ids = list(dict.fromkeys(item_ids))
+        team = pc.team_quantiles()
         found: Dict[str, ForecastWindowQuantile] = {}
         for k in range(0, len(item_ids), _IN_CHUNK):
             chunk = item_ids[k:k + _IN_CHUNK]
@@ -726,12 +879,18 @@ class WindowQuantileService:
                 )
                 .all()
             ):
+                if team and r.route == pc.ROUTE_TEACHER:
+                    continue  # H1 team mode: the imported row is replaced by the team's own route (c)
                 found[r.item_id] = r
         missing = [i for i in item_ids if i not in found]
         if missing:
-            new_recs = self.build_records(
-                db, store_id, missing, origin_date, horizon_days, model_run_id, None, quantile_floor
-            )
+            new_recs = self.build_team_records(db, store_id, missing, origin_date, horizon_days, model_run_id)                 if team else []
+            done = {r.item_id for r in new_recs}
+            rest = [i for i in missing if i not in done]
+            if rest:
+                new_recs += self.build_records(
+                    db, store_id, rest, origin_date, horizon_days, model_run_id, None, quantile_floor
+                )
             if persist and new_recs:
                 try:
                     # idempotent: drop any row with the same primary key (race / partial earlier run), then insert

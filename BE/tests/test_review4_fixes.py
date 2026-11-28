@@ -169,8 +169,13 @@ class TestScheduler(unittest.TestCase):
         """Postgres only: a second worker that cannot take pg_try_advisory_lock runs nothing."""
         from sqlalchemy import text
         from app.core.database import engine
+        from sqlalchemy.exc import OperationalError
         if engine.dialect.name != "postgresql":
             self.skipTest("advisory lock needs PostgreSQL")
+        try:  # CI has no PostgreSQL server: the configured default URL is not reachable there
+            engine.connect().close()
+        except OperationalError:
+            self.skipTest("no reachable PostgreSQL server")
         with engine.connect() as holder:
             holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": scheduler_service.SCHEDULER_LOCK_KEY})
             try:

@@ -3,7 +3,7 @@ Batch jobs run off the request thread (demo.md §5 "trả job id", §6 step 7; r
 
 ``submit_advance`` records a ``batch_runs`` row (job ADVANCE, status ``running``) under a fresh ``run_id``, returns the
 id at once (HTTP 202) and runs the clock advance on a single background worker thread with its OWN database session.
-When the advance finishes the simulator replaces the ``running`` row by the real rows (ADVANCE + J1/J3-J6, status
+When the advance finishes the simulator replaces the ``running`` row by the real rows (ADVANCE + J1-J6, status
 ``success``) in the same transaction as the simulation, or by one ``failed`` ADVANCE row with the error. The client
 polls ``GET /batch-runs/{run_id}``.
 

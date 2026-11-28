@@ -49,6 +49,11 @@ async def lifespan(_app: FastAPI):
                         logger.warning("Marked %d orphan batch_runs row(s) as failed", n_orphans)
     except Exception as exc:  # noqa: BLE001 - startup must not fail on an optional seed
         logger.error("Default schedule check failed: %s", exc)
+    try:  # H5: precompute the slow report pieces so the first call after start-up is fast (daemon thread)
+        from app.services.result_cache import warm_in_background
+        warm_in_background()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Cache warm-up start failed: %s", exc)
     task = None
     try:
         from app.services.scheduler_service import scheduler_enabled, scheduler_loop

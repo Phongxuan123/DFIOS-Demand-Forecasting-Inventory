@@ -73,11 +73,11 @@ def machine_info() -> dict:
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))  # type: ignore[attr-defined]
         info["ram_total_gb"] = round(ms.ullTotalPhys / 2 ** 30, 1)
         info["ram_available_gb_at_start"] = round(ms.ullAvailPhys / 2 ** 30, 1)
-    except Exception:  # not Windows
+    except (AttributeError, OSError):  # not Windows
         try:
             pages, size = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
             info["ram_total_gb"] = round(pages * size / 2 ** 30, 1)
-        except Exception:
+        except (AttributeError, ValueError, OSError):
             info["ram_total_gb"] = None
     return info
 
@@ -278,7 +278,7 @@ def main(argv=None) -> int:
 def render_md(r: dict) -> str:
     m, d, v, ex = r["machine"], r["data"], r["verdicts"], r["extrapolation"]
     ok = lambda b: "PASS" if b else "FAIL"  # noqa: E731
-    L = [f"# E7 performance report (RQ6)\n",
+    L = ["# E7 performance report (RQ6)\n",
          f"Generated {r['generated_at']} on database `{r['database']}` (local sandbox), store {r['store']}.\n",
          "## Setup\n",
          f"- Machine: {m['os']}, {m['cpu_count_logical']} logical CPUs ({m.get('processor','')}), "
